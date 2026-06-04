@@ -2,12 +2,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { resolve } from "path";
 import { MemoryGraphIndex } from "./core-engine.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = process.env.MCP_PROJECT_ROOT || process.cwd();
 const INDEX_PATH = resolve(PROJECT_ROOT, "code-index.json");
 
 const server = new McpServer({
@@ -23,6 +21,7 @@ async function generateLocalEmbedding(text) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+        signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error("Ollama connection failed");
     const data = await res.json();

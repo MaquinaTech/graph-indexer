@@ -12,7 +12,6 @@ import { fileURLToPath } from 'url';
 import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import JavaScript from 'tree-sitter-javascript';
-import PHP from 'tree-sitter-php';
 import CSS from 'tree-sitter-css';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,13 +23,12 @@ const PROJECT_ROOT = path.resolve(repoArg);
 const INDEX_PATH = path.join(PROJECT_ROOT, 'code-index.json');
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage']);
-const EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.php', '.scss', '.css']);
+const EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.scss', '.css']);
 const LANGUAGE_MAP = {
     '.ts': TypeScript.typescript,
     '.tsx': TypeScript.tsx,
     '.js': JavaScript,
     '.jsx': JavaScript,
-    '.php': PHP,
     '.css': CSS,
     '.scss': CSS
 };
@@ -41,10 +39,6 @@ const SEMANTIC_NODES = new Set([
     "function_declaration", "method_definition", "class_declaration",
     "interface_declaration", "type_alias_declaration", "arrow_function",
     "lexical_declaration",
-
-    // PHP
-    "function_definition", "method_declaration", "class_declaration",
-    "trait_declaration", "interface_declaration",
 
     // SCSS / CSS
     "rule_set", "declaration" // rule_set captura clases como .btn { ... }
@@ -77,11 +71,6 @@ function extractImportsFromAST(rootNode, ext) {
         else if (node.type === 'call_expression' && node.children[0]?.text === 'require') {
             const arg = node.children[1]?.children?.find(c => c.type === 'string');
             if (arg) imports.add(arg.text.replace(/['"]/g, ''));
-        }
-        // PHP (require_once, include)
-        else if (node.type === 'require_once_expression' || node.type === 'include_expression') {
-            const source = node.children.find(c => c.type === 'string');
-            if (source) imports.add(source.text.replace(/['"]/g, ''));
         }
         // SCSS (@use, @import)
         else if (node.type === 'import_statement' && ext === '.scss') {
@@ -141,12 +130,24 @@ async function getLocalEmbedding(text) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+            signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) return null;
         const data = await res.json();
         return data.embedding;
     } catch (err) {
         return null;
+    }
+}
+
+async function assertOllama() {
+    try {
+        const res = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+        console.error("❌ Ollama no responde en http://localhost:11434");
+        console.error("   → Inicia Ollama y ejecuta: ollama pull nomic-embed-text");
+        process.exit(1);
     }
 }
 
@@ -166,6 +167,7 @@ function walkRepo(dir, files = []) {
 }
 
 async function main() {
+    await assertOllama();
     console.log(`\n🚀 Iniciando In-Memory Indexer (Bootstrap)\n📂 Directorio: ${PROJECT_ROOT}\n`);
 
     const files = walkRepo(PROJECT_ROOT);
@@ -188,7 +190,7 @@ async function main() {
             const ext = path.extname(absolutePath);
             const parser = getParserForFile(ext);
 
-            if (!parser) return; // Ignorar si no hay parser
+            if (!parser) continue; // Ignorar si no hay parser
 
             const tree = parser.parse(content);
             const imports = extractImportsFromAST(tree.rootNode, ext);

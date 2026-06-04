@@ -6,7 +6,6 @@ import { MemoryGraphIndex } from './core-engine.mjs';
 import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import JavaScript from 'tree-sitter-javascript';
-import PHP from 'tree-sitter-php';
 import CSS from 'tree-sitter-css';
 
 const PROJECT_ROOT = process.env.MCP_PROJECT_ROOT || process.cwd();
@@ -22,7 +21,6 @@ const LANGUAGE_MAP = {
     '.tsx': TypeScript.tsx,
     '.js': JavaScript,
     '.jsx': JavaScript,
-    '.php': PHP,
     '.css': CSS,
     '.scss': CSS
 };
@@ -41,10 +39,6 @@ const SEMANTIC_NODES = new Set([
     "function_declaration", "method_definition", "class_declaration",
     "interface_declaration", "type_alias_declaration", "arrow_function",
     "lexical_declaration",
-
-    // PHP
-    "function_definition", "method_declaration", "class_declaration",
-    "trait_declaration", "interface_declaration",
 
     // SCSS / CSS
     "rule_set", "declaration" // rule_set captura clases como .btn { ... }
@@ -65,11 +59,6 @@ function extractImportsFromAST(rootNode, ext) {
         else if (node.type === 'call_expression' && node.children[0]?.text === 'require') {
             const arg = node.children[1]?.children?.find(c => c.type === 'string');
             if (arg) imports.add(arg.text.replace(/['"]/g, ''));
-        }
-        // PHP (require_once, include)
-        else if (node.type === 'require_once_expression' || node.type === 'include_expression') {
-            const source = node.children.find(c => c.type === 'string');
-            if (source) imports.add(source.text.replace(/['"]/g, ''));
         }
         // SCSS (@use, @import)
         else if (node.type === 'import_statement' && ext === '.scss') {
@@ -133,6 +122,7 @@ async function getLocalEmbedding(text) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+            signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) throw new Error(`Ollama Falló: ${res.status}`);
         const data = await res.json();
@@ -229,7 +219,7 @@ watcher.on('change', (eventType, filename) => {
     ) return;
 
     const ext = path.extname(filename);
-    if (!['.ts', '.tsx', '.js', '.jsx', '.php', '.scss', '.css'].includes(ext)) return;
+    if (!['.ts', '.tsx', '.js', '.jsx', '.scss', '.css'].includes(ext)) return;
 
     const fullPath = path.join(PROJECT_ROOT, filename);
     const now = Date.now();

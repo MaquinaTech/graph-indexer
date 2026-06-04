@@ -25,9 +25,9 @@ npm install graph-indexer-mcp --save-dev
 In your package.json, add the execution shortcuts:
 JSON
 "scripts": {
-  "mcp:index": "sg-index --repo .",
-  "mcp:watch": "sg-watch",
-  "mcp:start": "sg-mcp"
+  "mcp:index": "idx-index --repo .",
+  "mcp:watch": "idx-watch",
+  "mcp:start": "idx-mcp"
 }
 ```
 
