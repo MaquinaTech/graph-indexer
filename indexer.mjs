@@ -15,6 +15,11 @@ import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import JavaScript from 'tree-sitter-javascript';
 import CSS from 'tree-sitter-css';
+import Python from 'tree-sitter-python';
+import Rust from 'tree-sitter-rust';
+import Go from 'tree-sitter-go';
+import ignore from 'ignore';
+import { truncateForEmbedding } from './core-engine.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,16 +29,19 @@ const repoArg = args[args.indexOf("--repo") + 1] ?? process.cwd();
 const PROJECT_ROOT = path.resolve(repoArg);
 const INDEX_PATH = path.join(PROJECT_ROOT, 'code-index.json');
 
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage']);
-const EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.scss', '.css']);
 const LANGUAGE_MAP = {
     '.ts': TypeScript.typescript,
     '.tsx': TypeScript.tsx,
     '.js': JavaScript,
     '.jsx': JavaScript,
     '.css': CSS,
-    '.scss': CSS
+    '.scss': CSS,
+    '.py': Python,
+    '.rs': Rust,
+    '.go': Go,
 };
+
+const EXTENSIONS = new Set(Object.keys(LANGUAGE_MAP));
 
 // Semantic nodes for Tree-sitter
 const SEMANTIC_NODES = new Set([
@@ -43,7 +51,16 @@ const SEMANTIC_NODES = new Set([
     "lexical_declaration",
 
     // SCSS / CSS
-    "rule_set", "declaration" // rule_set captures CSS classes like .btn { ... }
+    "rule_set", "declaration", // rule_set captures CSS classes like .btn { ... }
+
+    // Python
+    'function_definition', 'class_definition',
+
+    // Rust
+    'function_item', 'impl_item', 'struct_item', 'trait_item', 'enum_item',
+
+    // Go
+    'method_declaration', 'type_declaration',
 ]);
 
 function getParserForFile(ext) {
@@ -61,11 +78,11 @@ function extractImportsFromAST(rootNode, ext) {
 
     function walk(node) {
         // JS / TS (ES Modules)
-        if (node.type === 'import_statement') {
+        if (node.type === 'import_statement' && ['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
             const source = node.children.find(c => c.type === 'string');
             if (source) imports.add(source.text.replace(/['"]/g, ''));
         }
-        // JS (CommonJS)
+        // JS (CommonJS require)
         else if (node.type === 'call_expression' && node.children[0]?.text === 'require') {
             const arg = node.children[1]?.children?.find(c => c.type === 'string');
             if (arg) imports.add(arg.text.replace(/['"]/g, ''));
@@ -74,6 +91,25 @@ function extractImportsFromAST(rootNode, ext) {
         else if (node.type === 'import_statement' && ext === '.scss') {
             const source = node.children.find(c => c.type === 'string_value');
             if (source) imports.add(source.text.replace(/['"]/g, ''));
+        }
+        // Python (import os / from os import path)
+        else if ((node.type === 'import_statement' || node.type === 'import_from_statement') && ext === '.py') {
+            const moduleName = node.children.find(c => c.type === 'dotted_name');
+            if (moduleName) imports.add(moduleName.text);
+        }
+        // Rust (use std::collections::HashMap)
+        else if (node.type === 'use_declaration' && ext === '.rs') {
+            const pathNode = node.children.find(c =>
+                c.type === 'scoped_identifier' || c.type === 'identifier' || c.type === 'use_tree'
+            );
+            if (pathNode) imports.add(pathNode.text);
+        }
+        // Go (import "fmt" or import ( "os" ))
+        else if (node.type === 'import_spec' && ext === '.go') {
+            const pathNode = node.children.find(c =>
+                c.type === 'interpreted_string_literal' || c.type === 'raw_string_literal'
+            );
+            if (pathNode) imports.add(pathNode.text.replace(/["`]/g, ''));
         }
 
         node.children.forEach(walk);
@@ -124,7 +160,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
 
 function resolveLocalImports(rawImports, fromFileRelPath) {
     const fileDir = path.dirname(path.join(PROJECT_ROOT, fromFileRelPath));
-    const tryExts = ['.ts', '.tsx', '.js', '.jsx', '.css', '.scss'];
+    const tryExts = ['.ts', '.tsx', '.js', '.jsx', '.css', '.scss', '.py', '.rs', '.go'];
     const resolved = [];
 
     for (const raw of rawImports) {
@@ -186,12 +222,14 @@ async function assertOllama() {
 
 // ─── Indexing Logic ───────────────────────────────────────────────────────────
 
-function walkRepo(dir, files = []) {
+function walkRepo(dir, root, ig, files = []) {
     for (const entry of fs.readdirSync(dir)) {
-        if (IGNORE_DIRS.has(entry) || entry.startsWith('.')) continue;
+        if (entry.startsWith('.')) continue;
         const fullPath = path.join(dir, entry);
+        const relPath = path.relative(root, fullPath).replace(/\\/g, '/');
+        if (ig.ignores(relPath)) continue;
         if (fs.statSync(fullPath).isDirectory()) {
-            walkRepo(fullPath, files);
+            walkRepo(fullPath, root, ig, files);
         } else if (EXTENSIONS.has(path.extname(fullPath))) {
             files.push(fullPath);
         }
@@ -199,12 +237,24 @@ function walkRepo(dir, files = []) {
     return files;
 }
 
+function buildIgnoreFilter(root) {
+    const ig = ignore();
+    // Always ignore common build artifacts regardless of .gitignore
+    ig.add(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '*.tmp']);
+    const gitignorePath = path.join(root, '.gitignore');
+    if (fs.existsSync(gitignorePath)) {
+        ig.add(fs.readFileSync(gitignorePath, 'utf-8'));
+    }
+    return ig;
+}
+
 async function main() {
     await assertOllama();
-    console.log(`\n🚀 Iniciando In-Memory Indexer (Bootstrap)\n📂 Directorio: ${PROJECT_ROOT}\n`);
+    console.log(`\n🚀 Starting In-Memory Indexer (Bootstrap)\n📂 Directory: ${PROJECT_ROOT}\n`);
 
-    const files = walkRepo(PROJECT_ROOT);
-    console.log(`Encontrados ${files.length} archivos para analizar.\n`);
+    const ig = buildIgnoreFilter(PROJECT_ROOT);
+    const files = walkRepo(PROJECT_ROOT, PROJECT_ROOT, ig);
+    console.log(`Found ${files.length} files to analyse.\n`);
 
     const indexData = {
         chunks: [],
@@ -234,17 +284,18 @@ async function main() {
             const chunks = extractSemanticChunks(tree.rootNode, relPath, content);
 
             for (const chunk of chunks) {
-                const embedText = `${chunk.node_type} ${chunk.name}\n${chunk.code_snippet}`;
+                const embedText = truncateForEmbedding(`${chunk.node_type} ${chunk.name}\n${chunk.code_snippet}`);
                 const embedding = await getLocalEmbedding(embedText);
 
-                if (embedding) {
-                    chunk.embedding = embedding;
-                    indexData.chunks.push(chunk);
-                    processedChunks++;
-                }
+                // Always push the chunk — even without an embedding it provides
+                // lexical search coverage. Hybrid search degrades to pure TF-IDF
+                // for chunks that lack a vector.
+                if (embedding) chunk.embedding = embedding;
+                indexData.chunks.push(chunk);
+                processedChunks++;
             }
 
-            process.stdout.write(`\r✅ Procesando: [${i + 1}/${files.length}] ${relPath} (${chunks.length} chunks)`);
+            process.stdout.write(`\r✅ Processing: [${i + 1}/${files.length}] ${relPath} (${chunks.length} chunks)`);
         } catch (err) {
             console.error(`\n❌ Error en ${relPath}: ${err.message}`);
         }
@@ -266,11 +317,11 @@ async function main() {
 
     // 3. Atomic persistence
     const tmpPath = `${INDEX_PATH}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(indexData));
-    fs.renameSync(tmpPath, INDEX_PATH);
+    await fs.promises.writeFile(tmpPath, JSON.stringify(indexData));
+    await fs.promises.rename(tmpPath, INDEX_PATH);
 
     console.log(`\n🎉 Indexing completed successfully.`);
-    console.log(`💾 Database saved to: code-index.json`);
+    console.log(`💾 Index saved to: code-index.json`);
     console.log(`📊 Total indexed fragments: ${processedChunks}\n`);
 }
 
