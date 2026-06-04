@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * In-Memory Graph Indexer — Bootstrap Engine
- * Lee archivos .ts/.tsx → Tree-sitter AST → Local Embeddings → code-index.json
- * Cero dependencias externas (solo Tree-sitter). Sin ChromaDB.
+ * @file indexer.mjs
+ * @description In-Memory Graph Indexer — Bootstrap Engine. Reads .ts/.tsx/.js/.jsx files → Tree-sitter AST → Local Embeddings → code-index.json. Zero external dependencies (only Tree-sitter). No ChromaDB.
+ * @author MaquinaTech <https://github.com/MaquinaTech>
+ * @copyright (c) 2026 MaquinaTech. All rights reserved.
+ * @license MIT
  */
 
 import fs from 'fs';
@@ -16,7 +18,7 @@ import CSS from 'tree-sitter-css';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ─── Configuración ────────────────────────────────────────────────────────────
+// ─── Configuration ────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const repoArg = args[args.indexOf("--repo") + 1] ?? process.cwd();
 const PROJECT_ROOT = path.resolve(repoArg);
@@ -33,7 +35,7 @@ const LANGUAGE_MAP = {
     '.scss': CSS
 };
 
-// Nodos semánticos para Tree-sitter
+// Semantic nodes for Tree-sitter
 const SEMANTIC_NODES = new Set([
     // TypeScript / JavaScript
     "function_declaration", "method_definition", "class_declaration",
@@ -41,7 +43,7 @@ const SEMANTIC_NODES = new Set([
     "lexical_declaration",
 
     // SCSS / CSS
-    "rule_set", "declaration" // rule_set captura clases como .btn { ... }
+    "rule_set", "declaration" // rule_set captures CSS classes like .btn { ... }
 ]);
 
 function getParserForFile(ext) {
@@ -52,11 +54,7 @@ function getParserForFile(ext) {
     return parser;
 }
 
-// Inicializar Parser
-const parser = new Parser();
-parser.setLanguage(TypeScript.typescript);
-
-// ─── Utilidades de Extracción AST (Idénticas al Watch-Daemon) ─────────────────
+// ─── AST Extraction Utilities ──────────────────────────────────────────────────
 
 function extractImportsFromAST(rootNode, ext) {
     const imports = new Set();
@@ -100,7 +98,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
                     name = node.childForFieldName?.("name")?.text || name;
                 }
 
-                // ID Determinista para evitar duplicados en actualizaciones iterativas
+                // Deterministic ID to avoid duplicates on incremental updates
                 const id = createHash('sha256')
                     .update(`${relPath}::${node.type}::${name}`)
                     .digest('hex').slice(0, 24);
@@ -110,7 +108,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
                     file_path: relPath,
                     node_type: node.type,
                     name,
-                    code_snippet: node.text.slice(0, 3000), // Límite por seguridad de contexto
+                    code_snippet: node.text.slice(0, 3000), // Context safety limit
                     start_line: node.startPosition.row + 1,
                     end_line: node.endPosition.row + 1
                 });
@@ -122,22 +120,57 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
     return chunks;
 }
 
-// ─── Cliente Local de Ollama ──────────────────────────────────────────────────
+// ─── Local Import Path Resolution ─────────────────────────────────────────────
+
+function resolveLocalImports(rawImports, fromFileRelPath) {
+    const fileDir = path.dirname(path.join(PROJECT_ROOT, fromFileRelPath));
+    const tryExts = ['.ts', '.tsx', '.js', '.jsx', '.css', '.scss'];
+    const resolved = [];
+
+    for (const raw of rawImports) {
+        if (!raw.startsWith('.')) continue; // skip npm packages and Node built-ins
+
+        const absResolved = path.resolve(fileDir, raw);
+        const existingExt = path.extname(absResolved);
+        let finalAbs = null;
+
+        if (existingExt && EXTENSIONS.has(existingExt) && fs.existsSync(absResolved)) {
+            finalAbs = absResolved;
+        } else {
+            for (const ext of tryExts) {
+                if (fs.existsSync(absResolved + ext)) { finalAbs = absResolved + ext; break; }
+                const idx = path.join(absResolved, 'index' + ext);
+                if (fs.existsSync(idx)) { finalAbs = idx; break; }
+            }
+        }
+
+        if (finalAbs) resolved.push(path.relative(PROJECT_ROOT, finalAbs).replace(/\\/g, '/'));
+    }
+
+    return resolved;
+}
+
+// ─── Local Ollama Client ──────────────────────────────────────────────────────
 
 async function getLocalEmbedding(text) {
-    try {
-        const res = await fetch("http://localhost:11434/api/embeddings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
-            signal: AbortSignal.timeout(15000),
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data.embedding;
-    } catch (err) {
-        return null;
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const res = await fetch("http://localhost:11434/api/embeddings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+                signal: AbortSignal.timeout(15000),
+            });
+            if (res.status === 429 || res.status === 503) throw new Error(`Retryable: ${res.status}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data.embedding;
+        } catch {
+            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
+        }
     }
+    return null;
 }
 
 async function assertOllama() {
@@ -151,7 +184,7 @@ async function assertOllama() {
     }
 }
 
-// ─── Lógica de Indexación ─────────────────────────────────────────────────────
+// ─── Indexing Logic ───────────────────────────────────────────────────────────
 
 function walkRepo(dir, files = []) {
     for (const entry of fs.readdirSync(dir)) {
@@ -180,7 +213,7 @@ async function main() {
 
     let processedChunks = 0;
 
-    // 1. Procesamiento Secuencial (AST + Embeddings)
+    // 1. Sequential processing (AST + Embeddings)
     for (let i = 0; i < files.length; i++) {
         const absolutePath = files[i];
         const relPath = path.relative(PROJECT_ROOT, absolutePath).replace(/\\/g, '/');
@@ -190,13 +223,14 @@ async function main() {
             const ext = path.extname(absolutePath);
             const parser = getParserForFile(ext);
 
-            if (!parser) continue; // Ignorar si no hay parser
+            if (!parser) continue; // Skip unsupported extensions
 
             const tree = parser.parse(content);
-            const imports = extractImportsFromAST(tree.rootNode, ext);
+            const rawImports = extractImportsFromAST(tree.rootNode, ext);
+            const imports = resolveLocalImports(rawImports, relPath);
             indexData.graph.dependencies[relPath] = imports;
 
-            // Extraer y procesar chunks
+            // Extract and process semantic chunks
             const chunks = extractSemanticChunks(tree.rootNode, relPath, content);
 
             for (const chunk of chunks) {
@@ -216,7 +250,7 @@ async function main() {
         }
     }
 
-    console.log(`\n\n🧩 Generando topología de dependencias downstream (importedBy)...`);
+    // 2. Build reverse dependency graph (importedBy) in RAM (< 5ms)
 
     // 2. Construir Grafo Inverso (importedBy) en memoria RAM (< 5ms)
     for (const [filePath, imports] of Object.entries(indexData.graph.dependencies)) {
@@ -230,14 +264,14 @@ async function main() {
         }
     }
 
-    // 3. Persistencia Atómica
+    // 3. Atomic persistence
     const tmpPath = `${INDEX_PATH}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(indexData));
     fs.renameSync(tmpPath, INDEX_PATH);
 
-    console.log(`\n🎉 Indexación completada con éxito.`);
-    console.log(`💾 Base de datos guardada en: code-index.json`);
-    console.log(`📊 Total de fragmentos indexados: ${processedChunks}\n`);
+    console.log(`\n🎉 Indexing completed successfully.`);
+    console.log(`💾 Database saved to: code-index.json`);
+    console.log(`📊 Total indexed fragments: ${processedChunks}\n`);
 }
 
 main().catch(console.error);

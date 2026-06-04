@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+/**
+ * @file watch-daemon.mjs
+ * @description Native FileSystem Watcher Daemon to maintain in-memory graph index. Uses Tree-sitter for AST parsing and local embedding generation.
+ * @author MaquinaTech <https://github.com/MaquinaTech>
+ * @copyright (c) 2026 MaquinaTech. All rights reserved.
+ * @license MIT
+ */
+
 import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
@@ -11,10 +19,6 @@ import CSS from 'tree-sitter-css';
 const PROJECT_ROOT = process.env.MCP_PROJECT_ROOT || process.cwd();
 const INDEX_PATH = path.join(PROJECT_ROOT, 'code-index.json');
 const DEBOUNCE_MS = 300;
-
-// Configuración de Tree-sitter
-const parser = new Parser();
-parser.setLanguage(TypeScript.typescript);
 
 const LANGUAGE_MAP = {
     '.ts': TypeScript.typescript,
@@ -33,7 +37,7 @@ function getParserForFile(ext) {
     return parser;
 }
 
-// Nodos AST con valor semántico para fragmentación
+// Semantic AST nodes for fragment extraction
 const SEMANTIC_NODES = new Set([
     // TypeScript / JavaScript
     "function_declaration", "method_definition", "class_declaration",
@@ -41,10 +45,10 @@ const SEMANTIC_NODES = new Set([
     "lexical_declaration",
 
     // SCSS / CSS
-    "rule_set", "declaration" // rule_set captura clases como .btn { ... }
+    "rule_set", "declaration" // rule_set captures CSS classes like .btn { ... }
 ]);
 
-// ─── Utilidades del AST ───────────────────────────────────────────────────────
+// ─── AST Utilities ────────────────────────────────────────────────────────────
 
 function extractImportsFromAST(rootNode, ext) {
     const imports = new Set();
@@ -80,7 +84,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
         const lineCount = node.endPosition.row - node.startPosition.row;
 
         if (SEMANTIC_NODES.has(node.type) && lineCount >= 2) {
-            // Evitar duplicación de funciones anidadas dentro de clases o exportaciones
+            // Avoid duplicating nested functions within classes or exports
             const isNested = node.parent && SEMANTIC_NODES.has(node.parent.type) && node.parent.type !== 'export_statement';
 
             if (!isNested) {
@@ -92,7 +96,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
                     name = node.childForFieldName?.("name")?.text || name;
                 }
 
-                // ID Determinista basado en Semántica
+                // Deterministic ID based on semantics
                 const id = createHash('sha256')
                     .update(`${relPath}::${node.type}::${name}`)
                     .digest('hex').slice(0, 24);
@@ -102,7 +106,7 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
                     file_path: relPath,
                     node_type: node.type,
                     name: name,
-                    code_snippet: node.text.slice(0, 3000), // Límite de seguridad
+                    code_snippet: node.text.slice(0, 3000), // Safety limit
                     start_line: node.startPosition.row + 1,
                     end_line: node.endPosition.row + 1
                 });
@@ -114,26 +118,67 @@ function extractSemanticChunks(rootNode, relPath, sourceCode) {
     return chunks;
 }
 
-// ─── Motor Local de Embedding ─────────────────────────────────────────────────
+// ─── Local Import Path Resolution ─────────────────────────────────────────────
 
-async function getLocalEmbedding(text) {
-    try {
-        const res = await fetch("http://localhost:11434/api/embeddings", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
-            signal: AbortSignal.timeout(15000),
-        });
-        if (!res.ok) throw new Error(`Ollama Falló: ${res.status}`);
-        const data = await res.json();
-        return data.embedding;
-    } catch (err) {
-        process.stderr.write(`[embedding-error] ${err.message}\n`);
-        return null;
+function resolveLocalImports(rawImports, fromFileRelPath) {
+    const fileDir = path.dirname(path.join(PROJECT_ROOT, fromFileRelPath));
+    const tryExts = ['.ts', '.tsx', '.js', '.jsx', '.css', '.scss'];
+    const resolved = [];
+
+    for (const raw of rawImports) {
+        if (!raw.startsWith('.')) continue; // skip npm packages and Node built-ins
+
+        const absResolved = path.resolve(fileDir, raw);
+        const existingExt = path.extname(absResolved);
+        let finalAbs = null;
+
+        if (existingExt && tryExts.includes(existingExt) && fs.existsSync(absResolved)) {
+            finalAbs = absResolved;
+        } else {
+            for (const ext of tryExts) {
+                if (fs.existsSync(absResolved + ext)) { finalAbs = absResolved + ext; break; }
+                const idx = path.join(absResolved, 'index' + ext);
+                if (fs.existsSync(idx)) { finalAbs = idx; break; }
+            }
+        }
+
+        if (finalAbs) resolved.push(path.relative(PROJECT_ROOT, finalAbs).replace(/\\/g, '/'));
     }
+
+    return resolved;
 }
 
-// ─── Lógica del Demonio (Watcher) ─────────────────────────────────────────────
+// ─── Local Embedding Engine ───────────────────────────────────────────────────
+
+async function getLocalEmbedding(text) {
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const res = await fetch("http://localhost:11434/api/embeddings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+                signal: AbortSignal.timeout(15000),
+            });
+            if (res.status === 429 || res.status === 503) throw new Error(`Retryable: ${res.status}`);
+            if (!res.ok) {
+                process.stderr.write(`[embedding-error] HTTP ${res.status}\n`);
+                return null;
+            }
+            const data = await res.json();
+            return data.embedding;
+        } catch {
+            if (attempt < MAX_RETRIES) {
+                await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
+            } else {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
+// ─── Watcher Daemon Logic ─────────────────────────────────────────────────────
 
 const db = new MemoryGraphIndex(INDEX_PATH);
 db.load(); // Cargar estado actual en memoria
@@ -153,9 +198,9 @@ async function processFileChange(filename, absolutePath) {
                 if (c.embedding) db.vectors.set(c.id, new Float32Array(c.embedding));
             }
 
-            db.updateFileGraph(filename, []); // Eliminar dependencias
+            db.updateFileGraph(filename, []); // Clear dependencies
             db.save();
-            process.stderr.write(`[daemon] 🗑️  Purgado: ${filename}\n`);
+            process.stderr.write(`[daemon] 🗑️  Purged: ${filename}\n`);
             return;
         }
 
@@ -163,16 +208,17 @@ async function processFileChange(filename, absolutePath) {
         const ext = path.extname(absolutePath);
         const parser = getParserForFile(ext);
 
-        if (!parser) return; // Ignorar si no hay parser
+        if (!parser) return; // Skip unsupported extensions
 
         const tree = parser.parse(content);
-        const imports = extractImportsFromAST(tree.rootNode, ext);
+        const rawImports = extractImportsFromAST(tree.rootNode, ext);
+        const imports = resolveLocalImports(rawImports, filename);
         db.updateFileGraph(filename, imports);
 
-        // 2. Extraer Chunks Semánticos
+        // 2. Extract semantic chunks
         const newChunks = extractSemanticChunks(tree.rootNode, filename, content);
 
-        // 3. Eliminar chunks antiguos de este archivo en la DB en memoria
+        // 3. Remove old chunks from this file in memory DB
         for (const [id, chunk] of db.chunks.entries()) {
             if (chunk.file_path === filename) {
                 db.chunks.delete(id);
@@ -180,7 +226,7 @@ async function processFileChange(filename, absolutePath) {
             }
         }
 
-        // 4. Generar vectores e insertar nuevos chunks
+        // 4. Generate vectors and insert new chunks
         for (const chunk of newChunks) {
             const embedText = `${chunk.node_type} ${chunk.name}\n${chunk.code_snippet}`;
             const vector = await getLocalEmbedding(embedText);
@@ -192,15 +238,15 @@ async function processFileChange(filename, absolutePath) {
             db.chunks.set(chunk.id, chunk);
         }
 
-        db.save(); // Persistir en disco de forma atómica
-        process.stderr.write(`[daemon] 🔄 Sincronizado: ${filename} (${newChunks.length} chunks)\n`);
+        db.save(); // Atomically persist to disk
+        process.stderr.write(`[daemon] 🔄 Synced: ${filename} (${newChunks.length} chunks)\n`);
 
     } catch (err) {
         process.stderr.write(`[daemon] ❌ Error en ${filename}: ${err.message}\n`);
     }
 }
 
-// ─── Inicialización del FileSystem Watcher Nativo ──────────────────────────────
+// ─── Native FileSystem Watcher Initialization ────────────────────────────────
 
 process.stderr.write(`🚀 Native In-Memory Indexer Daemon iniciado en: ${PROJECT_ROOT}\n`);
 
@@ -209,12 +255,12 @@ const watcher = fs.watch(PROJECT_ROOT, { recursive: true });
 watcher.on('change', (eventType, filename) => {
     if (!filename) return;
 
-    // Ignorar directorios de compilación, módulos y ocultos
+    // Ignore build directories, modules, and hidden files
     if (
         filename.includes('node_modules') ||
         filename.includes('.git') ||
         filename.includes('dist') ||
-        filename.endsWith('.json') || // Prevenir loop infinito al guardar el index
+        filename.endsWith('.json') || // Prevent infinite loop on index save
         filename.startsWith('.')
     ) return;
 
@@ -224,13 +270,13 @@ watcher.on('change', (eventType, filename) => {
     const fullPath = path.join(PROJECT_ROOT, filename);
     const now = Date.now();
 
-    // Debounce nativo para evitar procesar ráfagas de guardado del IDE
+    // Native debounce to avoid processing IDE save bursts
     if (changeRegistry.has(fullPath) && (now - changeRegistry.get(fullPath) < DEBOUNCE_MS)) return;
     changeRegistry.set(fullPath, now);
 
     setTimeout(() => {
         processFileChange(filename, fullPath);
-    }, 50); // Pequeño retraso para liberar bloqueos I/O del SO
+    }, 50); // Small delay to release OS I/O locks
 });
 
 watcher.on('error', (err) => {

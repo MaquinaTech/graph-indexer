@@ -1,6 +1,13 @@
+/**
+ * @file core-engine.mjs
+ * @description In-Memory Graph Indexer Core Engine.
+ * @author MaquinaTech <https://github.com/MaquinaTech>
+ * @copyright (c) 2026 MaquinaTech. All rights reserved.
+ * @license MIT
+ */
 import fs from 'fs';
 
-// Optimización V8 para similitud vectorial
+// V8-optimized cosine similarity
 export function cosineSimilarity(vecA, vecB) {
     let dotProduct = 0, normA = 0, normB = 0;
     for (let i = 0; i < vecA.length; i++) {
@@ -11,9 +18,9 @@ export function cosineSimilarity(vecA, vecB) {
     return normA === 0 || normB === 0 ? 0 : dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Tokenizador Léxico Nativo (Cero Dependencias)
+// Native lexical tokenizer (Zero dependencies)
 function tokenize(text) {
-    // Convierte a minúsculas, extrae palabras alfanuméricas mayores a 2 caracteres
+    // Lowercase, extract alphanumeric words > 2 characters
     return text.toLowerCase().split(/[\s\W_]+/).filter(w => w.length > 2);
 }
 
@@ -24,7 +31,7 @@ export class MemoryGraphIndex {
         this.vectors = new Map();
         this.graph = { dependencies: {}, importedBy: {} };
 
-        // Estructuras Léxicas (TF-IDF)
+        // TF-IDF Lexical structures
         this.docCount = 0;
         this.df = new Map(); // Frecuencia de Documento (Término -> Cantidad de chunks que lo contienen)
         this.tf = new Map(); // Frecuencia de Término (ChunkId -> Map(Término -> Frecuencia))
@@ -44,7 +51,7 @@ export class MemoryGraphIndex {
         }
     }
 
-    // Indexación Léxica Incremental
+    // Incremental lexical indexing
     _indexLexical(chunkId, text) {
         const tokens = tokenize(text);
         if (tokens.length === 0) return;
@@ -64,7 +71,7 @@ export class MemoryGraphIndex {
         this.docCount++;
     }
 
-    // Búsqueda Léxica Pura (TF-IDF)
+    // Pure lexical search (TF-IDF)
     _searchLexical(queryText) {
         const queryTokens = tokenize(queryText);
         const scores = new Map();
@@ -90,14 +97,14 @@ export class MemoryGraphIndex {
             .map(([id, score], rank) => ({ id, score, rank: rank + 1 }));
     }
 
-    // Búsqueda Vectorial Pura
-    _searchVector(queryVector) {
+    // Pure vector search
+    _searchVector(queryVector, minScore = 0.3) {
         const qVec = new Float32Array(queryVector);
         const results = [];
 
         for (const [id, vec] of this.vectors.entries()) {
             const score = cosineSimilarity(qVec, vec);
-            if (score > 0.3) results.push({ id, score });
+            if (score > minScore) results.push({ id, score });
         }
 
         return results
@@ -105,26 +112,26 @@ export class MemoryGraphIndex {
             .map((item, rank) => ({ ...item, rank: rank + 1 }));
     }
 
-    // Búsqueda Híbrida usando RRF (Reciprocal Rank Fusion)
-    searchHybrid(queryText, queryVector, topK = 5) {
+    // Hybrid search using RRF (Reciprocal Rank Fusion)
+    searchHybrid(queryText, queryVector, topK = 5, minScore = 0.3) {
         const lexicalResults = this._searchLexical(queryText);
-        const vectorResults = this._searchVector(queryVector);
+        const vectorResults = this._searchVector(queryVector, minScore);
 
         const rrfScores = new Map();
-        const RRF_K = 60; // Constante de estabilización estándar
+        const RRF_K = 60; // Standard stabilization constant
 
-        // Fusionar ranks vectoriales
+        // Merge vector ranks
         for (const { id, rank } of vectorResults) {
             rrfScores.set(id, 1 / (RRF_K + rank));
         }
 
-        // Fusionar ranks léxicos
+        // Merge lexical ranks
         for (const { id, rank } of lexicalResults) {
             const currentRRF = rrfScores.get(id) || 0;
             rrfScores.set(id, currentRRF + (1 / (RRF_K + rank)));
         }
 
-        // Recuperar y ordenar los chunks finales
+        // Retrieve and sort final chunks
         const finalResults = Array.from(rrfScores.entries())
             .sort((a, b) => b[1] - a[1])
             .slice(0, topK)

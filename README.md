@@ -112,5 +112,14 @@ function extractImportsFromAST(rootNode, ext) {
 
 Done! If you restart the daemon and save a .py file, the indexer will automatically extract its AST, inject its variables into the lexical engine (TF-IDF), calculate the semantic vector (Ollama), and create the bidirectional graph topology relative to the rest of your monorepo.
 
-## License
-Distributed under the MIT License. Built for high-security local architectures.
+## 👥 Author & Maintainer
+
+This project is developed and maintained by **MaquinaTech**.
+* **GitHub:** [@MaquinaTech](https://github.com/MaquinaTech)
+* **NPM Package:** [graph-indexer-mcp](https://www.npmjs.com/package/graph-indexer-mcp)
+
+If you want to contribute, please open an Issue or a Pull Request.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+/**
+ * @file mcp-server.mjs
+ * @description MCP Server to expose in-memory graph index with hybrid search capabilities. Connects to local Ollama instance for embedding generation. Cero dependencias externas.
+ * @author MaquinaTech <https://github.com/MaquinaTech>
+ * @copyright (c) 2026 MaquinaTech. All rights reserved.
+ * @license MIT
+ */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -14,36 +21,51 @@ const server = new McpServer({
 });
 
 const db = new MemoryGraphIndex(INDEX_PATH);
-db.load(); // Carga en memoria instantánea
+db.load();
 
 async function generateLocalEmbedding(text) {
-    const res = await fetch("http://localhost:11434/api/embeddings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
-        signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) throw new Error("Ollama connection failed");
-    const data = await res.json();
-    return data.embedding;
+    const MAX_RETRIES = 3;
+    let lastErr = new Error('Ollama unreachable');
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const res = await fetch("http://localhost:11434/api/embeddings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "nomic-embed-text", prompt: text }),
+                signal: AbortSignal.timeout(15000),
+            });
+            if (res.status === 429 || res.status === 503) {
+                lastErr = new Error(`Ollama returned ${res.status}`);
+                throw lastErr;
+            }
+            if (!res.ok) throw new Error(`Ollama connection failed: ${res.status}`);
+            const data = await res.json();
+            return data.embedding;
+        } catch (err) {
+            lastErr = err;
+            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
+        }
+    }
+    throw lastErr;
 }
 
 server.tool(
     "search_code",
-    "Búsqueda semántica (Híbrida: Vectorial + Exacta) en memoria. Devuelve código y topología.",
+    "Hybrid semantic search (Vector + Lexical). Returns code snippets and dependency topology.",
     {
-        query: z.string().describe("Lógica a buscar. Ej: 'autenticación de JWT en middleware'"),
-        exact_tokens: z.string().optional().describe("Nombres de variables o funciones exactas requeridas"),
-        include_topology: z.boolean().default(true)
+        query: z.string().describe("What logic to search for. Example: 'JWT authentication in middleware'"),
+        exact_tokens: z.string().optional().describe("Exact variable or function names to require"),
+        include_topology: z.boolean().default(true),
+        min_score: z.number().min(0).max(1).default(0.3).describe("Minimum cosine similarity threshold (0–1). Lower values return more results.")
     },
-    async ({ query, exact_tokens, include_topology }) => {
+    async ({ query, exact_tokens, include_topology, min_score }) => {
         try {
-            // Combinamos query y tokens exactos para potenciar el TF-IDF
+            // Combine query and exact tokens to boost TF-IDF
             const fullQueryText = exact_tokens ? `${query} ${exact_tokens}` : query;
             const queryVector = await generateLocalEmbedding(fullQueryText);
 
-            // Usamos el motor híbrido
-            const matches = db.searchHybrid(fullQueryText, queryVector, 5);
+            // Use hybrid search engine
+            const matches = db.searchHybrid(fullQueryText, queryVector, 5, min_score);
 
             if (matches.length === 0) return { content: [{ type: "text", text: "Sin resultados." }] };
 
