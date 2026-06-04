@@ -1,0 +1,16 @@
+# Ignorar bases de datos locales
+code-index.json
+*.tmp
+
+# Ignorar logs y cachés
+*.log
+npm-debug.log*
+.eslintcache
+
+# Ignorar variables de entorno
+.env
+.env.local
+
+# Ignorar archivos del SO
+.DS_Store
+Thumbs.db

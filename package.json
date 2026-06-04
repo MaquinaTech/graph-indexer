@@ -1,0 +1,48 @@
+{
+    "name": "graph-indexer-mcp",
+    "version": "1.0.0",
+    "description": "Zero-DB, Air-gapped, In-Memory Graph Indexer MCP Server with Hybrid RRF Search",
+    "type": "module",
+    "main": "core-engine.mjs",
+    "bin": {
+        "idx-index": "./indexer.mjs",
+        "idx-watch": "./watch-daemon.mjs",
+        "idx-mcp": "./mcp-server.mjs"
+    },
+    "files": [
+        "*.mjs",
+        "README.md"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/MaquinaTech/graph-indexer-mcp.git"
+    },
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.4.0",
+        "tree-sitter": "^0.21.1",
+        "tree-sitter-css": "^0.21.1",
+        "tree-sitter-javascript": "^0.21.2",
+        "tree-sitter-php": "^0.21.1",
+        "tree-sitter-typescript": "^0.21.2",
+        "zod": "^3.23.8"
+    },
+    "keywords": [
+        "mcp",
+        "model-context-protocol",
+        "indexer",
+        "ast",
+        "tree-sitter",
+        "rag",
+        "hybrid-search",
+        "rrf",
+        "ollama"
+    ],
+    "author": "MaquinaTech https://github.com/MaquinaTech",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/MaquinaTech/graph-indexer-mcp/issues"
+    }
+}
