@@ -8,9 +8,9 @@
         ".": "./core-engine.mjs"
     },
     "bin": {
-        "idx-index": "./indexer.mjs",
-        "idx-watch": "./watch-daemon.mjs",
-        "idx-mcp": "./mcp-server.mjs"
+        "idx-index": "indexer.mjs",
+        "idx-watch": "watch-daemon.mjs",
+        "idx-mcp": "mcp-server.mjs"
     },
     "files": [
         "*.mjs",
@@ -66,6 +66,14 @@
     },
     "bugs": {
         "url": "https://github.com/MaquinaTech/graph-indexer/issues"
+    },
+    "homepage": "https://github.com/MaquinaTech/graph-indexer",
+    "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/MaquinaTech"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "optionalDependencies": {
         "hnswlib-node": "^3.0.0"
