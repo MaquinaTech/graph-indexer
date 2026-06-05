@@ -4,16 +4,16 @@
  * @description In-Memory Graph Indexer — Bootstrap Engine. Reads .ts/.tsx/.js/.jsx files → Tree-sitter AST → Local Embeddings → code-index.json. Zero external dependencies (only Tree-sitter). No ChromaDB.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
- * @license GPL-3.0-only
- * * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * @license MIT
+ * Copyright (c) 2026 MaquinaTech. All rights reserved.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions: The above copyright
+ * notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
  */
 import fs from 'fs';
 import path from 'path';
@@ -76,7 +76,7 @@ async function main() {
             const parser = getParserForFile(ext);
             if (!parser) continue;
 
-            let tree = parser.parse(content);
+            let tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null);
             const rawImports = extractImportsFromAST(tree.rootNode, ext);
             const imports = resolveLocalImports(rawImports, relPath, PROJECT_ROOT);
             indexData.graph.dependencies[relPath] = imports;

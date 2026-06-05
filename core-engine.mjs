@@ -3,16 +3,16 @@
  * @description In-Memory Graph Indexer Core Engine.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
- * @license GPL-3.0-only
- * * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * @license MIT
+ * Copyright (c) 2026 MaquinaTech. All rights reserved.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions: The above copyright
+ * notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
  */
 import fs from 'fs';
 
@@ -140,12 +140,21 @@ export class MemoryGraphIndex {
             const deps = this.graph.dependencies[chunk.file_path] || [];
             const cleanDeps = deps.map(d => d.split('/').pop().split('.')[0]);
 
-            const enrichedContext = `${chunk.name} ${chunk.docstring || ''} ${cleanDeps.join(' ')} ${(chunk.calls || []).join(' ')} ${chunk.code_snippet}`;
-            this._indexLexical(chunk.id, enrichedContext);
+            const enrichedContext = [
+                chunk.name,
+                chunk.docstring || '',
+                cleanDeps.join(' '),
+                (chunk.calls || []).join(' '),
+                (chunk.params || []).join(' '),
+                chunk.return_type || '',
+                chunk.class_context ? `${chunk.class_context}.${chunk.name}` : '',
+                chunk.code_snippet
+            ].join(' ');
+            this._indexLexical(chunk.id, enrichedContext, chunk.file_path);
         }
     }
 
-    _indexLexical(chunkId, text) {
+    _indexLexical(chunkId, text, filePath = '') {
         const tokens = tokenize(text);
         if (tokens.length === 0) return;
 
@@ -158,6 +167,19 @@ export class MemoryGraphIndex {
         for (const [term, count] of termCounts.entries()) {
             tfMap.set(term, 1 + Math.log(count));
             this.df.set(term, (this.df.get(term) || 0) + 1);
+        }
+
+        // 🥇 FILENAME TOKEN BOOST: Add file path tokens with fixed TF weight 1.0 (not sublinear)
+        // Splits on /, -, _, ., CamelCase so "authStore.ts" → ["auth", "store", "ts", "authstore"]
+        if (filePath) {
+            const fileTokens = tokenize(filePath.replace(/[\/\-_.]/g, ' '));
+            for (const token of fileTokens) {
+                if (!tfMap.has(token)) {
+                    // Only add if not already from the body (avoids double-counting)
+                    tfMap.set(token, 1.0);
+                    this.df.set(token, (this.df.get(token) || 0) + 1);
+                }
+            }
         }
 
         this.tf.set(chunkId, tfMap);
@@ -313,6 +335,14 @@ export class MemoryGraphIndex {
         const allResults = [...vectorResults, ...lexicalResults];
 
         const queryLower = queryText.toLowerCase();
+
+        // 🥇 FILENAME PATH BOOST: when Ollama offline (no vectors), boost chunks from
+        // files whose path contains a token from the query (e.g. "auth middleware" → authStore.ts)
+        const vectorEmpty = vectorResults.length === 0;
+        const queryFileTokens = vectorEmpty
+            ? queryLower.split(/[\s\W_]+/).filter(t => t.length >= 3)
+            : [];
+
         for (const { id, rank } of allResults) {
             let baseScore = 1 / (K + rank);
             const chunk = this.chunks.get(id);
@@ -325,6 +355,13 @@ export class MemoryGraphIndex {
             // Prefer definitions (functions/classes/impls) over pure usage/expression sites
             if (chunk.node_type === 'expression_statement' || chunk.node_type === 'call_expression') {
                 baseScore *= 0.8;
+            }
+
+            // Filename path boost when no vectors available
+            if (vectorEmpty && queryFileTokens.length > 0) {
+                const filePathLower = chunk.file_path.toLowerCase();
+                const hasMatch = queryFileTokens.some(t => filePathLower.includes(t));
+                if (hasMatch) baseScore *= 1.5;
             }
 
             rrfScores.set(id, (rrfScores.get(id) || 0) + baseScore);
@@ -364,7 +401,8 @@ export class MemoryGraphIndex {
             id: c.id, file_path: c.file_path, node_type: c.node_type,
             name: c.name, docstring: c.docstring || '', code_snippet: c.code_snippet,
             content_hash: c.content_hash, start_line: c.start_line, end_line: c.end_line,
-            calls: c.calls || []
+            calls: c.calls || [],
+            params: c.params || [], return_type: c.return_type || '', class_context: c.class_context || ''
         }));
         // Embeddings go to a compact binary sidecar — NOT in the JSON payload
         const payload = JSON.stringify({ chunks: chunksData, graph: this.graph });

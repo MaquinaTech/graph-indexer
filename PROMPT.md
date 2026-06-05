@@ -133,6 +133,23 @@ Returns: all files this file imports, and all files that import this file. Use f
 
 ---
 
+### `list_index_stats` — Index Diagnostics
+
+Call this first when search results seem wrong, empty, or stale:
+
+```
+list_index_stats()
+```
+
+Returns: chunk count, file count, embeddings loaded, search mode (hybrid vs lexical), daemon status, and index age.
+
+**When to use:**
+- Search results look empty or irrelevant
+- You want to confirm the index is fresh after indexing
+- You're unsure if semantic search (Ollama) is active
+
+---
+
 ## 🔄 Standard Workflows
 
 ### Workflow A: Answer a Question About the Code
@@ -164,6 +181,13 @@ Returns: all files this file imports, and all files that import this file. Use f
 2. `graph://dependencies/src/path/file.ts` → see what it depends on and what depends on it
 3. Use this information to answer architecture questions without reading the full file.
 
+### Workflow F: Diagnose Index Problems
+1. `list_index_stats()` → check chunk count, embeddings, daemon status, index age
+2. If chunks = 0 → run `npm run mcp:index` to rebuild the index
+3. If search mode = "Lexical only" but you expect semantic → check Ollama is running and `INDEXER_EMBEDDINGS` is not `off`
+4. If index age is stale (hours) → check daemon status; restart with `npm run mcp:watch` if not running
+5. After diagnosing, retry `search_code` with `min_score: 0.0` to see all lexical matches
+
 ---
 
 ## ⚠️ What NOT To Do
@@ -176,6 +200,7 @@ Returns: all files this file imports, and all files that import this file. Use f
 | Editing a function without checking callers | `get_call_graph("fnName")` first |
 | Re-running `search_code` with the same query | Refine the query or use `exact_tokens` |
 | Reading a full file to understand its structure | `get_file_skeleton("path")` |
+| Search results seem wrong or stale | Call `list_index_stats` to diagnose before anything else |
 
 ---
 

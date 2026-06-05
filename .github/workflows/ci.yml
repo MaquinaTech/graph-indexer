@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: ["20"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint package.json
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf-8'))" && echo "package.json is valid JSON"
+
+      - name: Verify MIT license
+        run: |
+          node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json','utf-8'));
+            if (pkg.license !== 'MIT') { console.error('License must be MIT, got: ' + pkg.license); process.exit(1); }
+            console.log('License OK: MIT');
+          "
+          grep -q 'MIT License' LICENSE && echo 'LICENSE file OK'
+
+      - name: Unit tests (eval harness)
+        run: |
+          INDEXER_EMBEDDINGS=off node indexer.mjs --repo .
+          npm test
+        env:
+          INDEXER_EMBEDDINGS: "off"
+
+      - name: E2E integration test
+        run: |
+          INDEXER_EMBEDDINGS=off node indexer.mjs --repo .
+          node tests/e2e-integration.mjs
+        env:
+          INDEXER_EMBEDDINGS: "off"

@@ -3,16 +3,16 @@
  * @description Shared AST parsing, language registry, and embedding utilities.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
- * @license GPL-3.0-only
- * * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * @license MIT
+ * Copyright (c) 2026 MaquinaTech. All rights reserved.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions: The above copyright
+ * notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
  */
 import fs from 'fs';
 import path from 'path';
@@ -28,6 +28,11 @@ import Python from 'tree-sitter-python';
 import Rust from 'tree-sitter-rust';
 import Go from 'tree-sitter-go';
 import PHP from 'tree-sitter-php';
+import Java from 'tree-sitter-java';
+import Kotlin from 'tree-sitter-kotlin';
+import CSharp from 'tree-sitter-c-sharp';
+import Swift from 'tree-sitter-swift';
+import Ruby from 'tree-sitter-ruby';
 import { truncateForEmbedding } from './core-engine.mjs';
 
 export const MAX_FILE_SIZE_BYTES = 500000;
@@ -39,6 +44,11 @@ const LANGUAGE_MAP = {
     '.css': CSS, '.scss': CSS,
     '.py': Python, '.rs': Rust, '.go': Go,
     '.php': PHP.php,
+    '.java': Java,
+    '.kt': Kotlin, '.kts': Kotlin,
+    '.cs': CSharp,
+    '.swift': Swift,
+    '.rb': Ruby,
 };
 
 // 🥇 ULTRA-GENERIC QUERIES: Immune to grammar changes between TS/JS/TSX
@@ -73,6 +83,40 @@ const LANGUAGE_QUERIES = {
         (function_definition) @chunk
         (class_declaration) @chunk
         (expression_statement) @chunk
+    `,
+    java: `
+        (method_declaration) @chunk
+        (class_declaration) @chunk
+        (interface_declaration) @chunk
+        (constructor_declaration) @chunk
+        (enum_declaration) @chunk
+    `,
+    kotlin: `
+        (function_declaration) @chunk
+        (class_declaration) @chunk
+        (object_declaration) @chunk
+        (companion_object) @chunk
+        (secondary_constructor) @chunk
+    `,
+    cs: `
+        (method_declaration) @chunk
+        (class_declaration) @chunk
+        (interface_declaration) @chunk
+        (constructor_declaration) @chunk
+        (enum_declaration) @chunk
+        (property_declaration) @chunk
+    `,
+    swift: `
+        (function_declaration) @chunk
+        (class_declaration) @chunk
+        (protocol_declaration) @chunk
+        (protocol_function_declaration) @chunk
+    `,
+    rb: `
+        (method) @chunk
+        (singleton_method) @chunk
+        (class) @chunk
+        (module) @chunk
     `
 };
 
@@ -84,7 +128,17 @@ const CONTAINERS = new Set([
     'lexical_declaration', 'expression_statement', 'export_statement',
     'function_definition', 'class_definition', 'rule_set',
     'function_item', 'struct_item', 'enum_item', 'trait_item', 'impl_item',
-    'method_declaration', 'type_declaration'
+    'method_declaration', 'type_declaration',
+    // Java / C#
+    'interface_declaration', 'constructor_declaration', 'enum_declaration',
+    // Kotlin
+    'object_declaration', 'companion_object', 'secondary_constructor',
+    // C#
+    'property_declaration',
+    // Swift
+    'protocol_declaration', 'protocol_function_declaration',
+    // Ruby
+    'method', 'singleton_method', 'module'
 ]);
 
 export function getParserForFile(ext) {
@@ -183,6 +237,48 @@ export function extractImportsFromAST(rootNode, ext) {
                     c.type === 'string' || c.type === 'encapsed_string');
                 if (strNode) imports.add(strNode.text.replace(/['"]/g, ''));
             }
+        }        // ── Java ─────────────────────────────────────────────────────────────
+        else if (ext === '.java') {
+            if (node.type === 'import_declaration') {
+                const scopedId = node.children.find(c => c.type === 'scoped_identifier' || c.type === 'identifier');
+                if (scopedId) imports.add(scopedId.text.replace(/\./g, '/'));
+            }
+        }
+        // ── Kotlin ───────────────────────────────────────────────────────────
+        else if (ext === '.kt' || ext === '.kts') {
+            if (node.type === 'import_header') {
+                const path = node.children.find(c => c.type === 'identifier' || c.type === 'user_type' || c.isNamed);
+                const raw = node.text.replace(/^import\s+/, '').replace(/\s*\.\*\s*$/, '').trim();
+                if (raw) imports.add(raw.replace(/\./g, '/'));
+            }
+        }
+        // ── C# ───────────────────────────────────────────────────────────────
+        else if (ext === '.cs') {
+            if (node.type === 'using_directive') {
+                const ns = node.children.find(c => c.type === 'qualified_name' || c.type === 'identifier' || c.type === 'name_equals');
+                if (ns) {
+                    const raw = ns.text.replace(/\s*=\s*.*$/, '').trim();
+                    if (raw) imports.add(raw.replace(/\./g, '/'));
+                }
+            }
+        }
+        // ── Swift ─────────────────────────────────────────────────────────────
+        else if (ext === '.swift') {
+            if (node.type === 'import_declaration') {
+                const pathNode = node.children.find(c => c.type === 'identifier' || c.type === 'scoped_identifier');
+                if (pathNode) imports.add(pathNode.text.replace(/\./g, '/'));
+            }
+        }
+        // ── Ruby ──────────────────────────────────────────────────────────────
+        else if (ext === '.rb') {
+            if (node.type === 'call' || node.type === 'method_call') {
+                const method = node.childForFieldName?.('method') || node.children[0];
+                if (method && (method.text === 'require' || method.text === 'require_relative')) {
+                    const args = node.childForFieldName?.('arguments') || node.children.find(c => c.type === 'argument_list');
+                    const strArg = args?.children?.find(c => c.type === 'string' || c.type === 'simple_string');
+                    if (strArg) imports.add(strArg.text.replace(/['"]/g, ''));
+                }
+            }
         }
         node.children.forEach(walk);
     }
@@ -196,7 +292,12 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
     if (!parser) return chunks;
 
     const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
-    const langKey = JS_LIKE.includes(ext) ? 'ts' : (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null);
+    const EXT_TO_LANG = {
+        '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.cs': 'cs',
+        '.swift': 'swift', '.rb': 'rb'
+    };
+    const langKey = JS_LIKE.includes(ext) ? 'ts'
+        : (EXT_TO_LANG[ext] || (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null));
     if (!langKey || !LANGUAGE_QUERIES[langKey]) return chunks;
 
     // 🥇 HEADER INHERITANCE: Extract top-of-file/global comments for module context
@@ -306,6 +407,11 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             const hash = generateChunkHash(docstring + snippet);
             const outgoingCalls = extractCalls(chunkNode);
 
+            // 🥇 PARAMETER / TYPE / CLASS CONTEXT ENRICHMENT (improves recall on undocumented code)
+            const params = extractParams(chunkNode, ext);
+            const returnType = extractReturnType(chunkNode, ext);
+            const classContext = extractClassContext(chunkNode);
+
             const id = createHash('sha256')
                 .update(`${relPath}::${chunkNode.startPosition.row}::${chunkNode.startPosition.column}`)
                 .digest('hex').slice(0, 24);
@@ -314,7 +420,8 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 id, file_path: relPath, node_type: chunkNode.type, name: nameText,
                 docstring: docstring, code_snippet: snippet, content_hash: hash,
                 start_line: chunkNode.startPosition.row + 1, end_line: chunkNode.endPosition.row + 1,
-                calls: outgoingCalls
+                calls: outgoingCalls,
+                params, return_type: returnType, class_context: classContext
             });
         }
     } catch (e) {
@@ -322,6 +429,88 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
         process.stderr.write(`\n[parser-utils] 💥 Query Error in ${relPath}: ${e.message}\n`);
     }
     return chunks;
+}
+
+// ─── Barrel export resolution ─────────────────────────────────────────────────
+
+// Module-level cache: barrelAbsPath → Map<exportedName, sourceRelPath>
+const _barrelCache = new Map();
+
+/**
+ * Parses a barrel file (index.ts / index.js) and returns a map of
+ * exportedName → sourceFilePath (relative to projectRoot).
+ * e.g. { useAuthStore: 'src/stores/authStore.ts' }
+ */
+export function resolveBarrelExports(barrelAbsPath, projectRoot) {
+    if (_barrelCache.has(barrelAbsPath)) return _barrelCache.get(barrelAbsPath);
+
+    const result = new Map();
+    _barrelCache.set(barrelAbsPath, result);
+
+    const ext = path.extname(barrelAbsPath);
+    if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) return result;
+
+    let content;
+    try { content = fs.readFileSync(barrelAbsPath, 'utf-8'); } catch { return result; }
+
+    const parser = getParserForFile(ext);
+    if (!parser) return result;
+
+    let tree;
+    try { tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null); } catch { return result; }
+
+    const barrelDir = path.dirname(barrelAbsPath);
+
+    function walk(node) {
+        // export { X, Y as Z } from './source'
+        if (node.type === 'export_statement') {
+            const fromNode = node.children.find(c => c.type === 'string');
+            if (!fromNode) { node.children.forEach(walk); return; }
+
+            const rawSource = fromNode.text.replace(/['"]/g, '');
+            if (!rawSource.startsWith('.')) { node.children.forEach(walk); return; }
+
+            // Resolve the source file
+            const absSource = path.resolve(barrelDir, rawSource);
+            let finalAbs = null;
+            if (EXTENSIONS.has(path.extname(absSource)) && fs.existsSync(absSource)) {
+                finalAbs = absSource;
+            } else {
+                for (const e of EXTENSIONS) {
+                    if (fs.existsSync(absSource + e)) { finalAbs = absSource + e; break; }
+                    const idx = path.join(absSource, 'index' + e);
+                    if (fs.existsSync(idx)) { finalAbs = idx; break; }
+                }
+            }
+            if (!finalAbs) { node.children.forEach(walk); return; }
+
+            const relSource = path.relative(projectRoot, finalAbs).replace(/\\/g, '/');
+
+            // Walk named exports
+            const namedExports = node.children.find(c => c.type === 'named_imports' || c.type === 'export_clause');
+            if (namedExports) {
+                for (const child of namedExports.children) {
+                    if (child.type === 'import_specifier' || child.type === 'export_specifier') {
+                        // `alias as exported` or just `name`
+                        const names = child.children.filter(c => c.type === 'identifier');
+                        if (names.length > 0) {
+                            // The exported name is the last identifier (the alias if present)
+                            result.set(names[names.length - 1].text, relSource);
+                        }
+                    }
+                }
+            }
+
+            // export * from './source' → map the source file itself
+            const starNode = node.children.find(c => c.text === '*');
+            if (starNode) {
+                result.set('*', relSource);
+            }
+        }
+        node.children.forEach(walk);
+    }
+    walk(tree.rootNode);
+    return result;
 }
 
 export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
@@ -348,7 +537,26 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
                     }
                 }
             }
-            if (finalAbs) resolved.push(path.relative(projectRoot, finalAbs).replace(/\\/g, '/'));
+            if (finalAbs) {
+                const relPath = path.relative(projectRoot, finalAbs).replace(/\\/g, '/');
+                const baseName = path.basename(finalAbs, path.extname(finalAbs));
+                // 🥇 BARREL RESOLUTION: If the resolved file is an index file, expand barrel exports
+                if (baseName === 'index' && ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(path.extname(finalAbs))) {
+                    const barrelMap = resolveBarrelExports(finalAbs, projectRoot);
+                    if (barrelMap.size > 0) {
+                        // Add all unique source files referenced by this barrel
+                        const sources = new Set(barrelMap.values());
+                        for (const src of sources) {
+                            if (!resolved.includes(src)) resolved.push(src);
+                        }
+                    } else {
+                        // Barrel has no re-exports — keep the barrel file itself
+                        if (!resolved.includes(relPath)) resolved.push(relPath);
+                    }
+                } else {
+                    if (!resolved.includes(relPath)) resolved.push(relPath);
+                }
+            }
         }
         // ── Rust crate-local: crate::module::item → src/module.rs ──────────
         else if (ext === '.rs' && raw.startsWith('crate::')) {
@@ -419,6 +627,65 @@ export async function getLocalEmbeddingsBatch(texts, graceful = true) {
     return null;
 }
 
+// ─── Enrichment helpers (param names, return type, class context) ─────────────
+
+export function extractParams(chunkNode, ext) {
+    const params = [];
+    const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    const paramTypes = JS_LIKE.includes(ext)
+        ? ['required_parameter', 'optional_parameter', 'formal_parameters', 'identifier']
+        : ['parameter', 'formal_parameter', 'identifier'];
+
+    function walkParams(node) {
+        if (node.type === 'formal_parameters' || node.type === 'parameters' || node.type === 'parameter_list') {
+            for (const child of node.children) {
+                // TS: required_parameter / optional_parameter have an identifier child
+                if (child.type === 'required_parameter' || child.type === 'optional_parameter' || child.type === 'formal_parameter') {
+                    const id = child.childForFieldName?.('pattern') || child.childForFieldName?.('name') ||
+                        child.children.find(c => c.type === 'identifier');
+                    if (id) params.push(id.text);
+                    // also grab type annotation text
+                    const typeAnnotation = child.childForFieldName?.('type');
+                    if (typeAnnotation) {
+                        const typeText = typeAnnotation.text.replace(/^:\s*/, '').trim();
+                        if (typeText) params.push(typeText);
+                    }
+                } else if (child.type === 'identifier') {
+                    params.push(child.text);
+                }
+            }
+        }
+        for (const child of node.children) walkParams(child);
+    }
+
+    // Only walk the direct params node to avoid deep recursion into body
+    const paramsNode = chunkNode.childForFieldName?.('parameters') || chunkNode.childForFieldName?.('formal_parameters');
+    if (paramsNode) walkParams(paramsNode);
+    return [...new Set(params)].filter(p => p && p.length > 1).slice(0, 15);
+}
+
+export function extractReturnType(chunkNode, ext) {
+    const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    if (JS_LIKE.includes(ext)) {
+        const retTypeNode = chunkNode.childForFieldName?.('return_type');
+        if (retTypeNode) return retTypeNode.text.replace(/^:\s*/, '').trim().slice(0, 80);
+    }
+    return '';
+}
+
+export function extractClassContext(chunkNode) {
+    let parent = chunkNode.parent;
+    while (parent) {
+        if (parent.type === 'class_declaration' || parent.type === 'class_definition' ||
+            parent.type === 'class_body' || parent.type === 'impl_item') {
+            const nameNode = parent.childForFieldName?.('name');
+            if (nameNode) return nameNode.text;
+        }
+        parent = parent.parent;
+    }
+    return '';
+}
+
 export function extractCalls(rootNode) {
     const calls = new Set();
     function walk(node) {
@@ -449,6 +716,16 @@ export function extractCalls(rootNode) {
         else if (node.type === 'macro_invocation') {
             const macroNode = node.childForFieldName?.('macro') || node.children[0];
             if (macroNode && macroNode.type === 'identifier') calls.add(macroNode.text + '!');
+        }
+        // Java / C#: method_invocation
+        else if (node.type === 'method_invocation') {
+            const nameNode = node.childForFieldName?.('name') || node.children.find(c => c.type === 'identifier');
+            if (nameNode) calls.add(nameNode.text);
+        }
+        // Ruby: method_call / call
+        else if (node.type === 'method_call') {
+            const method = node.childForFieldName?.('method') || node.children.find(c => c.type === 'identifier');
+            if (method && method.type === 'identifier') calls.add(method.text);
         }
         node.children.forEach(walk);
     }

@@ -4,16 +4,16 @@
  * @description MCP Server to expose in-memory graph index with hybrid search capabilities. Connects to local Ollama instance for embedding generation. Zero external dependencies.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
- * @license GPL-3.0-only
- * * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * @license MIT
+ * Copyright (c) 2026 MaquinaTech. All rights reserved.
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions: The above copyright
+ * notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
  */
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -250,7 +250,7 @@ server.tool(
 
             if (!parser) return { content: [{ type: "text", text: "Language not supported for AST parsing." }] };
 
-            const tree = parser.parse(content);
+            const tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null);
             const skeleton = extractFileSkeleton(tree.rootNode, content);
 
             return { content: [{ type: "text", text: `# Skeleton: ${file_path}\n\n${skeleton || "_No semantic signatures found_"}` }] };
@@ -284,6 +284,83 @@ server.tool(
             ].join('\n');
 
             return { content: [{ type: "text", text: md }] };
+        } catch (err) {
+            return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+        }
+    }
+);
+
+server.tool(
+    "list_index_stats",
+    "Returns the current state of the graph-indexer index: chunk count, file count, embedding status, daemon status, and index freshness. Call this first if search results seem wrong or stale.",
+    {},
+    async () => {
+        try {
+            const chunkCount = db.chunks.size;
+            const fileSet = new Set();
+            for (const chunk of db.chunks.values()) fileSet.add(chunk.file_path);
+            const fileCount = fileSet.size;
+
+            const hasEmbeddings = db.vectors.size > 0;
+            const embeddingsEnabled = process.env.INDEXER_EMBEDDINGS !== 'off';
+
+            let indexAge = 'unknown';
+            try {
+                const stat = fs.statSync(INDEX_PATH);
+                const ageMs = Date.now() - stat.mtimeMs;
+                const ageSec = Math.floor(ageMs / 1000);
+                if (ageSec < 60) indexAge = `${ageSec}s ago`;
+                else if (ageSec < 3600) indexAge = `${Math.floor(ageSec / 60)}m ago`;
+                else indexAge = `${Math.floor(ageSec / 3600)}h ago`;
+            } catch { /* file not found */ }
+
+            let daemonStatus = 'unknown';
+            try {
+                if (fs.existsSync(PID_FILE)) {
+                    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8'), 10);
+                    process.kill(pid, 0);
+                    daemonStatus = `running (PID: ${pid})`;
+                } else {
+                    daemonStatus = 'not running';
+                }
+            } catch { daemonStatus = 'not running (stale PID)'; }
+
+            // Extension distribution
+            const extCounts = new Map();
+            for (const chunk of db.chunks.values()) {
+                const ext = chunk.file_path.split('.').pop() || 'unknown';
+                extCounts.set(ext, (extCounts.get(ext) || 0) + 1);
+            }
+
+            const searchMode = !embeddingsEnabled
+                ? '🔤 Lexical only (INDEXER_EMBEDDINGS=off)'
+                : hasEmbeddings
+                    ? '🧠 Hybrid (semantic + lexical RRF)'
+                    : '🔤 Lexical only (Ollama unavailable or not yet indexed)';
+
+            const lines = [
+                `# 📊 graph-indexer Index Stats`,
+                ``,
+                `| Metric | Value |`,
+                `| :--- | :--- |`,
+                `| **Chunks** | ${chunkCount} |`,
+                `| **Files indexed** | ${fileCount} |`,
+                `| **Embeddings loaded** | ${db.vectors.size} |`,
+                `| **Search mode** | ${searchMode} |`,
+                `| **Daemon** | ${daemonStatus} |`,
+                `| **Index age** | ${indexAge} |`,
+                ``,
+                `## Extension Breakdown`,
+                ...Array.from(extCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([ext, count]) => `- .${ext}: ${count} chunks`),
+            ];
+
+            if (chunkCount === 0) {
+                lines.push(``, `⚠️ Index is empty. Run \`npm run mcp:index\` to build it.`);
+            }
+
+            return { content: [{ type: "text", text: lines.join('\n') }] };
         } catch (err) {
             return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
         }

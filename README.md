@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=blue&style=flat-square" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=flat-square" alt="License: GPL-3.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node.js 18+"></a>
 </p>
 
@@ -97,7 +97,34 @@ flowchart LR
 
 ## Quick Start
 
-### 1. Install
+### One-Command Setup
+
+```bash
+npm install graph-indexer --save-dev
+npx graph-indexer init
+npm run mcp:index
+```
+
+`npx graph-indexer init` auto-detects and configures all installed IDEs (Cursor, VS Code, Claude Desktop, Claude Code), adds `mcp:index` / `mcp:watch` / `mcp:start` scripts to your `package.json`, and updates `.gitignore`. Run it again at any time — it's fully idempotent.
+
+Use `--dry-run` to preview changes without writing any files:
+
+```bash
+npx graph-indexer init --dry-run
+```
+
+Then start the MCP server (auto-starts the file watcher daemon too):
+
+```bash
+npm run mcp:start
+```
+
+---
+
+<details>
+<summary><strong>Advanced / Manual Setup</strong></summary>
+
+### Manual Install & Configure
 
 ```bash
 npm install graph-indexer --save-dev
@@ -119,8 +146,6 @@ Add scripts to your project's `package.json`:
 npm run mcp:index
 ```
 
-This scans every source file, builds the AST, generates embeddings via Ollama (if available), and writes `code-index.json` + `code-index.embeddings.bin`.
-
 ### 3. Start the MCP Server
 
 ```bash
@@ -131,11 +156,11 @@ Point your MCP client at this process. The server spawns the file watcher daemon
 
 ### 4. (Optional) Run the File Watcher Manually
 
-For persistent incremental updates in a separate terminal:
-
 ```bash
 npm run mcp:watch
 ```
+
+</details>
 
 ---
 
@@ -321,6 +346,11 @@ Returns which files this file imports, and which files import it.
 | Go | `.go` | function_declaration, method, type | Import spec resolution |
 | PHP | `.php` | function, class | include/require paths |
 | CSS / SCSS | `.css`, `.scss` | rule_set | — |
+| Java | `.java` | class, method, interface, constructor, enum | `import_declaration` → package path |
+| Kotlin | `.kt`, `.kts` | function, class, object, companion, constructor | `import_header` → package path |
+| C# | `.cs` | class, method, interface, constructor, enum, property | `using_directive` → namespace |
+| Swift | `.swift` | function, class, struct, protocol, extension | `import_declaration` → module name |
+| Ruby | `.rb` | method, singleton_method, class, module | `require` / `require_relative` → file path |
 
 ---
 
@@ -488,16 +518,11 @@ Both files are written atomically via a `tmp → rename` pattern to prevent corr
 
 ---
 
-## License & Intellectual Property
+## License
 
-Released under the [GNU General Public License v3.0](LICENSE).
+Released under the [MIT License](LICENSE).
 
-This license ensures:
-- **Copyleft protection**: Any software that incorporates this code must also be released under GPL-3.0.
-- **Attribution**: The original author (MaquinaTech) must be credited.
-- **Source availability**: Any distributed modifications must include source code.
-
-Commercial use is permitted but requires GPL-3.0 compliance. For proprietary licensing inquiries, contact the author.
+Copyright (c) 2026 MaquinaTech. Free to use, modify, and distribute in both open-source and commercial projects.
 
 ---
 

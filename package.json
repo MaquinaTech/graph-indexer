@@ -8,6 +8,7 @@
         ".": "./core-engine.mjs"
     },
     "bin": {
+        "graph-indexer": "init.mjs",
         "idx-index": "indexer.mjs",
         "idx-watch": "watch-daemon.mjs",
         "idx-mcp": "mcp-server.mjs"
@@ -25,6 +26,7 @@
     "scripts": {
         "start": "node ./mcp-server.mjs",
         "test": "node tests/eval-harness.mjs --index ./code-index.json",
+        "e2e": "node tests/e2e-integration.mjs",
         "mcp:index": "node indexer.mjs --repo .",
         "mcp:watch": "node watch-daemon.mjs",
         "mcp:start": "node mcp-server.mjs"
@@ -34,12 +36,17 @@
         "chokidar": "5.0.0",
         "ignore": "5.3.2",
         "tree-sitter": "0.21.1",
+        "tree-sitter-c-sharp": "^0.21.3",
         "tree-sitter-css": "0.21.1",
         "tree-sitter-go": "0.21.0",
+        "tree-sitter-java": "^0.21.0",
         "tree-sitter-javascript": "0.21.4",
+        "tree-sitter-kotlin": "^0.3.8",
         "tree-sitter-php": "0.23.1",
         "tree-sitter-python": "0.21.0",
+        "tree-sitter-ruby": "^0.23.1",
         "tree-sitter-rust": "0.21.0",
+        "tree-sitter-swift": "^0.7.1",
         "tree-sitter-typescript": "0.21.2",
         "zod": "3.23.8"
     },
@@ -60,7 +67,7 @@
         "url": "https://github.com/MaquinaTech",
         "email": "nicolopezdelerma@gmail.com"
     },
-    "license": "GPL-3.0-only",
+    "license": "MIT",
     "engines": {
         "node": ">=18.0.0"
     },
