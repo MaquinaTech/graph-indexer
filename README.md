@@ -1,76 +1,72 @@
-<h1 align="center">graph-indexer-mcp</h1>
+<h1 align="center">graph-indexer</h1>
 
 <p align="center">
   <strong>Zero-DB · Air-Gapped · AST-Precision · Hybrid RRF Search</strong><br>
-  <em>The production-grade Model Context Protocol (MCP) code indexer for AI agents that demand mathematical precision, absolute privacy, and massive token savings.</em>
+  <em>The production-grade MCP code indexer for AI coding agents — surgical context retrieval that cuts token costs by up to 90%.</em>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/graph-indexer-mcp"><img src="https://img.shields.io/npm/v/graph-indexer-mcp?color=blue&style=flat-square" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
+  <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=blue&style=flat-square" alt="npm version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=flat-square" alt="License: GPL-3.0"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-green?style=flat-square" alt="Node.js 18+"></a>
 </p>
 
 ---
 
-## 💸 The ROI: Stop Burning Tokens & Time
+## The Problem: AI Agents Are Context-Blind and Wasteful
 
-When coding with AI agents (Claude Desktop, Cursor, Copilot), **context is money and time**. Standard agents brute-force file reads, pulling thousands of lines of irrelevant code into the context window just to read a single function. This drains your API credits, slows down response times, and confuses the model.
+When you use an AI coding agent (Claude, Cursor, GitHub Copilot) on a real codebase, it operates with **brute-force context**: it reads entire files—often 500–1000 lines—just to find one function. This has three compounding costs:
 
-`graph-indexer-mcp` changes the economics of AI development:
+1. **Token burn:** A single `readFile` on an 800-line file consumes ~10,000 tokens of context window. At GPT-4 pricing, that's money per keystroke.
+2. **Lost in the Middle:** LLMs reliably lose accuracy when the relevant code is buried in a large context. More code ≠ better answers.
+3. **Topology blindness:** File reads give you code, not structure. The agent can't see that `fileA.ts` calls a function from `fileB.ts` unless it reads both. Refactors break silently.
 
-| Metric | Standard Agent Behavior | With `graph-indexer-mcp` | The Impact |
-| :--- | :--- | :--- | :--- |
-| **Token Costs** | Ingests entire 800-line files to find one method (~10k tokens). | Surgically extracts only the exact 15-line AST node (~100 tokens). | **~90% reduction** in input API costs. |
-| **Latency (TTFT)** | LLM struggles to process massive context windows. | LLM parses tiny, high-signal payloads. | **Drastically faster** Time-to-First-Token. |
-| **Code Accuracy** | Suffers from "Lost in the Middle" syndrome. | 100% focused context + Bidirectional AST topology. | **Zero hallucinations.** Right the first time. |
+## The Solution: Surgical, AST-Precise Retrieval
 
----
+`graph-indexer` is a local MCP server that gives your AI agent a **structural map** of the entire codebase instead of raw file access. It works in three steps:
 
-## ⚡ The Problem: Semantic Blindness
+1. **Parse**: Tree-sitter builds an AST of every source file. Every function, class, method, and interface is extracted as a discrete, named chunk with exact line numbers.
+2. **Index**: Each chunk is indexed in two parallel structures — a TF-IDF inverted index for lexical search and a `Float32Array` vector matrix for semantic (embedding) search.
+3. **Serve**: The MCP server exposes tools that let the agent retrieve the exact chunk it needs in a single call, receiving ~100 tokens of surgical context instead of ~10,000 tokens of a full file.
 
-Even if you don't care about costs, standard RAG (Retrieval-Augmented Generation) fails at complex codebases.
-1. **Dumb Chunking:** Splitting code by "character count" breaks functions in half.
-2. **Topology Loss:** Standard search cannot understand that `fileA.ts` imports a function from `fileB.ts`. The agent loses the dependency graph, leading to broken refactors.
-
-## 🚀 The Solution
-
-`graph-indexer-mcp` acts as a surgical retrieval engine for your AI agent. By using Tree-sitter AST parsing, it extracts exact logical units (functions, classes, interfaces) and maps their bidirectional dependencies. 
-
-Combined with a Zero-DB Hybrid Search (Dense Vectors + Sparse TF-IDF), it feeds the LLM **exactly what it needs, and nothing it doesn't**—all entirely in-memory and 100% air-gapped on your local machine.
+The result is **up to 90% reduction in token consumption** with higher code accuracy because the LLM processes only focused, relevant context.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 flowchart LR
     subgraph INPUT["Input Layer"]
         FS["Source Files\n(.ts .js .py .rs .go .css)"]
-        GIT[".gitignore\nFilter (ignore)"]
+        GIT[".gitignore Filter\n(ignore library)"]
     end
 
     subgraph PARSE["AST Layer — Tree-sitter"]
-        AST["Language-Specific\nGrammar Parser"]
+        AST["Language Grammar\nParser (6 languages)"]
         CHUNKS["Semantic Chunk\nExtractor\n(functions · classes · impls)"]
-        DEPS["Import / Dependency\nExtractor"]
+        DEPS["Bidirectional Import\nExtractor"]
     end
 
     subgraph INDEX["Dual Indexing Layer"]
-        EMBED["Ollama\nnomic-embed-text\n→ Float32Array vector"]
-        TFIDF["TF-IDF Inverted Index\n(sublinear scaling)"]
-        GRAPH["Bidirectional\nDependency Graph"]
+        EMBED["Ollama\nnomic-embed-text\n→ Float32Array matrix"]
+        TFIDF["TF-IDF Inverted\nIndex (sublinear tf)"]
+        GRAPH["Dependency Graph\nimportedBy ↔ imports"]
     end
 
-    subgraph SEARCH["Hybrid RRF Fusion"]
-        VEC["Vector Search\n(cosine similarity)"]
-        LEX["Lexical Search\n(TF-IDF)"]
+    subgraph SEARCH["Hybrid RRF Engine"]
+        VEC["Vector Search\n(cosine · flat/HNSW)"]
+        LEX["Lexical Search\n(TF-IDF · CamelCase-aware)"]
         RRF["Reciprocal Rank\nFusion  K=60"]
         BOOST["Exact-Name\nBoost"]
     end
 
-    subgraph MCP["MCP Protocol Layer"]
-        TOOL["search_code tool\n(top_k · min_score · exact_tokens)"]
-        RES["graph:// Resources\n(dependency topology)"]
+    subgraph MCP["MCP Protocol Layer (stdio)"]
+        SC["search_code\ntok-budget aware"]
+        GC["get_chunk"]
+        GFS["get_file_skeleton"]
+        GCG["get_call_graph"]
+        RES["graph:// resources"]
     end
 
     FS --> GIT --> AST --> CHUNKS & DEPS
@@ -78,35 +74,36 @@ flowchart LR
     DEPS --> GRAPH
     EMBED --> VEC
     TFIDF --> LEX
-    VEC & LEX --> RRF --> BOOST --> TOOL
-    GRAPH --> RES
+    VEC & LEX --> RRF --> BOOST --> SC & GC
+    GRAPH --> RES & GFS & GCG
 ```
 
 ---
 
-## ⚔️ Why This Beats Standard RAG
+## Why This Beats Standard RAG
 
-| Feature | **graph-indexer-mcp** | Standard RAG (ChromaDB + naive chunks) |
-| --- | --- | --- |
-| **Chunking Strategy** | AST-precise: functions, classes, impls | Naive line-count or token-count splits |
-| **Infrastructure** | Zero-DB — pure in-memory `Map` + `Float32Array` | External vector DB (Chroma, Pinecone) |
-| **Privacy** | 100% air-gapped (local Ollama) | Often requires cloud embedding APIs |
-| **Search Quality** | Hybrid RRF (Dense Vectors + Sparse Lexical) | Dense-only or BM25-only |
-| **Dependency Context** | Bidirectional AST topology (`importedBy` / `imports`) | None |
-| **Fault Tolerance** | Graceful degradation to pure TF-IDF | Hard failure on embedding downtime |
-| **Latency** | Sub-millisecond (V8 + `Float32Array` SIMD layout) | Network RTT + DB query overhead |
+| Feature | **graph-indexer** | Standard RAG (ChromaDB + text chunks) |
+| :--- | :--- | :--- |
+| **Chunking** | AST-precise: entire functions/classes, never split mid-logic | Naive token-count splits break code in half |
+| **Infrastructure** | Zero-DB — pure in-memory `Map` + `Float32Array` | External vector DB (Chroma, Pinecone, Weaviate) |
+| **Privacy** | 100% air-gapped (local Ollama or lexical-only mode) | Often requires cloud embedding APIs |
+| **Search quality** | Hybrid RRF fusing dense vectors + sparse TF-IDF | Dense-only or BM25-only |
+| **Dependency context** | Bidirectional AST topology for every result | None |
+| **Fault tolerance** | Graceful degradation to pure TF-IDF if Ollama is offline | Hard failure if embedding service is unavailable |
+| **Latency** | Sub-millisecond per query (pure V8 `Float32Array`) | Network RTT + DB overhead |
+| **Languages** | JS/TS/Python/Rust/Go/PHP/CSS | Language-agnostic (no topology) |
 
 ---
 
-## 📦 Installation
+## Quick Start
 
-Add as a development dependency in your repository:
+### 1. Install
 
 ```bash
-npm install graph-indexer-mcp --save-dev
+npm install graph-indexer --save-dev
 ```
 
-Add the execution shortcuts to your `package.json`:
+Add scripts to your project's `package.json`:
 
 ```json
 "scripts": {
@@ -116,123 +113,400 @@ Add the execution shortcuts to your `package.json`:
 }
 ```
 
-### System Requirements
-* **Node.js**: v18+ (ES Modules support)
-* **Ollama**: Running at `http://localhost:11434` with the target model downloaded:
-```bash
-  ollama pull nomic-embed-text
-  ```
-* **C/C++ Build Toolchain (Optional)**: Tree-sitter uses native C++ compilation bindings. If prebuilt binaries are not available for your platform, a local compiler toolchain (GCC/Clang or VS Build Tools) and `node-gyp` may be required.
+### 2. Index Your Repository
 
----
-
-## 🚦 Quick Start
-
-The architecture is decoupled into three non-blocking phases to prevent resource starvation:
-
-### 1. Bootstrap (Initial Indexing)
-Scans the repository, applies your `.gitignore`, builds the `code-index.json`, and generates embeddings:
 ```bash
 npm run mcp:index
 ```
 
-### 2. Daemon (Real-Time Sync)
-Run this in a secondary terminal. It watches for file changes and updates the index atomically with debounced I/O:
-```bash
-npm run mcp:watch
-```
+This scans every source file, builds the AST, generates embeddings via Ollama (if available), and writes `code-index.json` + `code-index.embeddings.bin`.
 
-### 3. MCP Server
-Point your MCP client (Claude Desktop, VS Code Copilot Agent, Cursor) to this command. The server loads RAM in $O(1)$ and communicates seamlessly via `stdio`:
+### 3. Start the MCP Server
+
 ```bash
 npm run mcp:start
 ```
 
+Point your MCP client at this process. The server spawns the file watcher daemon automatically.
+
+### 4. (Optional) Run the File Watcher Manually
+
+For persistent incremental updates in a separate terminal:
+
+```bash
+npm run mcp:watch
+```
+
 ---
 
-## 🛠️ MCP Protocol Exposed Capabilities
+## System Requirements
 
-### `search_code` Tool
-Hybrid semantic + lexical search with dependency topology.
+| Requirement | Details |
+| :--- | :--- |
+| **Node.js** | v18+ (ES Modules) |
+| **Ollama** | Optional. Runs locally for embedding generation. Pull `nomic-embed-text` to enable semantic search. |
+| **Disk** | `code-index.json` (metadata) + `code-index.embeddings.bin` (binary float32 vectors). Both are gitignored by default. |
+
+### Ollama Setup (Optional but Recommended)
+
+```bash
+# Install Ollama: https://ollama.ai
+ollama pull nomic-embed-text
+npm run mcp:index   # now with semantic vectors
+```
+
+### Lexical-Only Mode (No Ollama Required)
+
+```bash
+INDEXER_EMBEDDINGS=off npm run mcp:index
+```
+
+Recall@3 remains 100% for exact-name queries. Semantic recall (concept-to-code) degrades to lexical-only; still effective for most programming tasks.
+
+### Custom Ollama Host
+
+```bash
+# Non-standard port
+OLLAMA_HOST=http://localhost:11435 npm run mcp:index
+
+# Remote server
+OLLAMA_HOST=http://192.168.1.100:11434 npm run mcp:index
+```
+
+---
+
+## IDE / Client Configuration
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "graph-indexer": {
+      "command": "node",
+      "args": ["/absolute/path/to/your/project/node_modules/graph-indexer/mcp-server.mjs"],
+      "env": {
+        "MCP_PROJECT_ROOT": "/absolute/path/to/your/project",
+        "OLLAMA_HOST": "http://localhost:11434"
+      }
+    }
+  }
+}
+```
+
+### VS Code (`.vscode/mcp.json`)
+
+```json
+{
+  "servers": {
+    "graph-indexer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/node_modules/graph-indexer/mcp-server.mjs"],
+      "env": {
+        "MCP_PROJECT_ROOT": "${workspaceFolder}",
+        "OLLAMA_HOST": "http://localhost:11434"
+      }
+    }
+  }
+}
+```
+
+### Cursor (`.cursor/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "graph-indexer": {
+      "command": "node",
+      "args": ["${workspaceFolder}/node_modules/graph-indexer/mcp-server.mjs"],
+      "env": {
+        "MCP_PROJECT_ROOT": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Agent System Prompt
+
+Copy the contents of [`PROMPT.md`](./PROMPT.md) into your agent's system instructions. This document instructs the agent on:
+- When to call which tool (strict priority order)
+- How to write effective `query` and `exact_tokens` parameters
+- Workflow patterns for Q&A, implementation, refactoring, and debugging
+- What NOT to do (file reads without search first, raising `top_k` speculatively, etc.)
+
+---
+
+## MCP Tools Reference
+
+### `search_code`
+
+Hybrid semantic + lexical search. Returns compact signature cards for all results, then fills remaining token budget with code bodies.
 
 | Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `query` | `string` | — | Natural language or code query |
-| `exact_tokens` | `string?` | — | Exact function/class name to artificially boost |
-| `top_k` | `number` | `5` | Results to return (1–20) |
-| `min_score` | `number` | `0.3` | Cosine similarity threshold |
-| `include_topology` | `boolean` | `true` | Append dependency graph context |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | — | Natural language description of the logic to find |
+| `exact_tokens` | `string?` | — | Exact symbol name to guarantee rank-1 placement |
+| `top_k` | `number` | `5` | Number of results (1–20) |
+| `min_score` | `number` | `0.3` | Minimum cosine similarity threshold |
+| `token_budget` | `number?` | 1500 chars | Estimated token budget for code bodies |
+| `include_topology` | `boolean` | `true` | Include `⬇️ Deps` / `⬆️ Used by` / `🔗 Calls` in output |
 
-### `graph://` URI Resource
-Returns the full bidirectional dependency topology for any indexed file instantly, without consuming search compute.
-```text
-URI: graph://dependencies/src/auth/middleware.ts
+**Example response:**
 ```
-**Agent Response Output:**
-```markdown
-# Dependency Topology: `src/auth/middleware.ts`
-
-## Imports (2)
-- `src/utils/jwt.ts`
-- `src/db/session.ts`
-
-## Imported By (3)
-- `src/routes/api.ts`
-- `src/routes/admin.ts`
-- `src/app.ts`
+#1 · validateToken [function_declaration]
+📄 src/utils/jwt.ts:14–42 · ID: `a3f9c1b2` · RRF: 0.0321
+💬 Validates and decodes a JWT access token. Throws on expiry.
+⬇️  Deps:    src/config/env.ts [JWT_SECRET] | src/utils/errors.ts [AuthError]
+⬆️  Used by: src/middleware/auth.ts, src/routes/api.ts
+🔗 Calls:   verify, decodePayload, throwIfExpired
+↩️  Expand body: get_chunk("a3f9c1b2")
 ```
 
 ---
 
-## 🌍 Polyglot Extension Guide
+### `get_chunk`
 
-`graph-indexer-mcp` is polyglot by design. Adding a new language takes four steps. Example for **PHP**:
+Retrieves the full source body of one chunk by ID. Use this after `search_code` instead of reading the whole file.
 
-1. **Install the Grammar:**
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `chunk_id` | `string` | The ID shown in `search_code` results |
+
+---
+
+### `get_file_skeleton`
+
+Returns only the names and line ranges of all functions/classes in a file — no code bodies. ~50 tokens instead of thousands.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `file_path` | `string` | Relative path (e.g. `src/components/Button.tsx`) |
+
+---
+
+### `get_call_graph`
+
+Finds every chunk in the repo that calls a specific function by name. Critical before any signature change.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `target_function` | `string` | Exact function name (e.g. `validateToken`) |
+
+---
+
+### `graph://dependencies/{file_path}` Resource
+
+Fetches the full bidirectional dependency topology for a file without consuming any search quota.
+
+```
+URI: graph://dependencies/src/middleware/auth.ts
+```
+
+Returns which files this file imports, and which files import it.
+
+---
+
+## Supported Languages
+
+| Language | Extensions | Chunk Types | Import Resolution |
+| :--- | :--- | :--- | :--- |
+| TypeScript / TSX | `.ts`, `.tsx` | functions, classes, methods, exports | Absolute & relative paths |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | functions, classes, expressions | Absolute & relative paths |
+| Python | `.py` | function_definition, class_definition | Relative imports (`.`, `..`) → file paths |
+| Rust | `.rs` | fn, struct, enum, trait, impl | `crate::` path resolution |
+| Go | `.go` | function_declaration, method, type | Import spec resolution |
+| PHP | `.php` | function, class | include/require paths |
+| CSS / SCSS | `.css`, `.scss` | rule_set | — |
+
+---
+
+## Performance & Evaluation
+
+Validate indexer quality on your own codebase:
+
 ```bash
-   npm install tree-sitter-php
-   ```
-2. **Map the Extension** (in `indexer.mjs` and `watch-daemon.mjs`):
-```javascript
-   import PHP from 'tree-sitter-php';
-   const LANGUAGE_MAP = { '.php': PHP.php };
-   ```
-3. **Register Semantic Nodes:**
-```javascript
-   const SEMANTIC_NODES = new Set(['function_definition', 'class_declaration']);
-   ```
-4. **Teach the Import Extractor:**
-```javascript
-   // Inside extractImportsFromAST()
-   else if (node.type === 'require_expression' && ext === '.php') { ... }
-   ```
-Restart the daemon, and your `.php` files are immediately AST-extracted, dual-indexed, and searchable.
+npm run test
+# or with custom Ollama:
+OLLAMA_HOST=http://localhost:11435 npm run test
+```
+
+### Benchmark Results
+
+| Scenario | Recall@3 | Recall@5 | Latency (p50) |
+| :--- | :--- | :--- | :--- |
+| graph-indexer own codebase (34 chunks, lexical-only) | **100%** | 100% | 0.07 ms |
+| graph-indexer own codebase (34 chunks, with Ollama) | **75%** | 100% | 0.14 ms |
+| React Native project (311 chunks, with Ollama) | **58%** | 75% | 1.02 ms |
+
+> The React Native project numbers are without any JSDoc in the source files. Adding docstrings to exported functions (see Best Practices below) brings recall to **100% @3**.
+
+### Vector Search Performance
+
+| Corpus size | Pure JS flat scan | HNSW (auto-activated ≥5k) |
+| :--- | :--- | :--- |
+| 1,000 chunks (dim=768) | 0.9 ms/query | — |
+| 5,000 chunks (dim=768) | 4.5 ms/query | 1.2 ms/query |
+| 20,000 chunks (dim=768) | 30.5 ms/query | 3.1 ms/query |
 
 ---
 
-## 🧮 Mathematical Integrity
+## Best Practices for 100% Recall
+
+### 1. Add JSDoc/TSDoc to Exported Functions
+
+The indexer embeds your docstrings alongside code. Docstrings dramatically improve semantic search:
+
+```typescript
+/**
+ * Validates and decodes a JWT access token.
+ * Throws AuthError if the token is expired or malformed.
+ *
+ * @param token - Raw JWT string from Authorization header
+ * @returns Decoded payload with userId, role, and expiry
+ */
+export function validateToken(token: string): TokenPayload { ... }
+```
+
+### 2. Use Descriptive, Specific Names
+
+The exact-name boost gives a free rank-1 slot to any chunk whose name exactly matches `exact_tokens`. Descriptive names make this reliable:
+
+```typescript
+// ✅ Exact-name searchable
+export const useNotificationPermissionStatus = () => { ... };
+export function calculateTripDurationInDays(start: Date, end: Date) { ... }
+
+// ❌ Generic — impossible to target without semantic search
+export const util = () => { ... };
+export function process(data: any) { ... }
+```
+
+### 3. Expand Minimal Utility Files
+
+Files with fewer than ~5 indexable lines produce zero or one chunk. Add error handling and validation to make them indexable:
+
+```typescript
+// ❌ 2 lines — may not be indexed
+export const Context = createContext(null);
+export const useCtx = () => useContext(Context);
+
+// ✅ Indexable with meaningful docstring + validation
+/**
+ * Context for accessing authentication state throughout the component tree.
+ */
+export const AuthContext = createContext<AuthState | null>(null);
+
+/**
+ * Hook for consuming AuthContext. Throws if used outside AuthProvider.
+ */
+export function useAuth(): AuthState {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>');
+  return ctx;
+}
+```
+
+### 4. Keep Imports Explicit and Organized
+
+The topology graph follows import paths. Barrel re-exports from `index.ts` break dependency resolution — prefer direct imports:
+
+```typescript
+// ✅ Topology-friendly
+import { useAuthStore } from '@/stores/authStore';
+import { validateEmail } from '@/utils/validators';
+
+// ❌ Breaks topology — indexer can't resolve what's actually imported
+import { useAuthStore, validateEmail } from '@/index';
+```
+
+---
+
+## File Structure
+
+```
+graph-indexer/
+├── core-engine.mjs        # In-memory index: vector matrix, TF-IDF, RRF search, save/load
+├── parser-utils.mjs       # Tree-sitter AST parsing, 6 language grammars, Ollama embeddings
+├── indexer.mjs            # CLI bootstrap: scan repo → parse → embed → write index
+├── watch-daemon.mjs       # Chokidar daemon: incremental real-time index updates
+├── mcp-server.mjs         # MCP stdio server: exposes tools + graph:// resources
+├── PROMPT.md              # Agent system prompt — paste into your IDE's agent instructions
+├── tests/
+│   ├── eval-harness.mjs   # Recall@k + latency evaluation against the indexer's own codebase
+│   └── react-native-test.mjs  # Real-world quality test on a 311-chunk React Native project
+└── package.json
+```
+
+---
+
+## Mathematical Foundation
 
 ### Sublinear TF Scaling
-Term frequencies are aggressively scaled to compress dynamic range:
+
+Term frequencies use sublinear scaling to prevent common tokens (`return`, `const`) from burying business-logic terms:
+
 $$w(t,d) = 1 + \log(f_{t,d})$$
-This prevents ubiquitous keywords like `return` or `const` from statistically drowning out semantically rich but less-frequent business logic identifiers.
 
-### Reciprocal Rank Fusion (RRF)
-Vector and Lexical scores are merged by rank position rather than raw incompatible scores:
-$$\text{score}(d) = \sum_{i} \frac{1}{K + \text{rank}_i(d)} \quad K = 60$$
-The exact-name boost adds $1/(K+1)$ (the theoretical maximum single-list contribution) to any AST chunk whose `name` exactly matches the `exact_tokens` parameter.
+### Reciprocal Rank Fusion
 
----
+Vector and lexical results are merged by rank position, not raw incompatible scores:
 
-## 👥 Author & Maintainer
+$$\text{RRF}(d) = \sum_{i \in \{\text{vec, lex}\}} \frac{1}{K + \text{rank}_i(d)}, \quad K = 60$$
 
-Engineered and maintained by **MaquinaTech**.
-* **GitHub:** [@MaquinaTech](https://github.com/MaquinaTech)
-* **NPM:** [graph-indexer-mcp](https://www.npmjs.com/package/graph-indexer-mcp)
+### Exact-Name Boost
 
-Contributions, issues, and pull requests are highly encouraged.
+Any chunk whose name exactly matches `exact_tokens` receives an additive bonus equal to the maximum single-list RRF contribution:
+
+$$\Delta\text{score} = \frac{1}{K + 1}$$
+
+This guarantees rank-1 placement for any exact symbol name query.
 
 ---
 
-## 📄 License
-Released under the [MIT License](LICENSE).
+## How the Index Files Work
+
+| File | Purpose | Typical Size |
+| :--- | :--- | :--- |
+| `code-index.json` | Chunk metadata (names, file paths, docstrings, calls, graph) | ~200 KB / 1k chunks |
+| `code-index.embeddings.bin` | Binary `float32` embedding vectors (4.8× smaller than JSON) | ~3 MB / 1k chunks @768-dim |
+
+Both files are written atomically via a `tmp → rename` pattern to prevent corruption on crash. Both should be added to `.gitignore`.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
+| `INDEXER_EMBEDDINGS` | — | Set to `off` to disable embeddings entirely |
+| `MCP_PROJECT_ROOT` | `process.cwd()` | Absolute path to the project being indexed |
+
+---
+
+## License & Intellectual Property
+
+Released under the [GNU General Public License v3.0](LICENSE).
+
+This license ensures:
+- **Copyleft protection**: Any software that incorporates this code must also be released under GPL-3.0.
+- **Attribution**: The original author (MaquinaTech) must be credited.
+- **Source availability**: Any distributed modifications must include source code.
+
+Commercial use is permitted but requires GPL-3.0 compliance. For proprietary licensing inquiries, contact the author.
+
+---
+
+## Author
+
+Built and maintained by **MaquinaTech**.
+
+- **GitHub:** [github.com/MaquinaTech](https://github.com/MaquinaTech)
+- **NPM:** [npmjs.com/package/graph-indexer](https://www.npmjs.com/package/graph-indexer)
+- **Issues:** [github.com/MaquinaTech/graph-indexer/issues](https://github.com/MaquinaTech/graph-indexer/issues)
+
+Issues, pull requests, and feature discussions are welcome.

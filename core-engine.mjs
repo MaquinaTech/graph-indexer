@@ -3,20 +3,34 @@
  * @description In-Memory Graph Indexer Core Engine.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
- * @license MIT
+ * @license GPL-3.0-only
+ * * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 import fs from 'fs';
 
-// Maximum character length for embedding API prompts.
-// Prevents HTTP 400 errors from local Ollama instances with strict context limits.
 export const EMBEDDING_CONTEXT_LIMIT = 8000;
 
-/** Safely truncate text to the embedding context window before an API call. */
+// Optional HNSW accelerator for large corpora (≥ HNSW_THRESHOLD vectors).
+// Falls back silently to exact flat scan if the package is not installed.
+const HNSW_THRESHOLD = 5000;
+let HierarchicalNSW = null;
+try {
+    const mod = await import('hnswlib-node');
+    HierarchicalNSW = mod.HierarchicalNSW ?? mod.default?.HierarchicalNSW ?? null;
+} catch { /* not installed — flat scan will be used */ }
+
 export function truncateForEmbedding(text) {
     return text.length > EMBEDDING_CONTEXT_LIMIT ? text.slice(0, EMBEDDING_CONTEXT_LIMIT) : text;
 }
 
-// V8-optimized cosine similarity using typed arrays for SIMD-friendly memory layout
 export function cosineSimilarity(vecA, vecB) {
     let dotProduct = 0, normA = 0, normB = 0;
     for (let i = 0; i < vecA.length; i++) {
@@ -27,37 +41,76 @@ export function cosineSimilarity(vecA, vecB) {
     return normA === 0 || normB === 0 ? 0 : dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Native lexical tokenizer (Zero dependencies)
 function tokenize(text) {
-    // Lowercase, extract alphanumeric words > 2 characters
-    return text.toLowerCase().split(/[\s\W_]+/).filter(w => w.length > 2);
+    if (!text) return [];
+    const rawTokens = text.split(/[\s\W_]+/);
+    const tokens = [];
+
+    for (const word of rawTokens) {
+        if (word.length < 2) continue; // Skip very short tokens (e.g., single letters)
+        tokens.push(word.toLowerCase());
+
+        // Split CamelCase and PascalCase into parts
+        // E.g.: "TripList" -> "Trip", "List" -> "trip", "list"
+        // E.g.: "useTripsPage" -> "use", "Trips", "Page" -> "use", "trips", "page"
+        const camelParts = word.replace(/([a-z])([A-Z])/g, '$1 $2').split(' ');
+
+        if (camelParts.length > 1) {
+            for (const part of camelParts) {
+                if (part.length >= 2) tokens.push(part.toLowerCase());
+            }
+        }
+    }
+    return tokens;
+}
+
+/**
+ * Serializes an embeddingCache (Map<hash,Float32Array> or plain object {hash:number[]})
+ * to a compact binary buffer. Format per entry:
+ *   [uint32 hashLen][utf8 hash][uint32 dim][float32 * dim]
+ * The buffer is ~4.8× smaller than JSON float text.
+ */
+export function writeEmbeddingBinary(embeddingCache) {
+    const entries = embeddingCache instanceof Map
+        ? Array.from(embeddingCache.entries())
+        : Object.entries(embeddingCache);
+    let size = 4; // count header
+    for (const [hash, vec] of entries) {
+        size += 4 + Buffer.byteLength(hash, 'utf8') + 4 + vec.length * 4;
+    }
+    const buf = Buffer.allocUnsafe(size);
+    let off = 0;
+    buf.writeUInt32LE(entries.length, off); off += 4;
+    for (const [hash, vec] of entries) {
+        const hashBytes = Buffer.from(hash, 'utf8');
+        buf.writeUInt32LE(hashBytes.length, off); off += 4;
+        hashBytes.copy(buf, off); off += hashBytes.length;
+        buf.writeUInt32LE(vec.length, off); off += 4;
+        for (let d = 0; d < vec.length; d++) { buf.writeFloatLE(vec[d], off); off += 4; }
+    }
+    return buf;
 }
 
 export class MemoryGraphIndex {
-    /**
-     * @param {string} indexPath - Absolute path to the code-index.json persistence file.
-     * @param {object} [options]
-     * @param {number} [options.rrfK=60] - Reciprocal Rank Fusion constant K.
-     *   The RRF paper (Cormack et al., 2009) recommends K=60 as the stabilizing
-     *   constant. Higher K smooths rank differences; lower K amplifies top-rank
-     *   advantages. K=60 is the well-validated default for mixed retrieval tasks.
-     */
     constructor(indexPath, { rrfK = 60 } = {}) {
         this.indexPath = indexPath;
         this.chunks = new Map();
         this.vectors = new Map();
         this.graph = { dependencies: {}, importedBy: {} };
-
-        // Reciprocal Rank Fusion constant — tunable per corpus characteristics
+        this.embeddingCache = new Map();
         this.rrfK = rrfK;
-
-        // TF-IDF Lexical structures
         this.docCount = 0;
-        this.df = new Map(); // Document Frequency: term → count of chunks containing it
-        this.tf = new Map(); // Term Frequency: chunkId → Map(term → sublinear_tf_weight)
-
-        // Timer handle for saveDebounced()
+        this.df = new Map();
+        this.tf = new Map();
         this._saveTimer = null;
+        // Flat vector matrix for O(N·d) exact cosine search — no N-API overhead
+        this._matrixDirty = true;
+        this._vecMatrix = null;   // Float32Array(N × dim)
+        this._vecNorms = null;    // Float32Array(N) — pre-computed L2 norms
+        this._vecIds = [];        // string[N] — row-index → chunk-id lookup
+        this._dim = 0;
+        this._hnsw = null;        // HierarchicalNSW instance (optional large-repo accelerator)
+        this._embeddingPath = indexPath.replace(/\.json$/, '.embeddings.bin');
     }
 
     load() {
@@ -65,23 +118,33 @@ export class MemoryGraphIndex {
         const data = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
         this.graph = data.graph || { dependencies: {}, importedBy: {} };
 
+        // Prefer binary sidecar (~4.8× smaller); fall back to JSON embeddingCache for old indexes
+        if (fs.existsSync(this._embeddingPath)) {
+            this._loadEmbeddingBinary(fs.readFileSync(this._embeddingPath));
+        } else {
+            for (const [hash, vec] of Object.entries(data.embeddingCache || {})) {
+                this.embeddingCache.set(hash, new Float32Array(vec));
+            }
+        }
+
         for (const chunk of data.chunks) {
             this.chunks.set(chunk.id, chunk);
-            if (chunk.embedding) {
-                this.vectors.set(chunk.id, new Float32Array(chunk.embedding));
+            if (chunk.content_hash && this.embeddingCache.has(chunk.content_hash)) {
+                this.vectors.set(chunk.id, this.embeddingCache.get(chunk.content_hash));
+            } else if (chunk.embedding) {
+                const vec = new Float32Array(chunk.embedding);
+                this.vectors.set(chunk.id, vec);
+                if (chunk.content_hash) this.embeddingCache.set(chunk.content_hash, vec);
             }
-            this._indexLexical(chunk.id, chunk.code_snippet);
+
+            const deps = this.graph.dependencies[chunk.file_path] || [];
+            const cleanDeps = deps.map(d => d.split('/').pop().split('.')[0]);
+
+            const enrichedContext = `${chunk.name} ${chunk.docstring || ''} ${cleanDeps.join(' ')} ${(chunk.calls || []).join(' ')} ${chunk.code_snippet}`;
+            this._indexLexical(chunk.id, enrichedContext);
         }
     }
 
-    /**
-     * Add a chunk to the TF-IDF inverted index.
-     *
-     * Uses sublinear TF scaling: weight = 1 + log(raw_count)
-     * This compresses the dynamic range of term frequencies, preventing
-     * high-frequency but low-information tokens (e.g., `return`, `const`)
-     * from overwhelming semantically rich but less-repeated identifiers.
-     */
     _indexLexical(chunkId, text) {
         const tokens = tokenize(text);
         if (tokens.length === 0) return;
@@ -93,7 +156,6 @@ export class MemoryGraphIndex {
 
         const tfMap = new Map();
         for (const [term, count] of termCounts.entries()) {
-            // Sublinear TF scaling: 1 + log(count) instead of raw count/total
             tfMap.set(term, 1 + Math.log(count));
             this.df.set(term, (this.df.get(term) || 0) + 1);
         }
@@ -102,114 +164,176 @@ export class MemoryGraphIndex {
         this.docCount++;
     }
 
-    /**
-     * Remove a chunk from the TF-IDF inverted index.
-     *
-     * Prevents memory leaks during incremental index updates (file saves/deletes).
-     * Decrements document frequency for each term the chunk contributed;
-     * fully removes term entries when their document frequency reaches zero.
-     */
     _removeLexical(chunkId) {
         const tfMap = this.tf.get(chunkId);
         if (!tfMap) return;
-
         for (const term of tfMap.keys()) {
             const freq = this.df.get(term);
             if (freq === undefined) continue;
-            if (freq <= 1) {
-                this.df.delete(term); // Prune orphaned term entry to reclaim memory
-            } else {
-                this.df.set(term, freq - 1);
-            }
+            if (freq <= 1) this.df.delete(term);
+            else this.df.set(term, freq - 1);
         }
-
         this.tf.delete(chunkId);
         this.docCount = Math.max(0, this.docCount - 1);
     }
 
-    /** Pure lexical search using TF-IDF with sublinear term frequencies. */
     _searchLexical(queryText) {
         const queryTokens = tokenize(queryText);
         const scores = new Map();
-
         for (const token of queryTokens) {
             const docFreq = this.df.get(token);
             if (!docFreq) continue;
-
-            // IDF = log(N / df): penalizes terms appearing in many chunks
             const idf = Math.log(this.docCount / docFreq);
-
             for (const [chunkId, tfMap] of this.tf.entries()) {
-                const tf = tfMap.get(token); // Pre-scaled sublinear weight from _indexLexical
-                if (tf) {
-                    scores.set(chunkId, (scores.get(chunkId) || 0) + tf * idf);
-                }
+                const tf = tfMap.get(token);
+                if (tf) scores.set(chunkId, (scores.get(chunkId) || 0) + tf * idf);
             }
         }
-
         return Array.from(scores.entries())
             .sort((a, b) => b[1] - a[1])
             .map(([id, score], rank) => ({ id, score, rank: rank + 1 }));
     }
 
-    /** Pure vector search using cosine similarity. */
-    _searchVector(queryVector, minScore = 0.3) {
-        const qVec = new Float32Array(queryVector);
-        const results = [];
-
-        for (const [id, vec] of this.vectors.entries()) {
-            const score = cosineSimilarity(qVec, vec);
-            if (score > minScore) results.push({ id, score });
-        }
-
-        return results
-            .sort((a, b) => b.score - a.score)
-            .map((item, rank) => ({ ...item, rank: rank + 1 }));
+    _invalidateMatrix() {
+        this._matrixDirty = true;
+        this._hnsw = null;
     }
 
-    /**
-     * Hybrid search using Reciprocal Rank Fusion (RRF).
-     *
-     * RRF Formula:  score(d) = Σᵢ  1 / (K + rankᵢ(d))
-     *
-     * Merges vector and lexical result lists by rank position rather than raw
-     * scores, making it robust to differing score scales (cosine vs TF-IDF).
-     * Degrades gracefully to pure TF-IDF when queryVector is null (e.g., when
-     * Ollama is unavailable).
-     *
-     * @param {string} queryText - The search query.
-     * @param {number[]|null} queryVector - Pre-computed query embedding (null = lexical-only mode).
-     * @param {number} topK - Number of top results to return.
-     * @param {number} minScore - Minimum cosine similarity threshold.
-     * @param {string|null} exactBoostName - Exact function/class name to boost.
-     *   Chunks whose `name` exactly matches this string receive an additional
-     *   1/(K+1) RRF boost — equivalent to a rank-1 hit in a third virtual result
-     *   list — prioritising named-symbol lookups without breaking fusion math.
-     */
+    addVector(id, vec) {
+        this.vectors.set(id, vec);
+        this._invalidateMatrix();
+    }
+
+    removeVector(id) {
+        if (this.vectors.delete(id)) this._invalidateMatrix();
+    }
+
+    _rebuildMatrix() {
+        const ids = Array.from(this.vectors.keys());
+        const n = ids.length;
+        this._vecIds = ids;
+        if (n === 0) {
+            this._vecMatrix = null;
+            this._vecNorms = null;
+            this._dim = 0;
+            this._hnsw = null;
+            this._matrixDirty = false;
+            return;
+        }
+        const dim = this.vectors.get(ids[0]).length;
+        this._dim = dim;
+        const matrix = new Float32Array(n * dim);
+        const norms = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const v = this.vectors.get(ids[i]);
+            let normSq = 0;
+            const base = i * dim;
+            for (let d = 0; d < dim; d++) {
+                const vd = v[d];
+                matrix[base + d] = vd;
+                normSq += vd * vd;
+            }
+            norms[i] = Math.sqrt(normSq);
+        }
+        this._vecMatrix = matrix;
+        this._vecNorms = norms;
+        this._matrixDirty = false;
+
+        // Build HNSW index for large corpora when library is available
+        if (HierarchicalNSW && n >= HNSW_THRESHOLD) {
+            try {
+                const hnsw = new HierarchicalNSW('cosine', dim);
+                hnsw.initIndex(n, 16, 200, 100);
+                if (typeof hnsw.setEf === 'function') hnsw.setEf(100);
+                const buf = new Array(dim);
+                for (let i = 0; i < n; i++) {
+                    const base = i * dim;
+                    for (let d = 0; d < dim; d++) buf[d] = matrix[base + d];
+                    hnsw.addPoint(buf, i);
+                }
+                this._hnsw = hnsw;
+            } catch (e) {
+                process.stderr.write(`[core-engine] HNSW build failed, using flat scan: ${e.message}\n`);
+                this._hnsw = null;
+            }
+        }
+    }
+
+    _searchVector(queryVector, minScore = 0.3) {
+        if (this.vectors.size === 0) return [];
+        if (this._matrixDirty) this._rebuildMatrix();
+        if (!this._vecMatrix) return [];
+        if (queryVector.length !== this._dim) return [];
+
+        const n = this._vecIds.length;
+        const dim = this._dim;
+
+        // Pre-compute query L2 norm once
+        let qNorm = 0;
+        for (let d = 0; d < dim; d++) qNorm += queryVector[d] * queryVector[d];
+        qNorm = Math.sqrt(qNorm);
+        if (qNorm === 0) return [];
+
+        // Large-corpus fast path: approximate nearest-neighbour via HNSW
+        if (this._hnsw) {
+            const topK = Math.min(200, n);
+            try {
+                const qArr = Array.isArray(queryVector) ? queryVector : Array.from(queryVector);
+                const { neighbors, distances } = this._hnsw.searchKnn(qArr, topK);
+                const results = [];
+                for (let i = 0; i < neighbors.length; i++) {
+                    const score = 1 - distances[i]; // cosine distance → similarity
+                    if (score > minScore) results.push({ id: this._vecIds[neighbors[i]], score, rank: i + 1 });
+                }
+                return results;
+            } catch {
+                // HNSW search failed; fall through to exact flat scan
+            }
+        }
+
+        // Exact brute-force flat scan — O(N·d), no marshalling overhead
+        const results = [];
+        for (let i = 0; i < n; i++) {
+            const base = i * dim;
+            let dp = 0;
+            for (let d = 0; d < dim; d++) dp += queryVector[d] * this._vecMatrix[base + d];
+            const score = dp / (qNorm * this._vecNorms[i]);
+            if (score > minScore) results.push({ id: this._vecIds[i], score, rank: 0 });
+        }
+        results.sort((a, b) => b.score - a.score);
+        for (let i = 0; i < results.length; i++) results[i].rank = i + 1;
+        return results;
+    }
+
     searchHybrid(queryText, queryVector, topK = 5, minScore = 0.3, exactBoostName = null) {
         const lexicalResults = this._searchLexical(queryText);
         const vectorResults = queryVector ? this._searchVector(queryVector, minScore) : [];
-
         const rrfScores = new Map();
         const K = this.rrfK;
+        const allResults = [...vectorResults, ...lexicalResults];
 
-        // Accumulate vector ranks
-        for (const { id, rank } of vectorResults) {
-            rrfScores.set(id, (rrfScores.get(id) || 0) + 1 / (K + rank));
+        const queryLower = queryText.toLowerCase();
+        for (const { id, rank } of allResults) {
+            let baseScore = 1 / (K + rank);
+            const chunk = this.chunks.get(id);
+            if (!chunk) continue;
+
+            // Generic: demote test/spec files when the query is not about tests
+            if (/\.(test|spec)\.|[/\\]__tests__[/\\]|_test\./.test(chunk.file_path)) {
+                if (!queryLower.includes('test') && !queryLower.includes('spec')) baseScore *= 0.6;
+            }
+            // Prefer definitions (functions/classes/impls) over pure usage/expression sites
+            if (chunk.node_type === 'expression_statement' || chunk.node_type === 'call_expression') {
+                baseScore *= 0.8;
+            }
+
+            rrfScores.set(id, (rrfScores.get(id) || 0) + baseScore);
         }
 
-        // Accumulate lexical ranks
-        for (const { id, rank } of lexicalResults) {
-            rrfScores.set(id, (rrfScores.get(id) || 0) + 1 / (K + rank));
-        }
-
-        // Exact-name boost: applied after both lists merge to preserve RRF integrity.
-        // Adds 1/(K+1) — the maximum possible single-list contribution — for any
-        // chunk whose name exactly matches the provided token.
         if (exactBoostName) {
-            const boostTerm = exactBoostName.toLowerCase().trim();
+            const boostTerm = String(exactBoostName).toLowerCase().trim();
             for (const [id, chunk] of this.chunks.entries()) {
-                if (chunk.name && chunk.name.toLowerCase() === boostTerm) {
+                if (chunk.name && String(chunk.name).toLowerCase() === boostTerm) {
                     rrfScores.set(id, (rrfScores.get(id) || 0) + 1 / (K + 1));
                 }
             }
@@ -222,42 +346,46 @@ export class MemoryGraphIndex {
             .filter(r => r.chunk !== undefined);
     }
 
-    /**
-     * Atomically persist the index to disk using non-blocking async I/O.
-     *
-     * Write-to-tmp-then-rename pattern guarantees zero data corruption:
-     * the OS rename syscall is atomic, so readers always see a complete valid file.
-     */
-    async save() {
-        const chunksData = Array.from(this.chunks.values()).map(c => ({
-            ...c,
-            embedding: this.vectors.has(c.id) ? Array.from(this.vectors.get(c.id)) : null
-        }));
-
-        const payload = JSON.stringify({ chunks: chunksData, graph: this.graph });
-        const tmpPath = `${this.indexPath}.tmp`;
-        await fs.promises.writeFile(tmpPath, payload);
-        await fs.promises.rename(tmpPath, this.indexPath);
+    _loadEmbeddingBinary(buf) {
+        let off = 0;
+        const count = buf.readUInt32LE(off); off += 4;
+        for (let i = 0; i < count; i++) {
+            const hashLen = buf.readUInt32LE(off); off += 4;
+            const hash = buf.subarray(off, off + hashLen).toString('utf8'); off += hashLen;
+            const dim = buf.readUInt32LE(off); off += 4;
+            const vec = new Float32Array(dim);
+            for (let d = 0; d < dim; d++) { vec[d] = buf.readFloatLE(off); off += 4; }
+            this.embeddingCache.set(hash, vec);
+        }
     }
 
-    /**
-     * Debounced save: batches rapid consecutive writes into a single disk flush.
-     *
-     * Prevents event-loop saturation during IDE auto-save bursts (multiple files
-     * saved in quick succession) by coalescing all writes within the delay window
-     * into one async save at the end of the quiet period.
-     *
-     * @param {number} delayMs - Debounce window in milliseconds (default: 3000ms).
-     */
+    async save() {
+        const chunksData = Array.from(this.chunks.values()).map(c => ({
+            id: c.id, file_path: c.file_path, node_type: c.node_type,
+            name: c.name, docstring: c.docstring || '', code_snippet: c.code_snippet,
+            content_hash: c.content_hash, start_line: c.start_line, end_line: c.end_line,
+            calls: c.calls || []
+        }));
+        // Embeddings go to a compact binary sidecar — NOT in the JSON payload
+        const payload = JSON.stringify({ chunks: chunksData, graph: this.graph });
+        const tmpPath = `${this.indexPath}.tmp`;
+        const tmpBinPath = `${this._embeddingPath}.tmp`;
+        await Promise.all([
+            fs.promises.writeFile(tmpPath, payload),
+            fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(this.embeddingCache)),
+        ]);
+        await Promise.all([
+            fs.promises.rename(tmpPath, this.indexPath),
+            fs.promises.rename(tmpBinPath, this._embeddingPath),
+        ]);
+    }
+
     saveDebounced(delayMs = 3000) {
         if (this._saveTimer) clearTimeout(this._saveTimer);
         this._saveTimer = setTimeout(async () => {
             this._saveTimer = null;
-            try {
-                await this.save();
-            } catch (err) {
-                process.stderr.write(`[core-engine] ❌ Async save failed: ${err.message}\n`);
-            }
+            try { await this.save(); }
+            catch (err) { process.stderr.write(`[core-engine] ❌ Async save failed: ${err.message}\n`); }
         }, delayMs);
     }
 
@@ -268,14 +396,10 @@ export class MemoryGraphIndex {
                 this.graph.importedBy[oldDep] = this.graph.importedBy[oldDep].filter(f => f !== filePath);
             }
         }
-
         this.graph.dependencies[filePath] = imports;
-
         for (const dep of imports) {
             if (!this.graph.importedBy[dep]) this.graph.importedBy[dep] = [];
-            if (!this.graph.importedBy[dep].includes(filePath)) {
-                this.graph.importedBy[dep].push(filePath);
-            }
+            if (!this.graph.importedBy[dep].includes(filePath)) this.graph.importedBy[dep].push(filePath);
         }
     }
 }

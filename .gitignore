@@ -1,4 +1,49 @@
+# Generated Index Files (USER-SPECIFIC)
 code-index.json
+code-index.embeddings.bin
+code-index.json.tmp
+code-index.embeddings.bin.tmp
 *.tmp
+
+# Runtime / Daemon
+.idx-daemon.pid
+.idx-daemon.log
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+.env.production.local
+
+# Node
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / Build
+target/
+Cargo.lock
+
+# IDE / Editor
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+
+# Test Coverage & Reports
+coverage/
+.nyc_output/
+*.lcov
+junit.xml
+
+# System
+.DS_Store
+.AppleDouble
+.LSOverride
+*.log
