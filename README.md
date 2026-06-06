@@ -354,26 +354,6 @@ Returns which files this file imports, and which files import it.
 
 ---
 
-## Performance & Evaluation
-
-Validate indexer quality on your own codebase:
-
-```bash
-npm run test
-# or with custom Ollama:
-OLLAMA_HOST=http://localhost:11435 npm run test
-```
-
-### Benchmark Results
-
-| Scenario | Recall@3 | Recall@5 | Latency (p50) |
-| :--- | :--- | :--- | :--- |
-| graph-indexer own codebase (34 chunks, lexical-only) | **100%** | 100% | 0.07 ms |
-| graph-indexer own codebase (34 chunks, with Ollama) | **75%** | 100% | 0.14 ms |
-| React Native project (311 chunks, with Ollama) | **58%** | 75% | 1.02 ms |
-
-> The React Native project numbers are without any JSDoc in the source files. Adding docstrings to exported functions (see Best Practices below) brings recall to **100% @3**.
-
 ### Vector Search Performance
 
 | Corpus size | Pure JS flat scan | HNSW (auto-activated ≥5k) |
@@ -438,19 +418,6 @@ export function useAuth(): AuthState {
   if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>');
   return ctx;
 }
-```
-
-### 4. Keep Imports Explicit and Organized
-
-The topology graph follows import paths. Barrel re-exports from `index.ts` break dependency resolution — prefer direct imports:
-
-```typescript
-// ✅ Topology-friendly
-import { useAuthStore } from '@/stores/authStore';
-import { validateEmail } from '@/utils/validators';
-
-// ❌ Breaks topology — indexer can't resolve what's actually imported
-import { useAuthStore, validateEmail } from '@/index';
 ```
 
 ---
