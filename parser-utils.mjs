@@ -19,7 +19,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import ignore from 'ignore';
 import Parser from 'tree-sitter';
-const { Query } = Parser; // Importación robusta nativa
+const { Query } = Parser; // Native parser query helper
 
 import TypeScript from 'tree-sitter-typescript';
 import JavaScript from 'tree-sitter-javascript';

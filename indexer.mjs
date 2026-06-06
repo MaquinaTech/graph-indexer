@@ -61,7 +61,7 @@ async function main() {
     for (const absolutePath of files) {
         totalCheckedFiles++;
         const relPath = path.relative(PROJECT_ROOT, absolutePath).replace(/\\/g, '/');
-        process.stdout.write(`\r⚡ Parsing AST: [${totalCheckedFiles}/${files.length}] Procesando: ${relPath.slice(-40)}                 `);
+        process.stdout.write(`\r⚡ Parsing AST: [${totalCheckedFiles}/${files.length}] Processing: ${relPath.slice(-40)}                 `);
 
         if (relPath.includes('.bundle.') || relPath.includes('.min.')) continue;
 
@@ -92,14 +92,14 @@ async function main() {
                 }
             }
         } catch (err) {
-            console.error(`\n💥 Error en ${relPath}: ${err.message}`);
+            console.error(`\n💥 Error in ${relPath}: ${err.message}`);
         }
     }
 
     const pendingChunks = indexData.chunksToEmbed || [];
     console.log(`\n\n🧠 Embedding Generation (Ollama)`);
-    console.log(`Chunks reciclados de la caché: ${indexData.chunks.length}`);
-    console.log(`Chunks nuevos a procesar: ${pendingChunks.length}`);
+    console.log(`Chunks reused from cache: ${indexData.chunks.length}`);
+    console.log(`New chunks to process: ${pendingChunks.length}`);
 
     if (pendingChunks.length > 0) {
         const BATCH_SIZE = 64;
@@ -146,12 +146,12 @@ async function main() {
                 for (const chunk of batch) indexData.chunks.push(chunk);
             }
             completedChunksCount += batch.length;
-            process.stdout.write(`\r🤖 Embedding Progress: [${completedChunksCount}/${pendingChunks.length}] Chunks procesados...`);
+            process.stdout.write(`\r🤖 Embedding Progress: [${completedChunksCount}/${pendingChunks.length}] Chunks processed...`);
         };
 
         for (let i = 0; i < batches.length; i += CONCURRENCY) {
-            const ráfaga = batches.slice(i, i + CONCURRENCY);
-            await Promise.all(ráfaga.map(batch => worker(batch)));
+            const batchGroup = batches.slice(i, i + CONCURRENCY);
+            await Promise.all(batchGroup.map(batch => worker(batch)));
         }
         console.timeEnd("Embedding Generation Duration");
     }

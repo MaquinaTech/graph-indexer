@@ -132,11 +132,11 @@ async function processFileChange(absolutePath) {
         db.saveDebounced();
         process.stderr.write(`[daemon] 🔄 Synced: ${filename} (Cache Hit: ${newChunks.length - chunksToEmbed.length}/${newChunks.length})\n`);
     } catch (err) {
-        process.stderr.write(`[daemon] ❌ Error en ${filename}: ${err.message}\n`);
+        process.stderr.write(`[daemon] ❌ Error in ${filename}: ${err.message}\n`);
     }
 }
 
-process.stderr.write(`🚀 Chokidar Watcher Daemon iniciado en: ${PROJECT_ROOT}\n`);
+process.stderr.write(`🚀 Chokidar Watcher Daemon started in: ${PROJECT_ROOT}\n`);
 const watcher = chokidar.watch(PROJECT_ROOT, {
     ignored: /(^|[\/\\])\../, persistent: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }

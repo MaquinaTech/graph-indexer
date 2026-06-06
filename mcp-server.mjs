@@ -36,7 +36,7 @@ function ensureDaemonRunning() {
     if (fs.existsSync(PID_FILE)) {
         const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8'), 10);
         try {
-            process.kill(pid, 0); // Esto no mata el proceso, solo comprueba si existe
+            process.kill(pid, 0); // This does not kill the process; it only checks whether it exists.
             process.stderr.write(`✅ Daemon is already active in background (PID: ${pid}).\n`);
             return;
         } catch (e) {
@@ -72,12 +72,12 @@ function ensureDaemonRunning() {
     fs.writeFileSync(PID_FILE, child.pid.toString());
 }
 
-// ─── Inicialización del Servidor ──────────────────────────────────────────────
+// ─── Server Initialization ────────────────────────────────────────────────────
 
 // Wake the watcher before loading the index
 ensureDaemonRunning();
-
-const server = new McpServer({ name: "graph-indexer", version: "1.0.0" });
+const version = "1.0.1";
+const server = new McpServer({ name: "graph-indexer", version: version });
 const db = new MemoryGraphIndex(INDEX_PATH);
 
 // If the index doesn't exist (first run), the newly started daemon will create it
@@ -369,4 +369,4 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write("✅ graph-indexer MCP server running (v1.0.0).\n");
+process.stderr.write(`✅ graph-indexer MCP server running (v${version}).\n`);
