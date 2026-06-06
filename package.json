@@ -25,8 +25,7 @@
     },
     "scripts": {
         "start": "node ./mcp-server.mjs",
-        "test": "node tests/eval-harness.mjs --index ./code-index.json",
-        "e2e": "node tests/e2e-integration.mjs",
+        "test": "node test/run.mjs",
         "test:setup": "node test/setup.mjs",
         "test:run": "node test/run.mjs",
         "test:embeddings": "OLLAMA_HOST=http://localhost:11435 node test/run-embeddings.mjs",
