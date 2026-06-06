@@ -31,7 +31,6 @@ import PHP from 'tree-sitter-php';
 import Java from 'tree-sitter-java';
 import Kotlin from 'tree-sitter-kotlin';
 import CSharp from 'tree-sitter-c-sharp';
-import Swift from 'tree-sitter-swift';
 import Ruby from 'tree-sitter-ruby';
 import { truncateForEmbedding } from './core-engine.mjs';
 
@@ -47,7 +46,6 @@ const LANGUAGE_MAP = {
     '.java': Java,
     '.kt': Kotlin, '.kts': Kotlin,
     '.cs': CSharp,
-    '.swift': Swift,
     '.rb': Ruby,
 };
 
@@ -106,12 +104,6 @@ const LANGUAGE_QUERIES = {
         (enum_declaration) @chunk
         (property_declaration) @chunk
     `,
-    swift: `
-        (function_declaration) @chunk
-        (class_declaration) @chunk
-        (protocol_declaration) @chunk
-        (protocol_function_declaration) @chunk
-    `,
     rb: `
         (method) @chunk
         (singleton_method) @chunk
@@ -135,8 +127,6 @@ const CONTAINERS = new Set([
     'object_declaration', 'companion_object', 'secondary_constructor',
     // C#
     'property_declaration',
-    // Swift
-    'protocol_declaration', 'protocol_function_declaration',
     // Ruby
     'method', 'singleton_method', 'module'
 ]);
@@ -262,13 +252,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
-        // ── Swift ─────────────────────────────────────────────────────────────
-        else if (ext === '.swift') {
-            if (node.type === 'import_declaration') {
-                const pathNode = node.children.find(c => c.type === 'identifier' || c.type === 'scoped_identifier');
-                if (pathNode) imports.add(pathNode.text.replace(/\./g, '/'));
-            }
-        }
         // ── Ruby ──────────────────────────────────────────────────────────────
         else if (ext === '.rb') {
             if (node.type === 'call' || node.type === 'method_call') {
@@ -294,7 +277,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
     const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
     const EXT_TO_LANG = {
         '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.cs': 'cs',
-        '.swift': 'swift', '.rb': 'rb'
+        '.rb': 'rb'
     };
     const langKey = JS_LIKE.includes(ext) ? 'ts'
         : (EXT_TO_LANG[ext] || (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null));
@@ -327,10 +310,14 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             // Filter out very small fragments (simple variables, etc.)
             if (chunkNode.endPosition.row - chunkNode.startPosition.row < 2) continue;
 
-            // 🥇 DEDUPLICATION LOGIC: Ignore nodes that are nested inside other container nodes
+            // 🥇 DEDUPLICATION LOGIC: Ignore nodes that are nested inside other container nodes.
+            // Stop at the actual tree root (parent === null) to be language-agnostic:
+            // Python root = 'module', JS root = 'program', Go root = 'source_file', Ruby root = 'program'.
+            // Stopping at 'program' alone was falsely marking top-level Python classes as nested
+            // because Ruby's 'module' keyword (also in CONTAINERS) shares the name with Python's root.
             let isNested = false;
             let currentParent = chunkNode.parent;
-            while (currentParent && currentParent.type !== 'program') {
+            while (currentParent && currentParent.parent !== null) {
                 if (CONTAINERS.has(currentParent.type)) {
                     isNested = true;
                     break;
@@ -513,6 +500,22 @@ export function resolveBarrelExports(barrelAbsPath, projectRoot) {
     return result;
 }
 
+// ─── Go module-name cache (reads go.mod once per project root) ──────────────
+const _goModCache = new Map();
+function _readGoModuleName(projectRoot) {
+    if (_goModCache.has(projectRoot)) return _goModCache.get(projectRoot);
+    const modFile = path.join(projectRoot, 'go.mod');
+    let name = null;
+    if (fs.existsSync(modFile)) {
+        try {
+            const first = fs.readFileSync(modFile, 'utf-8').split('\n').find(l => l.trimStart().startsWith('module '));
+            if (first) name = first.trim().replace(/^module\s+/, '').split(/\s/)[0];
+        } catch { /* ignore */ }
+    }
+    _goModCache.set(projectRoot, name);
+    return name;
+}
+
 export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
     const fileDir = path.dirname(path.join(projectRoot, fromFileRelPath));
     const ext = path.extname(fromFileRelPath);
@@ -555,6 +558,26 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
                     }
                 } else {
                     if (!resolved.includes(relPath)) resolved.push(relPath);
+                }
+            }
+        }
+        // ── Go intra-module: github.com/owner/repo/sub → sub/*.go ──────────
+        // Go import paths use the module name as prefix; map them to local dirs.
+        else if (ext === '.go') {
+            const modName = _readGoModuleName(projectRoot);
+            if (modName && raw.startsWith(modName + '/')) {
+                const subPkg = raw.slice(modName.length + 1); // e.g. 'render'
+                const absDir = path.join(projectRoot, subPkg);
+                if (fs.existsSync(absDir)) {
+                    try {
+                        const goFiles = fs.readdirSync(absDir)
+                            .filter(f => f.endsWith('.go') && !f.includes('_test'))
+                            .slice(0, 5); // cap: take a representative sample
+                        for (const gof of goFiles) {
+                            const rel = path.relative(projectRoot, path.join(absDir, gof)).replace(/\\/g, '/');
+                            if (!resolved.includes(rel)) resolved.push(rel);
+                        }
+                    } catch { /* directory unreadable — skip */ }
                 }
             }
         }

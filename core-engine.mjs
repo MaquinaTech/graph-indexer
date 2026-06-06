@@ -332,7 +332,6 @@ export class MemoryGraphIndex {
         const vectorResults = queryVector ? this._searchVector(queryVector, minScore) : [];
         const rrfScores = new Map();
         const K = this.rrfK;
-        const allResults = [...vectorResults, ...lexicalResults];
 
         const queryLower = queryText.toLowerCase();
 
@@ -343,25 +342,59 @@ export class MemoryGraphIndex {
             ? queryLower.split(/[\s\W_]+/).filter(t => t.length >= 3)
             : [];
 
-        for (const { id, rank } of allResults) {
-            let baseScore = 1 / (K + rank);
+        // Weighted RRF: lexical weight 1.5×, vector weight 1.0×
+        // Keeps semantic lift without drowning precise TF-IDF matches.
+        const LEXICAL_WEIGHT = 1.5;
+        const VECTOR_WEIGHT = 1.0;
+
+        const allResults = [
+            ...vectorResults.map(r => ({ ...r, _w: VECTOR_WEIGHT })),
+            ...lexicalResults.map(r => ({ ...r, _w: LEXICAL_WEIGHT })),
+        ];
+
+        for (const { id, rank, _w } of allResults) {
+            let baseScore = (_w ?? 1.0) / (K + rank);
             const chunk = this.chunks.get(id);
             if (!chunk) continue;
 
-            // Generic: demote test/spec files when the query is not about tests
-            if (/\.(test|spec)\.|[/\\]__tests__[/\\]|_test\./.test(chunk.file_path)) {
-                if (!queryLower.includes('test') && !queryLower.includes('spec')) baseScore *= 0.6;
+            // Generic: demote test/spec files when the query is not about tests.
+            // Catches: foo.test.js, foo.spec.js, __tests__/foo.js, foo_test.go,
+            //          test/foo.js, tests/foo.js, spec/foo.js (plain test dirs).
+            if (/\.(test|spec)\.|[/\\]__tests__[/\\]|_test\.|^tests?[/\\]|[/\\]tests?[/\\]|[/\\]spec[/\\]/.test(chunk.file_path)) {
+                if (!queryLower.includes('test') && !queryLower.includes('spec')) baseScore *= 0.25;
+            }
+            // Demote example/sample/demo/docs directories — prefer canonical lib/src definitions
+            if (/^examples?[/\\]|[/\\]examples?[/\\]|^samples?[/\\]|[/\\]samples?[/\\]|^demos?[/\\]|[/\\]demos?[/\\]|^docs?_?src[/\\]|[/\\]docs?_?src[/\\]|^docs?[/\\]|[/\\]tutorials?[/\\]/.test(chunk.file_path)) {
+                baseScore *= 0.5;
             }
             // Prefer definitions (functions/classes/impls) over pure usage/expression sites
             if (chunk.node_type === 'expression_statement' || chunk.node_type === 'call_expression') {
                 baseScore *= 0.8;
             }
 
-            // Filename path boost when no vectors available
+            // Filename path boost when no vectors available.
+            // Also checks if any query token is a prefix of a path segment (≥4 chars),
+            // so "initialise" matches "init.js", "decorator" matches "decorators/", etc.
             if (vectorEmpty && queryFileTokens.length > 0) {
                 const filePathLower = chunk.file_path.toLowerCase();
-                const hasMatch = queryFileTokens.some(t => filePathLower.includes(t));
-                if (hasMatch) baseScore *= 1.5;
+                const hasExact = queryFileTokens.some(t => filePathLower.includes(t));
+                const hasPrefix = !hasExact && queryFileTokens.some(t =>
+                    t.length >= 4 && filePathLower.split(/[/\\._-]/).some(seg => seg.startsWith(t.slice(0, 5)))
+                );
+                if (hasExact) baseScore *= 1.5;
+                else if (hasPrefix) baseScore *= 1.25;
+            }
+
+            // Name-exact-token boost (applies in both lexical and hybrid mode):
+            // If the chunk name exactly matches any significant query token (≥4 chars),
+            // give it an extra 1.4× lift. This promotes WriteJSON over WriteContentType
+            // when the query contains "JSON", and GET/POST/Handle over GetPostForm.
+            if (chunk.name) {
+                const nameLower = chunk.name.toLowerCase();
+                const queryTokensAll = queryLower.split(/[\s\W_]+/).filter(t => t.length >= 4);
+                if (queryTokensAll.some(t => nameLower === t || nameLower.endsWith('.' + t))) {
+                    baseScore *= 1.4;
+                }
             }
 
             rrfScores.set(id, (rrfScores.get(id) || 0) + baseScore);

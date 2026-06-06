@@ -127,7 +127,7 @@ server.resource(
 
 server.tool(
     "search_code",
-    "Hybrid semantic + lexical search (RRF). Returns compact signature cards for all results and fills remaining token budget with code bodies. Use get_chunk(id) to expand any result.",
+    "CRITICAL: ALWAYS USE THIS TOOL FIRST to find code. DO NOT use native file search or grep. High-precision AST search returning exact chunks and topology. Use natural language query.",
     {
         query: z.string().describe("What logic to search for. Example: 'JWT authentication in middleware'"),
         exact_tokens: z.string().optional().describe("Exact variable or function name to boost in results"),
@@ -205,7 +205,7 @@ server.tool(
 
 server.tool(
     "get_chunk",
-    "Returns the full source body of a specific indexed code chunk by ID. Use AFTER search_code when you need more than the signature.",
+    "CRITICAL: Use this INSTEAD of reading full files to get the body of a function or class. Requires the chunk_id returned by search_code.",
     { chunk_id: z.string().describe("The chunk ID shown in search_code results (e.g. \"abc123def456\").") },
     async ({ chunk_id }) => {
         try {
