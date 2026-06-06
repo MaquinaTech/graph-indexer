@@ -60,15 +60,19 @@ jobs:
           grep -q "'.css': CSS" parser-utils.mjs && echo "✓ CSS support"
           echo "✓ All 11 languages verified"
 
-      - name: Lexical-only tests (no Ollama)
-        run: |
-          INDEXER_EMBEDDINGS=off npm test
-        env:
-          INDEXER_EMBEDDINGS: "off"
-
       - name: Build index on this codebase
         run: |
           INDEXER_EMBEDDINGS=off node indexer.mjs --repo .
+        env:
+          INDEXER_EMBEDDINGS: "off"
+
+      - name: Setup test fixtures
+        run: |
+          node test/setup.mjs
+
+      - name: Lexical-only tests (no Ollama)
+        run: |
+          INDEXER_EMBEDDINGS=off npm test
         env:
           INDEXER_EMBEDDINGS: "off"
 
