@@ -398,6 +398,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             const params = extractParams(chunkNode, ext);
             const returnType = extractReturnType(chunkNode, ext);
             const classContext = extractClassContext(chunkNode);
+            const typeRefs = extractTypeAnnotations(chunkNode, ext);
 
             const id = createHash('sha256')
                 .update(`${relPath}::${chunkNode.startPosition.row}::${chunkNode.startPosition.column}`)
@@ -408,7 +409,8 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 docstring: docstring, code_snippet: snippet, content_hash: hash,
                 start_line: chunkNode.startPosition.row + 1, end_line: chunkNode.endPosition.row + 1,
                 calls: outgoingCalls,
-                params, return_type: returnType, class_context: classContext
+                params, return_type: returnType, class_context: classContext,
+                type_refs: typeRefs,
             });
         }
     } catch (e) {
@@ -707,6 +709,44 @@ export function extractClassContext(chunkNode) {
         parent = parent.parent;
     }
     return '';
+}
+
+/**
+ * Frontier 2: Extract TypeScript/Python type annotation names from a chunk node.
+ * Returns simple type names (e.g. ['User', 'AuthToken', 'PaymentService'])
+ * used to enrich the inverted index and the type_refs chunk field.
+ */
+export function extractTypeAnnotations(chunkNode, ext) {
+    const types = new Set();
+    const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    if (!JS_LIKE.includes(ext) && ext !== '.py') return [];
+
+    function walk(node) {
+        // TypeScript: type_annotation nodes contain the type text
+        if (node.type === 'type_annotation') {
+            const typeText = node.text.replace(/^:\s*/, '').trim();
+            // Extract simple identifiers from the type (skip primitives)
+            const PRIMITIVES = new Set(['string','number','boolean','void','any','unknown','never','null','undefined','object','symbol','bigint']);
+            for (const match of typeText.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g)) {
+                if (!PRIMITIVES.has(match[1].toLowerCase())) types.add(match[1]);
+            }
+        }
+        // TypeScript: generic_type, predefined_type (string, number…) skip, named types keep
+        else if (node.type === 'type_identifier' || node.type === 'generic_type') {
+            const name = node.children[0]?.text || node.text;
+            if (name && /^[A-Z]/.test(name)) types.add(name);
+        }
+        // Python: type comments or annotations (annotation nodes)
+        else if (node.type === 'annotation' && ext === '.py') {
+            const typeText = node.text.replace(/^->\s*|^:\s*/, '').trim();
+            for (const match of typeText.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g)) {
+                types.add(match[1]);
+            }
+        }
+        for (const child of node.children) walk(child);
+    }
+    walk(chunkNode);
+    return Array.from(types).slice(0, 20);
 }
 
 export function extractCalls(rootNode) {

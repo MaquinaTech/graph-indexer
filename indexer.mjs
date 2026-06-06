@@ -124,11 +124,11 @@ async function main() {
                     ? `This code architectural neighborhood connects with: ${cleanDeps.join(', ')}.`
                     : '';
 
-                // 🥇 BLEED PROTECTION: Flattened linear payload for Ollama without hidden indentation
                 return [
                     `File Location: ${c.file_path}`,
                     `Symbol Name: ${c.node_type} -> ${c.name}`,
                     c.docstring ? `Developer Documentation: ${c.docstring}` : '',
+                    c.type_refs?.length ? `Type References: ${c.type_refs.join(', ')}` : '',
                     topologicalContext,
                     `--- Source Code ---`,
                     c.code_snippet
