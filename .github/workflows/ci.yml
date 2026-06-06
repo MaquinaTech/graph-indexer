@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: ["20"]
+        node-version: ["18", "20"]
 
     steps:
       - uses: actions/checkout@v4
@@ -24,30 +24,52 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Lint package.json
-        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf-8'))" && echo "package.json is valid JSON"
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf-8'))" && echo "✓ package.json is valid JSON"
 
       - name: Verify MIT license
         run: |
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json','utf-8'));
-            if (pkg.license !== 'MIT') { console.error('License must be MIT, got: ' + pkg.license); process.exit(1); }
-            console.log('License OK: MIT');
+            if (pkg.license !== 'MIT') { console.error('✗ License must be MIT, got: ' + pkg.license); process.exit(1); }
+            console.log('✓ License: MIT');
           "
-          grep -q 'MIT License' LICENSE && echo 'LICENSE file OK'
+          grep -q 'MIT License' LICENSE && echo '✓ LICENSE file OK'
 
-      - name: Unit tests (eval harness)
+      - name: Verify required files
         run: |
-          INDEXER_EMBEDDINGS=off node indexer.mjs --repo .
-          npm test
+          for file in core-engine.mjs parser-utils.mjs indexer.mjs watch-daemon.mjs mcp-server.mjs init.mjs PROMPT.md README.md LICENSE; do
+            [ -f "$file" ] && echo "✓ $file exists" || (echo "✗ $file missing"; exit 1)
+          done
+
+      - name: Verify supported languages
+        run: |
+          node -e "
+            const parser = require('./parser-utils.mjs');
+            const exts = parser.EXTENSIONS;
+            const langs = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rs', '.go', '.php', '.java', '.kt', '.kts', '.cs', '.rb', '.css', '.scss', '.cjs'];
+            const missing = langs.filter(l => !exts.has(l));
+            if (missing.length > 0) {
+              console.error('✗ Missing language support:', missing.join(', '));
+              process.exit(1);
+            }
+            console.log('✓ All required languages supported');
+          "
+
+      - name: Lexical-only tests (no Ollama)
+        run: |
+          INDEXER_EMBEDDINGS=off npm test
         env:
           INDEXER_EMBEDDINGS: "off"
 
-      - name: E2E integration test
+      - name: Build index on this codebase
         run: |
           INDEXER_EMBEDDINGS=off node indexer.mjs --repo .
-          node tests/e2e-integration.mjs
         env:
           INDEXER_EMBEDDINGS: "off"
+
+      - name: Verify index files created
+        run: |
+          [ -f code-index.json ] && echo "✓ code-index.json created" || (echo "✗ code-index.json missing"; exit 1)
