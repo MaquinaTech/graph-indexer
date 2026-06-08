@@ -21,32 +21,63 @@ import ignore from 'ignore';
 import Parser from 'tree-sitter';
 const { Query } = Parser; // Native parser query helper
 
-import TypeScript from 'tree-sitter-typescript';
-import JavaScript from 'tree-sitter-javascript';
-import CSS from 'tree-sitter-css';
-import Python from 'tree-sitter-python';
-import Rust from 'tree-sitter-rust';
-import Go from 'tree-sitter-go';
-import PHP from 'tree-sitter-php';
-import Java from 'tree-sitter-java';
-import Kotlin from 'tree-sitter-kotlin';
-import CSharp from 'tree-sitter-c-sharp';
-import Ruby from 'tree-sitter-ruby';
 import { truncateForEmbedding } from './core-engine.mjs';
 
 export const MAX_FILE_SIZE_BYTES = 500000;
 export const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 
+// ─── Dynamic Language Loading ─────────────────────────────────────────────────
+
+function _loadProjectConfig() {
+    const configPath = path.join(process.env.MCP_PROJECT_ROOT || process.cwd(), '.graph-indexer.json');
+    try {
+        if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch { /* ignore */ }
+    return null;
+}
+
+async function _tryLang(pkg, enabledLangs, key) {
+    if (enabledLangs && !enabledLangs.includes(key)) return null;
+    try {
+        return (await import(pkg)).default;
+    } catch {
+        process.stderr.write(`[graph-indexer] WARNING: ${pkg} not installed — ${key} files will be skipped\n`);
+        return null;
+    }
+}
+
+const _cfg = _loadProjectConfig();
+const _enabled = _cfg?.languages ?? null; // null = all languages
+
+const [
+    TypeScript, JavaScript, CSS, Python, Rust,
+    Go, PHP, Java, Kotlin, CSharp, Ruby
+] = await Promise.all([
+    _tryLang('tree-sitter-typescript', _enabled, 'typescript'),
+    _tryLang('tree-sitter-javascript', _enabled, 'javascript'),
+    _tryLang('tree-sitter-css',        _enabled, 'css'),
+    _tryLang('tree-sitter-python',     _enabled, 'python'),
+    _tryLang('tree-sitter-rust',       _enabled, 'rust'),
+    _tryLang('tree-sitter-go',         _enabled, 'go'),
+    _tryLang('tree-sitter-php',        _enabled, 'php'),
+    _tryLang('tree-sitter-java',       _enabled, 'java'),
+    _tryLang('tree-sitter-kotlin',     _enabled, 'kotlin'),
+    _tryLang('tree-sitter-c-sharp',    _enabled, 'csharp'),
+    _tryLang('tree-sitter-ruby',       _enabled, 'ruby'),
+]);
+
 const LANGUAGE_MAP = {
-    '.ts': TypeScript.typescript, '.tsx': TypeScript.tsx,
-    '.js': JavaScript, '.jsx': JavaScript, '.mjs': JavaScript, '.cjs': JavaScript,
-    '.css': CSS, '.scss': CSS,
-    '.py': Python, '.rs': Rust, '.go': Go,
-    '.php': PHP.php,
-    '.java': Java,
-    '.kt': Kotlin, '.kts': Kotlin,
-    '.cs': CSharp,
-    '.rb': Ruby,
+    ...(TypeScript ? { '.ts': TypeScript.typescript, '.tsx': TypeScript.tsx } : {}),
+    ...(JavaScript ? { '.js': JavaScript, '.jsx': JavaScript, '.mjs': JavaScript, '.cjs': JavaScript } : {}),
+    ...(CSS        ? { '.css': CSS, '.scss': CSS } : {}),
+    ...(Python     ? { '.py': Python }  : {}),
+    ...(Rust       ? { '.rs': Rust }    : {}),
+    ...(Go         ? { '.go': Go }      : {}),
+    ...(PHP        ? { '.php': PHP.php } : {}),
+    ...(Java       ? { '.java': Java }  : {}),
+    ...(Kotlin     ? { '.kt': Kotlin, '.kts': Kotlin } : {}),
+    ...(CSharp     ? { '.cs': CSharp }  : {}),
+    ...(Ruby       ? { '.rb': Ruby }    : {}),
 };
 
 // 🥇 ULTRA-GENERIC QUERIES: Immune to grammar changes between TS/JS/TSX

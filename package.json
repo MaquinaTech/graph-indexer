@@ -1,6 +1,6 @@
 {
     "name": "graph-indexer",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Zero-DB, Air-gapped, In-Memory Graph Indexer MCP Server with Hybrid RRF Search and Cross-Language Topology",
     "type": "module",
     "main": "core-engine.mjs",
@@ -42,17 +42,6 @@
         "chokidar": "5.0.0",
         "ignore": "5.3.2",
         "tree-sitter": "0.21.1",
-        "tree-sitter-c-sharp": "^0.21.3",
-        "tree-sitter-css": "0.21.1",
-        "tree-sitter-go": "0.21.0",
-        "tree-sitter-java": "^0.21.0",
-        "tree-sitter-javascript": "0.21.4",
-        "tree-sitter-kotlin": "^0.3.8",
-        "tree-sitter-php": "0.23.1",
-        "tree-sitter-python": "0.21.0",
-        "tree-sitter-ruby": "^0.23.1",
-        "tree-sitter-rust": "0.21.0",
-        "tree-sitter-typescript": "0.21.2",
         "zod": "3.23.8"
     },
     "keywords": [
@@ -88,6 +77,17 @@
         "access": "public"
     },
     "optionalDependencies": {
-        "hnswlib-node": "^3.0.0"
+        "hnswlib-node": "^3.0.0",
+        "tree-sitter-c-sharp": "^0.21.3",
+        "tree-sitter-css": "0.21.1",
+        "tree-sitter-go": "0.21.0",
+        "tree-sitter-java": "^0.21.0",
+        "tree-sitter-javascript": "0.21.4",
+        "tree-sitter-kotlin": "^0.3.8",
+        "tree-sitter-php": "0.23.1",
+        "tree-sitter-python": "0.21.0",
+        "tree-sitter-ruby": "^0.23.1",
+        "tree-sitter-rust": "0.21.0",
+        "tree-sitter-typescript": "0.21.2"
     }
 }

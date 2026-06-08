@@ -100,7 +100,7 @@ function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
 // ─── Server Initialization ────────────────────────────────────────────────────
 
 ensureDaemonRunning();
-const version = "1.0.2";
+const version = "1.0.3";
 const server = new McpServer({ name: "graph-indexer", version });
 
 // Use lazy (disk-backed) vector loading for large corpora — cacheEmbeddings:false

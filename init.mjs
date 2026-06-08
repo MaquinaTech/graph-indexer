@@ -18,18 +18,42 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import readline from 'readline';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDryRun = process.argv.includes('--dry-run');
+const isAllLanguages = process.argv.includes('--all-languages');
 const PROJECT_ROOT = process.cwd();
 
-// ─── MCP Server config block ──────────────────────────────────────────────────
+// ─── Language Registry ────────────────────────────────────────────────────────
+
+const LANGUAGES = [
+    { key: 'typescript', label: 'TypeScript / TSX', exts: '.ts, .tsx' },
+    { key: 'javascript', label: 'JavaScript', exts: '.js, .jsx, .mjs, .cjs' },
+    { key: 'python', label: 'Python', exts: '.py' },
+    { key: 'go', label: 'Go', exts: '.go' },
+    { key: 'rust', label: 'Rust', exts: '.rs' },
+    { key: 'php', label: 'PHP', exts: '.php' },
+    { key: 'java', label: 'Java', exts: '.java' },
+    { key: 'kotlin', label: 'Kotlin', exts: '.kt, .kts' },
+    { key: 'csharp', label: 'C#', exts: '.cs' },
+    { key: 'ruby', label: 'Ruby', exts: '.rb' },
+    { key: 'css', label: 'CSS / SCSS', exts: '.css, .scss' },
+];
+
+// ─── MCP Server config blocks ─────────────────────────────────────────────────
 
 const SERVER_CONFIG = {
-    command: 'node',
-    args: [path.join(PROJECT_ROOT, 'node_modules', 'graph-indexer', 'mcp-server.mjs')],
-    env: { MCP_PROJECT_ROOT: PROJECT_ROOT }
+    command: 'npm',
+    args: ['run', 'mcp:start'],
+    env: { MCP_PROJECT_ROOT: PROJECT_ROOT },
+};
+
+const SERVER_CONFIG_GLOBAL = {
+    command: 'npm',
+    args: ['run', '--prefix', PROJECT_ROOT, 'mcp:start'],
+    env: { MCP_PROJECT_ROOT: PROJECT_ROOT },
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -37,44 +61,120 @@ const SERVER_CONFIG = {
 function log(msg) { process.stdout.write(msg + '\n'); }
 
 function writeFile(filePath, content) {
-    if (isDryRun) {
-        log(`  [dry-run] Would write: ${filePath}`);
-        return;
-    }
+    if (isDryRun) { log(`  [dry-run] Would write: ${filePath}`); return; }
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content, 'utf-8');
 }
 
 function readJsonSafe(filePath) {
     try {
-        if (fs.existsSync(filePath)) {
-            return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        }
+        if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     } catch { /* malformed JSON — start fresh */ }
     return null;
 }
 
-/** Deep-merge src into dst without duplicating top-level keys. */
-function mergeJson(dst, src) {
-    for (const [k, v] of Object.entries(src)) {
-        if (dst[k] && typeof dst[k] === 'object' && !Array.isArray(dst[k]) && typeof v === 'object' && !Array.isArray(v)) {
-            mergeJson(dst[k], v);
-        } else {
-            dst[k] = v;
-        }
+// ─── Interactive Language Selection ───────────────────────────────────────────
+
+function selectLanguages() {
+    return new Promise((resolve) => {
+        if (isAllLanguages || !process.stdin.isTTY) return resolve(null);
+
+        const { stdin, stdout } = process;
+        readline.emitKeypressEvents(stdin);
+        stdin.setRawMode(true);
+        stdout.write('\x1B[?25l');
+
+        let cursorIndex = 0;
+        const selected = new Set();
+        let hasRendered = false;
+
+        const render = () => {
+            if (hasRendered) {
+                readline.moveCursor(stdout, 0, -(LANGUAGES.length + 2));
+                readline.cursorTo(stdout, 0);
+                readline.clearScreenDown(stdout);
+            }
+            hasRendered = true;
+
+            stdout.write('⚙️  Select languages (Arrows/Tab: move, Space: toggle, Enter: confirm):\n\n');
+
+            LANGUAGES.forEach((lang, i) => {
+                const isHovered = i === cursorIndex;
+                const isSelected = selected.has(i);
+
+                const prefix = isHovered ? '❯' : ' ';
+                const checkbox = isSelected ? '◉' : '◯';
+
+                const line = `  ${prefix} ${checkbox} ${lang.label.padEnd(20)} ${lang.exts}\n`;
+                stdout.write(isHovered ? `\x1b[36m${line}\x1b[0m` : line);
+            });
+        };
+
+        const cleanup = () => {
+            stdin.setRawMode(false);
+            stdout.write('\x1B[?25h');
+            stdin.removeListener('keypress', onKeypress);
+        };
+
+        const onKeypress = (str, key) => {
+            if (key.ctrl && key.name === 'c') {
+                cleanup();
+                process.exit(0);
+            }
+
+            if (key.name === 'up' || (key.name === 'tab' && key.shift)) {
+                cursorIndex = (cursorIndex - 1 + LANGUAGES.length) % LANGUAGES.length;
+                render();
+            } else if (key.name === 'down' || (key.name === 'tab' && !key.shift)) {
+                cursorIndex = (cursorIndex + 1) % LANGUAGES.length;
+                render();
+            } else if (key.name === 'space') {
+                if (selected.has(cursorIndex)) selected.delete(cursorIndex);
+                else selected.add(cursorIndex);
+                render();
+            } else if (key.name === 'return') {
+                cleanup();
+                readline.moveCursor(stdout, 0, -(LANGUAGES.length + 2));
+                readline.cursorTo(stdout, 0);
+                readline.clearScreenDown(stdout);
+
+                if (selected.size === 0) {
+                    resolve(null); // Enable all languages by default
+                } else {
+                    resolve(Array.from(selected).map(i => LANGUAGES[i].key));
+                }
+            }
+        };
+
+        stdin.on('keypress', onKeypress);
+        render();
+    });
+}
+
+function saveLanguageConfig(languages) {
+    const configPath = path.join(PROJECT_ROOT, '.graph-indexer.json');
+    if (isDryRun) {
+        if (languages) log(`  [dry-run] Would write: ${configPath}`);
+        return;
     }
-    return dst;
+    const existing = readJsonSafe(configPath) || {};
+    if (!languages) {
+        delete existing.languages;
+    } else {
+        existing.languages = languages;
+    }
+    if (languages || Object.keys(existing).length > 0) {
+        fs.writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+    }
 }
 
 // ─── IDE Detectors & Configurators ───────────────────────────────────────────
 
 function configureVSCode() {
-    const vscodeDir = path.join(PROJECT_ROOT, '.vscode');
-    const configPath = path.join(vscodeDir, 'mcp.json');
-
+    const configPath = path.join(PROJECT_ROOT, '.vscode', 'mcp.json');
     const existing = readJsonSafe(configPath) || {};
     if (!existing.servers) existing.servers = {};
-    if (existing.servers['graph-indexer']) return false; // already configured
+    if (existing.servers['graph-indexer']) return false;
 
     existing.servers['graph-indexer'] = SERVER_CONFIG;
     writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
@@ -82,15 +182,7 @@ function configureVSCode() {
 }
 
 function configureCursor() {
-    // Check both project-level and global Cursor config
-    const candidates = [
-        path.join(PROJECT_ROOT, '.cursor', 'mcp.json'),
-        path.join(os.homedir(), '.cursor', 'mcp.json'),
-    ];
-    const detected = candidates.some(p => fs.existsSync(path.dirname(p)));
-
-    // Prefer project-level config
-    const configPath = candidates[0];
+    const configPath = path.join(PROJECT_ROOT, '.cursor', 'mcp.json');
     const existing = readJsonSafe(configPath) || {};
     if (!existing.mcpServers) existing.mcpServers = {};
     if (existing.mcpServers['graph-indexer']) return false;
@@ -108,34 +200,28 @@ function configureClaudeDesktop() {
         configPath = path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
     }
 
-    if (!fs.existsSync(path.dirname(configPath))) return false; // Claude not installed
+    if (!fs.existsSync(path.dirname(configPath))) return false;
+
+    const existing = readJsonSafe(configPath) || {};
+    if (!existing.mcpServers) existing.mcpServers = {};
+    if (existing.mcpServers['graph-indexer']) return false;
+
+    existing.mcpServers['graph-indexer'] = SERVER_CONFIG_GLOBAL;
+    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
+    return true;
+}
+
+function configureClaudeCode() {
+    const hasClaudeDir = fs.existsSync(path.join(PROJECT_ROOT, '.claude'));
+    const configPath = hasClaudeDir
+        ? path.join(PROJECT_ROOT, '.claude', 'settings.json')
+        : path.join(PROJECT_ROOT, '.mcp.json');
 
     const existing = readJsonSafe(configPath) || {};
     if (!existing.mcpServers) existing.mcpServers = {};
     if (existing.mcpServers['graph-indexer']) return false;
 
     existing.mcpServers['graph-indexer'] = SERVER_CONFIG;
-    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
-    return true;
-}
-
-function configureClaudeCode() {
-    // Claude Code stores MCP config in .mcp.json or .claude/settings.json at project root
-    const candidates = [
-        path.join(PROJECT_ROOT, '.claude', 'settings.json'),
-        path.join(PROJECT_ROOT, '.mcp.json'),
-    ];
-
-    // Prefer .claude/settings.json if directory exists, else .mcp.json
-    const hasClaudeDir = fs.existsSync(path.join(PROJECT_ROOT, '.claude'));
-    const configPath = hasClaudeDir ? candidates[0] : candidates[1];
-
-    const existing = readJsonSafe(configPath) || {};
-    const serverKey = hasClaudeDir ? 'mcpServers' : 'mcpServers';
-    if (!existing[serverKey]) existing[serverKey] = {};
-    if (existing[serverKey]['graph-indexer']) return false;
-
-    existing[serverKey]['graph-indexer'] = SERVER_CONFIG;
     writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
     return true;
 }
@@ -174,7 +260,13 @@ function updateGitignore() {
     const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
     const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : '';
 
-    const entries = ['code-index.json', 'code-index.embeddings.bin'];
+    const entries = [
+        'code-index.json',
+        'code-index.embeddings.bin',
+        '.idx-daemon.pid',
+        '.idx-daemon.log'
+    ];
+
     const toAdd = entries.filter(e => !existing.includes(e));
     if (toAdd.length === 0) return false;
 
@@ -185,13 +277,23 @@ function updateGitignore() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-log('\n🔧 graph-indexer init' + (isDryRun ? ' [dry-run]' : '') + '\n');
-log(`📂 Project: ${PROJECT_ROOT}\n`);
+log('\n🚀 graph-indexer init' + (isDryRun ? ' [dry-run]' : '') + '\n');
+log(`Project: ${PROJECT_ROOT}`);
+
+// Language selection (interactive menu).
+const selectedLanguages = await selectLanguages();
+saveLanguageConfig(selectedLanguages);
+
+if (selectedLanguages) {
+    const names = selectedLanguages.map(k => LANGUAGES.find(l => l.key === k)?.label || k);
+    log(`\n✅ Enabled languages: ${names.join(', ')}\n`);
+} else {
+    log('\n✅ Enabled languages: all (default)\n');
+}
 
 const configured = [];
 const skipped = [];
 
-// IDE configuration
 const ides = [
     { name: 'VS Code', fn: configureVSCode },
     { name: 'Cursor', fn: configureCursor },
@@ -199,43 +301,52 @@ const ides = [
     { name: 'Claude Code', fn: configureClaudeCode },
 ];
 
-log('🔍 Detecting IDEs / agents...\n');
+log('Detecting IDEs / agents...\n');
 for (const { name, fn } of ides) {
     try {
         const result = fn();
-        if (result === false) {
-            skipped.push(name + ' (already configured or not installed)');
-        } else {
-            configured.push(name);
-        }
+        if (result === false) skipped.push(name + ' (already configured or not installed)');
+        else configured.push(name);
     } catch (e) {
         skipped.push(name + ' (error: ' + e.message + ')');
     }
 }
 
-// Package scripts
 const scriptsAdded = addPackageScripts();
 if (scriptsAdded) configured.push('package.json scripts (mcp:index, mcp:watch, mcp:start)');
 else skipped.push('package.json scripts (already present)');
 
-// .gitignore
 const gitignoreUpdated = updateGitignore();
-if (gitignoreUpdated) configured.push('.gitignore (code-index.json, code-index.embeddings.bin)');
-else skipped.push('.gitignore (already contains index entries)');
+if (gitignoreUpdated) configured.push('.gitignore (code-index, daemon artifacts)');
+else skipped.push('.gitignore (already contains index/daemon entries)');
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
-log('\n✅ Configured:\n');
-if (configured.length) configured.forEach(c => log('  • ' + c));
+log('\nConfigured:\n');
+if (configured.length) configured.forEach(c => log('  * ' + c));
 else log('  (nothing new to configure)');
 
 if (skipped.length) {
-    log('\n⏭️  Skipped:\n');
-    skipped.forEach(s => log('  • ' + s));
+    log('\nSkipped:\n');
+    skipped.forEach(s => log('  - ' + s));
 }
 
-log('\n📋 Next steps:\n');
+log('\nNext steps:\n');
 log('  1. Run `npm run mcp:index` to index this project');
-log('  2. Restart your IDE to activate MCP servers');
+log('  2. Restart your IDE to activate the MCP server');
 log('  3. Run `npm run mcp:start` if your IDE needs the server started manually');
-log('\n');
+
+// Mensaje final de agradecimiento
+log('\n─────────────────────────────────────────────────────────────────');
+log('✨ Thank you for setting up graph-indexer!');
+log('   Enjoy your blazing-fast, AST-precise codebase search.');
+log('─────────────────────────────────────────────────────────────────\n');
+log('');
+log('🤖 Agent Instructions:');
+log('   To teach your AI agent how to use graph-indexer effectively,');
+log('   copy the system prompt from our repository:');
+log('   https://github.com/MaquinaTech/graph-indexer/blob/main/PROMPT.md?plain=1');
+log('─────────────────────────────────────────────────────────────────\n');
+
+// Cierre limpio de la ejecución para devolver el control a la terminal
+process.exit(0);
