@@ -22,7 +22,8 @@ import chokidar from 'chokidar';
 import { MemoryGraphIndex } from './core-engine.mjs';
 import {
     MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, getLocalEmbeddingsBatch
+    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, getLocalEmbeddingsBatch,
+    buildEmbeddingPayload
 } from './parser-utils.mjs';
 
 const PROJECT_ROOT = process.env.MCP_PROJECT_ROOT || process.cwd();
@@ -79,23 +80,11 @@ async function processFileChange(absolutePath) {
         const chunksToEmbed = newChunks.filter(c => !db.embeddingCache.has(c.content_hash));
 
         if (chunksToEmbed.length > 0) {
-            const textsToEmbed = chunksToEmbed.map(c => {
-                const dependencies = db.graph.dependencies[c.file_path] || [];
-                const cleanDeps = dependencies.map(d => path.basename(d, path.extname(d)));
-                const topologicalContext = cleanDeps.length > 0
-                    ? `This code architectural neighborhood connects with: ${cleanDeps.join(', ')}.`
-                    : '';
-
-                // 🥇 STRICT PAYLOAD PARITY: Eliminate real-time bleed
-                return [
-                    `File Location: ${c.file_path}`,
-                    `Symbol Name: ${c.node_type} -> ${c.name}`,
-                    c.docstring ? `Developer Documentation: ${c.docstring}` : '',
-                    topologicalContext,
-                    `--- Source Code ---`,
-                    c.code_snippet
-                ].filter(Boolean).join('\n');
-            });
+            // 🥇 STRICT PAYLOAD PARITY: identical embedding payload to indexer.mjs
+            // (shared helper) so incremental updates match the bootstrap index.
+            const textsToEmbed = chunksToEmbed.map(c =>
+                buildEmbeddingPayload(c, db.graph.dependencies[c.file_path] || [])
+            );
 
             const embeddingsMatrix = await getLocalEmbeddingsBatch(textsToEmbed, true);
             if (embeddingsMatrix) {
@@ -137,8 +126,23 @@ async function processFileChange(absolutePath) {
 }
 
 process.stderr.write(`🚀 Chokidar Watcher Daemon started in: ${PROJECT_ROOT}\n`);
+
+// Only watch source files we can actually index. Critically, this prevents
+// chokidar from descending into node_modules / dist / .git / .gitignored dirs —
+// watching those would exhaust the OS file-watcher limit (ENOSPC on Linux) and
+// waste CPU/memory on large projects. The ignore decision happens at the watcher
+// level, not just in processFileChange, so ignored trees are never traversed.
+function shouldIgnore(absPath) {
+    const rel = path.relative(PROJECT_ROOT, absPath).replace(/\\/g, '/');
+    if (!rel) return false;                       // the project root itself
+    if (path.basename(absPath).startsWith('.')) return true; // dotfiles / dot-dirs
+    try { return ignoreFilter.ignores(rel); }     // node_modules, dist, .gitignore, …
+    catch { return false; }
+}
+
 const watcher = chokidar.watch(PROJECT_ROOT, {
-    ignored: /(^|[\/\\])\../, persistent: true,
+    ignored: shouldIgnore,
+    persistent: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
 });
 watcher.on('add', processFileChange).on('change', processFileChange).on('unlink', (p) => processFileChange(p));

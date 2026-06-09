@@ -26,6 +26,7 @@
 - [Best practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [Security](#security)
 - [License](#license)
 
 ---
@@ -350,7 +351,9 @@ When you run `npm run mcp:index`:
 4. **Creates two indexes**: a BM25 inverted index (lexical) and per-chunk float32 embeddings via Ollama `nomic-embed-text` (optional).
 5. **Serializes to disk**: `code-index.json` + `code-index.embeddings.bin`.
 
-A background watcher daemon re-indexes changed files automatically.
+A background watcher daemon re-indexes changed files automatically. It respects
+`.gitignore` and skips `node_modules`, build output, and dot-directories, so it
+never traverses (or exhausts OS file-watcher limits on) dependency trees.
 
 ### Search pipeline
 
@@ -417,6 +420,18 @@ npm run mcp:index   # index this repo
 npm run test        # run test suite (lexical-only)
 npm run mcp:start   # start MCP server
 ```
+
+---
+
+## Security
+
+graph-indexer runs locally and is air-gapped by default — its only outbound call
+is to a local Ollama endpoint for embeddings (skipped entirely with
+`INDEXER_EMBEDDINGS=off`). It never executes the code it indexes, and the index
+artifacts contain source snippets, so keep them git-ignored (as `init` configures).
+
+See [SECURITY.md](SECURITY.md) for the full threat model and how to report a
+vulnerability.
 
 ---
 

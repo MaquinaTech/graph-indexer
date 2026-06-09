@@ -60,6 +60,9 @@ jobs:
           grep -q "'.css': CSS" parser-utils.mjs && echo "✓ CSS support"
           echo "✓ All 11 languages verified"
 
+      - name: Unit tests (pure helpers, no fixtures)
+        run: npm run test:unit
+
       - name: Build index on this codebase
         run: |
           INDEXER_EMBEDDINGS=off node indexer.mjs --repo .

@@ -1,6 +1,6 @@
 {
     "name": "graph-indexer",
-    "version": "1.0.3",
+    "version": "1.1.0",
     "description": "Zero-DB, Air-gapped, In-Memory Graph Indexer MCP Server with Hybrid RRF Search and Cross-Language Topology",
     "type": "module",
     "main": "core-engine.mjs",
@@ -26,6 +26,7 @@
     "scripts": {
         "start": "node ./mcp-server.mjs",
         "test": "node test/run.mjs",
+        "test:unit": "node test/unit.mjs",
         "test:setup": "node test/setup.mjs",
         "test:run": "node test/run.mjs",
         "test:embeddings": "OLLAMA_HOST=http://localhost:11435 node test/run-embeddings.mjs",

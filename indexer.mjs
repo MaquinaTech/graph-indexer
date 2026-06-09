@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import {
     MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter, getLocalEmbeddingsBatch,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports
+    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, buildEmbeddingPayload
 } from './parser-utils.mjs';
 import { MemoryGraphIndex, writeEmbeddingBinary } from './core-engine.mjs';
 
@@ -113,27 +113,9 @@ async function main() {
         console.time("Embedding Generation Duration");
 
         const worker = async (batch) => {
-            const textsToEmbed = batch.map(c => {
-                const dependencies = indexData.graph.dependencies[c.file_path] || [];
-                const cleanDeps = dependencies.map(d => {
-                    const depsFile = path.relative(PROJECT_ROOT, d);
-                    const chunkMatches = indexData.chunks.filter(c => c.file_path === depsFile);
-                    return chunkMatches.map(c => c.name).join(' ');
-                });
-                const topologicalContext = cleanDeps.length > 0
-                    ? `This code architectural neighborhood connects with: ${cleanDeps.join(', ')}.`
-                    : '';
-
-                return [
-                    `File Location: ${c.file_path}`,
-                    `Symbol Name: ${c.node_type} -> ${c.name}`,
-                    c.docstring ? `Developer Documentation: ${c.docstring}` : '',
-                    c.type_refs?.length ? `Type References: ${c.type_refs.join(', ')}` : '',
-                    topologicalContext,
-                    `--- Source Code ---`,
-                    c.code_snippet
-                ].filter(Boolean).join('\n');
-            });
+            const textsToEmbed = batch.map(c =>
+                buildEmbeddingPayload(c, indexData.graph.dependencies[c.file_path] || [])
+            );
 
             const embeddingsMatrix = await getLocalEmbeddingsBatch(textsToEmbed, true);
             if (embeddingsMatrix && embeddingsMatrix.length === batch.length) {

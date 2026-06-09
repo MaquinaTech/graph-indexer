@@ -637,6 +637,38 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
     return resolved;
 }
 
+/**
+ * Build the text payload sent to the embedding model for a chunk.
+ *
+ * Shared by the bootstrap indexer (indexer.mjs) and the watch daemon
+ * (watch-daemon.mjs) so a chunk yields the SAME embedding regardless of which
+ * path embedded it first. This matters because the cache key (content_hash) is
+ * derived from code + docstring only — it does NOT include this payload — so two
+ * divergent payloads for the same hash would silently produce inconsistent
+ * embeddings across a full re-index vs. an incremental update.
+ *
+ * @param {object}   chunk        Semantic chunk: { file_path, node_type, name, docstring, type_refs, code_snippet }.
+ * @param {string[]} depRelPaths  Resolved local imports of the chunk's file (project-relative paths).
+ * @returns {string}
+ */
+export function buildEmbeddingPayload(chunk, depRelPaths = []) {
+    const neighbors = depRelPaths
+        .map(d => path.basename(d, path.extname(d)))
+        .filter(Boolean);
+    const topologicalContext = neighbors.length
+        ? `This code architectural neighborhood connects with: ${neighbors.join(', ')}.`
+        : '';
+    return [
+        `File Location: ${chunk.file_path}`,
+        `Symbol Name: ${chunk.node_type} -> ${chunk.name}`,
+        chunk.docstring ? `Developer Documentation: ${chunk.docstring}` : '',
+        chunk.type_refs?.length ? `Type References: ${chunk.type_refs.join(', ')}` : '',
+        topologicalContext,
+        `--- Source Code ---`,
+        chunk.code_snippet,
+    ].filter(Boolean).join('\n');
+}
+
 export async function getLocalEmbedding(text, graceful = true) {
     if (process.env.INDEXER_EMBEDDINGS === 'off') return null; // lexical-only mode
     const MAX_RETRIES = 3;

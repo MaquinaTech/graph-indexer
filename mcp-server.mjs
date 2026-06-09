@@ -21,6 +21,15 @@ const PROJECT_ROOT = process.env.MCP_PROJECT_ROOT || process.cwd();
 const INDEX_PATH = resolve(PROJECT_ROOT, "code-index.json");
 const PID_FILE = resolve(PROJECT_ROOT, ".idx-daemon.pid");
 
+// Single source of truth for the version: graph-indexer's own package.json
+// (next to this file), never the consumer project's package.json.
+const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+function readPackageVersion() {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, "package.json"), "utf-8")).version || "0.0.0";
+    } catch { return "0.0.0"; }
+}
+
 // ─── Daemon Orchestration ─────────────────────────────────────────────────────
 
 function ensureDaemonRunning() {
@@ -100,7 +109,7 @@ function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
 // ─── Server Initialization ────────────────────────────────────────────────────
 
 ensureDaemonRunning();
-const version = "1.0.3";
+const version = readPackageVersion();
 const server = new McpServer({ name: "graph-indexer", version });
 
 // Use lazy (disk-backed) vector loading for large corpora — cacheEmbeddings:false
