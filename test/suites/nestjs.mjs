@@ -167,4 +167,74 @@ export const QUERIES = [
         expected_names: ['Reflect', 'metadata', 'decorator'],
         expected_files: ['decorators', 'metadata'],
     },
+
+    // ── SEMANTIC — agent-style conceptual queries (what PROMPT.md trains agents to write) ─
+    // These queries deliberately contain NO exact symbol name. They describe *behavior*,
+    // mirroring what an LLM following the prompt guidelines would type into search_code().
+    // They primarily exercise the embedding channel; BM25 must still find them via
+    // docstrings and code body content.
+
+    {
+        id: 'NJ15',
+        query: 'class-based HTTP endpoint handler binding route path prefix to controller methods',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Agent searching conceptually for the controller mechanism — must NOT contain "Controller" in query',
+        expected_names: ['Controller'],
+        expected_files: ['controller.decorator', 'decorators'],
+    },
+    {
+        id: 'NJ16',
+        query: 'mark TypeScript class as provider available for automatic constructor injection',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Agent looking for the DI provider registration decorator',
+        expected_names: ['Injectable'],
+        expected_files: ['injectable.decorator'],
+    },
+    {
+        id: 'NJ17',
+        query: 'validate or transform incoming request data payload before route handler executes',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Agent searching for the pipe/transform abstraction',
+        expected_names: ['PipeTransform'],
+        expected_files: ['pipes'],
+    },
+    {
+        id: 'NJ18',
+        query: 'Catching unhandled errors globally across the app and formatting them into standard HTTP responses',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Conceptual search for Exception Filters',
+        expected_names: ['ExceptionFilter', 'Catch', 'BaseExceptionFilter'],
+        expected_files: ['filters', 'core'],
+    },
+    {
+        id: 'NJ19',
+        query: 'Restricting access to certain endpoints based on user roles or active session permissions',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Searching for Guard logic',
+        expected_names: ['Guard', 'CanActivate'],
+        expected_files: ['guards'],
+    },
+    {
+        id: 'NJ20',
+        query: 'Bootstrapping the server engine, binding it to a port, and starting the HTTP listener to accept traffic',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Looking for the app initialization block',
+        expected_names: ['create', 'listen', 'bootstrap'],
+        expected_files: ['nest-factory', 'application'],
+    },
+    {
+        id: 'NJ21',
+        query: 'Wrapping a request handler to measure execution time or mutate the final returned JSON object',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Describing Interceptor behavior',
+        expected_names: ['NestInterceptor', 'Interceptor'],
+        expected_files: ['interceptors'],
+    },
 ];

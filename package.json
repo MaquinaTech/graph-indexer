@@ -1,7 +1,7 @@
 {
     "name": "graph-indexer",
-    "version": "1.1.0",
-    "description": "Zero-DB, Air-gapped, In-Memory Graph Indexer MCP Server with Hybrid RRF Search and Cross-Language Topology",
+    "version": "1.2.0",
+    "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph, with an optional zero-dependency SQLite backend for monorepo scale and optional local-LLM semantic enrichment.",
     "type": "module",
     "main": "core-engine.mjs",
     "exports": {
@@ -27,6 +27,13 @@
         "start": "node ./mcp-server.mjs",
         "test": "node test/run.mjs",
         "test:unit": "node test/unit.mjs",
+        "test:sqlite": "node test/sqlite.mjs",
+        "test:enrich": "node test/enrichment.mjs",
+        "test:mcp": "node test/mcp.mjs",
+        "test:scale": "node test/scale.mjs",
+        "test:all": "node test/unit.mjs && node test/sqlite.mjs && node test/enrichment.mjs && node test/mcp.mjs && node test/scale.mjs",
+        "test:eval": "node test/evaluate.mjs",
+        "test:eval:embeddings": "OLLAMA_HOST=http://localhost:11435 node test/evaluate.mjs --embeddings",
         "test:setup": "node test/setup.mjs",
         "test:run": "node test/run.mjs",
         "test:embeddings": "OLLAMA_HOST=http://localhost:11435 node test/run-embeddings.mjs",
@@ -35,6 +42,8 @@
         "test:json": "node test/run.mjs --json",
         "test:reset": "rm -rf test/fixtures && node test/setup.mjs",
         "mcp:index": "node indexer.mjs --repo .",
+        "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
+        "mcp:index:enriched": "node indexer.mjs --repo . --llm-enrichment",
         "mcp:watch": "node watch-daemon.mjs",
         "mcp:start": "node mcp-server.mjs"
     },
@@ -78,16 +87,16 @@
         "access": "public"
     },
     "optionalDependencies": {
-        "hnswlib-node": "^3.0.0",
-        "tree-sitter-c-sharp": "^0.21.3",
+        "hnswlib-node": "3.0.0",
+        "tree-sitter-c-sharp": "0.21.3",
         "tree-sitter-css": "0.21.1",
         "tree-sitter-go": "0.21.0",
-        "tree-sitter-java": "^0.21.0",
+        "tree-sitter-java": "0.21.0",
         "tree-sitter-javascript": "0.21.4",
-        "tree-sitter-kotlin": "^0.3.8",
+        "tree-sitter-kotlin": "0.3.8",
         "tree-sitter-php": "0.23.1",
         "tree-sitter-python": "0.21.0",
-        "tree-sitter-ruby": "^0.23.1",
+        "tree-sitter-ruby": "0.23.1",
         "tree-sitter-rust": "0.21.0",
         "tree-sitter-typescript": "0.21.2"
     }

@@ -3,6 +3,10 @@ code-index.json
 code-index.embeddings.bin
 code-index.json.tmp
 code-index.embeddings.bin.tmp
+code-index.db
+code-index.db-wal
+code-index.db-shm
+code-index.enrichment.json
 *.tmp
 
 # Runtime / Daemon
@@ -49,3 +53,4 @@ test/reports/
 .AppleDouble
 .LSOverride
 *.log
+.graph-indexer.json

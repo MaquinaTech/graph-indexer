@@ -1,32 +1,30 @@
 #!/usr/bin/env node
 /**
  * @file indexer.mjs
- * @description In-Memory Graph Indexer — Bootstrap Engine. Reads .ts/.tsx/.js/.jsx files → Tree-sitter AST → Local Embeddings → code-index.json. Zero external dependencies (only Tree-sitter). No ChromaDB.
+ * @description Bootstrap indexer. Walks a repository, extracts Tree-sitter AST
+ *              chunks + cross-file topology, generates local embeddings (Ollama),
+ *              optionally enriches the most central chunks with an LLM, and writes
+ *              the index to the configured backend — the default in-memory JSON
+ *              artifacts, or a disk-backed SQLite database (--use-sqlite).
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
- * Copyright (c) 2026 MaquinaTech. All rights reserved.
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions: The above copyright
- * notice and this permission notice shall be included in all copies or
- * substantial portions of the Software.
  */
 import fs from 'fs';
 import path from 'path';
 import {
     MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter, getLocalEmbeddingsBatch,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, buildEmbeddingPayload
+    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, buildEmbeddingPayload,
 } from './parser-utils.mjs';
-import { MemoryGraphIndex, writeEmbeddingBinary } from './core-engine.mjs';
+import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
+import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
+import { resolveConfig } from './config.mjs';
+import { enrichCoreChunks } from './enrichment.mjs';
 
-const args = process.argv.slice(2);
-const repoArg = args[args.indexOf("--repo") + 1] ?? process.cwd();
-const PROJECT_ROOT = path.resolve(repoArg);
-const INDEX_PATH = path.join(PROJECT_ROOT, 'code-index.json');
+const config = resolveConfig();
+const PROJECT_ROOT = config.projectRoot;
+const INDEX_PATH = config.indexPath;
+const EMBEDDINGS_PATH = config.embeddingPath;
 
 function walkRepo(dir, root, ig, files = []) {
     for (const entry of fs.readdirSync(dir)) {
@@ -44,18 +42,18 @@ function walkRepo(dir, root, ig, files = []) {
 }
 
 async function main() {
-    console.log(`\n🚀 Starting Optimized Indexer\n📂 Directory: ${PROJECT_ROOT}\n`);
+    console.log(`\n🚀 Starting Optimized Indexer\n📂 Directory: ${PROJECT_ROOT}`);
+    console.log(`🗄  Storage: ${config.storage}${config.enrichment.enabled ? ` · 🧠 LLM enrichment: ${config.enrichment.model}` : ''}\n`);
 
     const ig = buildIgnoreFilter(PROJECT_ROOT);
     const files = walkRepo(PROJECT_ROOT, PROJECT_ROOT, ig);
     console.log(`Found ${files.length} files to analyse.\n`);
 
-    const db = new MemoryGraphIndex(INDEX_PATH);
-    db.load();
-    const existingCache = db.embeddingCache;
+    const existingCache = readEmbeddingBinary(EMBEDDINGS_PATH);
     console.log(`📦 Loaded ${existingCache.size} cached embeddings from previous runs.\n`);
 
     const indexData = { chunks: [], graph: { dependencies: {}, importedBy: {} }, embeddingCache: {} };
+    const pendingChunks = [];
     let totalCheckedFiles = 0;
 
     for (const absolutePath of files) {
@@ -69,75 +67,97 @@ async function main() {
             const stats = await fs.promises.stat(absolutePath);
             if (stats.size > MAX_FILE_SIZE_BYTES) continue;
 
-            let content = await fs.promises.readFile(absolutePath, 'utf-8');
+            const content = await fs.promises.readFile(absolutePath, 'utf-8');
             if (!content.trim()) continue;
 
             const ext = path.extname(absolutePath);
             const parser = getParserForFile(ext);
             if (!parser) continue;
 
-            let tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null);
+            const tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null);
             const rawImports = extractImportsFromAST(tree.rootNode, ext);
             const imports = resolveLocalImports(rawImports, relPath, PROJECT_ROOT);
             indexData.graph.dependencies[relPath] = imports;
 
-            const chunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
-            for (const chunk of chunks) {
-                if (existingCache.has(chunk.content_hash)) {
-                    indexData.embeddingCache[chunk.content_hash] = Array.from(existingCache.get(chunk.content_hash));
-                    indexData.chunks.push(chunk);
-                } else {
-                    indexData.chunksToEmbed = indexData.chunksToEmbed || [];
-                    indexData.chunksToEmbed.push(chunk);
-                }
+            // Chunks are collected first; embedding/enrichment happen in batch below so
+            // we can route the high-value subset through the LLM before vectorising.
+            for (const chunk of extractSemanticChunks(tree.rootNode, relPath, content, ext)) {
+                pendingChunks.push(chunk);
             }
         } catch (err) {
             console.error(`\n💥 Error in ${relPath}: ${err.message}`);
         }
     }
 
-    const pendingChunks = indexData.chunksToEmbed || [];
+    // ── Optional LLM enrichment of the most central chunks (HyDE + summaries) ──────
+    // Runs before embedding so the hypothetical questions ride the same vector.
+    if (config.enrichment.enabled) {
+        await enrichCoreChunks(pendingChunks, indexData.graph, config);
+    }
+
+    // ── Embedding generation (cache-aware) ────────────────────────────────────────
+    // Vectors are keyed by embeddingKeyFor(chunk): content_hash for plain chunks,
+    // content_hash + enrichment digest for enriched ones. Because the enrichment
+    // cache returns the same summary for the same code, enriched chunks now HIT
+    // this cache on re-runs — previously every enriched chunk was re-embedded on
+    // every single index run.
+    const toEmbed = [];
+    for (const chunk of pendingChunks) {
+        const vecKey = embeddingKeyFor(chunk);
+        const sKey = vecKey + SUMMARY_VEC_SUFFIX;
+        // An enriched chunk needs BOTH vectors cached (code payload + summary) to
+        // skip embedding — e.g. indexes built before dual vectors only have the base.
+        const summaryMissing = summaryEmbeddingText(chunk) && !existingCache.has(sKey);
+        if (existingCache.has(vecKey) && !summaryMissing) {
+            indexData.embeddingCache[vecKey] = Array.from(existingCache.get(vecKey));
+            if (existingCache.has(sKey)) indexData.embeddingCache[sKey] = Array.from(existingCache.get(sKey));
+            indexData.chunks.push(chunk);
+        } else {
+            toEmbed.push(chunk);
+        }
+    }
+
     console.log(`\n\n🧠 Embedding Generation (Ollama)`);
     console.log(`Chunks reused from cache: ${indexData.chunks.length}`);
-    console.log(`New chunks to process: ${pendingChunks.length}`);
+    console.log(`New chunks to process: ${toEmbed.length}`);
 
-    if (pendingChunks.length > 0) {
+    if (toEmbed.length > 0) {
         const BATCH_SIZE = 64;
         const CONCURRENCY = 4;
         const batches = [];
-        for (let i = 0; i < pendingChunks.length; i += BATCH_SIZE) {
-            batches.push(pendingChunks.slice(i, i + BATCH_SIZE));
-        }
+        for (let i = 0; i < toEmbed.length; i += BATCH_SIZE) batches.push(toEmbed.slice(i, i + BATCH_SIZE));
 
-        let completedChunksCount = 0;
-        console.time("Embedding Generation Duration");
-
+        let completed = 0;
+        console.time('Embedding Generation Duration');
         const worker = async (batch) => {
-            const textsToEmbed = batch.map(c =>
-                buildEmbeddingPayload(c, indexData.graph.dependencies[c.file_path] || [])
-            );
-
-            const embeddingsMatrix = await getLocalEmbeddingsBatch(textsToEmbed, true);
-            if (embeddingsMatrix && embeddingsMatrix.length === batch.length) {
-                for (let j = 0; j < batch.length; j++) {
-                    const chunk = batch[j];
-                    indexData.embeddingCache[chunk.content_hash] = embeddingsMatrix[j];
-                    indexData.chunks.push(chunk);
-                }
-            } else {
-                for (const chunk of batch) indexData.chunks.push(chunk);
+            // Enriched chunks get TWO vectors: the full code payload (base key)
+            // and a compact summary-only text (`key|s`) that matches the vocabulary
+            // of natural-language queries (see search-core.summaryEmbeddingText).
+            const entries = [];
+            for (const c of batch) {
+                entries.push({ key: embeddingKeyFor(c), text: buildEmbeddingPayload(c, indexData.graph.dependencies[c.file_path] || []) });
+                const sText = summaryEmbeddingText(c);
+                if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
             }
-            completedChunksCount += batch.length;
-            process.stdout.write(`\r🤖 Embedding Progress: [${completedChunksCount}/${pendingChunks.length}] Chunks processed...`);
+            const matrix = await getLocalEmbeddingsBatch(entries.map(e => e.text), true, {
+                ollamaHost: config.ollamaHost, model: config.embedModel,
+            });
+            if (matrix && matrix.length === entries.length) {
+                for (let j = 0; j < entries.length; j++) {
+                    indexData.embeddingCache[entries[j].key] = matrix[j];
+                }
+            }
+            for (const chunk of batch) indexData.chunks.push(chunk);
+            completed += batch.length;
+            process.stdout.write(`\r🤖 Embedding Progress: [${completed}/${toEmbed.length}] Chunks processed...`);
         };
-
         for (let i = 0; i < batches.length; i += CONCURRENCY) {
-            const batchGroup = batches.slice(i, i + CONCURRENCY);
-            await Promise.all(batchGroup.map(batch => worker(batch)));
+            await Promise.all(batches.slice(i, i + CONCURRENCY).map(worker));
         }
-        console.timeEnd("Embedding Generation Duration");
+        console.timeEnd('Embedding Generation Duration');
     }
 
+    // ── Reverse topology edges ────────────────────────────────────────────────────
     for (const [filePath, imports] of Object.entries(indexData.graph.dependencies)) {
         for (const dep of imports) {
             if (!indexData.graph.importedBy[dep]) indexData.graph.importedBy[dep] = [];
@@ -145,18 +165,28 @@ async function main() {
         }
     }
 
-    const EMBEDDINGS_PATH = INDEX_PATH.replace(/\.json$/, '.embeddings.bin');
-    const tmpPath = `${INDEX_PATH}.tmp`;
-    const tmpBinPath = `${EMBEDDINGS_PATH}.tmp`;
-    await Promise.all([
-        fs.promises.writeFile(tmpPath, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph })),
-        fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
-    ]);
-    await Promise.all([
-        fs.promises.rename(tmpPath, INDEX_PATH),
-        fs.promises.rename(tmpBinPath, EMBEDDINGS_PATH),
-    ]);
-    console.log(`\n🎉 Indexing completed blazingly fast. Total fragments: ${indexData.chunks.length}\n`);
+    // ── Persist to the configured backend ─────────────────────────────────────────
+    if (config.storage === 'sqlite') {
+        const { SqliteGraphStore } = await import('./sqlite-store.mjs');
+        const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
+        const res = store.buildFrom({
+            chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
+        });
+        console.log(`\n🎉 SQLite index built: ${res.chunks} chunks · ${res.terms} terms · dim ${res.dim}`);
+        console.log(`   → ${config.sqlitePath}\n`);
+    } else {
+        const tmpPath = `${INDEX_PATH}.tmp`;
+        const tmpBinPath = `${EMBEDDINGS_PATH}.tmp`;
+        await Promise.all([
+            fs.promises.writeFile(tmpPath, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph })),
+            fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
+        ]);
+        await Promise.all([
+            fs.promises.rename(tmpPath, INDEX_PATH),
+            fs.promises.rename(tmpBinPath, EMBEDDINGS_PATH),
+        ]);
+        console.log(`\n🎉 Indexing completed blazingly fast. Total fragments: ${indexData.chunks.length}\n`);
+    }
 }
 
 main().catch(console.error);

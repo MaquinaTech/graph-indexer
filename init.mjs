@@ -263,6 +263,10 @@ function updateGitignore() {
     const entries = [
         'code-index.json',
         'code-index.embeddings.bin',
+        'code-index.db',
+        'code-index.db-wal',
+        'code-index.db-shm',
+        'code-index.enrichment.json',
         '.idx-daemon.pid',
         '.idx-daemon.log'
     ];
@@ -336,7 +340,6 @@ log('  1. Run `npm run mcp:index` to index this project');
 log('  2. Restart your IDE to activate the MCP server');
 log('  3. Run `npm run mcp:start` if your IDE needs the server started manually');
 
-// Mensaje final de agradecimiento
 log('\n─────────────────────────────────────────────────────────────────');
 log('✨ Thank you for setting up graph-indexer!');
 log('   Enjoy your blazing-fast, AST-precise codebase search.');
@@ -348,5 +351,4 @@ log('   copy the system prompt from our repository:');
 log('   https://github.com/MaquinaTech/graph-indexer/blob/main/PROMPT.md?plain=1');
 log('─────────────────────────────────────────────────────────────────\n');
 
-// Cierre limpio de la ejecución para devolver el control a la terminal
 process.exit(0);

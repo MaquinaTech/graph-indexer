@@ -1,143 +1,182 @@
-<agent_instructions name="graph-indexer-system-prompt">
-  <context>
-    You have access to a graph-indexer MCP server that has pre-indexed this entire codebase into a searchable AST graph. It is always faster, cheaper, and more accurate than reading files directly.
-  </context>
+# graph-indexer — Agent Instructions
 
-  <absolute_rules>
-    <rule id="1" name="Search before you read">NEVER use readFile, listDir, grep, find, or any native file tool as your first step. Every code discovery task starts with a graph-indexer tool. Violating this wastes 10-100x more tokens and is strictly forbidden.</rule>
-    <rule id="2" name="Never read a full file to find one function">If you know a chunk ID from search results, call get_chunk(id) directly. If you need one function from a file, search for it; do not read the whole file.</rule>
-    <rule id="3" name="Never modify an exported function without checking its callers">Before changing any function or class signature, call get_call_graph(functionName) to find all callers repo-wide. This takes 1 tool call. Skipping it risks breaking code you cannot see.</rule>
-    <rule id="4" name="Use resolve_symbol for exact names, not search">If you know the exact function or class name (e.g., validateToken, UserService), call resolve_symbol(validateToken). It is O(1) and returns the definition instantly. Do not use search_code for names you already know.</rule>
-  </absolute_rules>
+---
 
-  <decision_tree>
-    <task name="Unfamiliar codebase, need overview" tool="get_repo_map()" />
-    <task name="Focus on a subsystem" tool="get_repo_map(path_filter='auth')" />
-    <task name="Know exact symbol name" tool="resolve_symbol('ExactName')" />
-    <task name="Find concept or behavior" tool="search_code(query, detail='signatures')" />
-    <task name="Need interface only (no body)" tool="get_chunk_summary(chunk_id)" />
-    <task name="Need full implementation" tool="get_chunk(chunk_id)" />
-    <task name="See all exports in one file" tool="get_file_skeleton('src/file.ts')" />
-    <task name="Find who calls a function" tool="get_call_graph('functionName')" />
-    <task name="Check index health or search mode" tool="list_index_stats()" />
-    <task name="Browse file dependencies" tool="resource graph://dependencies/{file_path}" />
-  </decision_tree>
+## Prime directive
 
-  <token_management>
-    <costs>
-      <action tool="get_repo_map()" tokens="1500" context="Orienting in an unknown codebase" />
-      <action tool="resolve_symbol('Name')" tokens="50" context="You know the exact name" />
-      <action tool="search_code(detail='signatures', top_k=5)" tokens="100" context="Finding candidates to inspect" />
-      <action tool="get_chunk_summary(id)" tokens="50" context="You need the interface, not the body" />
-      <action tool="search_code(detail='smart', top_k=5)" tokens="750" context="You need to understand the logic" />
-      <action tool="get_chunk(id)" tokens="300" context="You need the complete implementation" />
-      <action tool="get_file_skeleton('file.ts')" tokens="80" context="You need all exports in one file" />
-      <action tool="search_code(detail='full', top_k=5)" tokens="1500" context="Rarely; full bodies for all results" />
-      <action tool="Direct file read" tokens="5000" context="Never - use the tools above" />
-    </costs>
-    <escalation_ladder>
-      <step level="1" tool="search_code(detail='signatures')">Start here: names and types only</step>
-      <step level="2" tool="get_chunk_summary(id)">Escalate: add docstring and calls</step>
-      <step level="3" tool="search_code(detail='smart')">Escalate: add query-relevant snippets</step>
-      <step level="4" tool="get_chunk(id)">Last resort: full body when you must</step>
-    </escalation_ladder>
-  </token_management>
+This codebase is **pre-indexed**. The `graph-indexer` MCP server answers code
+questions from an AST-precise search index in tens of tokens, with cross-file
+topology your file tools cannot see.
 
-  <workflows>
-    <workflow name="Orienting in a new codebase">
-      <step>get_repo_map() -> files sorted by importance (PageRank)</step>
-      <step>identify key files, pick relevant ones</step>
-      <step>resolve_symbol or search_code to drill in</step>
-    </workflow>
-    <workflow name="Finding where a concept is implemented">
-      <step>search_code(query='semantic description', detail='signatures', top_k=5) -> read signature cards and topology</step>
-      <step>if a result looks right: get_chunk_summary(id) to check interface</step>
-      <step>if confirmed: get_chunk(id) for the full body</step>
-    </workflow>
-    <workflow name="Looking up a specific function or class">
-      <step>resolve_symbol('ExactName') -> definition, type signature, cross-file topology</step>
-      <step>get_chunk(id) if you need the body</step>
-    </workflow>
-    <workflow name="Understanding a file structure">
-      <step>get_file_skeleton('src/module.ts') -> all exported symbols with line numbers (no bodies)</step>
-      <step>resolve_symbol or get_chunk for specific items</step>
-    </workflow>
-    <workflow name="Safe refactoring">
-      <step>get_call_graph('targetFunction') -> all callers repo-wide</step>
-      <step>review impact before changing signature</step>
-      <step>get_chunk for each caller if you need to update call sites</step>
-    </workflow>
-  </workflows>
+**Every code discovery task starts with a graph-indexer tool. Never start with
+a native file tool** — no `read file`, `list directory`, `grep`, `codebase
+search`, `find`, or equivalent — regardless of what your IDE calls them.
+Reading a file to "look around" costs 5,000–15,000 tokens; the same answer via
+the index costs 50–700. The difference compounds over every step of your
+session.
 
-  <query_guidelines>
-    <description>search_code uses BM25 hybrid search. Query quality determines result quality.</description>
-    <examples type="good">
-      <example>JWT token validation and expiry check middleware</example>
-      <example>HTTP adapter XMLHttpRequest browser send request</example>
-      <example>dependency injection container resolve provider</example>
-      <example>route registration path method handler</example>
-    </examples>
-    <examples type="bad">
-      <example reason="matches everything with the word auth">auth</example>
-      <example reason="thousands of results, meaningless ranking">request</example>
-      <example reason="too broad">handler</example>
-    </examples>
-    <rules>
-      <rule>Describe the behavior, not just the noun: 'parse and validate request body schema' not 'validation'</rule>
-      <rule>Include language context: 'TypeScript interface generic constraint' not 'interface'</rule>
-      <rule>If you know the name, use exact_tokens: search_code(query='token validation', exact_tokens='validateToken')</rule>
-      <rule>For files: include path segments in query: 'middleware auth route' will boost auth/middleware.ts</rule>
-    </rules>
-  </query_guidelines>
+Native tools are a **last resort**, permitted only under the fallback rules at
+the end of this document. Editing files is unaffected — write code with your
+normal tools; *discovery* belongs to the index.
 
-  <detail_parameter tool="search_code">
-    <option value="signatures" tokens="20">Name, type, params, return, topology (no body). Use for first pass finding candidates.</option>
-    <option value="smart" default="true" tokens="150">Signature + query-matching lines only, boilerplate removed. Use for understanding logic without full body.</option>
-    <option value="full" tokens="300">Complete source body. Use when you must see the full implementation.</option>
-    <instruction>Always start with signatures, escalate only when you need more.</instruction>
-  </detail_parameter>
+---
 
-  <anti_patterns>
-    <anti_pattern action="readFile('src/auth/jwt.ts')">WRONG: Reading files to discover code. Never use as a first step.</anti_pattern>
-    <anti_pattern action="search_code('validateToken')">WRONG: Searching for what you already have. You already have the chunk ID from search results.</anti_pattern>
-    <anti_pattern action="search_code(query='...', detail='full')">WRONG: Using full detail by default. Only use when you need all bodies.</anti_pattern>
-    <anti_pattern action="Edit function -> push -> find 12 other files break">WRONG: Modifying exported functions without impact check. Correct: get_call_graph('functionName') first.</anti_pattern>
-    <anti_pattern action="search_code(query='error')">WRONG: Generic one-word queries. Use semantic descriptions like 'HTTP error response handler middleware'.</anti_pattern>
-    <anti_pattern action="Ignoring topology in search results">WRONG: If results show 'Used by: auth.ts, routes.ts', read that, do not re-search.</anti_pattern>
-    <anti_pattern action="Re-searching for the same concept">WRONG: search_code returns chunk ID -> call get_chunk(id), not another search_code.</anti_pattern>
-  </anti_patterns>
+## The five rules
 
-  <topology_info>
-    <description>Every search_code and resolve_symbol result includes topology for free. Use this topology to navigate without additional tool calls.</description>
-    <fields>
-      <field name="Deps">What this file imports (and which symbols it uses from each)</field>
-      <field name="Used by">Which other files import this file</field>
-      <field name="Calls">Functions this chunk calls directly</field>
-    </fields>
-  </topology_info>
+1. **Search before you read.** First step of any discovery task is
+   `search_code`, `resolve_symbol`, or `get_repo_map` — never a file read.
+2. **Know the name? Don't search it.** `resolve_symbol("validateToken")` is an
+   O(1) exact lookup with topology included. Use it whenever you know the
+   symbol's exact name. Use `search_code` only for concepts and behaviour.
+3. **Never read a whole file to get one function.** Search results give you a
+   chunk ID → `get_chunk(id)` returns exactly that function's body.
+4. **Never change a signature blind.** Before modifying any exported
+   function/class, `get_call_graph("name")` lists every caller repo-wide in
+   one call. Skipping this breaks code you cannot see.
+5. **Escalate token spend stepwise.** signatures → summary → smart → full
+   body. Start cheap; pay for bodies only when you must (ladder below).
 
-  <index_health>
-    <troubleshooting>
-      <step>Call list_index_stats() to check chunk count, vector status, daemon status, index age.</step>
-      <step>If index age > 1h with no activity, ask the user to run npm run mcp:index.</step>
-      <step>If a symbol is missing from resolve_symbol, fall back to search_code.</step>
-    </troubleshooting>
-    <search_modes>
-      <mode name="Hybrid">semantic + lexical RRF, full quality, Ollama running</mode>
-      <mode name="Lexical only">BM25 only, Ollama unavailable; still high quality (R@5=1.00)</mode>
-    </search_modes>
-  </index_health>
+---
 
-  <quick_reference>
-    <command name="get_repo_map()" returns="full codebase overview (~1500 tok)" />
-    <command name="get_repo_map(path_filter='auth')" returns="subsystem overview (~300 tok)" />
-    <command name="resolve_symbol('ExactName')" returns="instant definition + topology" />
-    <command name="search_code('concept', 'signatures')" returns="find candidates (~100 tok)" />
-    <command name="get_chunk_summary(id)" returns="interface view (~50 tok)" />
-    <command name="get_chunk(id)" returns="full body (~300 tok)" />
-    <command name="get_file_skeleton('path/file.ts')" returns="all exports in file (~80 tok)" />
-    <command name="get_call_graph('name')" returns="all callers, pre-refactor check" />
-    <command name="list_index_stats()" returns="index health" />
-    <command name="graph://dependencies/{file_path}" returns="bidirectional dep graph" />
-  </quick_reference>
-</agent_instructions>
+## Tool selection — decision table
+
+| You need… | Call | ~Tokens |
+| :--- | :--- | ---: |
+| Orientation in an unfamiliar repo | `get_repo_map()` | 1,500 |
+| Orientation in one subsystem | `get_repo_map(path_filter: "auth")` | 300 |
+| A symbol you can name exactly | `resolve_symbol("UserService")` | 50 |
+| Code for a concept/behaviour | `search_code(query, detail: "signatures")` | 100 |
+| The interface of a found chunk | `get_chunk_summary(id)` | 50 |
+| Interfaces of everything a chunk calls | `get_chunk_summary(id, expand_calls: true)` | 150 |
+| The full implementation | `get_chunk(id)` | 300 |
+| All exports of one known file | `get_file_skeleton("src/file.ts")` | 80 |
+| Who calls a function (pre-refactor) | `get_call_graph("name")` | 100 |
+| What a file imports / who imports it | resource `graph://dependencies/{path}` | 100 |
+| Index health / why results look off | `list_index_stats()` | 100 |
+| *(comparison)* reading one file directly | — | 5,000+ |
+
+### Escalation ladder (token budget)
+
+```
+1. search_code(query, detail: "signatures", top_k: 5)   ~100 tok — find candidates
+2. get_chunk_summary(id)                                 ~50 tok — confirm the interface
+3. search_code(query, detail: "smart")                  ~750 tok — see query-relevant lines
+4. get_chunk(id)                                        ~300 tok — full body, last resort
+```
+
+Stop climbing as soon as you can answer. Most questions die at step 1–2.
+
+---
+
+## Writing queries that hit
+
+`search_code` is hybrid (BM25 keywords + semantic vectors) and **detects your
+query style automatically**. Both styles are first-class:
+
+**Keyword style** — when you know domain words or partial names:
+- `JWT token validation expiry middleware`
+- `route registration path method handler`
+- Partial name known? Pin it: `search_code(query: "token validation", exact_tokens: "validateToken")` → guaranteed rank-1.
+- Use resolve_symbol("Name") when you ONLY need the definition of that specific symbol. Use search_code(query: "...", exact_tokens: "Name") when you want to explore a concept but want to guarantee a specific symbol appears at the very top of the results.
+
+**Natural-language style** — when you only know the behaviour:
+- `How does the application parse incoming JSON payloads from the client?`
+- `the logic that decides whether a requested URL matches a registered route`
+- `stopping an HTTP call that takes too long or is no longer needed`
+
+Rules of thumb:
+- Describe **behaviour, not nouns**: `parse and validate request body schema`, not `validation`.
+- One-word queries (`auth`, `request`, `handler`) are useless — thousands of matches.
+- Include path hints when you have them: `middleware auth route` boosts `auth/middleware.ts`.
+- **A keyword miss is not a dead end**: rephrase the same need as a full
+  behavioural sentence — the semantic channel finds code that shares none of
+  your words. This rephrase is *mandatory* before any native-tool fallback.
+- Slow-but-smarter option: `search_code(..., rerank: true)` has a local LLM
+  judge reorder the top results (~1–2 s). Use it when a natural-language query
+  returns plausible-but-not-quite results.
+
+### Reading results
+
+Every result card includes **free topology** — use it instead of new searches:
+- `Deps:` what this file imports (with key symbols per import)
+- `Used by:` which files import this one
+- `Calls:` functions this chunk invokes
+- `ID:` pass to `get_chunk` / `get_chunk_summary` — never re-search what you already found.
+
+A result with node type `re_export` means the symbol is re-exported from a
+dependency (e.g. `fastapi` re-exporting Starlette's `BackgroundTasks`): the
+implementation lives outside this repo — do not hunt for it in the codebase.
+
+---
+
+## Standard workflows
+
+**Unfamiliar codebase** → `get_repo_map()` → pick files → `resolve_symbol` /
+`search_code` to drill in.
+
+**"Where is X implemented?"** → `search_code(behavioural query, detail:
+"signatures")` → `get_chunk_summary(best id)` → `get_chunk(id)` only if you
+must see the body.
+
+**Safe refactor** → `get_call_graph("target")` → review callers →
+`get_chunk(callerId)` for each call site you need to update → edit with your
+normal tools.
+
+**Understanding one file** → `get_file_skeleton(path)` (all exports + line
+numbers, no bodies) → drill into specific symbols.
+
+**Debugging a behaviour** → natural-language `search_code` describing the
+symptom's mechanism → follow `Calls:` topology instead of re-searching.
+
+---
+
+## Anti-patterns (each of these is a bug in your behaviour)
+
+- ❌ Reading a file as your *first* move on any question.
+- ❌ `search_code("validateToken")` — you know the name; that's `resolve_symbol`.
+- ❌ Re-searching a concept you already have a chunk ID for.
+- ❌ `detail: "full"` by default — signatures first, always.
+- ❌ Editing an exported signature without `get_call_graph` first.
+- ❌ Giving up after one keyword query without trying a behavioural rephrase.
+- ❌ Ignoring `Used by:` / `Calls:` topology and issuing new searches for it.
+- ❌ Re-indexing after edits: Do not tell the user to re-index or attempt to re-index after you modify a file. Graph Indexer has a live daemon (watch-daemon.mjs) that instantly updates the index in the background using SQLite WAL. Your next search will automatically see your changes.
+
+---
+
+## Fallback to native tools — the ONLY permitted cases
+
+You may use native file/search tools **only** when one of these is true:
+
+1. **The index says no.** You tried BOTH query styles (keyword + behavioural
+   sentence) and `resolve_symbol`, and the target genuinely isn't returned.
+2. **The index is unhealthy.** `list_index_stats()` shows 0 chunks, a missing
+   index, or a clearly stale index that the daemon isn't updating — tell the
+   user to run `npm run mcp:index`, then fall back for now.
+3. **Non-code files.** Configs, lockfiles, markdown, data files, generated
+   artifacts — the index covers source code chunks; plain files are fair game.
+4. **You need exact current file state for an edit** you are about to make
+   (e.g. precise surrounding lines to produce a diff) — *after* the index
+   located the file and line range for you.
+
+When you do fall back, scope it: read the one file the index pointed you to —
+never directory-walk or repo-grep what the index already answered.
+
+---
+
+## Quick reference
+
+```
+search_code(query, exact_tokens?, detail?, top_k?, rerank?)  hybrid search, topology included
+resolve_symbol(symbol)                                       O(1) exact definition lookup
+get_chunk(chunk_id, view?)                                   full body of one chunk
+get_chunk_summary(chunk_id, expand_calls?)                   interface only, ~50 tok
+get_file_skeleton(file_path)                                 all exports of a file, no bodies
+get_call_graph(target_function)                              every caller repo-wide
+get_repo_map(path_filter?, max_files?)                       PageRank-ordered codebase map
+list_index_stats()                                           index health + search mode
+graph://dependencies/{file_path}                             bidirectional import topology
+```
+
+**Detail levels:** `signatures` ~20 tok/result · `smart` (default) ~150 ·
+`full` ~300. **Search modes:** hybrid (semantic + lexical) when Ollama runs;
+lexical-only otherwise — in lexical-only mode prefer keyword-style queries.

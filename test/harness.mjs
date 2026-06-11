@@ -16,6 +16,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { MemoryGraphIndex } from '../core-engine.mjs';
+import { SqliteGraphStore } from '../sqlite-store.mjs';
 import {
     approxTokens,
     recallAtK,
@@ -39,17 +40,20 @@ const INDEXER = path.join(ROOT_DIR, 'indexer.mjs');
  * Runs the indexer on a fixture directory.
  * Returns { exitCode, stdout, stderr, wallMs }
  */
-export function runIndexer(fixtureDir, { useEmbeddings = false, ollamaHost = null } = {}) {
+export function runIndexer(fixtureDir, { useEmbeddings = false, useSqlite = false, ollamaHost = null } = {}) {
     const env = {
         ...process.env,
         INDEXER_EMBEDDINGS: useEmbeddings ? 'on' : 'off',
     };
     if (ollamaHost) env.OLLAMA_HOST = ollamaHost;
 
+    const args = [INDEXER, '--repo', fixtureDir];
+    if (useSqlite) args.push('--use-sqlite');
+
     const start = Date.now();
     const result = spawnSync(
         process.execPath,
-        [INDEXER, '--repo', fixtureDir],
+        args,
         { env, encoding: 'utf-8', timeout: 180_000 /* 3 min hard cap */ }
     );
     const wallMs = Date.now() - start;
@@ -65,7 +69,17 @@ export function runIndexer(fixtureDir, { useEmbeddings = false, ollamaHost = nul
 
 // ─── Index loading & introspection ────────────────────────────────────────────
 
-export function loadIndex(fixtureDir) {
+export function loadIndex(fixtureDir, { useSqlite = false } = {}) {
+    // Try to load SQLite backend if available and requested
+    if (useSqlite) {
+        const dbPath = path.join(fixtureDir, 'code-index.db');
+        if (fs.existsSync(dbPath)) {
+            const store = new SqliteGraphStore(dbPath, { embeddingPath: path.join(fixtureDir, 'code-index.embeddings.bin') });
+            store.load();
+            return store;
+        }
+    }
+    // Fallback to memory backend
     const indexPath = path.join(fixtureDir, 'code-index.json');
     if (!fs.existsSync(indexPath)) return null;
     const db = new MemoryGraphIndex(indexPath);
@@ -75,10 +89,12 @@ export function loadIndex(fixtureDir) {
 
 export function measureIndexSize(fixtureDir) {
     const jsonPath = path.join(fixtureDir, 'code-index.json');
+    const dbPath = path.join(fixtureDir, 'code-index.db');
     const binPath = path.join(fixtureDir, 'code-index.embeddings.bin');
     const jsonSize = fs.existsSync(jsonPath) ? fs.statSync(jsonPath).size : 0;
+    const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
     const binSize = fs.existsSync(binPath) ? fs.statSync(binPath).size : 0;
-    return { jsonSize, binSize, totalSize: jsonSize + binSize };
+    return { jsonSize, dbSize, binSize, totalSize: jsonSize + dbSize + binSize };
 }
 
 /**
@@ -87,14 +103,14 @@ export function measureIndexSize(fixtureDir) {
 export function indexStats(db) {
     if (!db) return null;
 
-    const chunks = Array.from(db.chunks.values());
+    const chunks = Array.from(db.iterateChunks());
     const files = new Set(chunks.map(c => c.file_path));
 
     const namedChunks = chunks.filter(c => c.name && c.name !== 'anonymous').length;
     const chunksWithDocstring = chunks.filter(c => c.docstring && c.docstring.trim().length > 0).length;
     const chunksWithCalls = chunks.filter(c => c.calls && c.calls.length > 0).length;
     const chunksWithParams = chunks.filter(c => c.params && c.params.length > 0).length;
-    const chunksWithVectors = db.vectors.size;
+    const chunksWithVectors = db.vectorCount();
 
     const chunkTokensList = chunks.map(c => approxTokens(c.code_snippet));
     const avgChunkTokens = chunks.length > 0 ? Math.round(mean(chunkTokensList)) : 0;
@@ -239,18 +255,21 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
  */
 export async function runSuite(suite, opts = {}) {
     const { META, QUERIES, fixtureDir } = suite;
-    const { useEmbeddings = false, skipIndexing = false, ollamaHost = null, embedFn = null } = opts;
+    const { useEmbeddings = false, useSqlite = false, skipIndexing = false, ollamaHost = null, embedFn = null } = opts;
 
     // ── 1. Optionally run (or re-run) the indexer ─────────────────────────────
     let indexResult = null;
     const indexJsonPath = path.join(fixtureDir, 'code-index.json');
+    const dbPath = path.join(fixtureDir, 'code-index.db');
     const binPath = path.join(fixtureDir, 'code-index.embeddings.bin');
     // When embeddings are requested, require the .bin file too; absence → must re-index
-    const indexReady = fs.existsSync(indexJsonPath) && (!useEmbeddings || fs.existsSync(binPath));
+    const indexReady = useSqlite
+        ? (fs.existsSync(dbPath) && (!useEmbeddings || fs.existsSync(binPath)))
+        : (fs.existsSync(indexJsonPath) && (!useEmbeddings || fs.existsSync(binPath)));
 
     if (!skipIndexing || !indexReady) {
         process.stdout.write(`  ⚙  Indexing ${META.displayName} ... `);
-        indexResult = runIndexer(fixtureDir, { useEmbeddings, ollamaHost });
+        indexResult = runIndexer(fixtureDir, { useEmbeddings, useSqlite, ollamaHost });
 
         if (indexResult.timedOut) {
             console.log('TIMEOUT');
@@ -267,9 +286,9 @@ export async function runSuite(suite, opts = {}) {
     }
 
     // ── 2. Load the index ─────────────────────────────────────────────────────
-    const db = loadIndex(fixtureDir);
+    const db = loadIndex(fixtureDir, { useSqlite });
     if (!db) {
-        return { META, error: 'code-index.json not found after indexing', indexResult };
+        return { META, error: (useSqlite ? 'code-index.db' : 'code-index.json') + ' not found after indexing', indexResult };
     }
 
     // ── 3. Compute static metrics ─────────────────────────────────────────────

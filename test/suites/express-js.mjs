@@ -5,17 +5,17 @@
  * Source: https://github.com/expressjs/express (tag 4.18.2)
  *
  * Key source layout:
- *   lib/application.js         — app.init, app.use, app.listen, app.handle
- *   lib/express.js             — createApplication
- *   lib/router/index.js        — proto.handle, proto.process_params, proto.route
- *   lib/router/layer.js        — Layer (constructor), Layer.match, Layer.handle_request
- *   lib/router/route.js        — Route (constructor), Route.dispatch, Route.all
- *   lib/request.js             — req.get, req.accepts, req.range
- *   lib/response.js            — res.send, res.json, res.render, res.redirect
- *   lib/view.js                — View (constructor), View.render, View.lookup
- *   lib/middleware/init.js     — init (initialisation middleware)
- *   lib/middleware/query.js    — query (query-string middleware)
- *   lib/utils.js               — setCharset, etag, etc.
+ * lib/application.js         — app.init, app.use, app.listen, app.handle
+ * lib/express.js             — createApplication
+ * lib/router/index.js        — proto.handle, proto.process_params, proto.route
+ * lib/router/layer.js        — Layer (constructor), Layer.match, Layer.handle_request
+ * lib/router/route.js        — Route (constructor), Route.dispatch, Route.all
+ * lib/request.js             — req.get, req.accepts, req.range
+ * lib/response.js            — res.send, res.json, res.render, res.redirect
+ * lib/view.js                — View (constructor), View.render, View.lookup
+ * lib/middleware/init.js     — init (initialisation middleware)
+ * lib/middleware/query.js    — query (query-string middleware)
+ * lib/utils.js               — setCharset, etag, etc.
  */
 
 export const META = {
@@ -163,4 +163,70 @@ export const QUERIES = [
         expected_names: ['req.accepts', 'req.acceptsEncodings', 'req.acceptsCharsets', 'res.format', 'format'],
         expected_files: ['lib/request', 'lib/response'],
     },
+
+    // ── SEMANTIC — agent-style conceptual queries ──────────────────────────────
+
+    {
+        id: 'EX15',
+        query: 'iterate registered middleware functions in order passing request response and next callback',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Agent describing the core request dispatch loop conceptually',
+        expected_names: ['handle', 'Layer'],
+        expected_files: ['router/index', 'router/layer'],
+    },
+    {
+        id: 'EX16',
+        query: 'serialize JavaScript value to JSON string and write body with correct content type header',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Agent looking for JSON response serialization without knowing method name',
+        expected_names: ['json'],
+        expected_files: ['lib/response'],
+    },
+    {
+        id: 'EX17',
+        query: 'How does the application parse incoming JSON payloads from the client?',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Locates the built-in JSON body parsing middleware',
+        expected_names: ['json'],
+        expected_files: ['lib/express'],
+    },
+    {
+        id: 'EX18',
+        query: 'Where is the logic that decides if a requested URL matches a registered route?',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Finds the core path-matching logic for incoming HTTP requests',
+        expected_names: ['match'],
+        expected_files: ['router/layer', 'router/index'],
+    },
+    {
+        id: 'EX19',
+        query: 'The global error handler that catches exceptions and sends a 500 status code',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Identifies the default Express error handling mechanism',
+        expected_names: ['logerror', 'handle'],
+        expected_files: ['lib/application', 'router/index'],
+    },
+    {
+        id: 'EX20',
+        query: 'Mechanism to render HTML templates and views for the user',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Finds the template engine rendering integration',
+        expected_names: ['render'],
+        expected_files: ['lib/application', 'lib/response'],
+    },
+    {
+        id: 'EX21',
+        query: 'Constructing and formatting the final HTTP response to send back to the browser',
+        difficulty: 'semantic',
+        topK: 10,
+        description: 'Locates the general response building functions',
+        expected_names: ['send', 'json', 'sendFile'],
+        expected_files: ['lib/response'],
+    }
 ];

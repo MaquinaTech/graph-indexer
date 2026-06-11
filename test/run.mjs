@@ -46,6 +46,7 @@ Usage: node test/run.mjs [options]
   --suite <id>       Run only the named suite (axios | express-js | nestjs | fastapi | gin)
   --skip-indexing    Reuse existing code-index.json files instead of re-indexing
   --embeddings       Enable Ollama vector embeddings (requires running Ollama + nomic-embed-text)
+  --use-sqlite       Use SQLite backend instead of in-memory JSON storage
   --json             Write a JSON report to test/reports/
   --help             Show this message
 `);
@@ -55,6 +56,7 @@ Usage: node test/run.mjs [options]
 const suiteFilter = args.includes('--suite') ? args[args.indexOf('--suite') + 1] : null;
 const skipIndexing = args.includes('--skip-indexing');
 const useEmbeddings = args.includes('--embeddings');
+const useSqlite = args.includes('--use-sqlite');
 const writeJson = args.includes('--json');
 
 // ── Determine which suites to run ─────────────────────────────────────────────
@@ -337,7 +339,7 @@ async function main() {
     const results = [];
     for (const suite of availableSuites) {
         const prepared = prepareSuite(suite);
-        const result = await runSuite(prepared, { useEmbeddings, skipIndexing });
+        const result = await runSuite(prepared, { useEmbeddings, useSqlite, skipIndexing });
         results.push(result);
         renderSuiteResult(result);
     }

@@ -57,20 +57,29 @@ export function firstRelevantRank(results, expectedNames, expectedFiles) {
 }
 
 /**
- * nDCG@k — normalised discounted cumulative gain.
- * Assumes binary relevance: 1 if relevant, 0 otherwise.
+ * nDCG@k — normalised discounted cumulative gain (binary relevance), bounded to [0,1].
+ *
+ * The ideal ranking (IDCG) packs every relevant document found in the top-k into
+ * the highest ranks. The previous implementation hard-coded IDCG to a single
+ * relevant doc at rank 1 while DCG summed gains for ALL relevant docs in the
+ * window — so with permissive substring matching multiple chunks matched and
+ * nDCG exceeded 1.0 (the suite reported an impossible nDCG@5 = 2.59). Computing
+ * IDCG over the actual relevant count restores the [0,1] bound.
  */
 export function ndcgAtK(results, expectedNames, expectedFiles, k) {
     const topK = results.slice(0, k);
     let dcg = 0;
-    let idcg = 0;
+    let relCount = 0;
 
-    for (let i = 0; i < k; i++) {
-        const gain = i < topK.length && isRelevant(topK[i], expectedNames, expectedFiles) ? 1 : 0;
-        dcg += gain / Math.log2(i + 2);
-        // Ideal: assume one relevant doc exists, placed at rank 1
-        if (i === 0) idcg = 1 / Math.log2(2);
+    for (let i = 0; i < topK.length; i++) {
+        if (isRelevant(topK[i], expectedNames, expectedFiles)) {
+            dcg += 1 / Math.log2(i + 2);
+            relCount++;
+        }
     }
+
+    let idcg = 0;
+    for (let i = 0; i < relCount; i++) idcg += 1 / Math.log2(i + 2);
 
     return idcg > 0 ? dcg / idcg : 0;
 }

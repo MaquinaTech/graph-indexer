@@ -26,6 +26,48 @@ import { truncateForEmbedding } from './core-engine.mjs';
 export const MAX_FILE_SIZE_BYTES = 500000;
 export const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 
+// Resolves the Ollama host at call time so callers that set ollamaHost via
+// .graph-indexer.json don't have to pass it through every call chain.
+// Priority: caller override → OLLAMA_HOST env var → PROJECT .graph-indexer.json
+// (MCP_PROJECT_ROOT or cwd — NOT the package directory: when graph-indexer is
+// installed as a dependency, the user's config lives in their project root) →
+// default. Mirrors config.mjs precedence so every entry point agrees.
+//
+// Note: OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11435"), not an
+// HTTP client URL. We normalise bare "host:port" strings by adding http:// and translating
+// 0.0.0.0 → localhost so fetches work in both formats.
+let _cachedHost = null;
+let _cachedEmbedModel = null;
+function _normalizeOllamaHost(raw) {
+    if (!raw) return null;
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+    return 'http://' + raw.replace(/^0\.0\.0\.0/, 'localhost');
+}
+function _readProjectConfig() {
+    const root = process.env.MCP_PROJECT_ROOT || process.cwd();
+    try {
+        return JSON.parse(fs.readFileSync(path.join(root, '.graph-indexer.json'), 'utf8'));
+    } catch { return null; }
+}
+function _resolveOllamaHost(override) {
+    if (override) return _normalizeOllamaHost(override) || 'http://localhost:11434';
+    if (_cachedHost) return _cachedHost;
+    if (process.env.OLLAMA_HOST) {
+        _cachedHost = _normalizeOllamaHost(process.env.OLLAMA_HOST) || 'http://localhost:11434';
+        return _cachedHost;
+    }
+    const cfg = _readProjectConfig();
+    _cachedHost = _normalizeOllamaHost(cfg?.ollamaHost) || 'http://localhost:11434';
+    return _cachedHost;
+}
+function _resolveEmbedModel(override) {
+    if (override) return override;
+    if (_cachedEmbedModel) return _cachedEmbedModel;
+    const cfg = _readProjectConfig();
+    _cachedEmbedModel = cfg?.embedModel || 'nomic-embed-text';
+    return _cachedEmbedModel;
+}
+
 // ─── Dynamic Language Loading ─────────────────────────────────────────────────
 
 function _loadProjectConfig() {
@@ -300,6 +342,30 @@ export function extractImportsFromAST(rootNode, ext) {
     return Array.from(imports);
 }
 
+// ─── God-class defence ────────────────────────────────────────────────────────
+
+/**
+ * Token-safe skeleton for a class that exceeds GOD_CLASS_LINES.
+ *
+ * The agent's PROMPT.md promises get_chunk() costs ~300 tokens. A 2 000-line
+ * "god class" stored as one chunk violates that contract. This skeleton keeps
+ * only the first HEADER_LINES of the class (signature + opening brace) and
+ * appends a one-line summary — enough for name resolution and embeddings, while
+ * the real bodies are reachable via the individual method chunks that the
+ * god-class split produces.
+ */
+function buildGodClassSkeleton(classNode) {
+    const allLines = classNode.text.split('\n');
+    const HEADER_LINES = 15;
+    const header = allLines.slice(0, HEADER_LINES).join('\n');
+    return (
+        `${header}\n` +
+        `  // ⚠ [Large class: ${allLines.length} lines — ` +
+        `methods are indexed as individual searchable chunks. ` +
+        `Use search_code() to find specific methods.]\n}`
+    );
+}
+
 export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
     const chunks = [];
     const parser = getParserForFile(ext);
@@ -329,6 +395,49 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
         const matches = query.matches(rootNode);
         const processedNodes = new Set();
 
+        // ── God-class pre-pass ─────────────────────────────────────────────────
+        // Identify class-type container nodes whose line count exceeds the threshold.
+        // Their methods are allowed through the isNested filter below so each method
+        // becomes its own independent, searchable chunk; the class node itself gets a
+        // compact skeleton instead of a truncated body dump.
+        //
+        // Cross-language: class_declaration (TS/JS/Java/C#), class_definition (Python),
+        // impl_item (Rust impl blocks), class (Ruby), object_declaration (Kotlin).
+        // TS special case: exported classes live inside export_statement — we mark the
+        // inner class_declaration so the method-isNested check works correctly.
+        const GOD_CLASS_LINES = 200;
+        const GOD_CLASS_NODE_TYPES = new Set([
+            'class_declaration', 'class_definition',
+            'impl_item',           // Rust impl blocks
+            'class',               // Ruby
+            'object_declaration',  // Kotlin
+        ]);
+        const oversizedClassIds = new Set(); // node IDs whose direct methods are un-nested
+
+        for (const match of matches) {
+            for (const capture of match.captures) {
+                if (capture.name !== 'chunk') continue;
+                const n = capture.node;
+                const nLines = n.endPosition.row - n.startPosition.row + 1;
+                if (nLines <= GOD_CLASS_LINES) continue;
+                if (GOD_CLASS_NODE_TYPES.has(n.type)) {
+                    oversizedClassIds.add(n.id);
+                }
+                // TS: large export_statement wrapping a class — mark the inner class_declaration
+                // so method_definition.parent chain finds the oversized class node, not the
+                // export_statement (which isn't what the isNested walk stops at).
+                if (n.type === 'export_statement') {
+                    for (let ci = 0; ci < n.namedChildCount; ci++) {
+                        const c = n.namedChild(ci);
+                        if (GOD_CLASS_NODE_TYPES.has(c.type)) {
+                            oversizedClassIds.add(c.id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         for (const match of matches) {
             let chunkNode = null;
             for (const capture of match.captures) {
@@ -346,11 +455,16 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             // Python root = 'module', JS root = 'program', Go root = 'source_file', Ruby root = 'program'.
             // Stopping at 'program' alone was falsely marking top-level Python classes as nested
             // because Ruby's 'module' keyword (also in CONTAINERS) shares the name with Python's root.
+            //
+            // God-class exception: if the first CONTAINERS ancestor is an oversized class, the
+            // node is a direct method of that class — allow it through as its own chunk.
             let isNested = false;
             let currentParent = chunkNode.parent;
             while (currentParent && currentParent.parent !== null) {
                 if (CONTAINERS.has(currentParent.type)) {
-                    isNested = true;
+                    if (!oversizedClassIds.has(currentParent.id)) {
+                        isNested = true;
+                    }
                     break;
                 }
                 currentParent = currentParent.parent;
@@ -400,8 +514,25 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 } else if (assignExp) {
                     nameText = assignExp.childForFieldName?.("left")?.text || "anonymous";
                 }
+            } else if (chunkNode.type === "type_declaration") {
+                // Go: `type X struct {…}` / `type X interface {…}` / `type X = Y`.
+                // The identifier lives on the nested type_spec / type_alias node, not on
+                // the type_declaration itself, so childForFieldName("name") above is null.
+                // Without this branch every Go struct/interface collapses to the useless
+                // synthetic name `<file>_type_declaration`, making core types (e.g. Gin's
+                // RouterGroup, Engine, Context) unsearchable by name and invisible to the
+                // 2.0× name-boost in searchHybrid.
+                const spec = chunkNode.namedChildren?.find(c => c.type === "type_spec" || c.type === "type_alias");
+                nameText = spec?.childForFieldName?.("name")?.text
+                    || spec?.children?.find(c => c.type === "type_identifier")?.text
+                    || "anonymous";
             } else {
-                const idNode = chunkNode.children.find(c => c.type === "identifier" || c.type === "name" || c.type === "property_identifier");
+                // Generic fallback: search direct children for an identifier-like node.
+                // Includes type_identifier (Go/TS), constant (Ruby class/module names) and
+                // field_identifier so nested-name grammars don't fall through to anonymous.
+                const idNode = chunkNode.children.find(c =>
+                    c.type === "identifier" || c.type === "name" || c.type === "property_identifier"
+                    || c.type === "type_identifier" || c.type === "constant" || c.type === "field_identifier");
                 nameText = idNode?.text || "anonymous";
             }
 
@@ -421,7 +552,26 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 docstring = `[File Context]: ${fileDocstring}`;
             }
 
-            const snippet = chunkNode.text.slice(0, 3000);
+            // For oversized class containers — or TS export_statements wrapping one —
+            // store a compact skeleton so get_chunk() returns a bounded token count.
+            // All metadata fields (calls, params, type_refs, decorators, extends) are
+            // still extracted from the FULL AST node, so ranking and topology are intact.
+            const isOversizedClass = oversizedClassIds.has(chunkNode.id);
+            const wrapsOversizedClass = !isOversizedClass && chunkNode.type === 'export_statement' && (() => {
+                for (let ci = 0; ci < chunkNode.namedChildCount; ci++) {
+                    if (oversizedClassIds.has(chunkNode.namedChild(ci).id)) return true;
+                }
+                return false;
+            })();
+            const snippet = (isOversizedClass || wrapsOversizedClass)
+                ? buildGodClassSkeleton(isOversizedClass ? chunkNode : (() => {
+                    for (let ci = 0; ci < chunkNode.namedChildCount; ci++) {
+                        const c = chunkNode.namedChild(ci);
+                        if (oversizedClassIds.has(c.id)) return c;
+                    }
+                    return chunkNode;
+                })())
+                : chunkNode.text.slice(0, 3000);
             const hash = generateChunkHash(docstring + snippet);
             const outgoingCalls = extractCalls(chunkNode);
 
@@ -430,6 +580,8 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             const returnType = extractReturnType(chunkNode, ext);
             const classContext = extractClassContext(chunkNode);
             const typeRefs = extractTypeAnnotations(chunkNode, ext);
+            const decorators = extractDecorators(chunkNode);
+            const heritage = extractHeritage(chunkNode, ext);
 
             const id = createHash('sha256')
                 .update(`${relPath}::${chunkNode.startPosition.row}::${chunkNode.startPosition.column}`)
@@ -441,12 +593,46 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 start_line: chunkNode.startPosition.row + 1, end_line: chunkNode.endPosition.row + 1,
                 calls: outgoingCalls,
                 params, return_type: returnType, class_context: classContext,
-                type_refs: typeRefs,
+                type_refs: typeRefs, decorators, extends: heritage,
             });
         }
     } catch (e) {
         // Visible protective log for developers
         process.stderr.write(`\n[parser-utils] 💥 Query Error in ${relPath}: ${e.message}\n`);
+    }
+
+    // ── Python public re-exports ────────────────────────────────────────────────
+    // PEP 484 convention: `from starlette.background import BackgroundTasks as
+    // BackgroundTasks` re-exports a symbol as public API. Files like
+    // fastapi/background.py consist ONLY of such lines and previously produced
+    // zero chunks — resolve_symbol('BackgroundTasks') found nothing and agents
+    // hit a dead end. Each explicit re-export becomes a small chunk that names
+    // the symbol and points at its source module. (JS/TS barrels already chunk
+    // via the export_statement capture.)
+    if (ext === '.py') {
+        for (const node of rootNode.children) {
+            if (node.type !== 'import_from_statement') continue;
+            const moduleName = node.childForFieldName?.('module_name')?.text || '';
+            for (const child of node.children) {
+                if (child.type !== 'aliased_import') continue;
+                const orig = child.childForFieldName?.('name')?.text || '';
+                const alias = child.childForFieldName?.('alias')?.text || '';
+                if (!alias || orig.split('.').pop() !== alias) continue; // only `import X as X`
+                const snippet = node.text.slice(0, 300);
+                const docstring = `Public re-export of ${alias} from ${moduleName}.`;
+                const id = createHash('sha256')
+                    .update(`${relPath}::${node.startPosition.row}::${child.startPosition.column}`)
+                    .digest('hex').slice(0, 24);
+                chunks.push({
+                    id, file_path: relPath, node_type: 're_export', name: alias,
+                    docstring, code_snippet: snippet,
+                    content_hash: generateChunkHash(docstring + snippet),
+                    start_line: node.startPosition.row + 1, end_line: node.endPosition.row + 1,
+                    calls: [], params: [], return_type: '', class_context: '',
+                    type_refs: [], decorators: [], extends: [],
+                });
+            }
+        }
     }
     return chunks;
 }
@@ -658,7 +844,16 @@ export function buildEmbeddingPayload(chunk, depRelPaths = []) {
     const topologicalContext = neighbors.length
         ? `This code architectural neighborhood connects with: ${neighbors.join(', ')}.`
         : '';
+    // NOTE: decorators and inheritance edges are NOT added here (A/B-tested: neutral
+    // on vector, regression on BM25 — surfaced as metadata only).
+    // LLM summary leads the payload when available: declarative voice aligns with
+    // nomic-embed-text's search_document: training objective and anchors the embedding
+    // toward developer query vocabulary. Questions/hyde are intentionally excluded from
+    // the vector payload — they add stopword noise and dilute the code's semantic
+    // fingerprint. Concept keywords (chunk.hyde = concepts.join(' ')) go to BM25 only
+    // via buildLexicalDocument, keeping both retrieval channels clean.
     return [
+        chunk.summary || '',   // semantic lead: LLM-generated declarative summary (opt-in)
         `File Location: ${chunk.file_path}`,
         `Symbol Name: ${chunk.node_type} -> ${chunk.name}`,
         chunk.docstring ? `Developer Documentation: ${chunk.docstring}` : '',
@@ -669,15 +864,17 @@ export function buildEmbeddingPayload(chunk, depRelPaths = []) {
     ].filter(Boolean).join('\n');
 }
 
-export async function getLocalEmbedding(text, graceful = true) {
+export async function getLocalEmbedding(text, graceful = true, { ollamaHost, model } = {}) {
     if (process.env.INDEXER_EMBEDDINGS === 'off') return null; // lexical-only mode
+    const host = _resolveOllamaHost(ollamaHost);
+    const embedModel = _resolveEmbedModel(model);
     const MAX_RETRIES = 3;
     const safeText = "search_query: " + truncateForEmbedding(text);
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const res = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
+            const res = await fetch(`${host}/api/embeddings`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "nomic-embed-text", prompt: safeText }),
+                body: JSON.stringify({ model: embedModel, prompt: safeText }),
                 signal: AbortSignal.timeout(15000),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -691,17 +888,19 @@ export async function getLocalEmbedding(text, graceful = true) {
     return null;
 }
 
-export async function getLocalEmbeddingsBatch(texts, graceful = true) {
+export async function getLocalEmbeddingsBatch(texts, graceful = true, { ollamaHost, model } = {}) {
     if (!texts || texts.length === 0) return [];
     if (process.env.INDEXER_EMBEDDINGS === 'off') return null; // lexical-only mode
+    const host = _resolveOllamaHost(ollamaHost);
+    const embedModel = _resolveEmbedModel(model);
     const MAX_RETRIES = 3;
     const safeTexts = texts.map(t => "search_document: " + (t.length > 8000 ? t.slice(0, 8000) : t));
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
+            const res = await fetch(`${host}/api/embed`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "nomic-embed-text", input: safeTexts }),
+                body: JSON.stringify({ model: embedModel, input: safeTexts }),
                 signal: AbortSignal.timeout(60000),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -772,6 +971,116 @@ export function extractClassContext(chunkNode) {
         parent = parent.parent;
     }
     return '';
+}
+
+/**
+ * Extract decorator / annotation names applied to a chunk (and, for class chunks,
+ * to the methods inside it). Decorators encode what a symbol *is* in modern
+ * frameworks — `@Controller`, `@Injectable`, `@Get`, `@Entity` (TS: NestJS,
+ * Angular, TypeORM) and `@app.route`, `@pytest.fixture`, `@dataclass`,
+ * `@property` (Python) — yet as raw snippet text they are diluted to a single
+ * low-weight token inside a large class body. Surfacing them as a dedicated field
+ * lets a class annotated `@Controller` be retrieved by "controller" and a method
+ * annotated `@Get` by "get/route", independent of language.
+ *
+ * Generalises by node type only (the tree-sitter `decorator` node is shared across
+ * TS/JS/Python grammars) — no framework-specific names are hardcoded. Callee
+ * arguments are stripped: `@Controller('cats')` -> 'Controller',
+ * `@app.route('/x')` -> 'app.route', `@UseGuards(AuthGuard)` -> 'UseGuards'.
+ *
+ * @returns {string[]} unique decorator callee names (max 24)
+ */
+export function extractDecorators(chunkNode) {
+    const names = new Set();
+    const addDecorator = (decoNode) => {
+        let t = (decoNode.text || '').trim().replace(/^@/, '');
+        t = t.split('(')[0];              // drop call arguments: @Get(':id') -> Get
+        t = t.split(/[\s\n{]/)[0].trim(); // first token only
+        if (t && t.length <= 64) names.add(t);
+    };
+
+    // (1) Decorators that PRECEDE the chunk as siblings. Python wraps a decorated
+    //     symbol in `decorated_definition` ([decorator…, def]); some grammars place
+    //     class decorators as leading siblings rather than children.
+    let prev = chunkNode.previousSibling;
+    while (prev) {
+        if (prev.type === 'decorator') addDecorator(prev);
+        else if (prev.isNamed && prev.type !== 'comment') break;
+        prev = prev.previousSibling;
+    }
+
+    // (2) Decorators within the chunk's subtree. A captured TS class chunk (the
+    //     enclosing export_statement / class_declaration) carries its own class
+    //     decorators plus the @Get/@Post/@Inject decorators on its methods.
+    //     Bounded traversal so a large class body cannot inflate indexing time.
+    let budget = 800;
+    const stack = [chunkNode];
+    while (stack.length && budget-- > 0) {
+        const n = stack.pop();
+        for (let i = 0; i < n.namedChildCount; i++) {
+            const child = n.namedChild(i);
+            if (child.type === 'decorator') addDecorator(child);
+            else stack.push(child);
+        }
+    }
+
+    return Array.from(names).slice(0, 24);
+}
+
+/**
+ * Extract the base classes and implemented interfaces of a class chunk — the
+ * inheritance edge that links a concept to its implementations
+ * (`class ValidationPipe extends BasePipe implements PipeTransform`). Surfacing
+ * this lets an agent move from an abstract type to the concrete classes that
+ * realise it, and feeds the semantic embedding so an implementation is retrievable
+ * by the interface it fulfils.
+ *
+ * Generalises across `extends`/`implements` (TS/JS) and base-class argument lists
+ * (Python) by node type. Returns parent type names, e.g.
+ * ['BasePipe', 'PipeTransform', 'OnInit'].
+ *
+ * @returns {string[]} base/interface names (max 12)
+ */
+export function extractHeritage(chunkNode, ext) {
+    const bases = new Set();
+    const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+
+    const addTypeNames = (node) => {
+        const stack = [node];
+        let budget = 200;
+        while (stack.length && budget-- > 0) {
+            const n = stack.pop();
+            if ((n.type === 'type_identifier' || n.type === 'identifier') && /^[A-Za-z_$]/.test(n.text)) {
+                bases.add(n.text);
+            }
+            for (let i = 0; i < n.namedChildCount; i++) stack.push(n.namedChild(i));
+        }
+    };
+
+    if (JS_LIKE.includes(ext)) {
+        // Walk the chunk subtree for extends/implements clauses, but never descend
+        // into class_body — base types of the class only, not its method internals.
+        const stack = [chunkNode];
+        let budget = 400;
+        while (stack.length && budget-- > 0) {
+            const n = stack.pop();
+            if (n.type === 'extends_clause' || n.type === 'implements_clause') { addTypeNames(n); continue; }
+            for (let i = 0; i < n.namedChildCount; i++) {
+                const c = n.namedChild(i);
+                if (c.type !== 'class_body' && c.type !== 'statement_block') stack.push(c);
+            }
+        }
+    } else if (ext === '.py') {
+        const sc = chunkNode.childForFieldName?.('superclasses');
+        if (sc) {
+            for (let i = 0; i < sc.namedChildCount; i++) {
+                const c = sc.namedChild(i);
+                // skip keyword args like metaclass=… (keyword_argument node)
+                if (c.type === 'identifier' || c.type === 'attribute') bases.add(c.text);
+            }
+        }
+    }
+    return Array.from(bases).slice(0, 12);
 }
 
 /**
