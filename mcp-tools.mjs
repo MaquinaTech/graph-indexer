@@ -13,8 +13,8 @@ import { z } from 'zod';
 import fs from 'fs';
 import path, { resolve } from 'path';
 import { computePageRank, isNaturalLanguageQuery } from './search-core.mjs';
-import { getLocalEmbedding, getParserForFile, extractFileSkeleton } from './parser-utils.mjs';
-import { rerankResults, ollamaGenerate } from './enrichment.mjs';
+import { getParserForFile, extractFileSkeleton } from './parser-utils.mjs';
+import { rerankResults } from './enrichment.mjs';
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ export function extractSignatureLine(codeSnippet) {
  * description like "authentication bottleneck" that isn't in the code verbatim),
  * preserve the structural skeleton — control-flow lines and calls — rather than
  * blindly truncating, so 'smart' detail always returns meaningful context.
+ *
+ * maxLines bounds EVERY branch: a common query token matching half the lines of
+ * a 200-line body must not smuggle the whole body past the smart budget.
  */
 export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
     if (!codeSnippet) return '';
@@ -49,6 +52,7 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
 
     const SIG_LINES = Math.min(5, lines.length);
     const TAIL_LINES = Math.min(3, lines.length);
+    const budget = Math.max(4, maxLines - SIG_LINES - TAIL_LINES);
     const sigBlock = lines.slice(0, SIG_LINES);
     const tailBlock = lines.slice(Math.max(lines.length - TAIL_LINES, SIG_LINES));
 
@@ -60,7 +64,6 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
     });
 
     if (relevant.length === 0) {
-        const budget = Math.max(4, maxLines - SIG_LINES - TAIL_LINES);
         const structural = bodyLines.filter(line => {
             const ll = line.trimStart().toLowerCase();
             if (/^(if |else |for |while |switch |try |catch |finally |return |throw |raise |yield |await )/.test(ll)) return true;
@@ -70,7 +73,15 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
         if (structural.length > 0) return [...sigBlock, ...structural, ...tailBlock].join('\n');
         return lines.slice(0, maxLines).join('\n') + '\n// …';
     }
-    return [...sigBlock, ...relevant, ...tailBlock].join('\n');
+    const kept = relevant.slice(0, budget);
+    const omitted = relevant.length - kept.length;
+    return [...sigBlock, ...kept, ...(omitted > 0 ? [`// … ${omitted} more matching lines`] : []), ...tailBlock].join('\n');
+}
+
+/** Render a string list capped at `max` items, with an explicit remainder count. */
+function capList(items, max) {
+    if (items.length <= max) return items.join(', ');
+    return `${items.slice(0, max).join(', ')} (+${items.length - max} more)`;
 }
 
 // ─── Tool registration ──────────────────────────────────────────────────────────
@@ -82,14 +93,14 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
  * @param {object} db    A loaded store implementing the storage contract.
  * @param {object} opts
  * @param {string} opts.projectRoot
- * @param {string} opts.artifactPath      Index file whose mtime represents freshness.
- * @param {string} opts.pidFile           Watch-daemon PID file (may not exist).
+ * @param {string|null} opts.artifactPath  Index file whose mtime represents freshness (null for external DBs).
+ * @param {string} opts.pidFile            Watch-daemon PID file (may not exist).
  * @param {boolean} opts.embeddingsEnabled
- * @param {string} [opts.ollamaHost]      Resolved Ollama endpoint for query embedding.
- * @param {string} [opts.embedModel]      Embedding model (must match the index).
- * @param {{enabled:boolean, model:string, topM:number}} [opts.rerank] LLM rerank config.
+ * @param {(text: string) => Promise<number[]|null>} [opts.embedQuery]  Query embedder from providers.mjs.
+ * @param {{enabled:boolean, model:string, topM:number}} [opts.rerank]  LLM rerank config.
+ * @param {(prompt: string, opts?: object) => Promise<string|null>} [opts.rerankGenerate]  Rerank generator.
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, ollamaHost, embedModel, rerank }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedQuery, rerank, rerankGenerate }) {
 
     // ─── search_code ────────────────────────────────────────────────────────────
     server.tool(
@@ -119,8 +130,10 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             try {
                 const fullQuery = exact_tokens ? `${query} ${exact_tokens}` : query;
                 let queryVector = null;
-                try { queryVector = await getLocalEmbedding(fullQuery, true, { ollamaHost, model: embedModel }); }
-                catch { /* lexical fallback */ }
+                if (embedQuery) {
+                    try { queryVector = await embedQuery(fullQuery); }
+                    catch { /* lexical fallback */ }
+                }
 
                 let matches = db.searchHybrid(fullQuery, queryVector, top_k, min_score, exact_tokens || null);
 
@@ -129,13 +142,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 // pinned an exact symbol. Best-effort — order is preserved on
                 // any model failure.
                 const wantRerank = rerankParam ?? Boolean(rerank?.enabled);
-                if (wantRerank && !exact_tokens && matches.length > 1 && isNaturalLanguageQuery(fullQuery)) {
+                if (wantRerank && rerankGenerate && !exact_tokens && matches.length > 1 && isNaturalLanguageQuery(fullQuery)) {
                     matches = await rerankResults(fullQuery, matches, {
                         topM: rerank?.topM ?? 8,
-                        generate: (prompt) => ollamaGenerate(prompt, {
-                            model: rerank?.model || 'qwen2.5-coder:7b',
-                            ollamaHost, timeoutMs: 20000,
-                            options: { temperature: 0, num_predict: 40 },
+                        generate: (prompt) => rerankGenerate(prompt, {
+                            timeoutMs: 20000, maxTokens: 40, temperature: 0,
                         }),
                     });
                 }
@@ -152,11 +163,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     return syms.length ? `${depPath} [${syms.join(', ')}]` : depPath;
                 };
 
-                const lines = [`🔍 QUERY: "${fullQuery}" — ${matches.length} result(s)\n`];
+                const lines = [`🔍 QUERY: "${fullQuery}" — ${matches.length} result(s) · expand any ID with get_chunk(id)\n`];
 
                 for (let i = 0; i < matches.length; i++) {
                     const { score, chunk } = matches[i];
-                    lines.push(`${'─'.repeat(50)}`);
+                    lines.push(`${'─'.repeat(24)}`);
                     lines.push(`#${i + 1} · **${chunk.name}** [${chunk.node_type}]`);
                     lines.push(`📄 ${chunk.file_path}:${chunk.start_line}–${chunk.end_line} · ID: \`${chunk.id}\` · RRF: ${score.toFixed(4)}`);
 
@@ -177,7 +188,6 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         if (usedBy.length) lines.push(`⬆️  Used by: ${usedBy.join(', ')}`);
                         if (chunk.calls?.length) lines.push(`🔗 Calls:   ${chunk.calls.slice(0, 6).join(', ')}`);
                     }
-                    lines.push(`↩️  Expand: get_chunk("${chunk.id}")`);
                 }
 
                 if (detail !== 'signatures') {
@@ -185,7 +195,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     const defaultBudget = detail === 'full' ? 6000 : 2000;
                     let remainingChars = token_budget != null ? token_budget * CHARS_PER_TOKEN : defaultBudget;
 
-                    lines.push(`\n${'═'.repeat(50)}`);
+                    lines.push(`\n${'═'.repeat(24)}`);
                     lines.push(`CODE BODIES (detail: ${detail}, budget: ~${Math.round(remainingChars / CHARS_PER_TOKEN)} tok)\n`);
 
                     const queryTokens = fullQuery.toLowerCase().split(/[\s\W_]+/).filter(t => t.length >= 3);
@@ -236,11 +246,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 if (chunk.extends?.length) parts.push(`**Inherits:** ${chunk.extends.join(', ')}`);
                 if (chunk.docstring) parts.push(`**Doc:** ${chunk.docstring}`);
 
+                // Hub files can import / be imported by dozens of files — capped so the
+                // response honours the ~300-token contract; the graph resource has the rest.
                 const deps = db.getDependencies(chunk.file_path);
                 const usedBy = db.getImportedBy(chunk.file_path);
-                if (deps.length) parts.push(`⬇️ Imports: ${deps.join(', ')}`);
-                if (usedBy.length) parts.push(`⬆️ Used by: ${usedBy.join(', ')}`);
-                if (chunk.calls?.length) parts.push(`🔗 Calls: ${chunk.calls.join(', ')}`);
+                if (deps.length) parts.push(`⬇️ Imports: ${capList(deps, 8)}`);
+                if (usedBy.length) parts.push(`⬆️ Used by: ${capList(usedBy, 8)}`);
+                if (chunk.calls?.length) parts.push(`🔗 Calls: ${capList(chunk.calls, 12)}`);
 
                 if (view === 'signature') parts.push('', '```', extractSignatureLine(chunk.code_snippet), '```');
                 else parts.push('', '```', chunk.code_snippet, '```');
@@ -262,9 +274,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 if (defs.length === 0) {
                     return { content: [{ type: 'text', text: `Symbol '${symbol}' not in index. Try search_code(query="${symbol}") for fuzzy search.` }] };
                 }
-                const lines = [`# Symbol: \`${symbol}\` — ${defs.length} definition(s)\n`];
-                for (const chunk of defs) {
-                    lines.push(`${'─'.repeat(50)}`);
+                // Common names (overloads, re-exports, per-platform variants) can have
+                // dozens of definitions — render a bounded set, count the rest.
+                const MAX_DEFS = 6;
+                const shown = defs.slice(0, MAX_DEFS);
+                const lines = [`# Symbol: \`${symbol}\` — ${defs.length} definition(s)${defs.length > MAX_DEFS ? ` (showing ${MAX_DEFS})` : ''}\n`];
+                for (const chunk of shown) {
+                    lines.push(`${'─'.repeat(24)}`);
                     lines.push(`**${chunk.name}** [${chunk.node_type}]`);
                     lines.push(`📄 ${chunk.file_path}:${chunk.start_line}–${chunk.end_line} · ID: \`${chunk.id}\``);
                     if (chunk.params?.length) lines.push(`🔤 Params: ${chunk.params.join(', ')}`);
@@ -279,6 +295,9 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     if (chunk.calls?.length) lines.push(`🔗 Calls: ${chunk.calls.slice(0, 8).join(', ')}`);
                     lines.push(`\n\`\`\`\n${extractSignatureLine(chunk.code_snippet)}\n\`\`\``);
                     lines.push(`↩️  Full body: get_chunk("${chunk.id}")`);
+                }
+                if (defs.length > MAX_DEFS) {
+                    lines.push(`\n… ${defs.length - MAX_DEFS} more definitions. Narrow with search_code(query, exact_tokens: "${symbol}").`);
                 }
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
@@ -316,7 +335,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
 
                 if (chunk.calls?.length) {
                     if (!expand_calls) {
-                        lines.push(`**Calls:** ${chunk.calls.join(', ')}`);
+                        lines.push(`**Calls:** ${capList(chunk.calls, 12)}`);
                     } else {
                         const expanded = [];
                         const seen = new Set();
@@ -501,8 +520,12 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
 
                 let indexAge = 'unknown';
                 try {
-                    const ageSec = Math.floor((Date.now() - fs.statSync(artifactPath).mtimeMs) / 1000);
-                    indexAge = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ago`;
+                    // External DBs have no local artifact — the store reports built_at instead.
+                    const builtMs = artifactPath ? fs.statSync(artifactPath).mtimeMs : Number(s.builtAt);
+                    if (builtMs > 0) {
+                        const ageSec = Math.floor((Date.now() - builtMs) / 1000);
+                        indexAge = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ago`;
+                    }
                 } catch { }
 
                 let daemonStatus = 'not running';
@@ -523,7 +546,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 const lines = [
                     `# 📊 graph-indexer Index Stats`, '',
                     `| Metric | Value |`, `| :--- | :--- |`,
-                    `| **Storage backend** | ${s.backend === 'sqlite' ? '🗄  SQLite (disk-backed)' : '⚡ In-memory'} |`,
+                    `| **Storage backend** | ${s.backend === 'sqlite' ? '🗄  SQLite (disk-backed)'
+                        : s.backend === 'postgres' ? '🐘 PostgreSQL (external)' : '⚡ In-memory'} |`,
                     `| **Chunks** | ${s.chunks} |`,
                     `| **Files indexed** | ${s.files} |`,
                     `| **Symbols in table** | ${s.symbols} |`,

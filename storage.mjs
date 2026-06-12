@@ -1,18 +1,21 @@
 /**
  * @file storage.mjs
  * @description Storage backend factory. Selects the in-memory engine (default,
- *              zero-dependency) or the disk-backed SQLite store based on config,
- *              and documents the single read contract that the MCP tools depend
- *              on so they remain backend-agnostic.
+ *              zero-dependency), the disk-backed SQLite store, or the external
+ *              PostgreSQL store based on config, and documents the single
+ *              contract that the MCP tools depend on so they remain
+ *              backend-agnostic.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
  *
- * ── Store contract (implemented by both MemoryGraphIndex and SqliteGraphStore) ──
+ * ── Store contract (MemoryGraphIndex, SqliteGraphStore, PostgresGraphStore) ──
  *   load()                                   Prepare for queries (open db / parse json).
- *   get backend()                            'memory' | 'sqlite'.
+ *                                            May return a Promise — always await it.
+ *   get backend()                            'memory' | 'sqlite' | 'postgres'.
  *   get graph()                              { dependencies, importedBy } (file-level).
- *   searchHybrid(q, vec, topK, minScore, exactBoost) → [{ score, chunk }]
+ *   searchHybrid(q, vec, topK, minScore, exactBoost) → [{ score, chunk }]   (synchronous —
+ *                                            ranking runs on local state on every backend)
  *   getChunk(id)                             → chunk | null
  *   getChunksByFile(path)                    → chunk[]
  *   resolveSymbol(name)                      → chunk[]   (exact, case-insensitive)
@@ -21,7 +24,9 @@
  *   getDependencies(path) / getImportedBy(path) → string[]
  *   chunkCount() / fileCount() / symbolCount() / vectorCount() → number
  *   stats()                                  → engine health facts
- *   close()                                  Release fds / db handles.
+ *   applyFileUpdate(path, payload)           Replace one file's chunks (daemon write path).
+ *                                            May return a Promise — always await it.
+ *   close()                                  Release fds / db handles / connections.
  */
 import { MemoryGraphIndex } from './core-engine.mjs';
 
@@ -38,6 +43,11 @@ export async function createStore(config, { cacheEmbeddings = false } = {}) {
         // Imported lazily so the default path never loads node:sqlite.
         const { SqliteGraphStore } = await import('./sqlite-store.mjs');
         return new SqliteGraphStore(config.sqlitePath, { embeddingPath: config.embeddingPath });
+    }
+    if (config.storage === 'postgres') {
+        // Imported lazily so the default path never loads the optional pg driver.
+        const { PostgresGraphStore } = await import('./postgres-store.mjs');
+        return new PostgresGraphStore(config.postgres);
     }
     return new MemoryGraphIndex(config.indexPath, { cacheEmbeddings });
 }

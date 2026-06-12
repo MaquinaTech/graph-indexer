@@ -45,10 +45,10 @@
 
 graph-indexer pre-indexes your codebase into an AST-precise search index and exposes it as an MCP server. Instead of reading full files, AI agents call `search_code("payment validation")` and get back the exact functions that match — with type signatures, docstrings, decorators, inheritance edges, dependency graph, and call sites — in a fraction of the tokens.
 
-It runs entirely on your machine. No external database, no cloud APIs, no telemetry. Two design choices make it suitable for any repository size:
+By default it runs entirely on your machine — no external database, no cloud APIs, no telemetry — and both of those boundaries are opt-in extensible:
 
-- A **default in-memory engine** that is instant and dependency-free, and an optional **disk-backed SQLite backend** that holds the index on disk so retrieval RAM stays flat on enterprise monorepos that would otherwise exhaust Node's heap.
-- Optional **local-LLM semantic enrichment** that teaches the index what each core component *does*, so conceptual queries match code that shares none of their words.
+- A **default in-memory engine** that is instant and dependency-free, an optional **disk-backed SQLite backend** that keeps retrieval RAM flat on enterprise monorepos, and an optional **external PostgreSQL backend** for indexes shared across machines and ephemeral checkouts. All three return identical rankings.
+- Optional **LLM semantic enrichment** that teaches the index what each core component *does*, so conceptual queries match code that shares none of their words. Embeddings and enrichment run on **local Ollama by default**, or on **OpenAI, Anthropic or Google Gemini** — selected per channel, with API keys read from standard environment variables and never stored.
 
 **Token comparison:**
 
@@ -107,18 +107,18 @@ opt-in `qwen2.5-coder:7b` judge on natural-language queries.
 | :--- | ---: | ---: | ---: |
 | Axios v1.6.0 | 0.74 | 0.68 | 0.72 |
 | Express 4.18.2 | 0.90 | 0.62 | 0.73 |
-| NestJS v10.4.9 | 0.67 | 0.57 | 0.60 |
+| NestJS v10.4.9 | 0.62 | 0.57 | 0.59 |
 | FastAPI 0.103.0 | 0.81 | 0.67 | 0.74 |
 | Gin v1.9.1 | 1.00 | 0.78 | 0.84 |
-| **Mean (hybrid + rerank)** | **0.82** | **0.66** | **0.73** |
+| **Mean (hybrid + rerank)** | **0.81** | **0.66** | **0.72** |
 
 Split by query style and configuration (the numbers that matter for agent workflows):
 
 | Channel | Rank-1 | MRR | Success@5 |
 | :--- | ---: | ---: | ---: |
 | **Symbolic** (name-lookup, 69q), hybrid | **0.80** | **0.84** | — |
-| **Semantic** (behavioural, 31q), hybrid + rerank | **0.35** | **0.47** | **0.65** |
-| Semantic, hybrid (no rerank) | 0.23 | 0.37 | 0.55 |
+| **Semantic** (behavioural, 31q), hybrid + rerank | **0.35** | **0.46** | **0.61** |
+| Semantic, hybrid (no rerank) | 0.26 | 0.39 | 0.61 |
 | Semantic, lexical-only (no Ollama) | 0.19 | 0.29 | 0.48 |
 
 Read the semantic rows with their denominator in mind: under *strict* scoring several of those
@@ -132,13 +132,16 @@ Ranking favours exact symbol matches even for short, high-signal names — `res.
 `req.get`, `app.all` — by gating the name boost on corpus **document frequency** instead of a
 blunt length cutoff (with singular/plural equivalence, so `BackgroundTask` finds
 `BackgroundTasks`). Natural-language queries are detected and ranked **vector-first** (with the
-name/path boosts gated on semantic agreement), so behavioural questions aren't drowned by
-keyword noise. Test, spec, example and sandbox chunks are demoted in both channels.
+name/path boosts gated on semantic agreement, and the exact-name multiplier reduced — a
+behavioural query mentioning "string data" is weak evidence for a symbol named `String`).
+Test, spec, example and sandbox chunks are demoted in both channels.
 
-**Backend parity is exact**: every rank-assigning sort uses deterministic tie-breaking and both
-stores funnel vector candidates through one shared finalizer, so the in-memory engine and the
-SQLite store return **identical top-5 chunk ids for 100/100 benchmark queries** — verified, not
-approximate.
+**Backend parity is exact**: every rank-assigning sort uses deterministic tie-breaking and the
+disk-backed stores funnel vector candidates through one shared finalizer, so the in-memory
+engine and the SQLite store return **identical top-5 chunk ids for 100/100 benchmark queries**
+— verified, not approximate. The PostgreSQL store answers queries through the in-memory
+engine's own structures (the database is the system of record, not the query engine), so its
+parity holds by construction.
 
 Reproduce every view:
 
@@ -162,7 +165,7 @@ OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b \
 
 ## Getting started
 
-**Requirements:** Node.js v18+ · Ollama (optional, for semantic search and enrichment) · Node.js v22.5+ for the optional SQLite backend
+**Requirements:** Node.js v18+ · Ollama or a cloud-provider API key (optional, for semantic search and enrichment) · Node.js v22.5+ for the optional SQLite backend · `npm install pg` for the optional PostgreSQL backend
 
 ### 1. Install
 
@@ -171,7 +174,7 @@ npm install graph-indexer --save-dev
 npx graph-indexer init
 ```
 
-`init` auto-detects your IDE (Claude, Cursor, VS Code), adds npm scripts to `package.json`, updates `.gitignore`, and opens an interactive language selector:
+`init` auto-detects your IDE (Claude, Cursor, VS Code), adds npm scripts to `package.json`, updates `.gitignore`, and walks four short interactive steps — languages, storage backend, AI provider, models:
 
 ```
 ⚙️  Select languages (Arrows/Tab: move, Space: toggle, Enter: confirm):
@@ -179,28 +182,49 @@ npx graph-indexer init
   ❯ ◯ TypeScript / TSX         .ts, .tsx
     ◯ JavaScript               .js, .jsx, .mjs, .cjs
     ◯ Python                   .py
-    ◯ Go                       .go
-    ◯ Rust                     .rs
-    ◯ PHP                      .php
-    ◯ Java                     .java
-    ◯ Kotlin                   .kt, .kts
-    ◯ C#                       .cs
-    ◯ Ruby                     .rb
-    ◯ CSS / SCSS               .css, .scss
+    …
+
+🗄  Select the storage backend (Arrows: move, Enter: confirm):
+
+  ❯ ● In-memory  (default)     zero-dependency JSON artifacts
+    ○ SQLite                   disk-backed, Node ≥22.5, monorepo scale
+    ○ PostgreSQL               external/shared database (npm install pg)
+
+🤖 Select the AI provider for LLM generation (enrichment + rerank):
+
+  ❯ ● Ollama (local)  (default)   no API key needed
+    ○ OpenAI                      requires OPENAI_API_KEY
+    ○ Anthropic                   requires ANTHROPIC_API_KEY
+    ○ Google Gemini               requires GEMINI_API_KEY
 ```
 
-Navigate with **↑ ↓**, toggle with **Space**, confirm with **Enter**. Leaving all unselected enables every language. Your selection is saved to `.graph-indexer.json`. Pass `--all-languages` to skip the prompt.
+Navigate with **↑ ↓**, confirm with **Enter**; leaving all languages unselected enables every language. Everything is saved to `.graph-indexer.json` — only deviations from the defaults are written, so a stock Ollama setup stays a one-line file. Pass `--all-languages`, `--storage <backend>`, `--provider <id>` and `--embed-provider <id>` to skip prompts in scripts.
+
+Two provider details `init` handles for you:
+
+- **Anthropic has no embeddings API**, so selecting it for generation triggers an explicit follow-up menu to pick the embedding provider (Ollama, OpenAI or Gemini) — nothing is substituted silently.
+- A final **models step** shows the recommended embedding / enrichment / rerank trio and lets you customise the provider *and* model per channel, or just press Enter to keep the defaults.
 
 ### 2. Index your codebase
 
-**With semantic search (recommended):**
+**With semantic search (recommended, local default):**
 ```bash
 # Install Ollama: https://ollama.ai
 ollama pull nomic-embed-text
 npm run mcp:index
 ```
 
-**Lexical-only (no Ollama required):**
+**With a cloud provider instead of Ollama** (after selecting it in `init`, or via flag):
+```bash
+export OPENAI_API_KEY=sk-…        # or ANTHROPIC_API_KEY / GEMINI_API_KEY
+npm run mcp:index -- --provider openai
+```
+
+API keys are read from the environment only — never written to any config file. Switching the
+embedding provider or model invalidates the local vector cache automatically (vector spaces
+don't mix), so the next index run re-embeds cleanly.
+
+**Lexical-only (no Ollama or API key required):**
 ```bash
 INDEXER_EMBEDDINGS=off npm run mcp:index
 ```
@@ -212,13 +236,20 @@ Lexical-only still scores loose recall@5 = 0.90 and strict symbolic MRR 0.81 on 
 npm run mcp:index -- --use-sqlite
 ```
 
-**Sharpen conceptual recall with local-LLM enrichment:**
+**Share one index across machines with the PostgreSQL backend:**
 ```bash
-ollama pull qwen2.5-coder:1.5b
+npm install pg
+export GRAPH_INDEXER_PG_URL=postgres://user@host:5432/db   # or DATABASE_URL / PG* vars
+npm run mcp:index -- --use-postgres
+```
+
+**Sharpen conceptual recall with LLM enrichment:**
+```bash
+ollama pull qwen2.5-coder:1.5b    # not needed when a cloud provider is selected
 npm run mcp:index -- --llm-enrichment
 ```
 
-The two options compose (`--use-sqlite --llm-enrichment`) and can be made permanent in `.graph-indexer.json` — see [Configuration](#configuration).
+The options compose (`--use-sqlite --llm-enrichment`, `--use-postgres --provider gemini`, …) and can be made permanent in `.graph-indexer.json` — see [Configuration](#configuration).
 
 ### 3. Configure your IDE
 
@@ -264,7 +295,7 @@ The two options compose (`--use-sqlite --llm-enrichment`) and can be made perman
 }
 ```
 
-The server reads the backend from `.graph-indexer.json`, so the same launch config works for both the in-memory and SQLite indexes.
+The server reads the backend from `.graph-indexer.json`, so the same launch config works for every backend.
 
 ### 4. Add the agent system prompt
 
@@ -274,12 +305,13 @@ Copy [PROMPT.md](./PROMPT.md) into your AI agent's system prompt to instruct it 
 
 ## Storage backends
 
-The same index, the same tools, the same ranking — two ways to hold the data. The MCP tools are written against a storage contract and never see which backend is active.
+The same index, the same tools, the same ranking — three ways to hold the data. The MCP tools are written against a storage contract and never see which backend is active.
 
 | Backend | Default | Resident RAM* | Dependencies | Best for |
 | :--- | :--- | ---: | :--- | :--- |
 | **In-memory** | ✅ | ~586 MB | none | Single packages and services; instant cold start. |
 | **SQLite** | `--use-sqlite` | ~79 MB | none — uses Node's built-in `node:sqlite` | Monorepos / 1M+ LOC where holding every chunk in the heap would OOM. |
+| **PostgreSQL** | `--use-postgres` | as in-memory | `pg` (optional dependency) | Sharing one index across machines, CI runners and ephemeral checkouts. |
 
 > *Resident set serving the **same** 50,000-chunk corpus, measured in isolated processes by
 > [test/scale.mjs](test/scale.mjs). The in-memory engine keeps every chunk and the full inverted
@@ -289,6 +321,20 @@ The same index, the same tools, the same ranking — two ways to hold the data. 
 > set here, and the gap widens as the repo grows.
 
 The SQLite backend adds **no external dependency**: `node:sqlite` ships inside Node (v22.5+). Lexical BM25 reads from an indexed `postings` table, symbols and call edges from indexed columns, and vectors live in the shared `code-index.embeddings.bin` — point reads are `pread` on demand. Because both backends feed the same fusion-and-boost ranker with deterministic tie-breaking, switching is purely an operational choice with **zero** quality trade-off (identical top-5 ids on the full benchmark).
+
+The PostgreSQL backend moves the **system of record** into an external database — chunks, the
+dependency graph, vectors and build metadata live in a `graph_indexer` schema, so one indexed
+monorepo serves many machines and survives ephemeral checkouts. Queries still run on the
+in-memory engine's own structures (loaded from the database), which is what makes ranking
+parity hold *by construction* — pgvector is deliberately not used, because approximate ANN
+ordering and C-float cosine math would both break the deterministic cross-backend guarantee.
+The watch daemon commits per-file transactions and fires `NOTIFY`; running MCP servers `LISTEN`
+and reload, mirroring the live-update model of the other backends. Connection setup is
+env-first: `GRAPH_INDEXER_PG_URL` > `DATABASE_URL` > `postgres.url` in `.graph-indexer.json` >
+the driver's native `PGHOST`/`PGUSER`/`PGPASSWORD` variables — so credentials never need to
+touch the project config. Vectors already in the database double as the cross-run embedding
+cache, and the store records which embedding provider/model produced them, refusing to mix
+vector spaces after a provider switch.
 
 ### Vector search that stays fast at monorepo scale
 
@@ -313,12 +359,13 @@ chunks on both backends.
 npm run mcp:index -- --use-sqlite     # writes code-index.db
 ```
 
-### Live updates on both backends
+### Live updates on every backend
 
 The watch daemon keeps **whichever backend is configured** fresh, incrementally:
 
 - **In-memory** — the daemon rewrites the JSON snapshot; a running MCP server watches the file and reloads it automatically.
 - **SQLite** — each file save becomes one WAL transaction (`applyFileUpdate`): the file's old chunks, postings and call edges are replaced with exact BM25 bookkeeping, and new vectors are *appended* to the embeddings bin (O(changed chunks), never a full rewrite). Running MCP servers detect the commit via `PRAGMA data_version` on their next query and refresh themselves — no re-indexing, no restarts.
+- **PostgreSQL** — each file save becomes one transaction followed by `NOTIFY`; running MCP servers hold a `LISTEN` connection and reload on the signal.
 
 Daemon startup is also O(changed files): files older than the index artifact are skipped during the initial scan, so edits made while the daemon was down are picked up without re-parsing the whole repo.
 
@@ -328,7 +375,7 @@ Daemon startup is also O(changed files): files older than the index artifact are
 
 Embeddings match text proximity, not intent. A query like *"payment gateway webhook bottleneck"* misses the function that handles it if that function never spells out those words. Enrichment closes that gap.
 
-With `--llm-enrichment`, the indexer routes every substantive **production-source chunk** (tests, specs and example trees are excluded — agents search for implementations) through a local LLM via Ollama, producing per chunk:
+With `--llm-enrichment`, the indexer routes every substantive **production-source chunk** (tests, specs and example trees are excluded — agents search for implementations) through the configured generation provider (local Ollama by default; OpenAI, Anthropic or Gemini when selected), producing per chunk:
 
 - a one-line **summary** in developer vocabulary, and
 - a set of **concept tags** (e.g. `authentication, JWT, middleware`).
@@ -474,9 +521,10 @@ All persistent settings live in one file at the project root, written by `init` 
 {
   "languages": ["typescript", "javascript", "python"],
   "storage": "sqlite",
+  "provider": "anthropic",
+  "embedProvider": "openai",
   "enrichment": {
     "enabled": true,
-    "model": "qwen2.5-coder:1.5b",
     "coreRatio": 0.15,
     "maxChunks": 400
   }
@@ -486,16 +534,22 @@ All persistent settings live in one file at the project root, written by `init` 
 | Key | Default | Description |
 | :--- | :--- | :--- |
 | `languages` | all installed | Parsers to load. Valid keys: `typescript`, `javascript`, `python`, `go`, `rust`, `php`, `java`, `kotlin`, `csharp`, `ruby`, `css`. |
-| `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency) or `"sqlite"` (disk-backed). |
+| `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency), `"sqlite"` (disk-backed) or `"postgres"` (external). |
+| `provider` | `"ollama"` | AI provider for every channel: `"ollama"`, `"openai"`, `"anthropic"` or `"gemini"`. API keys come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` — never from this file. |
+| `embedProvider` | = `provider` | Embedding-channel override. Required when `provider` is `"anthropic"` (no embeddings API); `init` prompts for it. |
+| `embedModel` | per provider | Embedding model — `nomic-embed-text` (Ollama), `text-embedding-3-small` (OpenAI), `gemini-embedding-001` (Gemini). Index and queries must use the same one; switching invalidates the vector cache. |
 | `ollamaHost` | `"http://localhost:11434"` | Ollama endpoint (also settable via `OLLAMA_HOST`). |
-| `embedModel` | `"nomic-embed-text"` | Embedding model (index and queries must use the same one). |
-| `enrichment.enabled` | `false` | Run local-LLM enrichment during indexing. |
-| `enrichment.model` | `"qwen2.5-coder:1.5b"` | Ollama model used for generation. |
+| `postgres.url` | `""` | PostgreSQL connection string. `GRAPH_INDEXER_PG_URL` / `DATABASE_URL` override it; empty falls through to the driver's `PG*` variables. |
+| `postgres.schema` | `"graph_indexer"` | Schema holding the index tables. |
+| `enrichment.enabled` | `false` | Run LLM enrichment during indexing. |
+| `enrichment.provider` | = `provider` | Enrichment-channel provider override. |
+| `enrichment.model` | per provider | Generation model — `qwen2.5-coder:1.5b` (Ollama), `gpt-4o-mini` (OpenAI), `claude-haiku-4-5` (Anthropic), `gemini-2.5-flash-lite` (Gemini). |
 | `enrichment.coreRatio` | `1.0` | Share of production files eligible (by PageRank). `1.0` = all; tests/examples are always excluded. |
 | `enrichment.maxChunks` | `500` | Cap on **new** LLM calls per index run — the cache accumulates coverage across runs. |
-| `enrichment.concurrency` | `12` | Parallel Ollama requests during enrichment. |
+| `enrichment.concurrency` | `12` | Parallel generation requests during enrichment. |
 | `rerank.enabled` | `false` | LLM-judge reranking of natural-language queries (+50% semantic rank-1, ~1–2 s per NL query). |
-| `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none. |
+| `rerank.provider` | = `provider` | Rerank-channel provider override. |
+| `rerank.model` | per provider | Judge model — `qwen2.5-coder:7b` (Ollama; 7B measured a large gain where 1.5B measured ~none), `gpt-4o-mini`, `claude-haiku-4-5`, `gemini-2.5-flash`. |
 | `rerank.topM` | `8` | Fused results shown to the judge (8 measured better than 10). |
 
 ### CLI flags
@@ -506,6 +560,9 @@ Flags override the config file for a single run:
 | :--- | :--- |
 | `--repo <dir>` | Index a directory other than the cwd |
 | `--use-sqlite` | `"storage": "sqlite"` |
+| `--use-postgres` | `"storage": "postgres"` |
+| `--provider <id>` | `"provider"` |
+| `--embed-provider <id>` | `"embedProvider"` |
 | `--llm-enrichment` | `"enrichment.enabled": true` |
 | `--enrich-model <name>` | `"enrichment.model"` |
 | `--enrich-max <n>` | `"enrichment.maxChunks"` for this run |
@@ -517,6 +574,9 @@ Flags override the config file for a single run:
 | :--- | :--- | :--- |
 | `MCP_PROJECT_ROOT` | `process.cwd()` | Project root directory |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | — | Cloud-provider keys (read from the environment only; `GOOGLE_API_KEY` also works for Gemini) |
+| `GRAPH_INDEXER_PROVIDER` | — | Override the AI provider for one process |
+| `GRAPH_INDEXER_PG_URL` / `DATABASE_URL` | — | PostgreSQL connection string (beats `postgres.url` in the config file) |
 | `INDEXER_EMBEDDINGS` | — | Set to `off` to disable vector embeddings |
 
 Re-run `init` at any time to change languages, or `init --all-languages` to enable every installed parser without the prompt.
@@ -550,25 +610,29 @@ Oversized "god classes" are split automatically: a class longer than ~200 lines 
 graph-indexer is organised around a small set of cohesive modules with a strict separation between *retrieval math*, *storage*, and *transport*:
 
 ```
-config.mjs        Resolves CLI flags > env > .graph-indexer.json into one config.
-parser-utils.mjs  Tree-sitter parsing, chunk extraction, Ollama embeddings.
-search-core.mjs   Shared retrieval math: tokenisation, BM25, RRF fusion + boosts
-                  (query-adaptive NL weighting), PageRank, embedding cache keys.
-                  The numbers are measured once here and reused.
-core-engine.mjs   MemoryGraphIndex — the default in-heap store — plus the
-                  embeddings-bin codecs (write/read/append/scan) and the
-                  binary-quantized vector sketch (Hamming prefilter + rescore).
-sqlite-store.mjs  SqliteGraphStore — the disk-backed store (node:sqlite) with
-                  per-file incremental writes and data_version live refresh.
-storage.mjs       createStore(config) — picks a backend; documents the contract
-                  both implement (searchHybrid, getChunk, applyFileUpdate, …).
-enrichment.mjs    Optional LLM summaries + concept tags, cached by content hash.
-mcp-tools.mjs     The eight tools, written against the storage contract only.
-mcp-server.mjs    Thin bootstrap: config → store → tools → stdio.
-indexer.mjs       Bootstrap indexer.   watch-daemon.mjs  Incremental updates.
+config.mjs         Resolves CLI flags > env > .graph-indexer.json into one config.
+providers.mjs      AI provider abstraction: Ollama / OpenAI / Anthropic / Gemini
+                   embedders + generators, env-only API keys, graceful failure.
+parser-utils.mjs   Tree-sitter parsing, chunk extraction, embedding payloads.
+search-core.mjs    Shared retrieval math: tokenisation, BM25, RRF fusion + boosts
+                   (query-adaptive NL weighting), PageRank, embedding cache keys.
+                   The numbers are measured once here and reused.
+core-engine.mjs    MemoryGraphIndex — the default in-heap store — plus the
+                   embeddings-bin codecs (write/read/append/scan) and the
+                   binary-quantized vector sketch (Hamming prefilter + rescore).
+sqlite-store.mjs   SqliteGraphStore — the disk-backed store (node:sqlite) with
+                   per-file incremental writes and data_version live refresh.
+postgres-store.mjs PostgresGraphStore — external system of record; queries run
+                   on the in-memory engine, LISTEN/NOTIFY live refresh.
+storage.mjs        createStore(config) — picks a backend; documents the contract
+                   all three implement (searchHybrid, getChunk, applyFileUpdate, …).
+enrichment.mjs     Optional LLM summaries + concept tags, cached by content hash.
+mcp-tools.mjs      The eight tools, written against the storage contract only.
+mcp-server.mjs     Thin bootstrap: config → store → tools → stdio.
+indexer.mjs        Bootstrap indexer.   watch-daemon.mjs  Incremental updates.
 ```
 
-Because both stores call the identical `fuseAndRank` from `search-core`, the in-memory and SQLite backends are rank-consistent by construction, and a single change to the ranking math applies everywhere.
+Because every store calls the identical `fuseAndRank` from `search-core`, the backends are rank-consistent by construction, and a single change to the ranking math applies everywhere.
 
 ### Indexing
 

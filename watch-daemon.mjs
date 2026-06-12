@@ -4,7 +4,7 @@
  * @description Native FileSystem Watcher Daemon that keeps the configured index
  *              backend fresh incrementally. Backend-agnostic: file changes are
  *              parsed once (Tree-sitter), optionally enriched (LLM cache-first)
- *              and embedded (Ollama), then handed to the store's applyFileUpdate
+ *              and embedded (configured AI provider), then handed to the store's applyFileUpdate
  *              — the in-memory engine persists a debounced JSON snapshot, the
  *              SQLite store commits a per-file WAL transaction that running MCP
  *              servers pick up live via PRAGMA data_version. No more "SQLite
@@ -34,20 +34,23 @@ import {
 } from './search-core.mjs';
 import {
     MAX_FILE_SIZE_BYTES, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, getLocalEmbeddingsBatch,
+    extractImportsFromAST, extractSemanticChunks, resolveLocalImports,
     buildEmbeddingPayload,
 } from './parser-utils.mjs';
 import {
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,
-    ollamaGenerate, parseEnrichResponse, buildEnrichPrompt,
+    parseEnrichResponse, buildEnrichPrompt,
 } from './enrichment.mjs';
+import { createEmbedder, createGenerator } from './providers.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
 
 const ignoreFilter = buildIgnoreFilter(PROJECT_ROOT);
+const embedder = createEmbedder(config);
+const enrichGenerate = config.enrichment.enabled ? createGenerator(config, 'enrichment') : null;
 const db = await createStore(config, { cacheEmbeddings: true });
-db.load();
+await db.load();
 
 // ─── Enrichment (cache-first, live for core files) ──────────────────────────────
 // Cached entries re-attach for free on every change. When enrichment is enabled
@@ -96,9 +99,7 @@ async function enrichChunks(filename, chunks) {
     // mean "no enrichment until the next full index run".
     for (const chunk of pending) {
         if ((chunk.end_line - chunk.start_line) < 4) continue; // trivial stubs
-        const raw = await ollamaGenerate(buildEnrichPrompt(chunk), {
-            model: config.enrichment.model, ollamaHost: config.ollamaHost, timeoutMs: 20000,
-        });
+        const raw = await enrichGenerate(buildEnrichPrompt(chunk), { timeoutMs: 20000, maxTokens: 150 });
         const parsed = parseEnrichResponse(raw);
         if (!parsed) break; // model unreachable — stop trying for this batch
         chunk.summary  = parsed.summary;
@@ -120,7 +121,11 @@ async function enrichChunks(filename, chunks) {
 // while still picking up edits made while the daemon was down.
 const ARTIFACT_PATH = config.storage === 'sqlite' ? config.sqlitePath : config.indexPath;
 let indexBuiltAt = 0;
-try { indexBuiltAt = fs.statSync(ARTIFACT_PATH).mtimeMs; } catch { /* no index yet → full scan */ }
+if (config.storage === 'postgres') {
+    indexBuiltAt = Number(db.getMeta?.('built_at')) || 0; // no local artifact — DB meta carries the build time
+} else {
+    try { indexBuiltAt = fs.statSync(ARTIFACT_PATH).mtimeMs; } catch { /* no index yet → full scan */ }
+}
 let initialScan = true;
 
 async function processFileChange(absolutePath) {
@@ -136,8 +141,8 @@ async function processFileChange(absolutePath) {
         }
 
         if (!fs.existsSync(absolutePath)) {
-            if (typeof db.removeFile === 'function') db.removeFile(filename);
-            else db.applyFileUpdate(filename, { chunks: [], imports: [] });
+            if (typeof db.removeFile === 'function') await db.removeFile(filename);
+            else await db.applyFileUpdate(filename, { chunks: [], imports: [] });
             _coreFiles = null;
             process.stderr.write(`[daemon] 🗑️  Purged: ${filename}\n`);
             return;
@@ -174,9 +179,7 @@ async function processFileChange(absolutePath) {
                 const sText = summaryEmbeddingText(c);
                 if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
             }
-            const embeddingsMatrix = await getLocalEmbeddingsBatch(entries.map(e => e.text), true, {
-                ollamaHost: config.ollamaHost, model: config.embedModel,
-            });
+            const embeddingsMatrix = await embedder.embedDocuments(entries.map(e => e.text));
             if (embeddingsMatrix && embeddingsMatrix.length === entries.length) {
                 entries.forEach((entry, j) => {
                     if (embeddingsMatrix[j]) embeddings.set(entry.key, new Float32Array(embeddingsMatrix[j]));
@@ -184,7 +187,7 @@ async function processFileChange(absolutePath) {
             }
         }
 
-        db.applyFileUpdate(filename, { chunks: newChunks, imports, embeddings });
+        await db.applyFileUpdate(filename, { chunks: newChunks, imports, embeddings });
         process.stderr.write(
             `[daemon] 🔄 Synced: ${filename} (${newChunks.length} chunks, `
             + `${newChunks.length - chunksToEmbed.length} cached vectors, ${config.storage})\n`

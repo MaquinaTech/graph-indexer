@@ -19,6 +19,7 @@ import { spawn } from 'child_process';
 import { resolveConfig } from './config.mjs';
 import { createStore } from './storage.mjs';
 import { registerTools } from './mcp-tools.mjs';
+import { createEmbedder, createGenerator } from './providers.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
@@ -62,6 +63,8 @@ function ensureDaemonRunning() {
 
 if (config.storage === 'sqlite') {
     process.stderr.write('🗄  Storage backend: SQLite (disk-backed, live daemon updates).\n');
+} else if (config.storage === 'postgres') {
+    process.stderr.write(`🗄  Storage backend: PostgreSQL (schema "${config.postgres.schema}", LISTEN/NOTIFY live updates).\n`);
 }
 ensureDaemonRunning();
 
@@ -69,13 +72,13 @@ const version = readPackageVersion();
 const server = new McpServer({ name: 'graph-indexer', version });
 
 const db = await createStore(config, { cacheEmbeddings: false });
-try { db.load(); } catch (err) { process.stderr.write(`⏳ Waiting for initial indexing… (${err.message})\n`); }
+try { await db.load(); } catch (err) { process.stderr.write(`⏳ Waiting for initial indexing… (${err.message})\n`); }
 
 // In-memory backend: the daemon is a separate process that rewrites
 // code-index.json — without reloading, this server would answer from a stale
 // snapshot until restart. (The SQLite store refreshes itself per query via
-// PRAGMA data_version, so no watcher is needed there.)
-if (config.storage !== 'sqlite' && typeof db.reload === 'function') {
+// PRAGMA data_version; the Postgres store pushes change notifications.)
+if (config.storage === 'memory' && typeof db.reload === 'function') {
     let reloadTimer = null;
     const scheduleReload = () => {
         if (reloadTimer) clearTimeout(reloadTimer);
@@ -94,6 +97,24 @@ if (config.storage !== 'sqlite' && typeof db.reload === 'function') {
             if (name === path.basename(config.indexPath)) scheduleReload();
         });
     } catch { /* fs.watch unavailable — index stays load-time static */ }
+}
+
+// Postgres backend: the daemon NOTIFYs after every committed file update; a
+// debounced reload keeps this long-running server consistent without polling.
+if (config.storage === 'postgres' && typeof db.subscribeToChanges === 'function') {
+    let reloadTimer = null;
+    db.subscribeToChanges(() => {
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(async () => {
+            reloadTimer = null;
+            try {
+                await db.reload();
+                process.stderr.write('🔄 Index reloaded from PostgreSQL (daemon update).\n');
+            } catch (err) {
+                process.stderr.write(`⚠️ Index reload failed: ${err.message}\n`);
+            }
+        }, 1000);
+    }).catch(err => process.stderr.write(`⚠️ Change subscription failed: ${err.message}\n`));
 }
 
 process.on('SIGTERM', () => { db.close(); process.exit(0); });
@@ -127,14 +148,16 @@ server.resource(
 );
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
+const embedder = createEmbedder(config);
 registerTools(server, db, {
     projectRoot: PROJECT_ROOT,
-    artifactPath: config.storage === 'sqlite' ? config.sqlitePath : config.indexPath,
+    artifactPath: config.storage === 'postgres' ? null
+        : config.storage === 'sqlite' ? config.sqlitePath : config.indexPath,
     pidFile: PID_FILE,
     embeddingsEnabled: config.embeddingsEnabled,
-    ollamaHost: config.ollamaHost,
-    embedModel: config.embedModel,
+    embedQuery: embedder.embedQuery,
     rerank: config.rerank,
+    rerankGenerate: createGenerator(config, 'rerank'),
 });
 
 const transport = new StdioServerTransport();

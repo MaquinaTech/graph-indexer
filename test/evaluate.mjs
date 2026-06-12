@@ -47,7 +47,8 @@ import { FIXTURES_DIR } from './setup.mjs';
 import { loadIndex } from './harness.mjs';
 import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery } from '../search-core.mjs';
-import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
+import { rerankResults } from '../enrichment.mjs';
+import { ollamaGenerate } from '../providers.mjs';
 
 import * as axiosSuite from './suites/axios.mjs';
 import * as expressJsSuite from './suites/express-js.mjs';

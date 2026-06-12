@@ -21,7 +21,8 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { computePageRank, truncateForEmbedding, TEST_FILE_RE, EXAMPLE_DIR_RE } from './search-core.mjs';
+import { computePageRank, TEST_FILE_RE, EXAMPLE_DIR_RE } from './search-core.mjs';
+import { createGenerator } from './providers.mjs';
 
 // ─── Persistent enrichment cache ───────────────────────────────────────────────
 // Keyed by content_hash: the same code always yields the same (cached) summary
@@ -83,29 +84,6 @@ export const buildEnrichPrompt = (chunk) => {
         + `Output:`
     );
 };
-
-/**
- * Default generator: a single non-streaming Ollama /api/generate call. Returns the
- * response text, or null on any failure (enrichment is best-effort and never fatal).
- */
-export async function ollamaGenerate(prompt, { model, ollamaHost, timeoutMs = 30000, options = null } = {}) {
-    try {
-        const res = await fetch(`${ollamaHost}/api/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model, prompt, stream: false,
-                options: options || { temperature: 0.1, num_predict: 150 },
-            }),
-            signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        return (data.response || '').trim() || null;
-    } catch {
-        return null;
-    }
-}
 
 /**
  * Parse the SUMMARY + TAGS response into { summary, concepts, hyde }.
@@ -270,9 +248,9 @@ export function selectCoreChunks(chunks, graph, { coreRatio = 1.0, maxChunks = 5
  * @returns {Promise<{enriched:number, attempted:number, cached:number}>}
  */
 export async function enrichCoreChunks(chunks, graph, config, { generate, concurrency, cachePath } = {}) {
-    const { model, coreRatio, maxChunks } = config.enrichment;
-    const ollamaHost = config.ollamaHost;
-    const gen = generate || ((prompt) => ollamaGenerate(prompt, { model, ollamaHost, timeoutMs: 20000 }));
+    const { provider, model, coreRatio, maxChunks } = config.enrichment;
+    const defaultGen = generate ? null : createGenerator(config, 'enrichment');
+    const gen = generate || ((prompt) => defaultGen(prompt, { timeoutMs: 20000, maxTokens: 150 }));
     const slots = concurrency ?? config.enrichment.concurrency ?? 12;
     const cacheFile = cachePath === false ? null : (cachePath || config.enrichmentCachePath || null);
     const cache = cacheFile ? loadEnrichmentCache(cacheFile) : new Map();
@@ -302,7 +280,7 @@ export async function enrichCoreChunks(chunks, graph, config, { generate, concur
         return { enriched: cached, attempted: 0, cached };
     }
 
-    console.log(`🧠 LLM enrichment: ${pending.length} chunks via ${model} (${cached} from cache, concurrency: ${slots}) …`);
+    console.log(`🧠 LLM enrichment: ${pending.length} chunks via ${model}${provider ? ` [${provider}]` : ''} (${cached} from cache, concurrency: ${slots}) …`);
     let enriched = 0, attempted = 0, failures = 0;
     let aborted = false;
 

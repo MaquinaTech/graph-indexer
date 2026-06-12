@@ -384,6 +384,32 @@ test('embeddingKeyFor separates enriched from plain vectors deterministically', 
     assert.notEqual(embeddingKeyFor(enriched), embeddingKeyFor(otherSummary));
 });
 
+// ─── pruneBodyByQuery (smart-detail body budget) ────────────────────────────
+const { pruneBodyByQuery } = await import('../mcp-tools.mjs');
+
+test('pruneBodyByQuery keeps signature + relevant lines within maxLines', () => {
+    const body = [
+        'function f(req) {',
+        ...Array.from({ length: 50 }, (_, i) => `  noise_${i};`),
+        ...Array.from({ length: 5 }, (_, i) => `  check(req, ${i});`),
+        ...Array.from({ length: 50 }, (_, i) => `  more_${i};`),
+        '  return out;',
+        '}',
+    ].join('\n');
+    const out = pruneBodyByQuery(body, ['req'], 40);
+    assert.ok(out.split('\n').length <= 41, `pruned body too long: ${out.split('\n').length} lines`);
+    assert.match(out, /check\(req, 3\)/);
+    assert.ok(!/noise_10;/.test(out), 'irrelevant noise lines must be pruned');
+});
+
+test('pruneBodyByQuery bounds bodies where a common token matches most lines', () => {
+    // 200 lines all containing the query token must not bypass the budget.
+    const body = ['function handle(req) {', ...Array.from({ length: 200 }, (_, i) => `  use(req, ${i});`), '}'].join('\n');
+    const out = pruneBodyByQuery(body, ['req'], 40);
+    assert.ok(out.split('\n').length <= 41, `matching lines bypassed budget: ${out.split('\n').length} lines`);
+    assert.match(out, /more matching lines/);
+});
+
 // ─── isNaturalLanguageQuery ──────────────────────────────────────────────────
 test('isNaturalLanguageQuery separates behavioural questions from symbol lookups', () => {
     assert.ok(isNaturalLanguageQuery('How does the application parse incoming JSON payloads from the client?'));

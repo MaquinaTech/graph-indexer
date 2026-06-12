@@ -189,6 +189,14 @@ const VECTOR_WEIGHT  = 1.0;
 const NL_LEXICAL_WEIGHT = 1.0;
 const NL_VECTOR_WEIGHT  = 1.6;
 
+// Exact-name boost on NL queries. A behavioural description naming a generic
+// English word that happens to be a symbol ("string data" → Go's String(),
+// "route definitions" → Routes()) is weak evidence compared to a symbol lookup,
+// so NL queries get a reduced multiplier. Measured (hybrid strict): 1.4 lifts
+// semantic rank-1 0.23→0.26 and s@5 0.55→0.61 with symbolic unchanged; 1.2 and
+// 1.6 are both worse, and removing the boost entirely drops semantic to 0.16.
+const NL_NAME_BOOST = 1.4;
+
 const QUERY_STOPWORDS = new Set([
     'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'at',
     'by', 'from', 'that', 'this', 'is', 'are', 'was', 'were', 'be', 'how', 'what',
@@ -352,7 +360,7 @@ export function fuseAndRank({
                 // NOTE: a PageRank multiplier was trialled here (tie-break duplicate
                 // names toward central files) and measured NEGATIVE — hub files win
                 // exact-name matches on common words and the semantic channel drops.
-                baseScore *= 2.0;
+                baseScore *= nlQuery ? NL_NAME_BOOST : 2.0;
             } else {
                 const snakeParts = nameLower.split(/[._]+/);
                 const lastSnake  = snakeParts[snakeParts.length - 1] ?? '';

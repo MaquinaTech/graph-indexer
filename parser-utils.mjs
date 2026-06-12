@@ -1,6 +1,6 @@
 /**
  * @file parser-utils.mjs
- * @description Shared AST parsing, language registry, and embedding utilities.
+ * @description Shared AST parsing, language registry, and chunk-extraction utilities.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -21,52 +21,7 @@ import ignore from 'ignore';
 import Parser from 'tree-sitter';
 const { Query } = Parser; // Native parser query helper
 
-import { truncateForEmbedding } from './core-engine.mjs';
-
 export const MAX_FILE_SIZE_BYTES = 500000;
-export const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-
-// Resolves the Ollama host at call time so callers that set ollamaHost via
-// .graph-indexer.json don't have to pass it through every call chain.
-// Priority: caller override → OLLAMA_HOST env var → PROJECT .graph-indexer.json
-// (MCP_PROJECT_ROOT or cwd — NOT the package directory: when graph-indexer is
-// installed as a dependency, the user's config lives in their project root) →
-// default. Mirrors config.mjs precedence so every entry point agrees.
-//
-// Note: OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11435"), not an
-// HTTP client URL. We normalise bare "host:port" strings by adding http:// and translating
-// 0.0.0.0 → localhost so fetches work in both formats.
-let _cachedHost = null;
-let _cachedEmbedModel = null;
-function _normalizeOllamaHost(raw) {
-    if (!raw) return null;
-    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-    return 'http://' + raw.replace(/^0\.0\.0\.0/, 'localhost');
-}
-function _readProjectConfig() {
-    const root = process.env.MCP_PROJECT_ROOT || process.cwd();
-    try {
-        return JSON.parse(fs.readFileSync(path.join(root, '.graph-indexer.json'), 'utf8'));
-    } catch { return null; }
-}
-function _resolveOllamaHost(override) {
-    if (override) return _normalizeOllamaHost(override) || 'http://localhost:11434';
-    if (_cachedHost) return _cachedHost;
-    if (process.env.OLLAMA_HOST) {
-        _cachedHost = _normalizeOllamaHost(process.env.OLLAMA_HOST) || 'http://localhost:11434';
-        return _cachedHost;
-    }
-    const cfg = _readProjectConfig();
-    _cachedHost = _normalizeOllamaHost(cfg?.ollamaHost) || 'http://localhost:11434';
-    return _cachedHost;
-}
-function _resolveEmbedModel(override) {
-    if (override) return override;
-    if (_cachedEmbedModel) return _cachedEmbedModel;
-    const cfg = _readProjectConfig();
-    _cachedEmbedModel = cfg?.embedModel || 'nomic-embed-text';
-    return _cachedEmbedModel;
-}
 
 // ─── Dynamic Language Loading ─────────────────────────────────────────────────
 
@@ -862,56 +817,6 @@ export function buildEmbeddingPayload(chunk, depRelPaths = []) {
         `--- Source Code ---`,
         chunk.code_snippet,
     ].filter(Boolean).join('\n');
-}
-
-export async function getLocalEmbedding(text, graceful = true, { ollamaHost, model } = {}) {
-    if (process.env.INDEXER_EMBEDDINGS === 'off') return null; // lexical-only mode
-    const host = _resolveOllamaHost(ollamaHost);
-    const embedModel = _resolveEmbedModel(model);
-    const MAX_RETRIES = 3;
-    const safeText = "search_query: " + truncateForEmbedding(text);
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            const res = await fetch(`${host}/api/embeddings`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: embedModel, prompt: safeText }),
-                signal: AbortSignal.timeout(15000),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            return data.embedding;
-        } catch (err) {
-            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
-            else if (!graceful) throw err;
-        }
-    }
-    return null;
-}
-
-export async function getLocalEmbeddingsBatch(texts, graceful = true, { ollamaHost, model } = {}) {
-    if (!texts || texts.length === 0) return [];
-    if (process.env.INDEXER_EMBEDDINGS === 'off') return null; // lexical-only mode
-    const host = _resolveOllamaHost(ollamaHost);
-    const embedModel = _resolveEmbedModel(model);
-    const MAX_RETRIES = 3;
-    const safeTexts = texts.map(t => "search_document: " + (t.length > 8000 ? t.slice(0, 8000) : t));
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            const res = await fetch(`${host}/api/embed`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: embedModel, input: safeTexts }),
-                signal: AbortSignal.timeout(60000),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            return data.embeddings;
-        } catch (err) {
-            if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, 500 * 2 ** attempt));
-            else if (!graceful) throw err;
-        }
-    }
-    return null;
 }
 
 // ─── Enrichment helpers (param names, return type, class context) ─────────────

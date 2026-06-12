@@ -421,6 +421,7 @@ export class MemoryGraphIndex {
 
         // ── Core data ─────────────────────────────────────────────────────────
         this.chunks = new Map();           // chunkId → chunk metadata
+        this.fileIndex = new Map();        // file_path → Set<chunkId> (O(1) per-file reads/removals)
         this.graph  = { dependencies: {}, importedBy: {} };
 
         // ── Embedding cache (used by indexer to avoid re-embedding) ───────────
@@ -498,39 +499,50 @@ export class MemoryGraphIndex {
         }
 
         for (const chunk of (data.chunks || [])) {
-            this.chunks.set(chunk.id, chunk);
+            this._ingestChunk(chunk);
+        }
+    }
 
-            // Eager vector population. Vectors are keyed by embeddingKeyFor(chunk)
-            // (content_hash + enrichment digest); plain content_hash is the
-            // backward-compatible fallback for bins written before enrichment keys.
-            if (!this._lazyMode) {
-                const vecKey = embeddingKeyFor(chunk);
-                if (chunk.content_hash && this.embeddingCache.has(vecKey)) {
-                    this.vectors.set(chunk.id, this.embeddingCache.get(vecKey));
-                    // Summary-only second vector (enriched chunks): stored under a
-                    // pseudo row id; searchHybrid folds hits back onto the chunk id.
-                    const sVec = this.embeddingCache.get(vecKey + SUMMARY_VEC_SUFFIX);
-                    if (sVec) this.vectors.set(chunk.id + SUMMARY_VEC_SUFFIX, sVec);
-                } else if (chunk.content_hash && this.embeddingCache.has(chunk.content_hash)) {
-                    this.vectors.set(chunk.id, this.embeddingCache.get(chunk.content_hash));
-                } else if (chunk.embedding) {
-                    const vec = new Float32Array(chunk.embedding);
-                    this.vectors.set(chunk.id, vec);
-                    if (chunk.content_hash) this.embeddingCache.set(chunk.content_hash, vec);
-                }
+    /**
+     * Index one chunk into the in-memory structures: file index, eager vector
+     * rows, the inverted lexical index and the symbol table. Shared by the file
+     * loader above and by persistence-backed subclasses (PostgresGraphStore) so
+     * every load path indexes a chunk identically — ranking parity depends on it.
+     */
+    _ingestChunk(chunk) {
+        this.chunks.set(chunk.id, chunk);
+        this._addToFileIndex(chunk);
+
+        // Eager vector population. Vectors are keyed by embeddingKeyFor(chunk)
+        // (content_hash + enrichment digest); plain content_hash is the
+        // backward-compatible fallback for bins written before enrichment keys.
+        if (!this._lazyMode) {
+            const vecKey = embeddingKeyFor(chunk);
+            if (chunk.content_hash && this.embeddingCache.has(vecKey)) {
+                this.vectors.set(chunk.id, this.embeddingCache.get(vecKey));
+                // Summary-only second vector (enriched chunks): stored under a
+                // pseudo row id; searchHybrid folds hits back onto the chunk id.
+                const sVec = this.embeddingCache.get(vecKey + SUMMARY_VEC_SUFFIX);
+                if (sVec) this.vectors.set(chunk.id + SUMMARY_VEC_SUFFIX, sVec);
+            } else if (chunk.content_hash && this.embeddingCache.has(chunk.content_hash)) {
+                this.vectors.set(chunk.id, this.embeddingCache.get(chunk.content_hash));
+            } else if (chunk.embedding) {
+                const vec = new Float32Array(chunk.embedding);
+                this.vectors.set(chunk.id, vec);
+                if (chunk.content_hash) this.embeddingCache.set(chunk.content_hash, vec);
             }
+        }
 
-            // Build inverted lexical index from the shared document builder
-            // (search-core.buildLexicalDocument) — identical text across backends.
-            const deps = this.graph.dependencies[chunk.file_path] || [];
-            this._indexLexical(chunk.id, buildLexicalDocument(chunk, deps), chunk.file_path);
+        // Build inverted lexical index from the shared document builder
+        // (search-core.buildLexicalDocument) — identical text across backends.
+        const deps = this.graph.dependencies[chunk.file_path] || [];
+        this._indexLexical(chunk.id, buildLexicalDocument(chunk, deps), chunk.file_path);
 
-            // Build symbol table (Frontier 2)
-            if (chunk.name && chunk.name !== 'anonymous') {
-                const n = chunk.name.toLowerCase();
-                if (!this.symbolTable.has(n)) this.symbolTable.set(n, new Set());
-                this.symbolTable.get(n).add(chunk.id);
-            }
+        // Build symbol table (Frontier 2)
+        if (chunk.name && chunk.name !== 'anonymous') {
+            const n = chunk.name.toLowerCase();
+            if (!this.symbolTable.has(n)) this.symbolTable.set(n, new Set());
+            this.symbolTable.get(n).add(chunk.id);
         }
     }
 
@@ -601,6 +613,14 @@ export class MemoryGraphIndex {
         }
 
         return null;
+    }
+
+    // ─── File index ────────────────────────────────────────────────────────────
+
+    _addToFileIndex(chunk) {
+        let ids = this.fileIndex.get(chunk.file_path);
+        if (!ids) { ids = new Set(); this.fileIndex.set(chunk.file_path, ids); }
+        ids.add(chunk.id);
     }
 
     // ─── Lexical index (TRUE inverted index) ──────────────────────────────────
@@ -956,14 +976,16 @@ export class MemoryGraphIndex {
     applyFileUpdate(filePath, { chunks = [], imports = [], embeddings = null } = {}) {
         this.updateFileGraph(filePath, imports);
 
-        for (const [id, chunk] of Array.from(this.chunks.entries())) {
-            if (chunk.file_path !== filePath) continue;
+        for (const id of Array.from(this.fileIndex.get(filePath) ?? [])) {
+            const chunk = this.chunks.get(id);
+            if (!chunk) continue;
             this._removeLexical(id);
             this.removeVector(id);
             this.removeVector(id + SUMMARY_VEC_SUFFIX);
             this._removeSymbol(chunk);
             this.chunks.delete(id);
         }
+        this.fileIndex.delete(filePath);
 
         if (embeddings) {
             for (const [key, vec] of embeddings) {
@@ -979,6 +1001,7 @@ export class MemoryGraphIndex {
             if (sVec) this.addVector(chunk.id + SUMMARY_VEC_SUFFIX, sVec);
             this._indexLexical(chunk.id, buildLexicalDocument(chunk, imports), chunk.file_path);
             this.chunks.set(chunk.id, chunk);
+            this._addToFileIndex(chunk);
             if (chunk.name && chunk.name !== 'anonymous') {
                 const n = chunk.name.toLowerCase();
                 if (!this.symbolTable.has(n)) this.symbolTable.set(n, new Set());
@@ -997,8 +1020,15 @@ export class MemoryGraphIndex {
      * until restart.
      */
     reload() {
+        this._resetState();
+        this.load();
+    }
+
+    /** Drop every in-memory structure (shared by reload() and subclass loaders). */
+    _resetState() {
         if (this._vecFd >= 0) { try { fs.closeSync(this._vecFd); } catch {} this._vecFd = -1; }
         this.chunks = new Map();
+        this.fileIndex = new Map();
         this.graph = { dependencies: {}, importedBy: {} };
         this.embeddingCache = new Map();
         this.symbolTable = new Map();
@@ -1016,7 +1046,6 @@ export class MemoryGraphIndex {
         this._keyToIds = null;
         this._sketch = null;
         this._lazyMode = false;
-        this.load();
     }
 
     updateFileGraph(filePath, imports) {
@@ -1044,8 +1073,13 @@ export class MemoryGraphIndex {
 
     /** All chunks defined in a given file. @returns {object[]} */
     getChunksByFile(filePath) {
+        const ids = this.fileIndex.get(filePath);
+        if (!ids) return [];
         const out = [];
-        for (const c of this.chunks.values()) if (c.file_path === filePath) out.push(c);
+        for (const id of ids) {
+            const c = this.chunks.get(id);
+            if (c) out.push(c);
+        }
         return out;
     }
 
@@ -1070,11 +1104,7 @@ export class MemoryGraphIndex {
 
     chunkCount()  { return this.chunks.size; }
     symbolCount() { return this.symbolTable.size; }
-    fileCount() {
-        const files = new Set();
-        for (const c of this.chunks.values()) files.add(c.file_path);
-        return files.size;
-    }
+    fileCount()   { return this.fileIndex.size; }
     vectorCount() {
         if (this._lazyMode) {
             let n = 0;

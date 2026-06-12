@@ -1,7 +1,7 @@
 {
     "name": "graph-indexer",
-    "version": "1.2.0",
-    "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph, with an optional zero-dependency SQLite backend for monorepo scale and optional local-LLM semantic enrichment.",
+    "version": "1.3.0",
+    "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph. Storage backends: in-memory (default), zero-dependency SQLite for monorepo scale, or external PostgreSQL. Optional LLM semantic enrichment via local Ollama or cloud providers (OpenAI, Anthropic, Google Gemini).",
     "type": "module",
     "main": "core-engine.mjs",
     "exports": {
@@ -27,11 +27,13 @@
         "start": "node ./mcp-server.mjs",
         "test": "node test/run.mjs",
         "test:unit": "node test/unit.mjs",
+        "test:providers": "node test/providers.mjs",
         "test:sqlite": "node test/sqlite.mjs",
+        "test:postgres": "node test/postgres.mjs",
         "test:enrich": "node test/enrichment.mjs",
         "test:mcp": "node test/mcp.mjs",
         "test:scale": "node test/scale.mjs",
-        "test:all": "node test/unit.mjs && node test/sqlite.mjs && node test/enrichment.mjs && node test/mcp.mjs && node test/scale.mjs",
+        "test:all": "node test/unit.mjs && node test/providers.mjs && node test/sqlite.mjs && node test/postgres.mjs && node test/enrichment.mjs && node test/mcp.mjs && node test/scale.mjs",
         "test:eval": "node test/evaluate.mjs",
         "test:eval:embeddings": "OLLAMA_HOST=http://localhost:11435 node test/evaluate.mjs --embeddings",
         "test:setup": "node test/setup.mjs",
@@ -43,6 +45,7 @@
         "test:reset": "rm -rf test/fixtures && node test/setup.mjs",
         "mcp:index": "node indexer.mjs --repo .",
         "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
+        "mcp:index:postgres": "node indexer.mjs --repo . --use-postgres",
         "mcp:index:enriched": "node indexer.mjs --repo . --llm-enrichment",
         "mcp:watch": "node watch-daemon.mjs",
         "mcp:start": "node mcp-server.mjs"
@@ -64,7 +67,11 @@
         "hybrid-search",
         "rrf",
         "call-graph",
-        "ollama"
+        "ollama",
+        "openai",
+        "anthropic",
+        "gemini",
+        "postgresql"
     ],
     "author": {
         "name": "MaquinaTech",
@@ -88,6 +95,7 @@
     },
     "optionalDependencies": {
         "hnswlib-node": "3.0.0",
+        "pg": "8.16.3",
         "tree-sitter-c-sharp": "0.21.3",
         "tree-sitter-css": "0.21.1",
         "tree-sitter-go": "0.21.0",
