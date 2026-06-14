@@ -13,17 +13,24 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import fs from 'fs';
-import path, { resolve } from 'path';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { resolveConfig } from './config.mjs';
+import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
+import { daemonStatus } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
 import { registerTools } from './mcp-tools.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
-const PID_FILE = resolve(PROJECT_ROOT, '.idx-daemon.pid');
+const PID_FILE = config.pidFile;
 const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+// Make sure the data dir exists and any pre-v1.4 root artifacts are relocated
+// before we touch index paths or start watching the data dir.
+ensureDataDir(PROJECT_ROOT);
+migrateLegacyLayout(PROJECT_ROOT);
 
 function readPackageVersion() {
     try {
@@ -38,16 +45,17 @@ function readPackageVersion() {
 // PRAGMA data_version). Either way, a long-running MCP server stays consistent
 // with the working tree without restarts or full re-indexes.
 function ensureDaemonRunning() {
-    if (fs.existsSync(PID_FILE)) {
-        const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8'), 10);
-        try { process.kill(pid, 0); process.stderr.write(`✅ Daemon already active (PID: ${pid}).\n`); return; }
-        catch { fs.unlinkSync(PID_FILE); }
-    }
+    // The daemon owns the PID lock exclusively (it acquires it atomically on
+    // startup — see daemon-lock.mjs). We only check whether one is already live;
+    // if not, we spawn it detached. Even if two servers race here, the losing
+    // daemon fails to acquire the lock and exits, so never more than one runs.
+    const { running, pid } = daemonStatus(PID_FILE);
+    if (running) { process.stderr.write(`✅ Daemon already active (PID: ${pid}).\n`); return; }
+
     const daemonPath = path.join(PACKAGE_DIR, 'watch-daemon.mjs');
-    const logPath = path.join(PROJECT_ROOT, '.idx-daemon.log');
-    process.stderr.write(`🚀 Starting Watcher Daemon...\n   Log: ${logPath}\n`);
+    process.stderr.write(`🚀 Starting Watcher Daemon...\n   Log: ${config.logFile}\n`);
     let logFd;
-    try { logFd = fs.openSync(logPath, 'a'); } catch { logFd = null; }
+    try { logFd = fs.openSync(config.logFile, 'a'); } catch { logFd = null; }
     const child = spawn(process.execPath, [daemonPath], {
         detached: true,
         stdio: logFd !== null ? ['ignore', logFd, logFd] : 'ignore',
@@ -55,7 +63,6 @@ function ensureDaemonRunning() {
     });
     child.unref();
     if (logFd !== null) fs.closeSync(logFd);
-    fs.writeFileSync(PID_FILE, child.pid.toString());
 }
 
 // ─── Boot ──────────────────────────────────────────────────────────────────────

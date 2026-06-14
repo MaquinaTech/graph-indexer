@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url';
 
 import { MemoryGraphIndex } from '../core-engine.mjs';
 import { SqliteGraphStore } from '../sqlite-store.mjs';
+import { artifactPaths } from '../layout.mjs';
 import {
     approxTokens,
     recallAtK,
@@ -70,30 +71,27 @@ export function runIndexer(fixtureDir, { useEmbeddings = false, useSqlite = fals
 // ─── Index loading & introspection ────────────────────────────────────────────
 
 export function loadIndex(fixtureDir, { useSqlite = false } = {}) {
+    const A = artifactPaths(fixtureDir);
     // Try to load SQLite backend if available and requested
     if (useSqlite) {
-        const dbPath = path.join(fixtureDir, 'code-index.db');
-        if (fs.existsSync(dbPath)) {
-            const store = new SqliteGraphStore(dbPath, { embeddingPath: path.join(fixtureDir, 'code-index.embeddings.bin') });
+        if (fs.existsSync(A.sqlitePath)) {
+            const store = new SqliteGraphStore(A.sqlitePath, { embeddingPath: A.embeddingPath });
             store.load();
             return store;
         }
     }
     // Fallback to memory backend
-    const indexPath = path.join(fixtureDir, 'code-index.json');
-    if (!fs.existsSync(indexPath)) return null;
-    const db = new MemoryGraphIndex(indexPath);
+    if (!fs.existsSync(A.indexPath)) return null;
+    const db = new MemoryGraphIndex(A.indexPath);
     db.load();
     return db;
 }
 
 export function measureIndexSize(fixtureDir) {
-    const jsonPath = path.join(fixtureDir, 'code-index.json');
-    const dbPath = path.join(fixtureDir, 'code-index.db');
-    const binPath = path.join(fixtureDir, 'code-index.embeddings.bin');
-    const jsonSize = fs.existsSync(jsonPath) ? fs.statSync(jsonPath).size : 0;
-    const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
-    const binSize = fs.existsSync(binPath) ? fs.statSync(binPath).size : 0;
+    const A = artifactPaths(fixtureDir);
+    const jsonSize = fs.existsSync(A.indexPath) ? fs.statSync(A.indexPath).size : 0;
+    const dbSize = fs.existsSync(A.sqlitePath) ? fs.statSync(A.sqlitePath).size : 0;
+    const binSize = fs.existsSync(A.embeddingPath) ? fs.statSync(A.embeddingPath).size : 0;
     return { jsonSize, dbSize, binSize, totalSize: jsonSize + dbSize + binSize };
 }
 
@@ -259,9 +257,10 @@ export async function runSuite(suite, opts = {}) {
 
     // ── 1. Optionally run (or re-run) the indexer ─────────────────────────────
     let indexResult = null;
-    const indexJsonPath = path.join(fixtureDir, 'code-index.json');
-    const dbPath = path.join(fixtureDir, 'code-index.db');
-    const binPath = path.join(fixtureDir, 'code-index.embeddings.bin');
+    const A = artifactPaths(fixtureDir);
+    const indexJsonPath = A.indexPath;
+    const dbPath = A.sqlitePath;
+    const binPath = A.embeddingPath;
     // When embeddings are requested, require the .bin file too; absence → must re-index
     const indexReady = useSqlite
         ? (fs.existsSync(dbPath) && (!useEmbeddings || fs.existsSync(binPath)))

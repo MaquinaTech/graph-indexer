@@ -27,6 +27,8 @@ import fs from 'fs';
 import path from 'path';
 import chokidar from 'chokidar';
 import { resolveConfig } from './config.mjs';
+import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
+import { acquireLock, releaseLock, readPid } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
 import {
     embeddingKeyFor, computePageRank, TEST_FILE_RE, EXAMPLE_DIR_RE,
@@ -44,6 +46,21 @@ import {
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
+
+// ─── Single-instance guard ──────────────────────────────────────────────────────
+// Exactly one daemon may run per project. Acquire the PID lock BEFORE doing any
+// work (loading the store, opening the db) so a redundant launch — via the MCP
+// server, `idx-daemon start`, or a stray `idx-watch` — exits immediately instead
+// of racing a second watcher onto the same index.
+ensureDataDir(PROJECT_ROOT);
+migrateLegacyLayout(PROJECT_ROOT);
+if (!acquireLock(config.pidFile)) {
+    process.stderr.write(
+        `✋ A graph-indexer daemon is already running for this project `
+        + `(PID ${readPid(config.pidFile)}). Exiting — only one runs per project.\n`
+    );
+    process.exit(0);
+}
 
 const ignoreFilter = buildIgnoreFilter(PROJECT_ROOT);
 const db = await createStore(config, { cacheEmbeddings: true });
@@ -236,3 +253,6 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+// Always relinquish the single-instance lock on the way out (covers shutdown(),
+// uncaught exits and normal termination) so the next launch can take over cleanly.
+process.on('exit', () => releaseLock(config.pidFile));

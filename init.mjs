@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
  * @file init.mjs
- * @description graph-indexer init CLI — auto-configures all detected IDEs/agents
- *              and assembles the layered agent prompt suite (core + language +
- *              framework) for the selected stack.
+ * @description graph-indexer init CLI — a guided, idempotent project setup. It
+ *              detects the stack, wires every installed IDE/agent to the MCP
+ *              server (merging into existing configs, never clobbering them),
+ *              assembles the layered agent prompt suite, installs npm scripts
+ *              (index + daemon control), tidies generated artifacts into
+ *              `.graph-indexer/`, and migrates pre-v1.4 layouts in place.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -22,31 +25,42 @@ import path from 'path';
 import os from 'os';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
+import { c, glyph, log, rule, box } from './cli-ui.mjs';
+import {
+    DATA_DIR_NAME, CONFIG_FILE_NAME, ensureDataDir, artifactPaths,
+    migrateLegacyLayout, hasLegacyLayout,
+} from './layout.mjs';
+import { readPid, isAlive } from './daemon-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDryRun = process.argv.includes('--dry-run');
 const isAllLanguages = process.argv.includes('--all-languages');
 const isInteractive = !isAllLanguages && process.stdin.isTTY;
 const PROJECT_ROOT = process.cwd();
+const PATHS = artifactPaths(PROJECT_ROOT);
 
-// ─── Styling ──────────────────────────────────────────────────────────────────
+const TOTAL_STEPS = 5;
 
-const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-const paint = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
-const c = {
-    bold: paint('1'),
-    dim: paint('2'),
-    cyan: paint('36'),
-    green: paint('32'),
-    yellow: paint('33'),
+// ─── Action ledger (drives the grouped end-of-run summary) ───────────────────────
+
+const GLYPH_FOR = {
+    created: glyph.ok, updated: glyph.upd, migrated: glyph.move,
+    kept: glyph.keep, skipped: glyph.skip, warn: glyph.warn,
 };
-const RULE = '─'.repeat(64);
-const TOTAL_STEPS = 4;
+const ledger = { created: [], updated: [], migrated: [], kept: [], skipped: [], warn: [] };
 
-function log(msg = '') { process.stdout.write(msg + '\n'); }
-function stepHeader(n, title) { log('\n' + c.bold(`Step ${n}/${TOTAL_STEPS} · ${title}`)); }
-function ok(label, detail) { log(`  ${c.green('✓')} ${label}${detail ? c.dim(' · ' + detail) : ''}`); }
-function skip(label, reason) { log(c.dim(`  – ${label}${reason ? ' · ' + reason : ''}`)); }
+/** Log one action live (with optional detail) and record it for the summary. */
+function act(kind, label, detail) {
+    log(`  ${GLYPH_FOR[kind]} ${label}${detail ? '  ' + c.dim(detail) : ''}`);
+    ledger[kind].push(label);
+}
+/** Live-only line (e.g. the stack selection echo) — not recorded in the summary. */
+function line(g, label, detail) {
+    log(`  ${g} ${label}${detail ? '  ' + c.dim(detail) : ''}`);
+}
+function stepHeader(n, title) {
+    log('\n' + c.bold(`  ${c.cyan(`[${n}/${TOTAL_STEPS}]`)} ${title}`));
+}
 
 // ─── Language Registry ────────────────────────────────────────────────────────
 
@@ -109,7 +123,7 @@ const SERVER_CONFIG_GLOBAL = {
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function writeFile(filePath, content) {
-    if (isDryRun) { log(c.dim(`  [dry-run] Would write: ${path.relative(PROJECT_ROOT, filePath) || filePath}`)); return; }
+    if (isDryRun) { log(c.dim(`    [dry-run] would write ${path.relative(PROJECT_ROOT, filePath) || filePath}`)); return; }
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content, 'utf-8');
 }
@@ -131,6 +145,14 @@ function readTextSafe(filePath, maxBytes = 262144) {
             return buf.toString('utf-8');
         } finally { fs.closeSync(fd); }
     } catch { return ''; }
+}
+
+/** Structural equality for an MCP server entry (ignores key order). */
+function sameServer(a, b) {
+    if (!a || !b) return false;
+    return a.command === b.command
+        && JSON.stringify(a.args || []) === JSON.stringify(b.args || [])
+        && JSON.stringify(a.env || {}) === JSON.stringify(b.env || {});
 }
 
 // ─── Stack Detection (used to pre-select menu entries) ───────────────────────
@@ -263,10 +285,10 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
             items.forEach((item, i) => {
                 const isHovered = i === cursorIndex;
                 const prefix = isHovered ? '❯' : ' ';
-                const checkbox = selected.has(i) ? '◉' : '◯';
-                const detected = preselected.has(item.key) ? '  · detected' : '';
-                const line = `  ${prefix} ${checkbox} ${item.label.padEnd(28)} ${item.desc}${detected}\n`;
-                stdout.write(isHovered ? c.cyan(line) : line);
+                const checkbox = selected.has(i) ? c.green('◉') : '◯';
+                const detected = preselected.has(item.key) ? c.dim('  · detected') : '';
+                const label = isHovered ? c.cyan(item.label.padEnd(28)) : item.label.padEnd(28);
+                stdout.write(`  ${c.cyan(prefix)} ${checkbox} ${label} ${item.desc}${detected}\n`);
             });
         };
 
@@ -306,62 +328,64 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
     });
 }
 
-// ─── Stack config persistence (.graph-indexer.json) ──────────────────────────
+// ─── Stack config persistence (.graph-indexer/config.json) ───────────────────
 
-function saveStackConfig(languages, frameworks) {
-    const configPath = path.join(PROJECT_ROOT, '.graph-indexer.json');
-    if (isDryRun) { log(c.dim(`  [dry-run] Would write: .graph-indexer.json`)); return; }
-    const existing = readJsonSafe(configPath) || {};
-    if (!languages) delete existing.languages;
-    else existing.languages = languages;
-    if (!frameworks || frameworks.length === 0) delete existing.frameworks;
-    else existing.frameworks = frameworks;
-    if (Object.keys(existing).length > 0 || languages || (frameworks && frameworks.length)) {
-        fs.writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+function saveStackConfig(languages, frameworks, interactive) {
+    if (isDryRun) { log(c.dim(`    [dry-run] would write ${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`)); return 'skipped'; }
+    ensureDataDir(PROJECT_ROOT);
+    const existing = readJsonSafe(PATHS.configPath) || {};
+    const before = JSON.stringify(existing);
+
+    if (interactive) {
+        // The user just made an explicit choice — it is authoritative.
+        if (languages) existing.languages = languages; else delete existing.languages;
+        if (frameworks && frameworks.length) existing.frameworks = frameworks; else delete existing.frameworks;
+    } else {
+        // Auto-detect run: never destroy an existing selection; only fill blanks.
+        if (languages && !existing.languages) existing.languages = languages;
+        if (frameworks && frameworks.length && !existing.frameworks) existing.frameworks = frameworks;
     }
+
+    const after = JSON.stringify(existing);
+    if (after === before && fs.existsSync(PATHS.configPath)) return 'kept';
+    const action = fs.existsSync(PATHS.configPath) ? 'updated' : 'created';
+    fs.writeFileSync(PATHS.configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+    return action;
 }
 
-// ─── IDE Detectors & Configurators ───────────────────────────────────────────
+// ─── IDE Detectors & Configurators (merge-safe: never clobber other servers) ──
+
+/**
+ * Insert/refresh only the `graph-indexer` entry inside an MCP config file,
+ * preserving every other server and key the user already has. Returns the action
+ * taken: 'created' | 'updated' | 'kept'.
+ */
+function upsertMcpServer(configPath, containerKey, serverConfig) {
+    const existing = readJsonSafe(configPath) || {};
+    if (!existing[containerKey] || typeof existing[containerKey] !== 'object') existing[containerKey] = {};
+    const current = existing[containerKey]['graph-indexer'];
+    if (sameServer(current, serverConfig)) return { action: 'kept', rel: path.relative(PROJECT_ROOT, configPath) };
+    const action = current ? 'updated' : 'created';
+    existing[containerKey]['graph-indexer'] = serverConfig;
+    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
+    return { action, rel: path.relative(PROJECT_ROOT, configPath) || configPath };
+}
 
 function configureVSCode() {
-    const configPath = path.join(PROJECT_ROOT, '.vscode', 'mcp.json');
-    const existing = readJsonSafe(configPath) || {};
-    if (!existing.servers) existing.servers = {};
-    if (existing.servers['graph-indexer']) return false;
-
-    existing.servers['graph-indexer'] = SERVER_CONFIG;
-    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
-    return '.vscode/mcp.json';
+    return upsertMcpServer(path.join(PROJECT_ROOT, '.vscode', 'mcp.json'), 'servers', SERVER_CONFIG);
 }
 
 function configureCursor() {
-    const configPath = path.join(PROJECT_ROOT, '.cursor', 'mcp.json');
-    const existing = readJsonSafe(configPath) || {};
-    if (!existing.mcpServers) existing.mcpServers = {};
-    if (existing.mcpServers['graph-indexer']) return false;
-
-    existing.mcpServers['graph-indexer'] = SERVER_CONFIG;
-    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
-    return '.cursor/mcp.json';
+    return upsertMcpServer(path.join(PROJECT_ROOT, '.cursor', 'mcp.json'), 'mcpServers', SERVER_CONFIG);
 }
 
 function configureClaudeDesktop() {
-    let configPath;
-    if (process.platform === 'win32') {
-        configPath = path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json');
-    } else {
-        configPath = path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
-    }
-
-    if (!fs.existsSync(path.dirname(configPath))) return false;
-
-    const existing = readJsonSafe(configPath) || {};
-    if (!existing.mcpServers) existing.mcpServers = {};
-    if (existing.mcpServers['graph-indexer']) return false;
-
-    existing.mcpServers['graph-indexer'] = SERVER_CONFIG_GLOBAL;
-    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
-    return 'claude_desktop_config.json';
+    const configPath = process.platform === 'win32'
+        ? path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json')
+        : path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+    if (!fs.existsSync(path.dirname(configPath))) return false; // Claude Desktop not installed
+    const res = upsertMcpServer(configPath, 'mcpServers', SERVER_CONFIG_GLOBAL);
+    return { ...res, rel: 'claude_desktop_config.json' };
 }
 
 function configureClaudeCode() {
@@ -369,67 +393,90 @@ function configureClaudeCode() {
     const configPath = hasClaudeDir
         ? path.join(PROJECT_ROOT, '.claude', 'settings.json')
         : path.join(PROJECT_ROOT, '.mcp.json');
-
-    const existing = readJsonSafe(configPath) || {};
-    if (!existing.mcpServers) existing.mcpServers = {};
-    if (existing.mcpServers['graph-indexer']) return false;
-
-    existing.mcpServers['graph-indexer'] = SERVER_CONFIG;
-    writeFile(configPath, JSON.stringify(existing, null, 2) + '\n');
-    return path.relative(PROJECT_ROOT, configPath);
+    return upsertMcpServer(configPath, 'mcpServers', SERVER_CONFIG);
 }
 
-// ─── package.json scripts ─────────────────────────────────────────────────────
+// ─── package.json scripts (index + daemon control) ───────────────────────────
+
+// Canonical script values graph-indexer manages. These call the package bins, so
+// they work when graph-indexer is installed as a dependency of the user's project.
+const CANON_SCRIPTS = {
+    'mcp:index': 'idx-index --repo .',
+    'mcp:start': 'idx-mcp',
+    'mcp:daemon:start': 'idx-daemon start',
+    'mcp:daemon:stop': 'idx-daemon stop',
+    'mcp:daemon:restart': 'idx-daemon restart',
+    'mcp:daemon:status': 'idx-daemon status',
+    'mcp:daemon:logs': 'idx-daemon logs',
+};
+// Values previous graph-indexer versions wrote — safe to overwrite on upgrade.
+// Anything else under these keys is treated as a user customisation and kept.
+const OLD_SCRIPT_VALUES = {
+    'mcp:index': new Set(['idx-index --repo .', 'node indexer.mjs --repo .', 'idx-index']),
+    'mcp:start': new Set(['idx-mcp', 'node mcp-server.mjs']),
+};
 
 function addPackageScripts() {
     const pkgPath = path.join(PROJECT_ROOT, 'package.json');
-    if (!fs.existsSync(pkgPath)) return false;
+    if (!fs.existsSync(pkgPath)) return { added: 0, updated: 0, skipped: 'no package.json' };
 
     const pkg = readJsonSafe(pkgPath);
-    if (!pkg) return false;
+    if (!pkg) return { added: 0, updated: 0, skipped: 'unreadable package.json' };
 
     const scripts = pkg.scripts || {};
-    const toAdd = {
-        'mcp:index': 'idx-index --repo .',
-        'mcp:watch': 'idx-watch',
-        'mcp:start': 'idx-mcp',
-    };
-
-    let changed = false;
-    for (const [k, v] of Object.entries(toAdd)) {
-        if (!scripts[k]) { scripts[k] = v; changed = true; }
+    let added = 0, updated = 0;
+    for (const [k, v] of Object.entries(CANON_SCRIPTS)) {
+        if (!scripts[k]) { scripts[k] = v; added++; }
+        else if (scripts[k] !== v && (OLD_SCRIPT_VALUES[k]?.has(scripts[k]))) { scripts[k] = v; updated++; }
+        // else: identical (no-op) or a user customisation we must not touch
     }
 
-    if (changed) {
+    if (added + updated > 0) {
         pkg.scripts = scripts;
         writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
     }
-    return changed;
+    return { added, updated };
 }
 
-// ─── .gitignore ──────────────────────────────────────────────────────────────
+// ─── .gitignore (marker-delimited managed block) ─────────────────────────────
+
+const GITIGNORE_BEGIN = '# >>> graph-indexer >>>';
+const GITIGNORE_END = '# <<< graph-indexer <<<';
+const GITIGNORE_BLOCK = [
+    GITIGNORE_BEGIN,
+    '# Generated artifacts — https://github.com/MaquinaTech/graph-indexer',
+    // Ignore the dir CONTENTS (not the dir itself) so the shared stack config can
+    // be re-included — git can't un-ignore a file inside a fully-ignored directory.
+    `/${DATA_DIR_NAME}/*`,
+    `!/${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`,
+    GITIGNORE_END,
+].join('\n');
+
+// Individual lines pre-v1.4 init used to append; stripped during migration so the
+// single `.graph-indexer/` rule replaces them cleanly.
+const OLD_GITIGNORE_LINES = new Set([
+    'code-index.json', 'code-index.embeddings.bin', 'code-index.json.tmp',
+    'code-index.embeddings.bin.tmp', 'code-index.db', 'code-index.db-wal',
+    'code-index.db-shm', 'code-index.enrichment.json', '.idx-daemon.pid',
+    '.idx-daemon.log', '.graph-indexer.json', '# graph-indexer runtime artifacts',
+]);
 
 function updateGitignore() {
     const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
     const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : '';
 
-    const entries = [
-        'code-index.json',
-        'code-index.embeddings.bin',
-        'code-index.db',
-        'code-index.db-wal',
-        'code-index.db-shm',
-        'code-index.enrichment.json',
-        '.idx-daemon.pid',
-        '.idx-daemon.log'
-    ];
+    // Drop any previous managed block...
+    let body = existing.replace(
+        new RegExp(`\\n?${GITIGNORE_BEGIN}[\\s\\S]*?${GITIGNORE_END}\\n?`, 'g'), '\n'
+    );
+    // ...and any stray pre-v1.4 single lines we used to add.
+    const cleaned = body.split('\n').filter(line => !OLD_GITIGNORE_LINES.has(line.trim()));
+    body = cleaned.join('\n');
 
-    const toAdd = entries.filter(e => !existing.includes(e));
-    if (toAdd.length === 0) return false;
-
-    const newContent = existing.trimEnd() + '\n\n# graph-indexer runtime artifacts\n' + toAdd.join('\n') + '\n';
-    writeFile(gitignorePath, newContent);
-    return true;
+    const next = body.trimEnd() + (body.trim() ? '\n\n' : '') + GITIGNORE_BLOCK + '\n';
+    if (next === existing) return 'kept';
+    writeFile(gitignorePath, next);
+    return existing.trim() ? 'updated' : 'created';
 }
 
 // ─── Agent prompt assembly (Layer 1 + Layer 2, from prompts/) ────────────────
@@ -485,6 +532,8 @@ function assembleAgentPrompt(langKeys, frameworkKeys) {
 function writeAssembledPrompt(assembled) {
     const p = path.join(PROJECT_ROOT, 'GRAPH_INDEXER_PROMPT.md');
     const existed = fs.existsSync(p);
+    const same = existed && readTextSafe(p) === assembled.content;
+    if (same) return 'kept';
     writeFile(p, assembled.content);
     return existed ? 'updated' : 'created';
 }
@@ -512,7 +561,7 @@ function ensureClaudeMdImports() {
         ? existing.trimEnd() + '\n\n' + block
         : block;
     writeFile(p, content);
-    return true;
+    return existing.trim().length > 0 ? 'updated' : 'created';
 }
 
 /** Writes the always-on Cursor rule mirroring the assembled prompt. Regenerated each run. */
@@ -527,8 +576,39 @@ function writeCursorRule(assembled) {
         '',
     ].join('\n');
     const tail = '\n<!-- Layer 3 (project-specific rules): see GRAPH_INDEXER_DOMAIN.md at the repo root. -->\n';
-    writeFile(p, frontmatter + '\n' + assembled.content + tail);
+    const content = frontmatter + '\n' + assembled.content + tail;
+    if (existed && readTextSafe(p) === content) return 'kept';
+    writeFile(p, content);
     return existed ? 'updated' : 'created';
+}
+
+// ─── Pre-flight: migrate any pre-v1.4 root layout into .graph-indexer/ ────────
+
+function runMigration() {
+    if (!hasLegacyLayout(PROJECT_ROOT)) return;
+
+    log('\n' + c.bold('  ' + glyph.move + ' Tidying project layout'));
+
+    // A daemon from an older install may hold the SQLite db open at the old root
+    // path; stop it before relocating so nothing writes to a moved inode.
+    let stoppedDaemon = false;
+    for (const pf of [path.join(PROJECT_ROOT, '.idx-daemon.pid'), PATHS.pidFile]) {
+        const pid = readPid(pf);
+        if (isAlive(pid)) {
+            try { if (!isDryRun) process.kill(pid, 'SIGTERM'); stoppedDaemon = true; } catch { /* gone */ }
+        }
+    }
+    if (stoppedDaemon) act('migrated', 'Stopped a running daemon', 'restart with npm run mcp:daemon:start');
+
+    if (isDryRun) {
+        act('migrated', `Would relocate root artifacts → ${DATA_DIR_NAME}/`, 'run without --dry-run to apply');
+        return;
+    }
+
+    const { moved, removed } = migrateLegacyLayout(PROJECT_ROOT);
+    for (const m of moved) act('migrated', `${m.from} → ${m.to}`);
+    for (const r of removed) act('migrated', `Removed stale ${r}`, 'superseded by .graph-indexer/');
+    if (moved.length === 0 && removed.length === 0) act('kept', 'Layout already tidy');
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -538,13 +618,23 @@ const detectedLanguages = detectLanguages(PROJECT_ROOT);
 const detectedFrameworks = detectFrameworks(PROJECT_ROOT);
 
 log('');
-log(c.dim(RULE));
-log(`  ${c.bold('⚡ graph-indexer · init')}${pkgSelf.version ? c.dim('  v' + pkgSelf.version) : ''}${isDryRun ? c.yellow('  [dry-run]') : ''}`);
-log(c.dim(RULE));
+log(box([
+    `${c.bold('⚡ graph-indexer')} ${c.dim('· init')}${pkgSelf.version ? '  ' + c.dim('v' + pkgSelf.version) : ''}${isDryRun ? '  ' + c.yellow('[dry-run]') : ''}`,
+    c.dim('AST-precise, air-gapped code search for your AI agents'),
+]));
+log('');
 log(`  ${c.dim('Project')}  ${PROJECT_ROOT}`);
 log(`  ${c.dim('Mode')}     ${isInteractive ? 'interactive' : 'non-interactive (auto-detect)'}`);
+const stackPreview = [
+    detectedLanguages.size ? `${detectedLanguages.size} language(s)` : null,
+    detectedFrameworks.size ? `${detectedFrameworks.size} framework(s)` : null,
+].filter(Boolean).join(', ');
+log(`  ${c.dim('Detected')} ${stackPreview ? stackPreview + c.dim(' in this repo') : c.dim('no known stack auto-detected')}`);
 
-// ── Step 1/4 · Languages ─────────────────────────────────────────────────────
+// ── Pre-flight migration ──────────────────────────────────────────────────────
+runMigration();
+
+// ── Step 1 · Languages ────────────────────────────────────────────────────────
 
 stepHeader(1, 'Languages to index');
 
@@ -559,15 +649,13 @@ if (isInteractive) {
 }
 
 if (selectedLanguages) {
-    ok('Indexing', selectedLanguages.map(k => LANGUAGES.find(l => l.key === k)?.label || k).join(', '));
+    line(glyph.ok, 'Languages', selectedLanguages.map(k => LANGUAGES.find(l => l.key === k)?.label || k).join(', '));
 } else {
-    ok('Indexing', 'all supported languages (default)');
-    if (detectedLanguages.size > 0) {
-        log(c.dim(`    detected in project: ${Array.from(detectedLanguages).join(', ')}`));
-    }
+    line(glyph.ok, 'Languages', 'all supported (default)');
+    if (detectedLanguages.size > 0) log(c.dim(`      detected: ${Array.from(detectedLanguages).join(', ')}`));
 }
 
-// ── Step 2/4 · Frameworks ────────────────────────────────────────────────────
+// ── Step 2 · Frameworks ───────────────────────────────────────────────────────
 
 stepHeader(2, 'Frameworks (sharpen the agent prompt)');
 
@@ -578,7 +666,7 @@ const availableFrameworks = FRAMEWORKS.filter(f => f.langs.some(l => promptLangu
 
 let selectedFrameworks = [];
 if (availableFrameworks.length === 0) {
-    skip('No framework add-ons apply to this language selection');
+    line(glyph.skip, 'Frameworks', 'none apply to this language selection');
 } else if (isInteractive) {
     selectedFrameworks = await interactiveMultiSelect({
         title: 'Select frameworks',
@@ -586,27 +674,22 @@ if (availableFrameworks.length === 0) {
         preselected: detectedFrameworks,
     });
     if (selectedFrameworks.length > 0) {
-        ok('Frameworks', selectedFrameworks.map(k => FRAMEWORKS.find(f => f.key === k)?.label || k).join(', '));
+        line(glyph.ok, 'Frameworks', selectedFrameworks.map(k => FRAMEWORKS.find(f => f.key === k)?.label || k).join(', '));
     } else {
-        skip('No frameworks selected', 'language rules only');
+        line(glyph.skip, 'Frameworks', 'none selected — language rules only');
     }
 } else {
     selectedFrameworks = availableFrameworks.filter(f => detectedFrameworks.has(f.key)).map(f => f.key);
     if (selectedFrameworks.length > 0) {
-        ok('Auto-detected', selectedFrameworks.map(k => FRAMEWORKS.find(f => f.key === k)?.label || k).join(', '));
+        line(glyph.ok, 'Frameworks', 'auto-detected: ' + selectedFrameworks.map(k => FRAMEWORKS.find(f => f.key === k)?.label || k).join(', '));
     } else {
-        skip('None detected', 'language rules only');
+        line(glyph.skip, 'Frameworks', 'none detected — language rules only');
     }
 }
 
-saveStackConfig(selectedLanguages, selectedFrameworks);
-
-// ── Step 3/4 · Editors & MCP wiring ──────────────────────────────────────────
+// ── Step 3 · Editors & MCP wiring ─────────────────────────────────────────────
 
 stepHeader(3, 'Editors & MCP wiring');
-
-const configured = [];
-const skipped = [];
 
 const ides = [
     { name: 'VS Code', fn: configureVSCode },
@@ -618,79 +701,94 @@ const ides = [
 for (const { name, fn } of ides) {
     try {
         const result = fn();
-        if (result === false) {
-            skip(name, 'already configured or not installed');
-            skipped.push(name);
-        } else {
-            ok(name, typeof result === 'string' ? result : '');
-            configured.push(name);
-        }
+        if (result === false) { act('skipped', name, 'not installed'); continue; }
+        const { action, rel } = result;
+        act(action, name, rel);
     } catch (e) {
-        skip(name, 'error: ' + e.message);
-        skipped.push(name);
+        act('warn', name, 'error: ' + e.message);
     }
 }
 
-if (addPackageScripts()) { ok('package.json scripts', 'mcp:index, mcp:watch, mcp:start'); configured.push('package.json scripts'); }
-else skip('package.json scripts', 'already present');
+// ── Step 4 · Project files & daemon control ───────────────────────────────────
 
-if (updateGitignore()) { ok('.gitignore', 'index + daemon artifacts'); configured.push('.gitignore'); }
-else skip('.gitignore', 'already contains index/daemon entries');
+stepHeader(4, 'Project files & daemon control');
 
-// ── Step 4/4 · Agent instructions (layered prompt suite) ─────────────────────
+const scriptRes = addPackageScripts();
+if (scriptRes.skipped) {
+    act('skipped', 'package.json scripts', scriptRes.skipped);
+} else if (scriptRes.added + scriptRes.updated === 0) {
+    act('kept', 'package.json scripts', 'already present');
+} else {
+    act(scriptRes.added > 0 ? 'created' : 'updated', 'package.json scripts',
+        `mcp:index, mcp:start, mcp:daemon:* (${scriptRes.added} added${scriptRes.updated ? `, ${scriptRes.updated} refreshed` : ''})`);
+}
 
-stepHeader(4, 'Agent instructions');
+const gi = updateGitignore();
+act(gi, '.gitignore', `${DATA_DIR_NAME}/ (config.json shared)`);
+
+const cfg = saveStackConfig(selectedLanguages, selectedFrameworks, isInteractive);
+if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack selection');
+
+if (!isDryRun) ensureDataDir(PROJECT_ROOT);
+
+// ── Step 5 · Agent instructions (layered prompt suite) ────────────────────────
+
+stepHeader(5, 'Agent instructions');
 
 const assembled = assembleAgentPrompt(promptLanguages, selectedFrameworks);
 let layersUsed = [];
 
 if (!assembled) {
-    skip('Prompt suite not found in the installed package', 'see prompts/ in the repo');
+    act('warn', 'Prompt suite not found in the installed package', 'see prompts/ in the repo');
 } else {
     layersUsed = assembled.layers;
-    log(c.dim(`    layers: ${layersUsed.join(' + ')}`));
+    log(c.dim(`      layers: ${layersUsed.join(' + ')}`));
 
     const promptAction = writeAssembledPrompt(assembled);
-    ok('GRAPH_INDEXER_PROMPT.md', `${promptAction} (Layers 1+2 — regenerated on every init)`);
-    configured.push('GRAPH_INDEXER_PROMPT.md');
+    act(promptAction, 'GRAPH_INDEXER_PROMPT.md', 'Layers 1+2 (regenerated each init)');
 
-    if (ensureDomainFile()) {
-        ok('GRAPH_INDEXER_DOMAIN.md', 'created (Layer 3 — yours to edit, never overwritten)');
-        configured.push('GRAPH_INDEXER_DOMAIN.md');
-    } else {
-        skip('GRAPH_INDEXER_DOMAIN.md', 'already exists — kept untouched');
-    }
+    if (ensureDomainFile()) act('created', 'GRAPH_INDEXER_DOMAIN.md', 'Layer 3 — yours to edit, never overwritten');
+    else act('kept', 'GRAPH_INDEXER_DOMAIN.md', 'exists — left untouched');
 
-    if (ensureClaudeMdImports()) {
-        ok('CLAUDE.md', '@-imports added for Claude Code');
-        configured.push('CLAUDE.md');
-    } else {
-        skip('CLAUDE.md', 'imports already present');
-    }
+    const claudeRes = ensureClaudeMdImports();
+    if (claudeRes) act(claudeRes, 'CLAUDE.md', '@-imports for Claude Code');
+    else act('kept', 'CLAUDE.md', 'imports already present');
 
     const ruleAction = writeCursorRule(assembled);
-    ok('.cursor/rules/graph-indexer.mdc', `${ruleAction} (always-on Cursor rule)`);
-    configured.push('.cursor/rules/graph-indexer.mdc');
+    act(ruleAction, '.cursor/rules/graph-indexer.mdc', 'always-on Cursor rule');
 }
 
-// ── Summary ──────────────────────────────────────────────────────────────────
+// ── Summary ────────────────────────────────────────────────────────────────────
 
-log('\n' + c.dim(RULE));
-log(`  ${c.bold('Summary')}`);
-log(c.dim(RULE));
-log(`  ${c.dim('Configured')}  ${configured.length ? configured.join(', ') : '(nothing new)'}`);
-if (layersUsed.length > 0) log(`  ${c.dim('Prompt')}      ${layersUsed.join(' + ')}`);
+log('\n' + rule());
+log(`  ${c.bold('Summary')}${isDryRun ? c.yellow('  (dry-run — nothing written)') : ''}`);
+log(rule());
 
-log('\n' + c.bold('Next steps') + '\n');
-log('  1. Run ' + c.cyan('npm run mcp:index') + ' to index this project');
-log('  2. Restart your IDE to activate the MCP server');
-log('  3. Fill in ' + c.cyan('GRAPH_INDEXER_DOMAIN.md') + ' with your project\'s own rules (Layer 3)');
-log('  4. Other agents (.cursorrules, .clauderc, …): see ' + c.cyan('prompts/INTEGRATION.md'));
-log(c.dim('     https://github.com/MaquinaTech/graph-indexer/blob/main/prompts/INTEGRATION.md'));
+const summaryOrder = [
+    ['created', 'Created'], ['updated', 'Updated'], ['migrated', 'Migrated'],
+    ['kept', 'Kept'], ['skipped', 'Skipped'], ['warn', 'Warnings'],
+];
+let anySummary = false;
+for (const [kind, label] of summaryOrder) {
+    const items = ledger[kind];
+    if (!items.length) continue;
+    anySummary = true;
+    log(`  ${GLYPH_FOR[kind]} ${c.bold(label)} ${c.dim(`(${items.length})`)}  ${c.dim(items.join(', '))}`);
+}
+if (!anySummary) log(c.dim('  Nothing to do.'));
+if (layersUsed.length > 0) log(`\n  ${c.dim('Prompt layers')}  ${layersUsed.join(' + ')}`);
 
-log('\n' + c.dim(RULE));
-log('  ✨ Thank you for setting up graph-indexer!');
-log('     Enjoy your blazing-fast, AST-precise codebase search.');
-log(c.dim(RULE) + '\n');
+// ── Next steps ──────────────────────────────────────────────────────────────────
+
+log('\n' + c.bold('  Next steps'));
+log(`    ${c.cyan('1.')} Build the index        ${c.dim('→')} ${c.cyan('npm run mcp:index')}`);
+log(`    ${c.cyan('2.')} Restart your editor    ${c.dim('→')} loads the MCP server (auto-starts the daemon)`);
+log(`    ${c.cyan('3.')} Control the daemon     ${c.dim('→')} ${c.cyan('npm run mcp:daemon:status')} ${c.dim('| start | stop | restart | logs')}`);
+log(`    ${c.cyan('4.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
+log(c.dim(`       Other agents (.clinerules, .windsurfrules, …): prompts/INTEGRATION.md`));
+
+log('\n' + rule());
+log(`  ${glyph.ok} ${c.bold('graph-indexer is ready.')} ${c.dim('Generated files live in ' + DATA_DIR_NAME + '/ — your root stays clean.')}`);
+log(rule() + '\n');
 
 process.exit(0);

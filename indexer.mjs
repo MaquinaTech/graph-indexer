@@ -19,12 +19,18 @@ import {
 import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
 import { resolveConfig } from './config.mjs';
+import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { enrichCoreChunks } from './enrichment.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
 const INDEX_PATH = config.indexPath;
 const EMBEDDINGS_PATH = config.embeddingPath;
+
+// Artifacts are written under <root>/.graph-indexer/ — make sure it exists and
+// relocate any artifacts left at the root by a pre-v1.4 install.
+ensureDataDir(PROJECT_ROOT);
+migrateLegacyLayout(PROJECT_ROOT);
 
 function walkRepo(dir, root, ig, files = []) {
     for (const entry of fs.readdirSync(dir)) {

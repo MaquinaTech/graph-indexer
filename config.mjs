@@ -10,6 +10,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { artifactPaths, CONFIG_FILE_NAME, DATA_DIR_NAME } from './layout.mjs';
 
 export const DEFAULTS = Object.freeze({
     storage: 'memory',                 // 'memory' (default, zero-dependency) | 'sqlite'
@@ -35,12 +36,22 @@ export const DEFAULTS = Object.freeze({
     }),
 });
 
-/** Reads `.graph-indexer.json` from a directory, tolerating absence/corruption. */
+/**
+ * Reads the project config, tolerating absence/corruption. Looks first inside the
+ * tidy data dir (`.graph-indexer/config.json`), then falls back to the legacy
+ * root file (`.graph-indexer.json`) so pre-v1.4 projects keep working until they
+ * are migrated.
+ */
 export function loadConfigFile(root) {
-    const configPath = path.join(root, '.graph-indexer.json');
-    try {
-        if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    } catch { /* malformed config is ignored — defaults apply */ }
+    const candidates = [
+        path.join(root, DATA_DIR_NAME, CONFIG_FILE_NAME), // current canonical location
+        path.join(root, '.graph-indexer.json'),           // legacy root config (back-compat)
+    ];
+    for (const configPath of candidates) {
+        try {
+            if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        } catch { /* malformed config — try the next candidate, else defaults */ }
+    }
     return {};
 }
 
@@ -80,14 +91,21 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     const ollamaHost = env.OLLAMA_HOST || file.ollamaHost || DEFAULTS.ollamaHost;
     const embeddingsEnabled = env.INDEXER_EMBEDDINGS !== 'off';
 
+    // All generated artifacts live together under `<projectRoot>/.graph-indexer/`
+    // (see layout.mjs) so they never clutter the project root.
+    const paths = artifactPaths(projectRoot);
+
     return Object.freeze({
         projectRoot,
         storage,
-        // Index artifact paths — all derive from the same stem next to the project.
-        indexPath: path.join(projectRoot, 'code-index.json'),
-        embeddingPath: path.join(projectRoot, 'code-index.embeddings.bin'),
-        sqlitePath: path.join(projectRoot, 'code-index.db'),
-        enrichmentCachePath: path.join(projectRoot, 'code-index.enrichment.json'),
+        // Index artifact paths — all derive from the same data dir (layout.mjs).
+        dataDir: paths.dataDir,
+        indexPath: paths.indexPath,
+        embeddingPath: paths.embeddingPath,
+        sqlitePath: paths.sqlitePath,
+        enrichmentCachePath: paths.enrichmentCachePath,
+        pidFile: paths.pidFile,
+        logFile: paths.logFile,
 
         languages: Array.isArray(file.languages) ? file.languages : null, // null = all
 

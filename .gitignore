@@ -1,17 +1,8 @@
-# Generated Index Files (USER-SPECIFIC)
-code-index.json
-code-index.embeddings.bin
-code-index.json.tmp
-code-index.embeddings.bin.tmp
-code-index.db
-code-index.db-wal
-code-index.db-shm
-code-index.enrichment.json
+# graph-indexer generated artifacts — all consolidated under .graph-indexer/
+# (index, vectors, SQLite db, enrichment cache, daemon pid/log, resolved config).
+.graph-indexer/
+.graph-indexer.json
 *.tmp
-
-# Runtime / Daemon
-.idx-daemon.pid
-.idx-daemon.log
 
 # Environment & Secrets
 .env

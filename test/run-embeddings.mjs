@@ -24,6 +24,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { FIXTURES_DIR } from './setup.mjs';
+import { artifactPaths } from '../layout.mjs';
 import { runSuite, runIndexer, loadIndex, indexStats, measureIndexSize, runQueries } from './harness.mjs';
 import {
     fmt, fmtPct, fmtBytes, fmtMs, pad,
@@ -248,8 +249,9 @@ function printSuiteReport(meta, lexRes, hybRes, stats, sizes, indexMs, embedMs) 
         console.log(`\n  Processing ${BOLD}${META.displayName}${RESET} ...`);
 
         // 3a. Index with embeddings
-        const binPath = path.join(fixtureDir, 'code-index.embeddings.bin');
-        const jsonPath = path.join(fixtureDir, 'code-index.json');
+        const A = artifactPaths(fixtureDir);
+        const binPath = A.embeddingPath;
+        const jsonPath = A.indexPath;
         const alreadyIndexed = skipIndexing && fs.existsSync(jsonPath) && fs.existsSync(binPath);
 
         let indexMs = 0;

@@ -16,6 +16,7 @@ import os from 'os';
 import path from 'path';
 import { MemoryGraphIndex } from '../core-engine.mjs';
 import { SqliteGraphStore } from '../sqlite-store.mjs';
+import { artifactPaths } from '../layout.mjs';
 import { FIXTURES_DIR } from './setup.mjs';
 
 let passed = 0, failed = 0;
@@ -90,7 +91,7 @@ test('SqliteGraphStore round-trips chunks, symbols, callers and topology', () =>
 
 // ─── 2. Rank consistency with the in-memory engine ──────────────────────────────
 test('SqliteGraphStore matches MemoryGraphIndex rank-1 + top-5 set on a real fixture', () => {
-    const indexPath = path.join(FIXTURES_DIR, 'express-js', 'code-index.json');
+    const indexPath = artifactPaths(path.join(FIXTURES_DIR, 'express-js')).indexPath;
     if (!fs.existsSync(indexPath)) { console.log('      (skipped — express-js fixture not indexed)'); return; }
 
     const mem = new MemoryGraphIndex(indexPath);

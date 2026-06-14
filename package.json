@@ -11,6 +11,7 @@
         "graph-indexer": "init.mjs",
         "idx-index": "indexer.mjs",
         "idx-watch": "watch-daemon.mjs",
+        "idx-daemon": "daemon-ctl.mjs",
         "idx-mcp": "mcp-server.mjs"
     },
     "files": [
@@ -45,7 +46,13 @@
         "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
         "mcp:index:enriched": "node indexer.mjs --repo . --llm-enrichment",
         "mcp:watch": "node watch-daemon.mjs",
-        "mcp:start": "node mcp-server.mjs"
+        "mcp:start": "node mcp-server.mjs",
+        "mcp:daemon": "node daemon-ctl.mjs status",
+        "mcp:daemon:start": "node daemon-ctl.mjs start",
+        "mcp:daemon:stop": "node daemon-ctl.mjs stop",
+        "mcp:daemon:restart": "node daemon-ctl.mjs restart",
+        "mcp:daemon:status": "node daemon-ctl.mjs status",
+        "mcp:daemon:logs": "node daemon-ctl.mjs logs"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",

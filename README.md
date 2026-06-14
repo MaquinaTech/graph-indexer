@@ -172,7 +172,7 @@ npm install graph-indexer --save-dev
 npx graph-indexer init
 ```
 
-`init` auto-detects your IDE (Claude, Cursor, VS Code), adds npm scripts to `package.json`, updates `.gitignore`, and opens an interactive language selector:
+`init` is safe to re-run any time — it **merges** into existing configs (it never deletes your other MCP servers or prompts), **migrates** older layouts in place, and reports exactly what it created, updated, kept, or migrated. It auto-detects your IDEs (Claude, Cursor, VS Code), wires the MCP server, installs npm scripts (index + daemon control), tidies generated artifacts into `.graph-indexer/`, updates `.gitignore`, and opens an interactive language selector:
 
 ```
 ⚙️  Select languages (Arrows/Tab: move, Space: toggle, Enter: confirm):
@@ -190,7 +190,9 @@ npx graph-indexer init
     ◯ CSS / SCSS               .css, .scss
 ```
 
-Navigate with **↑ ↓**, toggle with **Space**, confirm with **Enter**. Leaving all unselected enables every language. Your selection is saved to `.graph-indexer.json`. Pass `--all-languages` to skip the prompt.
+Navigate with **↑ ↓**, toggle with **Space**, confirm with **Enter**. Leaving all unselected enables every language. Your selection is saved to `.graph-indexer/config.json`. Pass `--all-languages` to skip the prompt, or `--dry-run` to preview every change without writing anything.
+
+> **Generated files live in one place.** Everything graph-indexer generates — the index, vectors, SQLite db, enrichment cache, and daemon pid/log — is kept under a single `.graph-indexer/` directory so your project root stays clean. Files other tools must discover at conventional paths (the agent prompts `CLAUDE.md` / `GRAPH_INDEXER_PROMPT.md` / Cursor rules, and IDE MCP configs like `.vscode/mcp.json`) stay where they belong. Upgrading from an older version? `init` (or the next index/daemon run) relocates the old root artifacts automatically.
 
 ### 2. Index your codebase
 
@@ -219,7 +221,7 @@ ollama pull qwen2.5-coder:1.5b
 npm run mcp:index -- --llm-enrichment
 ```
 
-The two options compose (`--use-sqlite --llm-enrichment`) and can be made permanent in `.graph-indexer.json` — see [Configuration](#configuration).
+The two options compose (`--use-sqlite --llm-enrichment`) and can be made permanent in `.graph-indexer/config.json` — see [Configuration](#configuration).
 
 ### 3. Configure your IDE
 
@@ -265,7 +267,7 @@ The two options compose (`--use-sqlite --llm-enrichment`) and can be made perman
 }
 ```
 
-The server reads the backend from `.graph-indexer.json`, so the same launch config works for both the in-memory and SQLite indexes.
+The server reads the backend from `.graph-indexer/config.json`, so the same launch config works for both the in-memory and SQLite indexes.
 
 ### 4. Add the agent system prompt
 
@@ -291,7 +293,7 @@ The same index, the same tools, the same ranking — two ways to hold the data. 
 > on demand, so its footprint stays flat regardless of corpus size — an **87% smaller** resident
 > set here, and the gap widens as the repo grows.
 
-The SQLite backend adds **no external dependency**: `node:sqlite` ships inside Node (v22.5+). Lexical BM25 reads from an indexed `postings` table, symbols and call edges from indexed columns, and vectors live in the shared `code-index.embeddings.bin` — point reads are `pread` on demand. Because both backends feed the same fusion-and-boost ranker with deterministic tie-breaking, switching is purely an operational choice with **zero** quality trade-off (identical top-5 ids on the full benchmark).
+The SQLite backend adds **no external dependency**: `node:sqlite` ships inside Node (v22.5+). Lexical BM25 reads from an indexed `postings` table, symbols and call edges from indexed columns, and vectors live in the shared `.graph-indexer/code-index.embeddings.bin` — point reads are `pread` on demand. Because both backends feed the same fusion-and-boost ranker with deterministic tie-breaking, switching is purely an operational choice with **zero** quality trade-off (identical top-5 ids on the full benchmark).
 
 ### Vector search that stays fast at monorepo scale
 
@@ -313,7 +315,7 @@ triggers a rebuild. `test/scale.mjs` asserts hybrid queries stay interactive (<6
 chunks on both backends.
 
 ```bash
-npm run mcp:index -- --use-sqlite     # writes code-index.db
+npm run mcp:index -- --use-sqlite     # writes .graph-indexer/code-index.db
 ```
 
 ### Live updates on both backends
@@ -324,6 +326,20 @@ The watch daemon keeps **whichever backend is configured** fresh, incrementally:
 - **SQLite** — each file save becomes one WAL transaction (`applyFileUpdate`): the file's old chunks, postings and call edges are replaced with exact BM25 bookkeeping, and new vectors are *appended* to the embeddings bin (O(changed chunks), never a full rewrite). Running MCP servers detect the commit via `PRAGMA data_version` on their next query and refresh themselves — no re-indexing, no restarts.
 
 Daemon startup is also O(changed files): files older than the index artifact are skipped during the initial scan, so edits made while the daemon was down are picked up without re-parsing the whole repo.
+
+### One daemon per project, controlled from npm
+
+The MCP server auto-starts the watch daemon, but you can drive it yourself with the scripts `init` adds to your `package.json`:
+
+```bash
+npm run mcp:daemon:start      # start it (no-op if already running)
+npm run mcp:daemon:status     # daemon + index state (default)
+npm run mcp:daemon:stop       # stop it gracefully
+npm run mcp:daemon:restart    # stop then start
+npm run mcp:daemon:logs       # recent logs (add ` -- -f` to follow)
+```
+
+Exactly **one** daemon runs per project. The daemon holds an atomic PID lock (`.graph-indexer/daemon.pid`), so any redundant launch — whether from the MCP server, `mcp:daemon:start`, or a stray `idx-watch` — detects the live instance and exits immediately instead of racing a second watcher onto the same index. Stale locks left by a crash are cleared automatically.
 
 ---
 
@@ -338,7 +354,7 @@ With `--llm-enrichment`, the indexer routes every substantive **production-sourc
 
 These ride **three** retrieval paths: the tags join the chunk's BM25 lexical document as high-IDF domain terms; the summary leads the code-payload embedding; and — decisive for natural-language queries — each enriched chunk gets a **second, summary-only vector**. A one-line behavioural query embeds far closer to a one-line summary than to hundreds of characters of code, so conceptual searches hit code that shares none of their words.
 
-Enrichment is **incremental**: results are cached in `code-index.enrichment.json` keyed by content hash, so a re-index only sends new or changed code to the LLM (the embedding cache keys account for enrichment too, so nothing is re-embedded needlessly). Each run enriches up to `maxChunks` new chunks, ordered by file centrality (PageRank), and coverage accumulates across runs. The watch daemon re-attaches cached enrichment on every file save and live-enriches changed chunks. Generation is best-effort — if the model is unreachable the index is built without enrichment rather than failing.
+Enrichment is **incremental**: results are cached in `.graph-indexer/code-index.enrichment.json` keyed by content hash, so a re-index only sends new or changed code to the LLM (the embedding cache keys account for enrichment too, so nothing is re-embedded needlessly). Each run enriches up to `maxChunks` new chunks, ordered by file centrality (PageRank), and coverage accumulates across runs. The watch daemon re-attaches cached enrichment on every file save and live-enriches changed chunks. Generation is best-effort — if the model is unreachable the index is built without enrichment rather than failing.
 
 ```bash
 ollama pull qwen2.5-coder:1.5b
@@ -505,9 +521,9 @@ For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the laye
 
 ## Configuration
 
-### `.graph-indexer.json`
+### `.graph-indexer/config.json`
 
-All persistent settings live in one file at the project root, written by `init` and read by the indexer, watcher and server:
+All persistent settings live in one file inside the data dir, written by `init` and read by the indexer, watcher and server. (Legacy `.graph-indexer.json` at the project root is still read for back-compat and is migrated automatically.) It is the one file under `.graph-indexer/` that is **not** git-ignored, so your team can share the stack selection:
 
 ```json
 {
@@ -590,7 +606,7 @@ Oversized "god classes" are split automatically: a class longer than ~200 lines 
 graph-indexer is organised around a small set of cohesive modules with a strict separation between *retrieval math*, *storage*, and *transport*:
 
 ```
-config.mjs        Resolves CLI flags > env > .graph-indexer.json into one config.
+config.mjs        Resolves CLI flags > env > .graph-indexer/config.json into one config.
 parser-utils.mjs  Tree-sitter parsing, chunk extraction, Ollama embeddings.
 search-core.mjs   Shared retrieval math: tokenisation, BM25, RRF fusion + boosts
                   (query-adaptive NL weighting), PageRank, embedding cache keys.
@@ -606,6 +622,11 @@ enrichment.mjs    Optional LLM summaries + concept tags, cached by content hash.
 mcp-tools.mjs     The eight tools, written against the storage contract only.
 mcp-server.mjs    Thin bootstrap: config → store → tools → stdio.
 indexer.mjs       Bootstrap indexer.   watch-daemon.mjs  Incremental updates.
+layout.mjs        Single source of truth for the .graph-indexer/ data dir +
+                  legacy→current migration.   daemon-lock.mjs  Atomic single-
+                  instance PID lock.   daemon-ctl.mjs  idx-daemon start/stop/
+                  restart/status/logs.   cli-ui.mjs  Shared console styling.
+init.mjs          Guided, idempotent project setup (merge-safe, migrating).
 ```
 
 Because both stores call the identical `fuseAndRank` from `search-core`, the in-memory and SQLite backends are rank-consistent by construction, and a single change to the ranking math applies everywhere.
@@ -619,7 +640,7 @@ When you run `npm run mcp:index`:
 3. **Builds a dependency graph**: bidirectional import map so each chunk knows what it imports and what imports it.
 4. **(Optional) Enriches** production-source chunks with LLM summaries + concept tags (cache-first; only new code pays an LLM call).
 5. **Creates two indexes**: a BM25 inverted index (lexical) and per-chunk float32 embeddings via Ollama `nomic-embed-text` (optional) — two vectors per enriched chunk (code payload + summary-only).
-6. **Persists** to the configured backend: `code-index.json` + `code-index.embeddings.bin`, or `code-index.db` + the same embeddings binary.
+6. **Persists** to the configured backend under `.graph-indexer/`: `code-index.json` + `code-index.embeddings.bin`, or `code-index.db` + the same embeddings binary.
 
 A background watcher daemon applies changed files incrementally to **either** backend (JSON
 snapshot rewrites for in-memory, per-file WAL transactions for SQLite). It respects
@@ -687,12 +708,12 @@ Tree-sitter AST
 
 **MCP server won't connect**
 - Verify `MCP_PROJECT_ROOT` points to the indexed directory
-- Check the index exists: `ls -la code-index.json` (or `code-index.db`)
+- Check the index exists: `ls -la .graph-indexer/` (`code-index.json` or `code-index.db`)
 - Test manually: `npm run mcp:start`
 
 **Results are stale after file changes**
 - The daemon updates both backends live and running servers refresh automatically; check `list_index_stats()` for daemon status
-- If the daemon isn't running, restart the MCP server (it spawns the daemon) or run `npm run mcp:index` manually
+- If the daemon isn't running, start it with `npm run mcp:daemon:start` (or restart the MCP server, which spawns it); check `npm run mcp:daemon:status`
 
 ---
 
@@ -702,8 +723,9 @@ Tree-sitter AST
 git clone https://github.com/MaquinaTech/graph-indexer.git
 cd graph-indexer
 npm install
-npm run mcp:index   # index this repo
-npm run mcp:start   # start MCP server
+npm run mcp:index          # index this repo
+npm run mcp:start          # start MCP server (auto-starts the watch daemon)
+npm run mcp:daemon:status  # daemon + index state (start | stop | restart | logs)
 ```
 
 ### Tests

@@ -14,6 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { artifactPaths } from '../layout.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -59,7 +60,7 @@ function textOf(callResult) {
 
 async function main() {
     console.log('\nMCP SERVER SMOKE TEST\n');
-    if (!fs.existsSync(path.join(FIXTURE, 'code-index.json'))) {
+    if (!fs.existsSync(artifactPaths(FIXTURE).indexPath)) {
         console.log('  (skipped — express-js fixture not indexed)\n');
         process.exit(0);
     }
