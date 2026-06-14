@@ -183,11 +183,17 @@ export function finalizeVectorCandidates(entries, cap = VECTOR_FUSION_CAP) {
 const LEXICAL_WEIGHT = 1.5;
 const VECTOR_WEIGHT  = 1.0;
 
-// Natural-language queries flip the channel weights: behavioural descriptions
-// ("how does the app parse incoming JSON payloads?") carry their signal in the
-// embedding, while their common English words only add BM25 noise.
-const NL_LEXICAL_WEIGHT = 1.0;
-const NL_VECTOR_WEIGHT  = 1.6;
+// Natural-language queries: KEEP the lexical channel at full strength (exact-name
+// and keyword matches are the most reliable signal) and let the embedding channel
+// act as a low-weight RESCUE that adds candidates it surfaces, without
+// down-weighting lexical or gating the exact-name boost on vector membership.
+// The previous NL profile (lexical 1.0 / vector 1.6 + boost-gating) let a weak
+// code-embedding DISPLACE correct lexical hits. The 1.5/0.4 profile below is the
+// joint optimum of two independent retrieval suites (the full 15-fixture
+// language/framework harness AND test/evaluate.mjs's agent-style channel): both
+// peak at vector≈0.4 and regress on either side. See search-eval.mjs.
+const NL_LEXICAL_WEIGHT = 1.5;
+const NL_VECTOR_WEIGHT  = 0.4;
 
 const QUERY_STOPWORDS = new Set([
     'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'at',
@@ -280,11 +286,22 @@ export function fuseAndRank({
         vectorResults = adjusted.map((r, i) => ({ ...r, rank: i + 1 }));
     }
 
-    // On NL queries the name/path boosts misfire: identifiers that happen to share
-    // a generic English word with the query ("_global" for "global configuration")
-    // get 1.4–2.0× promotions over the semantically right answer. Gate the boosts
-    // on semantic agreement — a chunk must also be a vector candidate to earn them.
-    const boostEligible = nlQuery ? new Set(vectorResults.map(r => r.id)) : null;
+    // Boosts are NOT gated on vector-candidate membership. Gating was intended to
+    // stop generic-word name collisions on NL queries, but because the code-embedding
+    // channel is weak it mostly suppressed the EXACT-name boost on the correct hit
+    // (which then sank below a noisy vector candidate). Removing the gate measured
+    // strictly better on both retrieval suites; the exact-name boost is the single
+    // most reliable signal and must always apply.
+    const boostEligible = null;
+
+    // Style-intent detection: a stylesheet bundle vendored into a source tree
+    // (e.g. a bundled bootstrap.css) produces hundreds of synthetic-named
+    // `*_rule_set` chunks that pollute CODE searches in mixed repos. Demote those
+    // synthetic rule_sets UNLESS the query is actually about styling (a selector
+    // char, an exact_tokens pin, or a style keyword). Named SCSS @mixin/@function
+    // chunks are unaffected — only nameless rule_sets are noise for code queries.
+    const queryIsStyle = exactBoostName != null ||
+        /[.#]|css|scss|stylesheet|selector|\bstyle\b|\bclass\b|color|margin|padding|font|border|background|hover|keyframe|animation|mixin|breakpoint|responsive|\bwidth\b|\bheight\b/.test(queryLower);
 
     const allResults = [
         ...vectorResults.map(r => ({ ...r, _w: wVec })),
@@ -300,6 +317,9 @@ export function fuseAndRank({
         if (TEST_FILE_RE.test(chunk.file_path)) {
             if (!queryLower.includes('test') && !queryLower.includes('spec')) baseScore *= 0.25;
         }
+        // Demotion: synthetic-named stylesheet rule_sets on non-style queries
+        // (vendored CSS bundle noise in mixed repos). Named mixins/functions exempt.
+        if (!queryIsStyle && chunk.name && chunk.name.endsWith('_rule_set')) baseScore *= 0.2;
         // Demotion: example / docs dirs (tutorial snippets over-rank on short length
         // + high keyword density vs the real implementation).
         if (EXAMPLE_DIR_RE.test(chunk.file_path)) baseScore *= 0.5;

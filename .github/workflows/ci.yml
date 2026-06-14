@@ -40,7 +40,7 @@ jobs:
 
       - name: Verify required files
         run: |
-          for file in core-engine.mjs parser-utils.mjs indexer.mjs watch-daemon.mjs mcp-server.mjs init.mjs PROMPT.md README.md LICENSE; do
+          for file in core-engine.mjs parser-utils.mjs indexer.mjs watch-daemon.mjs mcp-server.mjs init.mjs prompts/CORE.md prompts/INTEGRATION.md README.md LICENSE; do
             [ -f "$file" ] && echo "✓ $file exists" || (echo "✗ $file missing"; exit 1)
           done
 

@@ -168,7 +168,7 @@ export const QUERIES = [
         expected_files: ['decorators', 'metadata'],
     },
 
-    // ── SEMANTIC — agent-style conceptual queries (what PROMPT.md trains agents to write) ─
+    // ── SEMANTIC — agent-style conceptual queries (what prompts/CORE.md trains agents to write) ─
     // These queries deliberately contain NO exact symbol name. They describe *behavior*,
     // mirroring what an LLM following the prompt guidelines would type into search_code().
     // They primarily exercise the embedding channel; BM25 must still find them via

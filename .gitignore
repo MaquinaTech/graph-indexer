@@ -48,9 +48,16 @@ junit.xml
 test/fixtures/
 test/reports/
 
+# Prompt-benchmark harness outputs (generated — regenerate via `node test/agent/assemble.mjs`)
+test/agent/built/
+test/agent/traces/
+
 # System
 .DS_Store
 .AppleDouble
 .LSOverride
 *.log
 .graph-indexer.json
+
+# Prompt-eval results (generated)
+test/agent/results/

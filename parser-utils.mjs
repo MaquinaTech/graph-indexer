@@ -92,12 +92,15 @@ const _cfg = _loadProjectConfig();
 const _enabled = _cfg?.languages ?? null; // null = all languages
 
 const [
-    TypeScript, JavaScript, CSS, Python, Rust,
+    TypeScript, JavaScript, CSS, SCSS, Python, Rust,
     Go, PHP, Java, Kotlin, CSharp, Ruby
 ] = await Promise.all([
     _tryLang('tree-sitter-typescript', _enabled, 'typescript'),
     _tryLang('tree-sitter-javascript', _enabled, 'javascript'),
     _tryLang('tree-sitter-css',        _enabled, 'css'),
+    // SCSS shares the 'css' enable-key — init records .css and .scss under one
+    // 'css' language, so the SCSS grammar must load whenever CSS is enabled.
+    _tryLang('tree-sitter-scss',       _enabled, (_enabled && _enabled.includes('css')) ? 'css' : 'scss'),
     _tryLang('tree-sitter-python',     _enabled, 'python'),
     _tryLang('tree-sitter-rust',       _enabled, 'rust'),
     _tryLang('tree-sitter-go',         _enabled, 'go'),
@@ -111,7 +114,8 @@ const [
 const LANGUAGE_MAP = {
     ...(TypeScript ? { '.ts': TypeScript.typescript, '.tsx': TypeScript.tsx } : {}),
     ...(JavaScript ? { '.js': JavaScript, '.jsx': JavaScript, '.mjs': JavaScript, '.cjs': JavaScript } : {}),
-    ...(CSS        ? { '.css': CSS, '.scss': CSS } : {}),
+    ...(CSS        ? { '.css': CSS } : {}),
+    ...(SCSS       ? { '.scss': SCSS } : (CSS ? { '.scss': CSS } : {})),
     ...(Python     ? { '.py': Python }  : {}),
     ...(Rust       ? { '.rs': Rust }    : {}),
     ...(Go         ? { '.go': Go }      : {}),
@@ -133,6 +137,11 @@ const LANGUAGE_QUERIES = {
         (export_statement) @chunk
     `,
     css: `(rule_set) @chunk`,
+    scss: `
+        (rule_set) @chunk
+        (mixin_statement) @chunk
+        (function_statement) @chunk
+    `,
     py: `
         (function_definition) @chunk
         (class_definition) @chunk
@@ -192,6 +201,8 @@ const CONTAINERS = new Set([
     'class_declaration', 'function_declaration', 'method_definition',
     'lexical_declaration', 'expression_statement', 'export_statement',
     'function_definition', 'class_definition', 'rule_set',
+    // SCSS
+    'mixin_statement', 'function_statement',
     'function_item', 'struct_item', 'enum_item', 'trait_item', 'impl_item',
     'method_declaration', 'type_declaration',
     // Java / C#
@@ -347,7 +358,7 @@ export function extractImportsFromAST(rootNode, ext) {
 /**
  * Token-safe skeleton for a class that exceeds GOD_CLASS_LINES.
  *
- * The agent's PROMPT.md promises get_chunk() costs ~300 tokens. A 2 000-line
+ * The agent prompt (prompts/CORE.md) promises get_chunk() costs ~300 tokens. A 2 000-line
  * "god class" stored as one chunk violates that contract. This skeleton keeps
  * only the first HEADER_LINES of the class (signature + opening brace) and
  * appends a one-line summary — enough for name resolution and embeddings, while
@@ -374,7 +385,11 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
     const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
     const EXT_TO_LANG = {
         '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.cs': 'cs',
-        '.rb': 'rb'
+        '.rb': 'rb',
+        // .scss uses the SCSS grammar+query when installed; otherwise it parses
+        // with the CSS grammar, so it MUST use the css query (the scss query
+        // references node types the CSS grammar doesn't have).
+        '.scss': SCSS ? 'scss' : 'css',
     };
     const langKey = JS_LIKE.includes(ext) ? 'ts'
         : (EXT_TO_LANG[ext] || (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null));

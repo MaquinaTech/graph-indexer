@@ -1,0 +1,21 @@
+<environment_prompt layer="2" type="framework" name="laravel-symfony" requires="graph-indexer-core, php" version="3.0">
+
+    <scope>The codebase is a PHP application built on Laravel or Symfony (container-managed MVC, ORM, facades/attributes). Loads AFTER the php layer; all of its rules — whole-class chunks, weak import topology, batched class questions — and every hard limit still apply.</scope>
+
+    <critical_fact>Controllers are invoked by the framework dispatcher: empty call graphs on controller methods mean ENTRY POINT, never dead code. And because PHP `use` imports are untracked, EMPTY Deps:/Used by: lines mean NOTHING here — usage always comes from name search, never from topology absence.</critical_fact>
+
+    <rules>
+        <rule name="eloquent-magic">Active-record models route everything through magic methods: attributes are __get/__set on the row, `User::where(...)` is __callStatic, scopes are scopeActive definitions invoked as active(), relations (hasMany/belongsTo) generate accessors. The MODEL chunk's relation/scope/cast declarations ARE the API — and model chunks are SMALL, so one batched search shows several models' full relation graphs at once. Never hunt for generated method bodies.</rule>
+        <rule name="routes">Laravel routes are DSL calls in route files (`Route::get('/orders', [OrderController::class, 'index'])`) — ONE search of the URL fragment with exact_tokens finds the registration; the controller class is named right there. Symfony routes are attributes on the controller method (#[Route('/orders')]) — the class chunk includes them; search the path fragment.</rule>
+        <rule name="big-controllers">A 600-line controller is ONE whole-class chunk: get_file_skeleton(its file) lists every action with line ranges in ~80 tok — THE move instead of searching method names inside it (php layer rule; the skeleton call replaces 3-4 searches).</rule>
+        <rule name="facades">Facade calls (Cache::get, DB::table, Log::info) are static proxies — NO edge to the implementation behind the container binding. Treat as "delegates to the named service"; resolve the underlying service ONLY when its internals are the question.</rule>
+        <rule name="container-bindings">Interface-to-implementation wiring lives in service providers (bind/singleton) or services config — ONE search with exact_tokens on the INTERFACE name surfaces binding site and implementation together.</rule>
+        <rule name="implicit-runners">Middleware, policies, form requests, events/listeners, and subscribers run implicitly around controllers. Registrations (kernel/provider/route-level/attributes) name them; events connect dispatch site to listeners by the EVENT CLASS NAME — ONE exact_tokens search finds both ends. Read at most ONE such body (hard limit 4).</rule>
+        <rule name="templates">Blade/Twig templates are content, not symbols: the controller chunk's view(...)/render(...) call names the template; reading the template file is fallback condition 3.</rule>
+        <rule name="query-style">URL fragments, event class names, and config keys are the highest-precision tokens. exact_tokens on a class name REPLACES the missing Used by: — it is the default usage-mapping move in this stack.</rule>
+    </rules>
+
+    <playbook question="explain models Country, Community, Region, Location — structure, relations, where used" calls="1-2">ONE search_code(query: "Country Community Region Location", detail: "smart", top_k: 10): the four model chunks rank top with their hasMany/belongsTo/HasManyThrough lines visible — that IS the hierarchy — and the controllers/Livewire components referencing them appear in the same results. Answer structure AND usage from this single call; optional 2nd call: detail "full" + token_budget: 3000 to quote every relation method. Four resolve_symbol calls here = the budget-killing anti-pattern.</playbook>
+    <playbook question="what happens on POST /orders" calls="3-4">search_code(exact_tokens: "/orders") → get_file_skeleton(controller file) or get_chunk_summary(controller class) for the action map → get_chunk_summary(the ONE model/service it delegates to) → answer; ONE middleware/listener/binding hop only if the question demands it.</playbook>
+
+</environment_prompt>

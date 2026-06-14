@@ -30,6 +30,7 @@
 - [Storage backends](#storage-backends)
 - [Semantic enrichment](#semantic-enrichment)
 - [MCP tools](#mcp-tools)
+- [Agent prompt suite](#agent-prompt-suite)
 - [Configuration](#configuration)
 - [Supported languages](#supported-languages)
 - [How it works](#how-it-works)
@@ -268,7 +269,9 @@ The server reads the backend from `.graph-indexer.json`, so the same launch conf
 
 ### 4. Add the agent system prompt
 
-Copy [PROMPT.md](./PROMPT.md) into your AI agent's system prompt to instruct it to use graph-indexer tools instead of reading files directly.
+`init` does this automatically: it assembles the layered prompt suite for your selected languages and frameworks into `GRAPH_INDEXER_PROMPT.md`, wires it into `CLAUDE.md` (Claude Code) and `.cursor/rules/` (Cursor), and drops a `GRAPH_INDEXER_DOMAIN.md` template for your project-specific rules.
+
+For other agents or manual setup, see [Agent prompt suite](#agent-prompt-suite) and [prompts/INTEGRATION.md](./prompts/INTEGRATION.md).
 
 ---
 
@@ -461,6 +464,37 @@ Index health snapshot: storage backend, chunk count, file count, symbol table si
 ### `graph://dependencies/{file_path}` (resource)
 
 Full bidirectional dependency topology for a file: what it imports and what imports it.
+
+---
+
+## Agent prompt suite
+
+Tools alone don't make an agent efficient — left unprompted, agents either read every file in a component's dependency tree ("exploration paralysis") or summarize a component without ever checking who uses it ("tunnel vision"). The [prompts/](./prompts/) directory ships a **3-layer system-prompt architecture** that fixes both, without collapsing into one giant "god prompt" that dilutes context.
+
+The prompts are **protocol-based, not advisory**: four inviolable hard limits — a **4-Call Budget** with forced synthesis at the wall (no self-granted extensions), **batch-don't-iterate** (N known names = one search, never N lookups), **consume-before-call** (a result's topology must be read before the next call is allowed), and the **Rule of One** (at most one example hop) — plus per-task playbooks with explicit call counts. This is what makes the token/latency promises above hold even on small, fast models.
+
+| Layer | File(s) | Contents |
+| :--- | :--- | :--- |
+| **1 — Core** | [prompts/CORE.md](./prompts/CORE.md) | The four hard limits, the call protocol, task playbooks, the tool/cost table, query rules, anti-patterns, and the fallback protocol. Always required. |
+| **2 — Environment** | [prompts/languages/](./prompts/languages/) · [prompts/frameworks/](./prompts/frameworks/) | Version-agnostic index facts per stack: which call edges exist, which don't, whether import topology is trustworthy, and the stack's highest-leverage playbook. Load only the ones matching your code. |
+| **3 — Domain** | [prompts/DOMAIN_TEMPLATE.md](./prompts/DOMAIN_TEMPLATE.md) | A template for *your* project's rules: entry points, domain vocabulary, critical paths, no-go zones. |
+
+**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
+
+All prompts are strict XML, instantly parsable by downstream LLMs. Combination is plain concatenation in layer order — Layer 1's hard limits are inviolable; lower layers refine, never relax.
+
+### What `init` generates
+
+`npx graph-indexer init` asks for your languages and frameworks (pre-selecting what it detects in the project) and assembles the right layers:
+
+| File | Contents | Ownership |
+| :--- | :--- | :--- |
+| `GRAPH_INDEXER_PROMPT.md` | Layers 1+2 for your selection | Generated — regenerated on every `init` |
+| `GRAPH_INDEXER_DOMAIN.md` | Layer 3 template | **Yours** — never overwritten |
+| `CLAUDE.md` | `@`-imports of the two files above | Appended once, idempotent |
+| `.cursor/rules/graph-indexer.mdc` | Same layers as an always-on Cursor rule | Generated — regenerated on every `init` |
+
+For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the layers yourself — [prompts/INTEGRATION.md](./prompts/INTEGRATION.md) has copy-paste recipes and worked examples per stack.
 
 ---
 

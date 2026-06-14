@@ -256,7 +256,7 @@ function render(result) {
     console.log(`  ${pad('nDCG@5 strict', 30)} ${scoreColour(a.ndcg[5])}`);
     console.log(`  ${pad('file-only inflated hits', 30)} ${a.fileOnlyHitRate > 0 ? c.red(fmtPct(a.fileOnlyHitRate)) : c.green('0.0%')}`);
 
-    // Semantic channel breakdown — highlights the benchmark mismatch the PROMPT.md revealed:
+    // Semantic channel breakdown — highlights the benchmark mismatch the agent prompt (prompts/CORE.md) revealed:
     // symbolic queries test name-lookup (what agents use resolve_symbol for), while semantic
     // queries test the actual search_code use case (behavioral descriptions, no symbol names).
     if (semCount > 0) {
