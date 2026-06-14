@@ -122,23 +122,35 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 try { queryVector = await getLocalEmbedding(fullQuery, true, { ollamaHost, model: embedModel }); }
                 catch { /* lexical fallback */ }
 
-                let matches = db.searchHybrid(fullQuery, queryVector, top_k, min_score, exact_tokens || null);
-
                 // Opt-in LLM rerank: only for natural-language queries (symbol
                 // lookups are already rank-1-dominant), never when the caller
                 // pinned an exact symbol. Best-effort — order is preserved on
                 // any model failure.
                 const wantRerank = rerankParam ?? Boolean(rerank?.enabled);
-                if (wantRerank && !exact_tokens && matches.length > 1 && isNaturalLanguageQuery(fullQuery)) {
+                const willRerank = wantRerank && !exact_tokens && isNaturalLanguageQuery(fullQuery);
+
+                // When reranking, OVER-FETCH a deeper candidate pool and let the
+                // judge reorder it, then truncate to top_k. Without this the judge
+                // only ever sees the top_k it was asked for (default 5), so it can
+                // reorder but never RESCUE a correct-but-deep hit into the top_k —
+                // which is exactly where the semantic recall lives. Pool size is
+                // capped well above top_k; the user still receives only top_k cards.
+                const poolSize = willRerank
+                    ? Math.min(Math.max(top_k, rerank?.poolSize ?? 15), 25)
+                    : top_k;
+                let matches = db.searchHybrid(fullQuery, queryVector, poolSize, min_score, exact_tokens || null);
+
+                if (willRerank && matches.length > 1) {
                     matches = await rerankResults(fullQuery, matches, {
-                        topM: rerank?.topM ?? 8,
+                        topM: Math.min(rerank?.topM ?? 12, matches.length),
                         generate: (prompt) => ollamaGenerate(prompt, {
                             model: rerank?.model || 'qwen2.5-coder:7b',
-                            ollamaHost, timeoutMs: 20000,
+                            ollamaHost, timeoutMs: 60000,
                             options: { temperature: 0, num_predict: 40 },
                         }),
                     });
                 }
+                matches = matches.slice(0, top_k);
                 if (matches.length === 0) return { content: [{ type: 'text', text: 'No results found.' }] };
 
                 const depSignature = (depPath) => {

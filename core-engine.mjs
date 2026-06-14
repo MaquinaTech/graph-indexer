@@ -469,6 +469,10 @@ export class MemoryGraphIndex {
         if (!fs.existsSync(this.indexPath)) return;
         const data = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
         this.graph = data.graph || { dependencies: {}, importedBy: {} };
+        // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
+        // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
+        // stay a low-weight rescue). Set during the chunk load loop below.
+        this._corpusEnriched = false;
 
         const chunkCount = (data.chunks || []).length;
 
@@ -499,6 +503,9 @@ export class MemoryGraphIndex {
 
         for (const chunk of (data.chunks || [])) {
             this.chunks.set(chunk.id, chunk);
+            if (!this._corpusEnriched && (chunk.summary || (chunk.concepts && chunk.concepts.length))) {
+                this._corpusEnriched = true;
+            }
 
             // Eager vector population. Vectors are keyed by embeddingKeyFor(chunk)
             // (content_hash + enrichment digest); plain content_hash is the
@@ -886,6 +893,7 @@ export class MemoryGraphIndex {
             topK,
             queryText,
             exactBoostName,
+            corpusEnriched: this._corpusEnriched,
             // Equivalent to the former full-scan (symbolTable is keyed by name.toLowerCase()),
             // but O(1) and reusable by the SQLite backend.
             resolveExact:  (term) => this.symbolTable.get(term) || [],

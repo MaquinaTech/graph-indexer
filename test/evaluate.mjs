@@ -169,17 +169,23 @@ async function evaluateSuite(suite) {
         catch (e) { return { META: suite.META, error: `query embedding failed: ${e.message}` }; }
     }
 
+    // Sweep knobs (harness only): retrieve deeper than 10 so the reranker can
+    // rescue a correct-but-deep hit into the top-5, and widen the judged window.
+    const RETRIEVE_K = Number(process.env.RETRIEVE_K) > 0 ? Number(process.env.RETRIEVE_K) : 10;
+    const RERANK_TOPM = Number(process.env.RERANK_TOPM) > 0 ? Number(process.env.RERANK_TOPM) : 8;
+
     const rows = [];
     for (const q of suite.QUERIES) {
-        const topK = Math.max(q.topK ?? 10, 10);
+        const topK = Math.max(q.topK ?? 10, RETRIEVE_K);
         const qVec = queryVectors ? (queryVectors.get(q.id) ?? null) : null;
         let results = db.searchHybrid(q.query, qVec, topK);
         // Mirrors the production gate in mcp-tools: rerank only natural-language
         // queries, best-effort, original order on any failure.
         if (useRerank && isNaturalLanguageQuery(q.query)) {
             results = await rerankResults(q.query, results, {
+                topM: RERANK_TOPM,
                 generate: (prompt) => ollamaGenerate(prompt, {
-                    model: RERANK_MODEL, ollamaHost: OLLAMA_HOST, timeoutMs: 30000,
+                    model: RERANK_MODEL, ollamaHost: OLLAMA_HOST, timeoutMs: 60000,
                     options: { temperature: 0, num_predict: 40 },
                 }),
             });

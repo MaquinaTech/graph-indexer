@@ -21,12 +21,17 @@ export const DEFAULTS = Object.freeze({
         coreRatio: 1.0,                // 1.0 = all production files (tests/examples always excluded);
                                        // <1 bounds enrichment to the most-central share by PageRank
         maxChunks: 500,                // cap on NEW LLM calls per index run (cache accumulates across runs)
-        concurrency: 12,               // parallel Ollama requests during enrichment
+        concurrency: 4,                // parallel Ollama requests during enrichment; keep low —
+                                       // a single local model serves requests fastest one-at-a-time
+                                       // unless OLLAMA_NUM_PARALLEL + hardware allow more
+
     }),
     rerank: Object.freeze({
-        enabled: false,                // opt-in: one LLM call (~1–2 s) per natural-language query
+        enabled: false,                // opt-in: one LLM call per natural-language query
         model: 'qwen2.5-coder:7b',     // judge quality matters: 7B measured +50% semantic rank-1, 1.5B ~nil
-        topM: 8,                       // fused results shown to the judge (8 measured better than 10)
+        topM: 12,                      // candidates shown to the judge to reorder
+        poolSize: 15,                  // over-fetch depth when reranking, so a correct-but-deep
+                                       // hit can be RESCUED into top_k (then truncated to top_k)
     }),
 });
 
@@ -106,6 +111,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
             enabled: Boolean((file.rerank || {}).enabled),
             model: (file.rerank || {}).model || DEFAULTS.rerank.model,
             topM: Number.isInteger((file.rerank || {}).topM) ? (file.rerank || {}).topM : DEFAULTS.rerank.topM,
+            poolSize: Number.isInteger((file.rerank || {}).poolSize) ? (file.rerank || {}).poolSize : DEFAULTS.rerank.poolSize,
         }),
     });
 }

@@ -67,17 +67,22 @@ export function attachEnrichment(chunk, entry) {
 //
 // One-shot example is mandatory for 1.5B models to reliably follow the format.
 export const buildEnrichPrompt = (chunk) => {
-    const code = (chunk.code_snippet || '').slice(0, 700);
+    const code = (chunk.code_snippet || '').slice(0, 1000);
     const base = path.basename(chunk.file_path);
-    const ctx = chunk.class_context ? ` (method of class ${chunk.class_context})` : '';
-    const doc = chunk.docstring ? `Doc: ${chunk.docstring.slice(0, 200)}\n` : '';
+    const ctx = chunk.class_context ? ` (member of ${chunk.class_context})` : '';
+    const doc = chunk.docstring ? `Doc: ${chunk.docstring.slice(0, 240)}\n` : '';
     return (
-        `Output exactly two lines for this ${chunk.node_type} "${chunk.name}"${ctx} in ${base}:\n`
-        + `SUMMARY: one sentence describing what it DOES in plain developer vocabulary (the behavior, not the syntax)\n`
-        + `TAGS: 5-8 comma-separated search keywords a developer would type to find this\n\n`
+        `You are indexing source code for semantic search. A developer will search by INTENT\n`
+        + `("where is the code that …", "how does it …") in plain words — NOT by the symbol name.\n\n`
+        + `Describe this ${chunk.node_type} "${chunk.name}"${ctx} in ${base} as exactly two lines:\n`
+        + `SUMMARY: one specific sentence stating WHAT IT DOES and the DOMAIN it acts on, in the\n`
+        + `  vocabulary a developer would search with. Use concrete domain nouns and action verbs.\n`
+        + `  Do NOT restate the symbol name and do NOT use filler words like "function", "method",\n`
+        + `  "class", "handles", "manages", or "responsible for".\n`
+        + `TAGS: 5-8 comma-separated domain keywords a developer would type to find this code.\n\n`
         + `Example:\n`
-        + `SUMMARY: validates JWT tokens and refreshes expired authentication sessions\n`
-        + `TAGS: authentication, JWT, token validation, session refresh, middleware\n\n`
+        + `SUMMARY: validates JWT bearer tokens and refreshes expired authentication sessions for incoming requests\n`
+        + `TAGS: authentication, JWT, token validation, session refresh, middleware, authorization\n\n`
         + doc
         + `Code:\n${code}\n`
         + `Output:`
@@ -196,11 +201,19 @@ export function parseRerankResponse(text, n) {
 }
 
 /**
- * Rerank the fused top-M results with a local LLM. Best-effort: any failure
- * (model unreachable, unparseable output) returns the original order.
+ * Rerank the fused top-M results with a local LLM: the judge's order wins outright
+ * for the head, the unjudged tail is preserved. Best-effort — any failure (model
+ * unreachable, unparseable output) returns the original order untouched.
+ *
+ * A reciprocal-rank BLEND of judge-order with retrieval-order was A/B-tested (to
+ * anchor strongly-retrieved hits against judge mistakes) and measured WORSE on
+ * both rank-1 and MRR while not recovering recall@k — so the straight reorder is
+ * what ships. Recall@k is protected upstream instead, by over-fetching a deep pool
+ * before reranking (see mcp-tools search_code) so the judge reorders real
+ * candidates rather than a thin top_k.
  *
  * @param {string} queryText
- * @param {Array<{score:number, chunk:object}>} results  Fused results (mutated copy returned).
+ * @param {Array<{score:number, chunk:object}>} results  Fused results (copy returned).
  * @param {object} opts
  * @param {(prompt:string)=>Promise<string|null>} opts.generate
  * @param {number} [opts.topM]  How many leading results to rerank (default 8).
@@ -272,7 +285,12 @@ export function selectCoreChunks(chunks, graph, { coreRatio = 1.0, maxChunks = 5
 export async function enrichCoreChunks(chunks, graph, config, { generate, concurrency, cachePath } = {}) {
     const { model, coreRatio, maxChunks } = config.enrichment;
     const ollamaHost = config.ollamaHost;
-    const gen = generate || ((prompt) => ollamaGenerate(prompt, { model, ollamaHost, timeoutMs: 20000 }));
+    // 60 s timeout: a larger judge model on a busy/CPU-bound local Ollama can take
+    // 10–25 s per generation; the old 20 s cap made every call fail there and aborted
+    // enrichment entirely. Concurrency defaults low for the same reason — parallel
+    // requests to one local model thrash and slow each other (set higher only when
+    // OLLAMA_NUM_PARALLEL and the hardware support it).
+    const gen = generate || ((prompt) => ollamaGenerate(prompt, { model, ollamaHost, timeoutMs: 60000 }));
     const slots = concurrency ?? config.enrichment.concurrency ?? 12;
     const cacheFile = cachePath === false ? null : (cachePath || config.enrichmentCachePath || null);
     const cache = cacheFile ? loadEnrichmentCache(cacheFile) : new Map();
@@ -327,8 +345,10 @@ export async function enrichCoreChunks(chunks, graph, config, { generate, concur
                 failures++;
             }
             process.stdout.write(`\r   enriched ${enriched}/${pending.length} (failures: ${failures})        `);
-            // Bail early if the model is clearly unreachable.
-            if (attempted >= slots * 2 && enriched === 0) {
+            // Bail early if the model is clearly unreachable. Require a real minimum
+            // of attempts (not just slots×2) so a slow first generation at low
+            // concurrency doesn't abort a perfectly healthy run.
+            if (attempted >= Math.max(8, slots * 2) && enriched === 0) {
                 aborted = true;
                 console.log(`\n⚠️  LLM enrichment: generator unreachable (${failures} failures) — continuing without enrichment.`);
             }

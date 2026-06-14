@@ -351,12 +351,17 @@ The model, the file-selection ratio and the per-run cap are all configurable (se
 
 Fusion resolves most queries, but a natural-language query can end in a near-tie between the
 semantically right chunk and a lexically similar neighbour — a gap no static boost can close.
-With `rerank.enabled` (or `search_code(..., rerank: true)`), the fused top-8 is shown to a local
-LLM judge — one line per candidate — which reorders them. Measured effect on the strict semantic
-channel: **rank-1 0.23 → 0.35, MRR 0.37 → 0.47, success@5 0.55 → 0.65**, with the symbolic
-channel untouched (the judge only fires on natural-language queries, never on symbol lookups or
-`exact_tokens` calls). Cost: one generation call (~1–2 s with `qwen2.5-coder:7b`). Best-effort —
-any model failure preserves the original order.
+With `rerank.enabled` (or `search_code(..., rerank: true)`), the engine **over-fetches a deeper
+candidate pool** (`rerank.poolSize`, capped at 25), shows the top `rerank.topM` to a local LLM
+judge — one line per candidate — which reorders them, then truncates back to `top_k`. The
+over-fetch matters: without it the judge only ever sees the `top_k` it was asked for and can
+reorder but never *rescue* a correct-but-deep hit into view. Measured effect on the strict
+semantic channel (on top of the enriched default): **rank-1 0.23 → 0.42, MRR 0.37 → 0.52**, with
+success@5 already ~0.65 from enrichment + the adaptive vector weight (rerank sharpens *ordering*,
+recall comes from retrieval). The symbolic channel is untouched (the judge only fires on
+natural-language queries, never on symbol lookups or `exact_tokens` calls). Cost: one generation
+call per NL query (`qwen2.5-coder:7b` default; a larger judge such as `qwen2.5:14b-instruct` scores
+higher if you have the headroom). Best-effort — any model failure preserves the original order.
 
 ---
 
@@ -527,10 +532,11 @@ All persistent settings live in one file at the project root, written by `init` 
 | `enrichment.model` | `"qwen2.5-coder:1.5b"` | Ollama model used for generation. |
 | `enrichment.coreRatio` | `1.0` | Share of production files eligible (by PageRank). `1.0` = all; tests/examples are always excluded. |
 | `enrichment.maxChunks` | `500` | Cap on **new** LLM calls per index run — the cache accumulates coverage across runs. |
-| `enrichment.concurrency` | `12` | Parallel Ollama requests during enrichment. |
-| `rerank.enabled` | `false` | LLM-judge reranking of natural-language queries (+50% semantic rank-1, ~1–2 s per NL query). |
-| `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none. |
-| `rerank.topM` | `8` | Fused results shown to the judge (8 measured better than 10). |
+| `enrichment.concurrency` | `4` | Parallel Ollama requests during enrichment. Keep low — a single local model serves requests fastest one-at-a-time; raise only when `OLLAMA_NUM_PARALLEL` + hardware allow. |
+| `rerank.enabled` | `false` | LLM-judge reranking of natural-language queries (semantic rank-1 0.23 → 0.42 measured; one generation per NL query). |
+| `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none; a 14B judge scores higher still. |
+| `rerank.topM` | `12` | Candidates shown to the judge to reorder. |
+| `rerank.poolSize` | `15` | Over-fetch depth when reranking (capped at 25), so a correct-but-deep hit can be rescued into `top_k`. |
 
 ### CLI flags
 

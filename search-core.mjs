@@ -84,10 +84,14 @@ export function tokenize(text) {
  */
 export const SUMMARY_VEC_SUFFIX = '|s';
 
-/** The text embedded as the summary-only vector, or null when not enriched. */
+/** The text embedded as the summary-only vector, or null when not enriched.
+ * The leading LLM summary carries the behavioural signal; the concept tags add
+ * domain vocabulary; the qualified name (class_context.name when present) anchors
+ * the vector to the symbol so a method is disambiguated from same-named peers. */
 export function summaryEmbeddingText(chunk) {
     if (!chunk.summary && !(chunk.concepts?.length > 0)) return null;
-    return [chunk.summary, (chunk.concepts || []).join(', '), chunk.name]
+    const qualifiedName = chunk.class_context ? `${chunk.class_context}.${chunk.name}` : chunk.name;
+    return [chunk.summary, (chunk.concepts || []).join(', '), qualifiedName]
         .filter(Boolean).join('. ');
 }
 
@@ -183,17 +187,28 @@ export function finalizeVectorCandidates(entries, cap = VECTOR_FUSION_CAP) {
 const LEXICAL_WEIGHT = 1.5;
 const VECTOR_WEIGHT  = 1.0;
 
-// Natural-language queries: KEEP the lexical channel at full strength (exact-name
-// and keyword matches are the most reliable signal) and let the embedding channel
-// act as a low-weight RESCUE that adds candidates it surfaces, without
-// down-weighting lexical or gating the exact-name boost on vector membership.
-// The previous NL profile (lexical 1.0 / vector 1.6 + boost-gating) let a weak
-// code-embedding DISPLACE correct lexical hits. The 1.5/0.4 profile below is the
-// joint optimum of two independent retrieval suites (the full 15-fixture
-// language/framework harness AND test/evaluate.mjs's agent-style channel): both
-// peak at vector≈0.4 and regress on either side. See search-eval.mjs.
-const NL_LEXICAL_WEIGHT = 1.5;
-const NL_VECTOR_WEIGHT  = 0.4;
+// Natural-language queries keep the lexical channel at full strength (exact-name and
+// keyword matches are the most reliable signal); the vector channel's weight depends on
+// whether the corpus carries LLM enrichment:
+//
+//   • PLAIN corpus (no enrichment) — the only vectors are raw-code embeddings, a weak
+//     conceptual signal that DISPLACES correct lexical hits at any real weight. It acts
+//     as a low-weight rescue (0.4). This was the historical "joint optimum" finding.
+//   • ENRICHED corpus — every central chunk also owns a summary vector that speaks the
+//     vocabulary of behavioural queries, so the vector channel becomes a strong semantic
+//     signal and earns more weight. The value is the JOINT optimum of two independent
+//     suites that DISAGREE: the repo-eval behavioural channel keeps climbing to ~1.0,
+//     while the broader 15-fixture search-eval (mixed nl/kw/xc) peaks at 0.4 and decays
+//     above it (a high weight lets a confident-but-wrong summary vector displace a good
+//     lexical hit on cross-cutting queries). 0.6 improves BOTH over baseline and avoids
+//     overfitting either; the opt-in LLM reranker recovers the top-rank precision that a
+//     lower weight gives up. (Plain stays 0.4 — raw-code vectors are a weak rescue.)
+//
+// The engine selects the regime per index via `corpusEnriched` (see core-engine /
+// sqlite-store), so a repo indexed without --enrich is never hurt by the strong weight.
+const NL_LEXICAL_WEIGHT         = 1.5;
+const NL_VECTOR_WEIGHT_PLAIN    = 0.4;
+const NL_VECTOR_WEIGHT_ENRICHED = 0.6;
 
 const QUERY_STOPWORDS = new Set([
     'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'at',
@@ -216,9 +231,15 @@ export function isNaturalLanguageQuery(queryText) {
 }
 
 export const TEST_FILE_RE = /\.(test|spec)\.|[/\\]__tests__[/\\]|_test\.|^tests?[/\\]|[/\\]tests?[/\\]|[/\\]spec[/\\]/;
-// `^integration/` is root-anchored ONLY: a repo-root integration/ tree is an e2e
-// test-app convention (NestJS), while nested src/integrations/ is real code.
-export const EXAMPLE_DIR_RE = /^examples?[/\\]|[/\\]examples?[/\\]|^samples?[/\\]|[/\\]samples?[/\\]|^demos?[/\\]|[/\\]demos?[/\\]|[/\\]tutorials?[/\\]|^docs_src[/\\]|[/\\]docs_src[/\\]|^sandbox[/\\]|[/\\]sandbox[/\\]|^benchmarks?[/\\]|[/\\]benchmarks?[/\\]|^scripts?[/\\]|[/\\]scripts?[/\\]/;
+// Example/sample/demo/sandbox/etc. trees are a top-level project convention
+// (examples/, samples/, demo/, docs_src/, …). The keyword is matched ONLY as the
+// FIRST or SECOND path segment. Matching it at ANY depth (the previous behaviour)
+// false-positived on PACKAGE PATHS that merely contain the word — e.g. Spring's
+// `src/main/java/org/springframework/samples/petclinic/…` and Google's
+// `com/google/samples/apps/…` — silently excluding real application code from LLM
+// enrichment and demoting it in search. The fixtures' legitimate example/sample
+// dirs all sit at depth ≤1, so this only stops the deep package-path false hits.
+export const EXAMPLE_DIR_RE = /^(?:[^/\\]+[/\\])?(?:examples?|samples?|demos?|tutorials?|docs_src|sandbox|benchmarks?|scripts?)[/\\]/;
 
 /**
  * Reciprocal-Rank-Fusion of lexical + vector candidate lists, with the measured
@@ -245,6 +266,7 @@ export const EXAMPLE_DIR_RE = /^examples?[/\\]|[/\\]examples?[/\\]|^samples?[/\\
 export function fuseAndRank({
     lexicalResults, vectorResults, getChunk, getPathTokens, getDf,
     docCount, rrfK, topK, queryText, exactBoostName = null, resolveExact = null,
+    corpusEnriched = false,
 }) {
     const rrfScores  = new Map();
     const K          = rrfK;
@@ -264,8 +286,9 @@ export function fuseAndRank({
     // vector-led for natural-language behavioural queries (only when a vector
     // channel actually produced candidates — lexical-only mode is unaffected).
     const nlQuery = vectorResults.length > 0 && isNaturalLanguageQuery(queryText);
+    const nlVecWeight = corpusEnriched ? NL_VECTOR_WEIGHT_ENRICHED : NL_VECTOR_WEIGHT_PLAIN;
     const wLex = nlQuery ? NL_LEXICAL_WEIGHT : LEXICAL_WEIGHT;
-    const wVec = nlQuery ? NL_VECTOR_WEIGHT  : VECTOR_WEIGHT;
+    const wVec = nlQuery ? nlVecWeight       : VECTOR_WEIGHT;
 
     // Re-rank the vector channel with test/example demotion applied to the cosine
     // scores BEFORE ranks are assigned: a test helper that out-scores the real

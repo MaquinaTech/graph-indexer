@@ -148,6 +148,13 @@ export class SqliteGraphStore {
         }
         this.db.exec(SCHEMA_INDEXES);
         this._reloadMeta();
+        // Does this corpus carry LLM enrichment? One cheap probe → drives the NL
+        // vector-channel weight in fuseAndRank (parity with the in-memory engine).
+        try {
+            this._corpusEnriched = Boolean(
+                this.db.prepare("SELECT 1 FROM chunks WHERE summary IS NOT NULL AND summary != '' LIMIT 1").get()
+            );
+        } catch { this._corpusEnriched = false; }
         this._loadGraph();
         this._openVecFd();
         this._refreshSketch();
@@ -496,6 +503,7 @@ export class SqliteGraphStore {
         return fuseAndRank({
             lexicalResults, vectorResults, getChunk, getPathTokens, getDf,
             docCount: this._docCount, rrfK: this.rrfK, topK, queryText, exactBoostName,
+            corpusEnriched: this._corpusEnriched,
             resolveExact: (term) => this._stmtIdByName.all(term).map(r => r.id),
         });
     }
