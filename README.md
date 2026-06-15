@@ -172,25 +172,50 @@ npm install graph-indexer --save-dev
 npx graph-indexer init
 ```
 
-`init` is safe to re-run any time — it **merges** into existing configs (it never deletes your other MCP servers or prompts), **migrates** older layouts in place, and reports exactly what it created, updated, kept, or migrated. It auto-detects your IDEs (Claude, Cursor, VS Code), wires the MCP server, installs npm scripts (index + daemon control), tidies generated artifacts into `.graph-indexer/`, updates `.gitignore`, and opens an interactive language selector:
+`init` is safe to re-run any time — it **merges** into existing configs (it never deletes your other MCP servers or prompts), **migrates** older layouts in place, and reports exactly what it created, updated, kept, or migrated. It auto-detects your IDEs (Claude, Cursor, VS Code), wires the MCP server, installs npm scripts (index + daemon control), tidies generated artifacts into `.graph-indexer/`, and updates `.gitignore`. Setup is a short guided flow — **press Enter at any prompt to accept the shown default**:
+
+1. **Languages** to index — pre-checked from what's detected in the repo
+2. **Frameworks** — adds framework-specific rules to the agent prompt
+3. **Search engine & LLM features** — storage backend, Ollama endpoint and models (details below)
+4. **Editors & MCP wiring**
+5. **Project files & daemon control** — npm scripts, `.gitignore`, `config.json`
+6. **Agent instructions** — the layered prompt suite
+
+Step 1 is an arrow-key multi-select (detected languages start checked):
 
 ```
-⚙️  Select languages (Arrows/Tab: move, Space: toggle, Enter: confirm):
+  [1/6] Languages to index
+  Select languages (↑↓/Tab move · Space toggle · Enter confirm)
 
-  ❯ ◯ TypeScript / TSX         .ts, .tsx
-    ◯ JavaScript               .js, .jsx, .mjs, .cjs
-    ◯ Python                   .py
-    ◯ Go                       .go
-    ◯ Rust                     .rs
-    ◯ PHP                      .php
-    ◯ Java                     .java
-    ◯ Kotlin                   .kt, .kts
-    ◯ C#                       .cs
-    ◯ Ruby                     .rb
-    ◯ CSS / SCSS               .css, .scss
+  ❯ ◉ TypeScript / TSX             .ts, .tsx  · detected
+    ◯ JavaScript                   .js, .jsx, .mjs, .cjs
+    ◯ Python                       .py
+    …
 ```
 
-Navigate with **↑ ↓**, toggle with **Space**, confirm with **Enter**. Leaving all unselected enables every language. Your selection is saved to `.graph-indexer/config.json`. Pass `--all-languages` to skip the prompt, or `--dry-run` to preview every change without writing anything.
+Step 3 picks the storage backend and configures local-LLM features. It **reads your installed Ollama models** and lets you choose one for embeddings, enrichment and reranking — every prompt defaults on **Enter**, so the whole step is a few keystrokes:
+
+```
+  [3/6] Search engine & LLM features
+  Storage backend (↑↓ move · Enter select)
+
+  ❯ ◉ In-memory                  default · fastest · ideal for most repos
+    ◯ SQLite                     persistent · for very large repos (1M+ LOC)
+
+  ? Ollama host [http://localhost:11434] (URL or port)
+  ›
+  ✓ Ollama  6 model(s) at http://localhost:11434
+
+  Model for embeddings (↑↓ move · Enter select)
+  ❯ ◉ nomic-embed-text           installed
+    ◯ mxbai-embed-large          installed
+    ◯ Other (type a name)…
+
+  ? Enable LLM enrichment?  (richer semantics, slower indexing) [y/N]
+  ? Enable LLM reranker?  (one LLM call per query, sharper top hits) [y/N]
+```
+
+Navigate menus with **↑ ↓** (multi-selects toggle with **Space**), confirm with **Enter**. Leaving all languages unselected enables every language; if Ollama isn't running you can still type model names to pull later. Everything you choose is written to `.graph-indexer/config.json`, so the indexer, daemon and MCP server all pick it up automatically — power-user keys you set by hand (e.g. `enrichment.coreRatio`) are preserved across re-runs. Pass `--all-languages` for a non-interactive run (auto-detect + defaults, no prompts), or `--dry-run` to preview every change without writing anything.
 
 > **Generated files live in one place.** Everything graph-indexer generates — the index, vectors, SQLite db, enrichment cache, and daemon pid/log — is kept under a single `.graph-indexer/` directory so your project root stays clean. Files other tools must discover at conventional paths (the agent prompts `CLAUDE.md` / `GRAPH_INDEXER_PROMPT.md` / Cursor rules, and IDE MCP configs like `.vscode/mcp.json`) stay where they belong. Upgrading from an older version? `init` (or the next index/daemon run) relocates the old root artifacts automatically.
 
@@ -523,7 +548,7 @@ For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the laye
 
 ### `.graph-indexer/config.json`
 
-All persistent settings live in one file inside the data dir, written by `init` and read by the indexer, watcher and server. (Legacy `.graph-indexer.json` at the project root is still read for back-compat and is migrated automatically.) It is the one file under `.graph-indexer/` that is **not** git-ignored, so your team can share the stack selection:
+All persistent settings live in one file inside the data dir, written by `init` (its **Search engine & LLM features** step sets the backend, Ollama host and models interactively — reading your installed Ollama models for the model pickers) and read by the indexer, watcher and server. (Legacy `.graph-indexer.json` at the project root is still read for back-compat and is migrated automatically.) It is the one file under `.graph-indexer/` that is **not** git-ignored, so your team can share the stack selection:
 
 ```json
 {

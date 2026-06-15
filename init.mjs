@@ -39,7 +39,7 @@ const isInteractive = !isAllLanguages && process.stdin.isTTY;
 const PROJECT_ROOT = process.cwd();
 const PATHS = artifactPaths(PROJECT_ROOT);
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 // ─── Action ledger (drives the grouped end-of-run summary) ───────────────────────
 
@@ -265,6 +265,7 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
         const { stdin, stdout } = process;
         readline.emitKeypressEvents(stdin);
         stdin.setRawMode(true);
+        stdin.resume(); // a preceding readline prompt may have left stdin paused
         stdout.write('\x1B[?25l');
 
         let cursorIndex = 0;
@@ -328,9 +329,144 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
     });
 }
 
+// ─── Single-select menu, line prompts & Ollama model discovery ───────────────
+
+const CUSTOM_MODEL = Symbol('custom-model'); // unique sentinel for the "Other…" choice
+
+/**
+ * Arrow-key single-select. Enter confirms the currently hovered row, and the
+ * cursor starts on `selectedKey`, so pressing Enter with no movement always
+ * yields the default. `items` need { key, label, desc }.
+ */
+function interactiveSelect({ title, items, selectedKey }) {
+    return new Promise((resolve) => {
+        const { stdin, stdout } = process;
+        readline.emitKeypressEvents(stdin);
+        if (stdin.isTTY) stdin.setRawMode(true);
+        stdin.resume(); // a preceding readline prompt may have left stdin paused
+        stdout.write('\x1B[?25l');
+
+        let cursor = Math.max(0, items.findIndex(it => it.key === selectedKey));
+        let hasRendered = false;
+        const lineCount = items.length + 2;
+
+        const render = () => {
+            if (hasRendered) {
+                readline.moveCursor(stdout, 0, -lineCount);
+                readline.cursorTo(stdout, 0);
+                readline.clearScreenDown(stdout);
+            }
+            hasRendered = true;
+            stdout.write(`  ${title} ${c.dim('(↑↓ move · Enter select)')}\n\n`);
+            items.forEach((item, i) => {
+                const hovered = i === cursor;
+                const radio = hovered ? c.green('◉') : '◯';
+                const label = hovered ? c.cyan(item.label.padEnd(26)) : item.label.padEnd(26);
+                stdout.write(`  ${c.cyan(hovered ? '❯' : ' ')} ${radio} ${label} ${item.desc || ''}\n`);
+            });
+        };
+
+        const cleanup = () => {
+            if (stdin.isTTY) stdin.setRawMode(false);
+            stdout.write('\x1B[?25h');
+            stdin.removeListener('keypress', onKeypress);
+        };
+
+        const onKeypress = (str, key) => {
+            if (key.ctrl && key.name === 'c') { cleanup(); process.exit(0); }
+            if (key.name === 'up' || (key.name === 'tab' && key.shift)) {
+                cursor = (cursor - 1 + items.length) % items.length; render();
+            } else if (key.name === 'down' || (key.name === 'tab' && !key.shift)) {
+                cursor = (cursor + 1) % items.length; render();
+            } else if (key.name === 'return') {
+                cleanup();
+                readline.moveCursor(stdout, 0, -lineCount);
+                readline.cursorTo(stdout, 0);
+                readline.clearScreenDown(stdout);
+                resolve(items[cursor].key);
+            }
+        };
+
+        stdin.on('keypress', onKeypress);
+        render();
+    });
+}
+
+/** One line of input via readline. Resolves the raw (untrimmed) answer. */
+function promptLine(prompt) {
+    return new Promise((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        rl.question(prompt, (ans) => { rl.close(); resolve(ans); });
+    });
+}
+
+/** Free-text prompt; empty input falls back to `def`. */
+async function promptText({ label, def = '', hint = '' }) {
+    const tail = def ? c.dim(` [${def}]`) : '';
+    const ans = await promptLine(`  ${c.cyan('?')} ${label}${tail}${hint ? ' ' + c.dim(hint) : ''}\n  ${c.cyan('›')} `);
+    return ans.trim() || def;
+}
+
+/** Yes/No prompt; empty input falls back to `def`. */
+async function confirm({ label, def = false }) {
+    const ans = (await promptLine(`  ${c.cyan('?')} ${label} ${c.dim(def ? '[Y/n]' : '[y/N]')} `)).trim().toLowerCase();
+    if (!ans) return def;
+    return ans[0] === 'y';
+}
+
+/** Positive-integer prompt; empty input falls back to `def`, re-asks on garbage. */
+async function promptInt({ label, def, min = 1 }) {
+    for (;;) {
+        const raw = await promptText({ label, def: String(def) });
+        const n = parseInt(raw, 10);
+        if (Number.isInteger(n) && n >= min) return n;
+        log(c.yellow(`    Please enter a whole number ≥ ${min} (Enter = ${def}).`));
+    }
+}
+
+/** Normalise free-form Ollama input — bare port, host:port, or full URL → URL. */
+function normalizeHost(raw) {
+    let v = (raw || '').trim();
+    if (!v) return 'http://localhost:11434';
+    if (/^\d+$/.test(v)) return `http://localhost:${v}`;          // bare port
+    if (!/^https?:\/\//.test(v)) v = 'http://' + v;              // add scheme
+    return v.replace('://0.0.0.0', '://localhost');
+}
+
+/** GET {host}/api/tags → array of installed model names, or null if unreachable. */
+async function listOllamaModels(host) {
+    try {
+        const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(2500) });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return (data.models || []).map(m => m.name).filter(Boolean);
+    } catch { return null; }
+}
+
+/**
+ * Pick a model. With Ollama reachable: an arrow-select over the installed models
+ * (the default is always listed and pre-highlighted) plus an "Other…" escape
+ * hatch for a name to pull later. Offline: a plain text prompt. Either way,
+ * Enter/empty yields `def`.
+ */
+async function selectModel({ purpose, def, models }) {
+    if (models && models.length) {
+        const names = models.includes(def) ? models.slice() : [def, ...models];
+        const items = names.map(n => ({
+            key: n, label: n,
+            desc: models.includes(n) ? c.dim('installed') : c.yellow('not installed — pulled on first use'),
+        }));
+        items.push({ key: CUSTOM_MODEL, label: 'Other (type a name)…', desc: '' });
+        const choice = await interactiveSelect({ title: `Model for ${purpose}`, items, selectedKey: def });
+        if (choice !== CUSTOM_MODEL) return choice;
+        return await promptText({ label: `${purpose} model`, def });
+    }
+    return await promptText({ label: `${purpose} model`, def, hint: '· Ollama offline — used once pulled' });
+}
+
 // ─── Stack config persistence (.graph-indexer/config.json) ───────────────────
 
-function saveStackConfig(languages, frameworks, interactive) {
+function saveStackConfig({ languages, frameworks, engine, interactive }) {
     if (isDryRun) { log(c.dim(`    [dry-run] would write ${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`)); return 'skipped'; }
     ensureDataDir(PROJECT_ROOT);
     const existing = readJsonSafe(PATHS.configPath) || {};
@@ -344,6 +480,17 @@ function saveStackConfig(languages, frameworks, interactive) {
         // Auto-detect run: never destroy an existing selection; only fill blanks.
         if (languages && !existing.languages) existing.languages = languages;
         if (frameworks && frameworks.length && !existing.frameworks) existing.frameworks = frameworks;
+    }
+
+    // Engine settings only when the user explicitly configured them (interactive).
+    // Merge nested objects so power-user knobs we didn't prompt for (coreRatio,
+    // topM, poolSize, …) survive a re-run.
+    if (engine) {
+        existing.storage = engine.storage;
+        existing.ollamaHost = engine.ollamaHost;
+        existing.embedModel = engine.embedModel;
+        existing.enrichment = { ...(existing.enrichment || {}), ...engine.enrichment };
+        existing.rerank = { ...(existing.rerank || {}), ...engine.rerank };
     }
 
     const after = JSON.stringify(existing);
@@ -687,9 +834,76 @@ if (availableFrameworks.length === 0) {
     }
 }
 
-// ── Step 3 · Editors & MCP wiring ─────────────────────────────────────────────
+// ── Step 3 · Search engine & LLM features ─────────────────────────────────────
 
-stepHeader(3, 'Editors & MCP wiring');
+stepHeader(3, 'Search engine & LLM features');
+
+let engineConfig = null; // null = leave engine settings to defaults / existing config
+{
+    const existing = readJsonSafe(PATHS.configPath) || {};
+    const exEnrich = existing.enrichment || {};
+    const exRerank = existing.rerank || {};
+
+    if (!isInteractive) {
+        line(glyph.skip, 'Engine', 'using defaults / existing config (non-interactive)');
+    } else {
+        // Storage backend
+        const storage = await interactiveSelect({
+            title: 'Storage backend',
+            items: [
+                { key: 'memory', label: 'In-memory', desc: c.dim('default · fastest · ideal for most repos') },
+                { key: 'sqlite', label: 'SQLite', desc: c.dim('persistent · for very large repos (1M+ LOC)') },
+            ],
+            selectedKey: existing.storage === 'sqlite' ? 'sqlite' : 'memory',
+        });
+
+        // Ollama endpoint — powers embeddings, enrichment and reranking
+        const ollamaHost = normalizeHost(await promptText({
+            label: 'Ollama host', hint: '(URL or port)',
+            def: existing.ollamaHost || 'http://localhost:11434',
+        }));
+        log(c.dim('      probing Ollama…'));
+        const models = await listOllamaModels(ollamaHost);
+        if (models) line(glyph.ok, 'Ollama', `${models.length} model(s) at ${ollamaHost}`);
+        else line(glyph.warn, 'Ollama', `not reachable at ${ollamaHost} — you can still name models to pull later`);
+
+        // Embedding model (semantic vector search — always on)
+        const embedModel = await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'nomic-embed-text', models });
+
+        // LLM enrichment (opt-in)
+        const enrichEnabled = await confirm({ label: 'Enable LLM enrichment?  (richer semantics, slower indexing)', def: Boolean(exEnrich.enabled) });
+        const enrichment = { enabled: enrichEnabled };
+        if (enrichEnabled) {
+            enrichment.model = await selectModel({ purpose: 'enrichment', def: exEnrich.model || 'qwen2.5-coder:1.5b', models });
+            if (await confirm({ label: 'Tune enrichment limits?', def: false })) {
+                enrichment.maxChunks = await promptInt({ label: 'Max LLM calls per index run', def: exEnrich.maxChunks || 500 });
+                enrichment.concurrency = await promptInt({ label: 'Parallel Ollama requests', def: exEnrich.concurrency || 4 });
+            }
+        }
+
+        // LLM reranker (opt-in)
+        const rerankEnabled = await confirm({ label: 'Enable LLM reranker?  (one LLM call per query, sharper top hits)', def: Boolean(exRerank.enabled) });
+        const rerank = { enabled: rerankEnabled };
+        if (rerankEnabled) {
+            rerank.model = await selectModel({ purpose: 'reranker', def: exRerank.model || 'qwen2.5-coder:7b', models });
+            if (await confirm({ label: 'Tune reranker limits?', def: false })) {
+                rerank.topM = await promptInt({ label: 'Candidates shown to the judge', def: exRerank.topM || 12 });
+                rerank.poolSize = await promptInt({ label: 'Over-fetch pool size', def: exRerank.poolSize || 15 });
+            }
+        }
+
+        engineConfig = { storage, ollamaHost, embedModel, enrichment, rerank };
+
+        line(glyph.ok, 'Backend', storage === 'sqlite' ? 'SQLite (large repos)' : 'In-memory (default)');
+        line(glyph.ok, 'Embeddings', embedModel);
+        line(enrichEnabled ? glyph.ok : glyph.skip, 'Enrichment', enrichEnabled ? enrichment.model : 'disabled (default)');
+        line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? rerank.model : 'disabled (default)');
+    }
+}
+
+// ── Step 4 · Editors & MCP wiring ─────────────────────────────────────────────
+
+stepHeader(4, 'Editors & MCP wiring');
 
 const ides = [
     { name: 'VS Code', fn: configureVSCode },
@@ -709,9 +923,9 @@ for (const { name, fn } of ides) {
     }
 }
 
-// ── Step 4 · Project files & daemon control ───────────────────────────────────
+// ── Step 5 · Project files & daemon control ───────────────────────────────────
 
-stepHeader(4, 'Project files & daemon control');
+stepHeader(5, 'Project files & daemon control');
 
 const scriptRes = addPackageScripts();
 if (scriptRes.skipped) {
@@ -726,14 +940,14 @@ if (scriptRes.skipped) {
 const gi = updateGitignore();
 act(gi, '.gitignore', `${DATA_DIR_NAME}/ (config.json shared)`);
 
-const cfg = saveStackConfig(selectedLanguages, selectedFrameworks, isInteractive);
-if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack selection');
+const cfg = saveStackConfig({ languages: selectedLanguages, frameworks: selectedFrameworks, engine: engineConfig, interactive: isInteractive });
+if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack + engine settings');
 
 if (!isDryRun) ensureDataDir(PROJECT_ROOT);
 
-// ── Step 5 · Agent instructions (layered prompt suite) ────────────────────────
+// ── Step 6 · Agent instructions (layered prompt suite) ────────────────────────
 
-stepHeader(5, 'Agent instructions');
+stepHeader(6, 'Agent instructions');
 
 const assembled = assembleAgentPrompt(promptLanguages, selectedFrameworks);
 let layersUsed = [];
@@ -786,6 +1000,9 @@ log(`    ${c.cyan('2.')} Restart your editor    ${c.dim('→')} loads the MCP se
 log(`    ${c.cyan('3.')} Control the daemon     ${c.dim('→')} ${c.cyan('npm run mcp:daemon:status')} ${c.dim('| start | stop | restart | logs')}`);
 log(`    ${c.cyan('4.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
 log(c.dim(`       Other agents (.clinerules, .windsurfrules, …): prompts/INTEGRATION.md`));
+if (engineConfig && (engineConfig.enrichment.enabled || engineConfig.rerank.enabled)) {
+    log(c.dim(`       LLM features on — first ${c.cyan('npm run mcp:index')} calls Ollama at ${engineConfig.ollamaHost}`));
+}
 
 log('\n' + rule());
 log(`  ${glyph.ok} ${c.bold('graph-indexer is ready.')} ${c.dim('Generated files live in ' + DATA_DIR_NAME + '/ — your root stays clean.')}`);
