@@ -1,17 +1,15 @@
 <div align="center">
-  <!-- Reemplaza la URL de abajo con la ruta a tu nuevo logo profesional en formato SVG o PNG transparente -->
   <img src="https://raw.githubusercontent.com/MaquinaTech/graph-indexer/main/assets/logo.jpg" alt="Graph Indexer Logo" width="250" />
 
   <h1>Graph Indexer</h1>
 
   <p>
-    <strong>Zero-Database · Air-Gapped · AST-Precise · Hybrid Search · Monorepo-Scale</strong>
+    <strong>Topology-Aware · Caller-Safe · Air-Gapped · Hybrid Search · Monorepo-Scale</strong>
   </p>
   <p>
-    <em>An MCP server that lets AI coding agents search your codebase by concept instead of reading files, cutting context usage by 65–88% per query.</em>
+    <em>An MCP server that gives AI coding agents structural awareness of your codebase — so they find the right code, see everything that depends on it, and make changes that don't break what they never read.</em>
   </p>
 
-  <!-- Badges -->
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=007acc&style=for-the-badge" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/dt/graph-indexer?color=4caf50&style=for-the-badge" alt="NPM Downloads"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D18-brightgreen?style=for-the-badge&logo=nodedotjs" alt="Node.js 18+"></a>
@@ -24,13 +22,15 @@
 
 ## Table of Contents
 
+- [Why agents fail on real codebases](#why-agents-fail-on-real-codebases)
 - [What it does](#what-it-does)
+- [Key use cases](#key-use-cases)
 - [Results](#results)
 - [Getting started](#getting-started)
+- [Agent prompt suite](#agent-prompt-suite)
+- [MCP tools](#mcp-tools)
 - [Storage backends](#storage-backends)
 - [Semantic enrichment](#semantic-enrichment)
-- [MCP tools](#mcp-tools)
-- [Agent prompt suite](#agent-prompt-suite)
 - [Configuration](#configuration)
 - [Supported languages](#supported-languages)
 - [How it works](#how-it-works)
@@ -42,33 +42,81 @@
 
 ---
 
+## Why agents fail on real codebases
+
+Without structural awareness, AI coding agents operate on incomplete information:
+
+- **They read the wrong files** — grabbing full file contents when only one function is relevant, burning context on code that doesn't matter.
+- **They miss callers** — editing a function's signature without knowing which other functions call it, breaking things they never saw.
+- **They can't see side effects** — changing behavior in one module that ripples into three others they never read.
+- **They lose coherence on large repos** — reading full files pushes the relevant code out of the context window, or they hallucinate because they never found it at all.
+
+These aren't model failures. They're information failures. Agents make decisions with whatever context they have — and file-reading gives them an incomplete, topology-blind slice of your codebase.
+
+---
+
 ## What it does
 
-graph-indexer pre-indexes your codebase into an AST-precise search index and exposes it as an MCP server. Instead of reading full files, AI agents call `search_code("payment validation")` and get back the exact functions that match — with type signatures, docstrings, decorators, inheritance edges, dependency graph, and call sites — in a fraction of the tokens.
+graph-indexer pre-indexes your codebase into an AST-precise, topology-aware search index and exposes it as an MCP server. Instead of reading full files, agents search by concept and get back the exact functions that match — with type signatures, docstrings, decorators, inheritance edges, and **the full call graph**: what the function calls and what calls it.
 
-It runs entirely on your machine. No external database, no cloud APIs, no telemetry. Two design choices make it suitable for any repository size:
+**The call graph is the critical piece.** Before modifying any function, an agent can call `get_call_graph("processPayment")` and see every caller across the entire repo. It can update them all in one consistent pass instead of discovering broken callers in CI.
 
-- A **default in-memory engine** that is instant and dependency-free, and an optional **disk-backed SQLite backend** that holds the index on disk so retrieval RAM stays flat on enterprise monorepos that would otherwise exhaust Node's heap.
+Here's what that looks like in practice:
+
+```
+Task: "Refactor processPayment to accept a new currency parameter"
+
+─────────────────────────────────────────────────────────────────
+WITHOUT graph-indexer
+─────────────────────────────────────────────────────────────────
+readFile("src/payments/service.ts")       →  8,400 tokens
+readFile("src/payments/handlers.ts")      →  6,200 tokens
+readFile("src/types/payment.ts")          →  1,800 tokens
+                                 Total:  ~16,400 tokens
+
+Agent edits processPayment signature. Submits change.
+CI fails: retryQueue, webhookHandler, auditLogger all call
+processPayment — the agent never saw them.
+
+─────────────────────────────────────────────────────────────────
+WITH graph-indexer
+─────────────────────────────────────────────────────────────────
+search_code("payment processing")         →    650 tokens
+get_call_graph("processPayment")          →    280 tokens
+                                          (3 callers returned:
+                                           retryQueue, webhookHandler,
+                                           auditLogger)
+
+Agent updates processPayment + all 3 callers. CI passes.
+                                 Total:  ~  930 tokens
+─────────────────────────────────────────────────────────────────
+```
+
+The token difference (94% fewer in this example) is a side effect of precision, not the primary goal. The primary goal is that the agent sees the blast radius of its change before making it.
+
+graph-indexer runs entirely on your machine. No external database, no cloud APIs, no telemetry. Two design choices make it suitable for any repository size:
+
+- A **default in-memory engine** that is instant and dependency-free, and an optional **disk-backed SQLite backend** that holds the index on disk so retrieval RAM stays flat on enterprise monorepos.
 - Optional **local-LLM semantic enrichment** that teaches the index what each core component *does*, so conceptual queries match code that shares none of their words.
 
-**Token comparison:**
+---
 
-```
-Agent task: "Add error handling to the payment processing flow"
+## Key use cases
 
-Without graph-indexer:
-  readFile("src/payments/service.ts")   →  8,400 tokens
-  readFile("src/payments/handlers.ts")  →  6,200 tokens
-  readFile("src/types/payment.ts")      →  1,800 tokens
-  Total:                                ~ 16,400 tokens
+**Safe refactoring across callers**
+Before modifying any exported function, call `get_call_graph` to retrieve every call site across the entire repo. Update them all in one pass. Never break a caller you didn't know existed.
 
-With graph-indexer:
-  search_code("payment processing")     →    650 tokens  (5 exact chunks)
-  get_chunk("chunk_id")                 →    280 tokens  (full function body)
-  Total:                                ~    930 tokens
-```
+**Orienting in an unfamiliar codebase**
+`get_repo_map` returns a compact, PageRank-ordered symbol map — most-imported modules first — in ~1,500 tokens. An agent understands the architecture before writing a single line.
 
-The difference compounds across a session. Agents that read files also lack topology — they can't see which other functions call the one they're modifying, so they miss side effects.
+**Conceptual and cross-cutting feature work**
+Search by behavior ("rate limiting middleware", "auth token refresh flow") without knowing function names. Semantic enrichment finds code that shares none of your query's words by matching on LLM-generated intent summaries.
+
+**Consistent changes across a large codebase**
+When a shared interface, type, or utility changes, `search_code` finds every implementation, and `get_call_graph` finds every consumer. The agent touches everything that needs updating — no partial migrations.
+
+**Large monorepo work without OOM**
+The SQLite backend holds the index on disk; retrieval RAM stays flat at ~79 MB regardless of corpus size. The binary-quantized vector sketch keeps search interactive at <11 ms across 200k+ chunks.
 
 ---
 
@@ -84,7 +132,7 @@ behavioural descriptions sharing few or no words with the code).
 
 ### Token savings per query
 
-| Project | Language | Chunks | Recall@5 (loose) | Savings | 
+| Project | Language | Chunks | Recall@5 (loose) | Savings |
 | :--- | :--- | ---: | ---: | ---: |
 | Axios v1.6.0 | JavaScript | 450 | 0.89 | **69.7%** |
 | Express 4.18.2 | JavaScript | 389 | 0.95 | **88.7%** |
@@ -302,6 +350,159 @@ For other agents or manual setup, see [Agent prompt suite](#agent-prompt-suite) 
 
 ---
 
+## Agent prompt suite
+
+Tools alone don't make an agent efficient or safe. Left unprompted, agents fall into two failure modes: **exploration paralysis** (reading every file in a dependency tree before acting) and **tunnel vision** (editing a function without checking who calls it). The [prompts/](./prompts/) directory ships a **3-layer system-prompt architecture** that fixes both.
+
+The prompts are **protocol-based, not advisory**. Four inviolable hard limits govern every agent session:
+
+- **4-Call Budget** — forced synthesis at the wall, no self-granted extensions
+- **Batch-don't-iterate** — N known names = one search, never N serial lookups
+- **Consume-before-call** — a result's topology must be read before the next call is allowed
+- **Rule of One** — at most one example hop
+
+These aren't style guidelines. They're enforced constraints that make token and latency budgets hold even on small, fast models, and they ensure the agent actually *uses* the call graph and topology data before acting — not after.
+
+| Layer | File(s) | Contents |
+| :--- | :--- | :--- |
+| **1 — Core** | [prompts/CORE.md](./prompts/CORE.md) | The four hard limits, the call protocol, task playbooks, the tool/cost table, query rules, anti-patterns, and the fallback protocol. Always required. |
+| **2 — Environment** | [prompts/languages/](./prompts/languages/) · [prompts/frameworks/](./prompts/frameworks/) | Version-agnostic index facts per stack: which call edges exist, which don't, whether import topology is trustworthy, and the stack's highest-leverage playbook. Load only the ones matching your code. |
+| **3 — Domain** | [prompts/DOMAIN_TEMPLATE.md](./prompts/DOMAIN_TEMPLATE.md) | A template for *your* project's rules: entry points, domain vocabulary, critical paths, no-go zones. |
+
+**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
+
+All prompts are strict XML, instantly parsable by downstream LLMs. Combination is plain concatenation in layer order — Layer 1's hard limits are inviolable; lower layers refine, never relax.
+
+### What `init` generates
+
+`npx graph-indexer init` asks for your languages and frameworks (pre-selecting what it detects in the project) and assembles the right layers:
+
+| File | Contents | Ownership |
+| :--- | :--- | :--- |
+| `GRAPH_INDEXER_PROMPT.md` | Layers 1+2 for your selection | Generated — regenerated on every `init` |
+| `GRAPH_INDEXER_DOMAIN.md` | Layer 3 template | **Yours** — never overwritten |
+| `CLAUDE.md` | `@`-imports of the two files above | Appended once, idempotent |
+| `.cursor/rules/graph-indexer.mdc` | Same layers as an always-on Cursor rule | Generated — regenerated on every `init` |
+
+For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the layers yourself — [prompts/INTEGRATION.md](./prompts/INTEGRATION.md) has copy-paste recipes and worked examples per stack.
+
+---
+
+## MCP tools
+
+### `search_code`
+
+Hybrid BM25 + vector search over the index. The primary entry point for agents.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | string | required | Natural language description of the logic to find |
+| `exact_tokens` | string? | — | Exact symbol name — guarantees rank-1 placement |
+| `detail` | `"signatures"` \| `"smart"` \| `"full"` | `"smart"` | How much code to return per result |
+| `top_k` | number | `5` | Results to return (1–20) |
+| `include_topology` | boolean | `true` | Include imports / used-by / calls |
+| `min_score` | number | `0.3` | Minimum relevance threshold |
+| `token_budget` | number? | auto | Cap total tokens returned |
+| `rerank` | boolean? | config | LLM-judge rerank for natural-language queries (see `rerank.*` config) |
+
+**`detail` levels:**
+
+| Value | Cost | Returns |
+| :--- | ---: | :--- |
+| `"signatures"` | ~20 tok | Name, type, params, return type, topology |
+| `"smart"` (default) | ~150 tok | Signature + lines relevant to the query |
+| `"full"` | ~300 tok | Signature + complete source body |
+
+For purely conceptual queries with no lexical overlap, `"smart"` falls back to a structural skeleton — control-flow lines and call sites — so the agent always gets meaningful signal about what the code does, never a blind truncation.
+
+---
+
+### `get_call_graph`
+
+Every chunk across the repo that calls a specific function.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `target_function` | string | Exact function name (e.g. `"validateToken"`) |
+
+**This is the blast-radius tool.** Call it before modifying any exported function to find every call site across the entire codebase. The agent can then update all callers in one consistent pass instead of discovering them in CI.
+
+```
+# Agent workflow for safe refactoring:
+1. search_code("payment validation")       → find the function
+2. get_call_graph("processPayment")        → see all callers
+3. get_chunk(caller_id) for each caller   → read what needs updating
+4. Make all changes in one pass            → no broken callers
+```
+
+---
+
+### `resolve_symbol`
+
+O(1) lookup by exact name — no search ranking needed.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `symbol` | string | Exact function, class, or type name (e.g. `"validateToken"`) |
+
+---
+
+### `get_chunk`
+
+Returns the source code of a single chunk by its ID.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `chunk_id` | string | required | ID from `search_code` results |
+| `view` | `"full"` \| `"signature"` | `"full"` | Full body or first line only |
+
+---
+
+### `get_chunk_summary`
+
+Signature + docstring + calls without the body. ~50 tokens vs ~300 for full.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `chunk_id` | string | required | ID from `search_code` results |
+| `expand_calls` | boolean | `false` | Resolve each outgoing call's signature inline (~150 tok) instead of issuing a follow-up tool call per dependency |
+
+---
+
+### `get_file_skeleton`
+
+All top-level exports and definitions in a file with line numbers — no bodies.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `file_path` | string | Relative path (e.g. `src/utils/auth.ts`) |
+
+---
+
+### `get_repo_map`
+
+Compact symbol map ordered by PageRank (most-imported files first). Orients agents in an unfamiliar codebase in ~1,500 tokens.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `path_filter` | string? | — | Limit to files whose path contains this string |
+| `max_files` | number | `80` | Maximum files to include |
+| `sort_by` | `"importance"` \| `"path"` | `"importance"` | Sort order |
+
+---
+
+### `list_index_stats`
+
+Index health snapshot: storage backend, chunk count, file count, symbol table size, vector count, search mode, daemon status, index age.
+
+---
+
+### `graph://dependencies/{file_path}` (resource)
+
+Full bidirectional dependency topology for a file: what it imports and what imports it.
+
+---
+
 ## Storage backends
 
 The same index, the same tools, the same ranking — two ways to hold the data. The MCP tools are written against a storage contract and never see which backend is active.
@@ -403,144 +604,6 @@ recall comes from retrieval). The symbolic channel is untouched (the judge only 
 natural-language queries, never on symbol lookups or `exact_tokens` calls). Cost: one generation
 call per NL query (`qwen2.5-coder:7b` default; a larger judge such as `qwen2.5:14b-instruct` scores
 higher if you have the headroom). Best-effort — any model failure preserves the original order.
-
----
-
-## MCP tools
-
-### `search_code`
-
-Hybrid BM25 + vector search over the index. The primary entry point for agents.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `query` | string | required | Natural language description of the logic to find |
-| `exact_tokens` | string? | — | Exact symbol name — guarantees rank-1 placement |
-| `detail` | `"signatures"` \| `"smart"` \| `"full"` | `"smart"` | How much code to return per result |
-| `top_k` | number | `5` | Results to return (1–20) |
-| `include_topology` | boolean | `true` | Include imports / used-by / calls |
-| `min_score` | number | `0.3` | Minimum relevance threshold |
-| `token_budget` | number? | auto | Cap total tokens returned |
-| `rerank` | boolean? | config | LLM-judge rerank for natural-language queries (see `rerank.*` config) |
-
-**`detail` levels:**
-
-| Value | Cost | Returns |
-| :--- | ---: | :--- |
-| `"signatures"` | ~20 tok | Name, type, params, return type, topology |
-| `"smart"` (default) | ~150 tok | Signature + lines relevant to the query |
-| `"full"` | ~300 tok | Signature + complete source body |
-
-For purely conceptual queries with no lexical overlap, `"smart"` falls back to a structural skeleton — control-flow lines and call sites — so the agent always gets meaningful signal about what the code does, never a blind truncation.
-
----
-
-### `resolve_symbol`
-
-O(1) lookup by exact name — no search ranking needed.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `symbol` | string | Exact function, class, or type name (e.g. `"validateToken"`) |
-
----
-
-### `get_chunk`
-
-Returns the source code of a single chunk by its ID.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `chunk_id` | string | required | ID from `search_code` results |
-| `view` | `"full"` \| `"signature"` | `"full"` | Full body or first line only |
-
----
-
-### `get_chunk_summary`
-
-Signature + docstring + calls without the body. ~50 tokens vs ~300 for full.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `chunk_id` | string | required | ID from `search_code` results |
-| `expand_calls` | boolean | `false` | Resolve each outgoing call's signature inline (~150 tok) instead of issuing a follow-up tool call per dependency |
-
----
-
-### `get_file_skeleton`
-
-All top-level exports and definitions in a file with line numbers — no bodies.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `file_path` | string | Relative path (e.g. `src/utils/auth.ts`) |
-
----
-
-### `get_call_graph`
-
-Every chunk across the repo that calls a specific function.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `target_function` | string | Exact function name (e.g. `"validateToken"`) |
-
-Call this before modifying any exported function to find all affected call sites.
-
----
-
-### `get_repo_map`
-
-Compact symbol map ordered by PageRank (most-imported files first). Orients agents in an unfamiliar codebase in ~1,500 tokens.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `path_filter` | string? | — | Limit to files whose path contains this string |
-| `max_files` | number | `80` | Maximum files to include |
-| `sort_by` | `"importance"` \| `"path"` | `"importance"` | Sort order |
-
----
-
-### `list_index_stats`
-
-Index health snapshot: storage backend, chunk count, file count, symbol table size, vector count, search mode, daemon status, index age.
-
----
-
-### `graph://dependencies/{file_path}` (resource)
-
-Full bidirectional dependency topology for a file: what it imports and what imports it.
-
----
-
-## Agent prompt suite
-
-Tools alone don't make an agent efficient — left unprompted, agents either read every file in a component's dependency tree ("exploration paralysis") or summarize a component without ever checking who uses it ("tunnel vision"). The [prompts/](./prompts/) directory ships a **3-layer system-prompt architecture** that fixes both, without collapsing into one giant "god prompt" that dilutes context.
-
-The prompts are **protocol-based, not advisory**: four inviolable hard limits — a **4-Call Budget** with forced synthesis at the wall (no self-granted extensions), **batch-don't-iterate** (N known names = one search, never N lookups), **consume-before-call** (a result's topology must be read before the next call is allowed), and the **Rule of One** (at most one example hop) — plus per-task playbooks with explicit call counts. This is what makes the token/latency promises above hold even on small, fast models.
-
-| Layer | File(s) | Contents |
-| :--- | :--- | :--- |
-| **1 — Core** | [prompts/CORE.md](./prompts/CORE.md) | The four hard limits, the call protocol, task playbooks, the tool/cost table, query rules, anti-patterns, and the fallback protocol. Always required. |
-| **2 — Environment** | [prompts/languages/](./prompts/languages/) · [prompts/frameworks/](./prompts/frameworks/) | Version-agnostic index facts per stack: which call edges exist, which don't, whether import topology is trustworthy, and the stack's highest-leverage playbook. Load only the ones matching your code. |
-| **3 — Domain** | [prompts/DOMAIN_TEMPLATE.md](./prompts/DOMAIN_TEMPLATE.md) | A template for *your* project's rules: entry points, domain vocabulary, critical paths, no-go zones. |
-
-**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
-
-All prompts are strict XML, instantly parsable by downstream LLMs. Combination is plain concatenation in layer order — Layer 1's hard limits are inviolable; lower layers refine, never relax.
-
-### What `init` generates
-
-`npx graph-indexer init` asks for your languages and frameworks (pre-selecting what it detects in the project) and assembles the right layers:
-
-| File | Contents | Ownership |
-| :--- | :--- | :--- |
-| `GRAPH_INDEXER_PROMPT.md` | Layers 1+2 for your selection | Generated — regenerated on every `init` |
-| `GRAPH_INDEXER_DOMAIN.md` | Layer 3 template | **Yours** — never overwritten |
-| `CLAUDE.md` | `@`-imports of the two files above | Appended once, idempotent |
-| `.cursor/rules/graph-indexer.mdc` | Same layers as an always-on Cursor rule | Generated — regenerated on every `init` |
-
-For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the layers yourself — [prompts/INTEGRATION.md](./prompts/INTEGRATION.md) has copy-paste recipes and worked examples per stack.
 
 ---
 
@@ -708,6 +771,8 @@ Tree-sitter AST
 **Export named functions, not anonymous ones.** Anonymous default exports can't be targeted by `resolve_symbol` and rank lower in name-boost scoring.
 
 **Avoid catch-all utility files.** Files that mix unrelated utilities produce weaker per-chunk signals. One responsibility per module indexes more cleanly.
+
+**Run `get_call_graph` before any refactor.** Any change to an exported function's signature, return type, or behavior has a blast radius. Know it before you start.
 
 **Reach for the SQLite backend when the heap gets tight.** If indexing a large monorepo pushes Node toward its memory limit, switch to `--use-sqlite`; retrieval quality is identical and resident memory stops scaling with the codebase.
 
