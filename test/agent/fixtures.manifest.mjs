@@ -33,4 +33,10 @@ export const FIXTURES = [
                   'app/Events', 'app/Listeners', 'app/Policies', 'app/Rules', 'app/Values', 'app/Builders',
                   'app/Facades', 'app/Exceptions'],
     },
+    // C — cJSON: a compact, famous, pure-C JSON library (functions + the cJSON struct).
+    { dest: 'cjson',     repo: 'https://github.com/DaveGamble/cJSON',  subdirs: ['.'],       lang: 'C' },
+    // Bash — nvm: a large real-world shell program; nvm.sh + install.sh are function-dense.
+    { dest: 'nvm',       repo: 'https://github.com/nvm-sh/nvm',        subdirs: ['.'],       lang: 'Bash' },
+    // Swift — Alamofire: idiomatic Swift HTTP networking (Session/Request/AFError + extensions).
+    { dest: 'alamofire', repo: 'https://github.com/Alamofire/Alamofire', subdirs: ['Source'], lang: 'Swift' },
 ];

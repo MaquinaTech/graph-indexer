@@ -93,7 +93,7 @@ const _enabled = _cfg?.languages ?? null; // null = all languages
 
 const [
     TypeScript, JavaScript, CSS, SCSS, Python, Rust,
-    Go, PHP, Java, Kotlin, CSharp, Ruby
+    Go, PHP, Java, Kotlin, CSharp, Ruby, C, Bash, Swift
 ] = await Promise.all([
     _tryLang('tree-sitter-typescript', _enabled, 'typescript'),
     _tryLang('tree-sitter-javascript', _enabled, 'javascript'),
@@ -109,6 +109,9 @@ const [
     _tryLang('tree-sitter-kotlin',     _enabled, 'kotlin'),
     _tryLang('tree-sitter-c-sharp',    _enabled, 'csharp'),
     _tryLang('tree-sitter-ruby',       _enabled, 'ruby'),
+    _tryLang('tree-sitter-c',          _enabled, 'c'),
+    _tryLang('tree-sitter-bash',       _enabled, 'bash'),
+    _tryLang('tree-sitter-swift',      _enabled, 'swift'),
 ]);
 
 const LANGUAGE_MAP = {
@@ -124,6 +127,11 @@ const LANGUAGE_MAP = {
     ...(Kotlin     ? { '.kt': Kotlin, '.kts': Kotlin } : {}),
     ...(CSharp     ? { '.cs': CSharp }  : {}),
     ...(Ruby       ? { '.rb': Ruby }    : {}),
+    // C maps .c sources and .h headers (structs/typedefs/macros live in headers).
+    ...(C          ? { '.c': C, '.h': C } : {}),
+    // Bash maps .sh and .bash; shebang-only extensionless scripts are not keyed.
+    ...(Bash       ? { '.sh': Bash, '.bash': Bash } : {}),
+    ...(Swift      ? { '.swift': Swift } : {}),
 };
 
 // 🥇 ULTRA-GENERIC QUERIES: Immune to grammar changes between TS/JS/TSX
@@ -191,6 +199,28 @@ const LANGUAGE_QUERIES = {
         (singleton_method) @chunk
         (class) @chunk
         (module) @chunk
+    `,
+    // C: functions + record/typedef definitions. Bare prototypes (declaration) and
+    // object macros (preproc_def) are intentionally excluded — too noisy / sub-chunk.
+    c: `
+        (function_definition) @chunk
+        (struct_specifier) @chunk
+        (union_specifier) @chunk
+        (enum_specifier) @chunk
+        (type_definition) @chunk
+        (preproc_function_def) @chunk
+    `,
+    // Bash: the function is the only meaningful indexable unit. Top-level command
+    // sequences are script glue, not symbols, so they are not chunked.
+    bash: `
+        (function_definition) @chunk
+    `,
+    // Swift: struct/class/enum/extension all parse as class_declaration (the grammar
+    // distinguishes them by an inner keyword); protocols and free funcs are separate.
+    swift: `
+        (class_declaration) @chunk
+        (protocol_declaration) @chunk
+        (function_declaration) @chunk
     `
 };
 
@@ -212,7 +242,12 @@ const CONTAINERS = new Set([
     // C#
     'property_declaration',
     // Ruby
-    'method', 'singleton_method', 'module'
+    'method', 'singleton_method', 'module',
+    // C (records + typedef so nested/anonymous specifiers dedupe to one chunk)
+    'struct_specifier', 'union_specifier', 'enum_specifier', 'type_definition',
+    'preproc_function_def',
+    // Swift (class_declaration + function_declaration already listed above)
+    'protocol_declaration'
 ]);
 
 export function getParserForFile(ext) {
@@ -347,6 +382,35 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
+        // ── C ──────────────────────────────────────────────────────────────────
+        else if (ext === '.c' || ext === '.h') {
+            // Only quoted local includes (`#include "foo.h"`) carry intra-project
+            // edges; angle-bracket system includes (<stdio.h>) are stdlib noise.
+            if (node.type === 'preproc_include') {
+                const str = node.children.find(c => c.type === 'string_literal');
+                if (str) imports.add(str.text.replace(/^[<"]|[>"]$/g, ''));
+            }
+        }
+        // ── Bash ─────────────────────────────────────────────────────────────────
+        else if (ext === '.sh' || ext === '.bash') {
+            // `source path` / `. path` pull another script into scope.
+            if (node.type === 'command') {
+                const cmd = node.childForFieldName?.('name')?.text;
+                if (cmd === 'source' || cmd === '.') {
+                    const arg = node.namedChildren.find(c => c.type !== 'command_name');
+                    if (arg) imports.add(arg.text.replace(/['"]/g, ''));
+                }
+            }
+        }
+        // ── Swift ─────────────────────────────────────────────────────────────────
+        else if (ext === '.swift') {
+            // `import Foundation` / `import MyModule.Submodule` — module-level, rarely
+            // file-resolvable, but tracked so the dependency list is non-empty.
+            if (node.type === 'import_declaration') {
+                const raw = node.text.replace(/^@?\w*\s*import\s+/, '').trim();
+                if (raw) imports.add(raw.replace(/\./g, '/'));
+            }
+        }
         node.children.forEach(walk);
     }
     walk(rootNode);
@@ -377,6 +441,29 @@ function buildGodClassSkeleton(classNode) {
     );
 }
 
+/**
+ * Resolve the declared name out of a C declarator chain.
+ * C nests the identifier under layers of pointer_declarator / array_declarator /
+ * function_declarator (`int *make_node(void)` → pointer_declarator → function_declarator
+ * → identifier), so we descend the `declarator` field until we hit the identifier.
+ */
+function _cDeclaratorName(node) {
+    let d = node, guard = 0;
+    while (d && guard++ < 16) {
+        if (d.type === 'identifier' || d.type === 'type_identifier' || d.type === 'field_identifier') return d.text;
+        // Descend the declarator field, or — for wrappers without that field, e.g. a
+        // function-pointer typedef's parenthesized_declarator — the inner *_declarator.
+        const next = d.childForFieldName?.('declarator')
+            || d.namedChildren?.find(c => /_declarator$/.test(c.type));
+        if (next && next !== d) { d = next; continue; }
+        const id = d.namedChildren?.find(c =>
+            c.type === 'identifier' || c.type === 'type_identifier' || c.type === 'field_identifier');
+        if (id) return id.text;
+        break;
+    }
+    return null;
+}
+
 export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
     const chunks = [];
     const parser = getParserForFile(ext);
@@ -390,6 +477,9 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
         // with the CSS grammar, so it MUST use the css query (the scss query
         // references node types the CSS grammar doesn't have).
         '.scss': SCSS ? 'scss' : 'css',
+        // C headers share the C grammar/query; .sh and .bash share the bash query.
+        // (.c and .swift resolve via the ext.slice(1) fallback below.)
+        '.h': 'c', '.sh': 'bash', '.bash': 'bash',
     };
     const langKey = JS_LIKE.includes(ext) ? 'ts'
         : (EXT_TO_LANG[ext] || (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null));
@@ -540,6 +630,17 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 const spec = chunkNode.namedChildren?.find(c => c.type === "type_spec" || c.type === "type_alias");
                 nameText = spec?.childForFieldName?.("name")?.text
                     || spec?.children?.find(c => c.type === "type_identifier")?.text
+                    || "anonymous";
+            } else if (chunkNode.type === "function_definition" || chunkNode.type === "type_definition"
+                       || chunkNode.type === "preproc_function_def") {
+                // C: the name is not a direct `name` field. For a function it is buried in
+                // declarator → … → identifier (e.g. `int *make()` nests through a
+                // pointer_declarator); for a typedef the `declarator` field is the new type
+                // name; a function-like macro carries an `identifier` child. Without this the
+                // chunk collapses to the useless synthetic `<file>_function_definition`, making
+                // every C function unsearchable by name and invisible to the 2.0× name boost.
+                nameText = _cDeclaratorName(chunkNode.childForFieldName?.("declarator"))
+                    || chunkNode.children.find(c => c.type === "identifier")?.text
                     || "anonymous";
             } else {
                 // Generic fallback: search direct children for an identifier-like node.
@@ -835,6 +936,18 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
                     }
                 }
                 if (found) break;
+            }
+        }
+        // ── C / Bash non-dotted relative includes ──────────────────────────
+        // C `#include "net/socket.h"` and Bash `source lib/util.sh` are resolved
+        // relative to the including file's directory, then to the project root.
+        else if ((ext === '.c' || ext === '.h' || ext === '.sh' || ext === '.bash')) {
+            for (const abs of [path.resolve(fileDir, raw), path.join(projectRoot, raw)]) {
+                if (EXTENSIONS.has(path.extname(abs)) && fs.existsSync(abs)) {
+                    const rel = path.relative(projectRoot, abs).replace(/\\/g, '/');
+                    if (!rel.startsWith('..') && !resolved.includes(rel)) resolved.push(rel);
+                    break;
+                }
             }
         }
     }
@@ -1143,6 +1256,19 @@ export function extractTypeAnnotations(chunkNode, ext) {
 const CALL_NOISE = new Set(['require', 'console', 'log', 'expect', 'test', 'it', 'describe', 'setTimeout', 'print', 'println!']);
 function _validCallName(c) { return Boolean(c) && c.length > 2 && !CALL_NOISE.has(c); }
 
+// Shell builtins / ubiquitous coreutils — emitting these as Bash call edges would
+// bury the project's own function-to-function calls in noise (they never resolve to
+// an indexed symbol anyway). Project functions and notable tools (docker, git, npm,
+// kubectl…) are kept.
+const BASH_BUILTINS = new Set([
+    'echo', 'cd', 'ls', 'cat', 'rm', 'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'ln',
+    'export', 'local', 'readonly', 'declare', 'unset', 'shift', 'read', 'printf',
+    'exit', 'return', 'eval', 'exec', 'trap', 'wait', 'sleep', 'pwd', 'set', 'shopt',
+    'source', 'test', 'true', 'false', 'kill', 'jobs', 'type', 'command', 'getopts',
+    'grep', 'sed', 'awk', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'find', 'xargs',
+    'chmod', 'chown', 'tee', 'wc', 'basename', 'dirname', 'tar', 'curl', 'wget', 'env',
+]);
+
 /**
  * Collapse a call's receiver expression into a compact disambiguation hint:
  *   • ''        — unqualified call (`foo()`): a free function or in-scope name.
@@ -1163,10 +1289,11 @@ function _receiverHint(objNode) {
 
 /**
  * Walk a subtree and collect every call site as { name, recv } (receiver hint).
- * Deduplicated by (name, recv). Cross-language: call_expression (JS/TS/Go/Rust),
- * call (Python), macro_invocation (Rust), method_invocation (Java/C#),
- * method_call (Ruby). The receiver is the precision half of the call graph —
- * extractCalls() derives the legacy name-only list from these sites.
+ * Deduplicated by (name, recv). Cross-language: call_expression (JS/TS/Go/Rust/C and
+ * Swift via simple_identifier/navigation_expression), call (Python), macro_invocation
+ * (Rust), method_invocation (Java/C#), method_call (Ruby), command (Bash). The receiver
+ * is the precision half of the call graph — extractCalls() derives the legacy name-only
+ * list from these sites.
  */
 export function extractCallSites(rootNode) {
     const sites = [];
@@ -1184,12 +1311,22 @@ export function extractCallSites(rootNode) {
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {
                 if (funcNode.type === 'identifier') add(funcNode.text, '');
+                else if (funcNode.type === 'simple_identifier') add(funcNode.text, ''); // Swift free call
                 else if (funcNode.type === 'member_expression' || funcNode.type === 'property_identifier') {
                     const prop = funcNode.childForFieldName?.('property');
                     if (prop) add(prop.text, _receiverHint(funcNode.childForFieldName?.('object')));
                     else add(funcNode.text.split('.').pop(), '');
+                } else if (funcNode.type === 'navigation_expression') { // Swift obj.method / self.method
+                    const suffix = funcNode.childForFieldName?.('suffix');
+                    const m = suffix?.namedChildren?.find(c => c.type === 'simple_identifier')?.text
+                        || suffix?.text?.replace(/^\./, '');
+                    if (m) add(m, _receiverHint(funcNode.childForFieldName?.('target')));
                 }
             }
+        } else if (t === 'command') { // Bash: a command is a function/program invocation
+            const cmd = (node.childForFieldName?.('name')?.text || '').trim();
+            // bare identifiers only — skip paths, env-prefixed assignments, builtins.
+            if (cmd && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(cmd) && !BASH_BUILTINS.has(cmd)) add(cmd, '');
         } else if (t === 'call') { // Python
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {

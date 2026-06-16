@@ -76,6 +76,9 @@ const LANGUAGES = [
     { key: 'csharp', label: 'C#', exts: '.cs' },
     { key: 'ruby', label: 'Ruby', exts: '.rb' },
     { key: 'css', label: 'CSS / SCSS', exts: '.css, .scss' },
+    { key: 'c', label: 'C', exts: '.c, .h' },
+    { key: 'bash', label: 'Bash / Shell', exts: '.sh, .bash' },
+    { key: 'swift', label: 'Swift', exts: '.swift' },
 ];
 
 // ─── Framework Registry (Layer 2 prompt add-ons) ─────────────────────────────
@@ -104,6 +107,9 @@ const LANGUAGE_PROMPTS = {
     ruby: 'languages/RUBY.md',
     php: 'languages/PHP.md',
     css: 'languages/CSS_SCSS.md',
+    c: 'languages/C.md',
+    bash: 'languages/BASH.md',
+    swift: 'languages/SWIFT.md',
 };
 
 // ─── MCP Server config blocks ─────────────────────────────────────────────────
@@ -163,6 +169,7 @@ const EXT_TO_LANG = {
     '.py': 'python', '.go': 'go', '.rs': 'rust', '.php': 'php', '.java': 'java',
     '.kt': 'kotlin', '.kts': 'kotlin', '.cs': 'csharp', '.rb': 'ruby',
     '.css': 'css', '.scss': 'css',
+    '.c': 'c', '.h': 'c', '.sh': 'bash', '.bash': 'bash', '.swift': 'swift',
 };
 
 const SKIP_DIRS = new Set([

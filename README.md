@@ -379,7 +379,7 @@ These aren't style guidelines. They're enforced constraints that make token and 
 | **2 — Environment** | [prompts/languages/](./prompts/languages/) · [prompts/frameworks/](./prompts/frameworks/) | Version-agnostic index facts per stack: which call edges exist, which don't, whether import topology is trustworthy, and the stack's highest-leverage playbook. Load only the ones matching your code. |
 | **3 — Domain** | [prompts/DOMAIN_TEMPLATE.md](./prompts/DOMAIN_TEMPLATE.md) | A template for *your* project's rules: entry points, domain vocabulary, critical paths, no-go zones. |
 
-**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
+**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, C, Bash, Swift, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
 
 All prompts are strict XML, instantly parsable by downstream LLMs. Combination is plain concatenation in layer order — Layer 1's hard limits are inviolable; lower layers refine, never relax.
 
@@ -668,7 +668,7 @@ All persistent settings live in one file inside the data dir, written by `init` 
 
 | Key | Default | Description |
 | :--- | :--- | :--- |
-| `languages` | all installed | Parsers to load. Valid keys: `typescript`, `javascript`, `python`, `go`, `rust`, `php`, `java`, `kotlin`, `csharp`, `ruby`, `css`. |
+| `languages` | all installed | Parsers to load. Valid keys: `typescript`, `javascript`, `python`, `go`, `rust`, `php`, `java`, `kotlin`, `csharp`, `ruby`, `css`, `c`, `bash`, `swift`. |
 | `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency) or `"sqlite"` (disk-backed). |
 | `embedProvider` | `"auto"` | How vectors are produced: `"auto"` (a running Ollama, else the in-process local model, else lexical), `"ollama"`, `"local"`, or `"off"`. |
 | `ollamaHost` | `"http://localhost:11434"` | Ollama endpoint (also settable via `OLLAMA_HOST`). |
@@ -730,9 +730,14 @@ Re-run `init` at any time to change languages, or `init --all-languages` to enab
 | C# | `.cs` | class, method, interface, property, enum |
 | Ruby | `.rb` | method, class, module |
 | PHP | `.php` | function, class |
+| C | `.c`, `.h` | functions, struct/union/enum, typedef, function-like macros |
+| Bash / Shell | `.sh`, `.bash` | functions (`source`/`.` tracked as deps) |
+| Swift | `.swift` | struct/class/enum/extension/actor, protocol, function |
 | CSS / SCSS | `.css`, `.scss` | rule sets |
 
 Oversized "god classes" are split automatically: a class longer than ~200 lines is indexed as a compact skeleton header plus one independently searchable chunk per method, so a single `get_chunk` never blows the token budget and every method stays reachable by search.
+
+> Each grammar is an **optional native dependency** — if one fails to install or build, graph-indexer logs a one-line warning and simply skips that language's files (everything else indexes normally). The Swift grammar (`tree-sitter-swift`) regenerates its parser at install time and therefore needs a working C toolchain; on hosts without one, Swift degrades gracefully like any other unavailable grammar.
 
 ---
 

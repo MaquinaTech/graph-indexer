@@ -100,4 +100,22 @@ export const SEARCH_CASES = {
         { id: 'breakpoint',  kind: 'kw', query: 'media breakpoint min width responsive', expect: { name: 'media-breakpoint-up' } },
         { id: 'contrast-fn', kind: 'kw', query: 'color contrast ratio function', expect: { name: 'color-contrast' } },
     ],
+    // ── C (cJSON: public API functions over the parsed tree) ────────────────────
+    cjson: [
+        { id: 'parse-json',  kind: 'nl', query: 'parse a JSON text string into an in-memory tree of value nodes', expect: { name: 'cJSON_Parse' } },
+        { id: 'duplicate',   kind: 'kw', query: 'duplicate clone a JSON item recursively', expect: { name: 'cJSON_Duplicate' } },
+        { id: 'compare',     kind: 'xc', query: 'compare two JSON values for deep structural equality', expect: { name: 'cJSON_Compare' } },
+    ],
+    // ── Bash (nvm: shell functions in nvm.sh / install.sh) ──────────────────────
+    nvm: [
+        { id: 'download-node',kind: 'nl', query: 'download a remote node binary tarball over the network for a version', expect: { name: 'nvm_download' } },
+        { id: 'is-installed', kind: 'kw', query: 'is version installed check directory exists', expect: { name: 'nvm_is_version_installed' } },
+        { id: 'latest-npm',   kind: 'xc', query: 'upgrade to the newest npm for the active node version', expect: { name: 'nvm_install_latest_npm' } },
+    ],
+    // ── Swift (Alamofire: Session / Request / HTTPHeaders + extensions) ─────────
+    alamofire: [
+        { id: 'session-mgr',  kind: 'nl', query: 'create and manage URL session requests with adapters retries and a delegate', expect: { name: 'Session' } },
+        { id: 'request-state',kind: 'kw', query: 'request state resume suspend cancel task', expect: { name: 'Request' } },
+        { id: 'http-headers', kind: 'xc', query: 'an ordered collection of HTTP header name and value pairs', expect: { name: 'HTTPHeaders' } },
+    ],
 };
