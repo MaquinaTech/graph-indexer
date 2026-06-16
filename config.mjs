@@ -14,8 +14,12 @@ import { artifactPaths, CONFIG_FILE_NAME, DATA_DIR_NAME } from './layout.mjs';
 
 export const DEFAULTS = Object.freeze({
     storage: 'memory',                 // 'memory' (default, zero-dependency) | 'sqlite'
-    embedModel: 'nomic-embed-text',
+    embedProvider: 'auto',             // 'auto' (Ollama→local→lexical) | 'ollama' | 'local' | 'off'
+    embedModel: 'nomic-embed-text',    // Ollama embedding model
+    localEmbedModel: 'Xenova/all-MiniLM-L6-v2', // in-process model (optional @huggingface/transformers)
     ollamaHost: 'http://localhost:11434',
+    gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
+    gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
     enrichment: Object.freeze({
         enabled: false,
         model: 'qwen2.5-coder:1.5b',   // small, code-aware; configurable, opt-in
@@ -91,6 +95,23 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     const ollamaHost = env.OLLAMA_HOST || file.ollamaHost || DEFAULTS.ollamaHost;
     const embeddingsEnabled = env.INDEXER_EMBEDDINGS !== 'off';
 
+    // Embedding provider: env > --embed-provider flag > config > default 'auto'.
+    // 'auto' prefers a running Ollama and falls back to the in-process local model
+    // (optional @huggingface/transformers) so semantic search works with no daemon.
+    const embedProvider = env.INDEXER_EMBED_PROVIDER
+        || flagValue(argv, '--embed-provider')
+        || file.embedProvider || DEFAULTS.embedProvider;
+
+    // Git signals: collection is air-gapped (local `git log` only). Disable with
+    // INDEXER_GIT_SIGNALS=off, --no-git-signals, or "gitSignals": false.
+    const gitSignals = env.INDEXER_GIT_SIGNALS === 'off' || argv.includes('--no-git-signals')
+        ? false
+        : (file.gitSignals === false ? false : DEFAULTS.gitSignals);
+    // Opt-in ranking boost weight (0..1). 0 keeps search ranking byte-identical.
+    const gitRankBoostRaw = env.INDEXER_GIT_RANK_BOOST ?? flagValue(argv, '--git-rank-boost')
+        ?? (Number.isFinite(file.gitRankBoost) ? file.gitRankBoost : DEFAULTS.gitRankBoost);
+    const gitRankBoost = Math.min(1, Math.max(0, Number(gitRankBoostRaw) || 0));
+
     // All generated artifacts live together under `<projectRoot>/.graph-indexer/`
     // (see layout.mjs) so they never clutter the project root.
     const paths = artifactPaths(projectRoot);
@@ -104,6 +125,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         embeddingPath: paths.embeddingPath,
         sqlitePath: paths.sqlitePath,
         enrichmentCachePath: paths.enrichmentCachePath,
+        gitSignalsPath: paths.gitSignalsPath,
         pidFile: paths.pidFile,
         logFile: paths.logFile,
 
@@ -111,7 +133,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
 
         ollamaHost,
         embeddingsEnabled,
+        embedProvider,
         embedModel: file.embedModel || DEFAULTS.embedModel,
+        localEmbedModel: file.localEmbedModel || DEFAULTS.localEmbedModel,
+        gitSignals,
+        gitRankBoost,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,

@@ -36,9 +36,10 @@ import {
 } from './search-core.mjs';
 import {
     MAX_FILE_SIZE_BYTES, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, getLocalEmbeddingsBatch,
+    extractImportsFromAST, extractSemanticChunks, resolveLocalImports,
     buildEmbeddingPayload,
 } from './parser-utils.mjs';
+import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import {
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,
     ollamaGenerate, parseEnrichResponse, buildEnrichPrompt,
@@ -46,6 +47,19 @@ import {
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
+
+// Embed incremental updates with the SAME provider/model the index was built with
+// (stamped in the embeddings-bin sidecar), so live vectors match the bootstrap
+// ones. Built lazily and cached for the daemon's lifetime.
+let _embedder = null;
+async function getEmbedder() {
+    if (_embedder) return _embedder;
+    const m = readEmbedMeta(config.embeddingPath);
+    _embedder = await createEmbedder(config, m?.provider
+        ? { provider: m.provider, model: m.model }
+        : { provider: config.embeddingsEnabled ? 'ollama' : 'off', model: config.embedModel });
+    return _embedder;
+}
 
 // ─── Single-instance guard ──────────────────────────────────────────────────────
 // Exactly one daemon may run per project. Acquire the PID lock BEFORE doing any
@@ -191,9 +205,8 @@ async function processFileChange(absolutePath) {
                 const sText = summaryEmbeddingText(c);
                 if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
             }
-            const embeddingsMatrix = await getLocalEmbeddingsBatch(entries.map(e => e.text), true, {
-                ollamaHost: config.ollamaHost, model: config.embedModel,
-            });
+            const embedder = await getEmbedder();
+            const embeddingsMatrix = await embedder.embedDocuments(entries.map(e => e.text));
             if (embeddingsMatrix && embeddingsMatrix.length === entries.length) {
                 entries.forEach((entry, j) => {
                     if (embeddingsMatrix[j]) embeddings.set(entry.key, new Float32Array(embeddingsMatrix[j]));

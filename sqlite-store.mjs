@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS chunks (
   start_line INTEGER, end_line INTEGER,
   calls TEXT, params TEXT, return_type TEXT, class_context TEXT,
   type_refs TEXT, decorators TEXT, extends_ TEXT, hyde TEXT, summary TEXT, concepts TEXT,
-  doc_len INTEGER, path_tokens TEXT, vec_key TEXT, vec_offset INTEGER, vec_dim INTEGER
+  doc_len INTEGER, path_tokens TEXT, vec_key TEXT, vec_offset INTEGER, vec_dim INTEGER,
+  call_sites TEXT
 );
 CREATE TABLE IF NOT EXISTS postings (term TEXT, chunk_id TEXT, tf INTEGER);
 CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, df INTEGER);
@@ -77,7 +78,7 @@ const CHUNK_COLS = [
     'id', 'file_path', 'node_type', 'name', 'name_lower', 'docstring', 'code_snippet',
     'content_hash', 'start_line', 'end_line', 'calls', 'params', 'return_type',
     'class_context', 'type_refs', 'decorators', 'extends_', 'hyde', 'summary', 'concepts',
-    'doc_len', 'path_tokens', 'vec_key', 'vec_offset', 'vec_dim',
+    'doc_len', 'path_tokens', 'vec_key', 'vec_offset', 'vec_dim', 'call_sites',
 ];
 
 function jsonArr(v) { return JSON.stringify(Array.isArray(v) ? v : []); }
@@ -145,6 +146,9 @@ export class SqliteGraphStore {
                 // Pre-enrichment-key indexes stored vectors under the plain content hash.
                 this.db.exec('UPDATE chunks SET vec_key = content_hash WHERE vec_key IS NULL');
             } catch { /* exists */ }
+            // Receiver-aware call graph (precise get_call_graph) landed later; older
+            // indexes lack the column. NULL → callers fall back to name-only grouping.
+            try { this.db.exec('ALTER TABLE chunks ADD COLUMN call_sites TEXT DEFAULT NULL'); } catch { /* exists */ }
         }
         this.db.exec(SCHEMA_INDEXES);
         this._reloadMeta();
@@ -266,6 +270,12 @@ export class SqliteGraphStore {
         this._stmtCallers   = this.db.prepare(
             'SELECT c.* FROM chunks c JOIN call_edges e ON e.chunk_id = c.id WHERE e.callee = ?'
         );
+        // type_refs / extends_ are JSON arrays of names. LIKE is a cheap prefilter
+        // (ASCII case-insensitive in SQLite); findReferers() verifies exact, quoted
+        // membership in JS so e.g. "User" never matches "UserProfile".
+        this._stmtReferers  = this.db.prepare(
+            'SELECT * FROM chunks WHERE type_refs LIKE ? ESCAPE \'\\\' OR extends_ LIKE ? ESCAPE \'\\\''
+        );
         this._stmtPosting   = this.db.prepare(
             'SELECT p.chunk_id AS id, p.tf AS tf, c.doc_len AS doc_len '
             + 'FROM postings p JOIN chunks c ON c.id = p.chunk_id WHERE p.term = ?'
@@ -319,7 +329,7 @@ export class SqliteGraphStore {
             return_type: row.return_type || '', class_context: row.class_context || '',
             type_refs: parseArr(row.type_refs), decorators: parseArr(row.decorators),
             extends: parseArr(row.extends_), hyde: row.hyde || '', summary: row.summary || '',
-            concepts: parseArr(row.concepts),
+            concepts: parseArr(row.concepts), call_sites: parseArr(row.call_sites),
         };
     }
 
@@ -336,6 +346,26 @@ export class SqliteGraphStore {
     }
 
     findCallers(funcName) { return this._stmtCallers.all(funcName).map(r => this._rowToChunk(r)); }
+
+    findReferers(symbol) {
+        const key = String(symbol).toLowerCase().trim();
+        if (!key) return [];
+        // Escape LIKE metacharacters in the symbol, then bracket with JSON quotes so
+        // the prefilter only fires on a whole array element.
+        const esc = key.replace(/[\\%_]/g, m => '\\' + m);
+        const pat = `%"${esc}"%`;
+        const out = [];
+        for (const row of this._stmtReferers.all(pat, pat)) {
+            const c = this._rowToChunk(row);
+            // A class/type lists its own name in type_refs — that self-mention is a
+            // definition, not a reference; skip it.
+            if (c.name && c.name.toLowerCase() === key) continue;
+            const hit = c.type_refs.some(t => t.toLowerCase() === key)
+                || c.extends.some(t => t.toLowerCase() === key);
+            if (hit) out.push(c);
+        }
+        return out;
+    }
 
     *iterateChunks() {
         // Stream rows via a cursor so repo-map / call-graph passes never materialise
@@ -537,7 +567,8 @@ export class SqliteGraphStore {
             jsonArr(chunk.extends), chunk.hyde ?? null, chunk.summary ?? null, jsonArr(chunk.concepts),
             docLen, JSON.stringify(pathTokens),
             chunk.content_hash ? embeddingKeyFor(chunk) : null,
-            vecEntry ? vecEntry.offset : -1, vecEntry ? vecEntry.dim : 0
+            vecEntry ? vecEntry.offset : -1, vecEntry ? vecEntry.dim : 0,
+            jsonArr(chunk.call_sites)
         );
         for (const callee of (chunk.calls || [])) this._stmtInsEdge.run(callee, chunk.id);
         return docLen;
@@ -747,7 +778,8 @@ export class SqliteGraphStore {
                 chunk.class_context ?? '', jsonArr(chunk.type_refs), jsonArr(chunk.decorators),
                 jsonArr(chunk.extends), chunk.hyde ?? null, chunk.summary ?? null, jsonArr(chunk.concepts),
                 docLen, JSON.stringify(pathTokens), vecKey,
-                vec ? vec.offset : -1, vec ? vec.dim : 0
+                vec ? vec.offset : -1, vec ? vec.dim : 0,
+                jsonArr(chunk.call_sites)
             );
             for (const callee of (chunk.calls || [])) insEdge.run(callee, chunk.id);
         }

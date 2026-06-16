@@ -907,7 +907,7 @@ export class MemoryGraphIndex {
             id: c.id, file_path: c.file_path, node_type: c.node_type,
             name: c.name, docstring: c.docstring || '', code_snippet: c.code_snippet,
             content_hash: c.content_hash, start_line: c.start_line, end_line: c.end_line,
-            calls: c.calls || [], params: c.params || [],
+            calls: c.calls || [], call_sites: c.call_sites || [], params: c.params || [],
             return_type: c.return_type || '', class_context: c.class_context || '',
             type_refs: c.type_refs || [], decorators: c.decorators || [],
             extends: c.extends || [],
@@ -1070,6 +1070,28 @@ export class MemoryGraphIndex {
     findCallers(funcName) {
         const out = [];
         for (const c of this.chunks.values()) if (c.calls?.includes(funcName)) out.push(c);
+        return out;
+    }
+
+    /**
+     * Chunks that reference a symbol *by name* as a type (`type_refs`) or as a
+     * base class/interface (`extends`) — the non-call half of symbol-level
+     * references. Calls are served by findCallers; mcp-tools.findReferences fuses
+     * the two and classifies each by confidence. Case-insensitive exact match.
+     * @returns {object[]}
+     */
+    findReferers(symbol) {
+        const key = String(symbol).toLowerCase().trim();
+        if (!key) return [];
+        const out = [];
+        for (const c of this.chunks.values()) {
+            // A class/type lists its own name in type_refs (the name node is a
+            // type_identifier) — that self-mention is a definition, not a reference.
+            if (c.name && c.name.toLowerCase() === key) continue;
+            const hit = (c.type_refs && c.type_refs.some(t => t.toLowerCase() === key))
+                || (c.extends && c.extends.some(t => t.toLowerCase() === key));
+            if (hit) out.push(c);
+        }
         return out;
     }
 

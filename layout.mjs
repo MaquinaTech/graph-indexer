@@ -49,6 +49,7 @@ export function artifactPaths(root) {
         embeddingPath: path.join(dir, 'code-index.embeddings.bin'),
         sqlitePath: path.join(dir, 'code-index.db'),
         enrichmentCachePath: path.join(dir, 'code-index.enrichment.json'),
+        gitSignalsPath: path.join(dir, 'code-index.git.json'),
         pidFile: path.join(dir, 'daemon.pid'),
         logFile: path.join(dir, 'daemon.log'),
         configPath: path.join(dir, CONFIG_FILE_NAME),

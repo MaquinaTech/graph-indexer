@@ -21,6 +21,8 @@ import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { daemonStatus } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
 import { registerTools } from './mcp-tools.mjs';
+import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
+import { loadGitSignals } from './git-signals.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
@@ -133,15 +135,33 @@ server.resource(
     }
 );
 
+// ─── Query embedder ────────────────────────────────────────────────────────────
+// Query with the SAME provider/model the index was built with (stamped in the
+// embeddings-bin sidecar). No stamp → an index from an older version: keep the
+// legacy behaviour (try Ollama, fall back to lexical). The local pipeline loads
+// lazily on first query, so an unused provider costs nothing at startup.
+const embedMeta = readEmbedMeta(config.embeddingPath);
+const embedder = await createEmbedder(
+    config,
+    embedMeta?.provider
+        ? { provider: embedMeta.provider, model: embedMeta.model }
+        : { provider: config.embeddingsEnabled ? 'ollama' : 'off', model: config.embedModel }
+);
+
+// ─── Git signals (air-gapped sidecar; blast-radius hint + opt-in rank boost) ────
+const gitSignals = config.gitSignals ? loadGitSignals(config.gitSignalsPath) : null;
+
 // ─── Tools ───────────────────────────────────────────────────────────────────
 registerTools(server, db, {
     projectRoot: PROJECT_ROOT,
     artifactPath: config.storage === 'sqlite' ? config.sqlitePath : config.indexPath,
     pidFile: PID_FILE,
-    embeddingsEnabled: config.embeddingsEnabled,
-    ollamaHost: config.ollamaHost,
-    embedModel: config.embedModel,
+    embeddingsEnabled: config.embeddingsEnabled && embedder.provider !== 'off',
+    embedder,
     rerank: config.rerank,
+    ollamaHost: config.ollamaHost,
+    gitSignals,
+    gitRankBoost: config.gitRankBoost,
 });
 
 const transport = new StdioServerTransport();

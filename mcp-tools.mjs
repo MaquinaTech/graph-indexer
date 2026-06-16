@@ -13,8 +13,10 @@ import { z } from 'zod';
 import fs from 'fs';
 import path, { resolve } from 'path';
 import { computePageRank, isNaturalLanguageQuery } from './search-core.mjs';
-import { getLocalEmbedding, getParserForFile, extractFileSkeleton } from './parser-utils.mjs';
+import { getParserForFile, extractFileSkeleton } from './parser-utils.mjs';
+import { describeEmbedder } from './embeddings.mjs';
 import { rerankResults, ollamaGenerate } from './enrichment.mjs';
+import { coChangesFor, gitBoostScore } from './git-signals.mjs';
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────────
 
@@ -73,6 +75,200 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
     return [...sigBlock, ...relevant, ...tailBlock].join('\n');
 }
 
+// ─── Structured (JSON) output helpers ────────────────────────────────────────────
+
+/**
+ * Wrap a structured payload as an MCP tool result. The JSON is emitted as a text
+ * block (so every client can read it) AND as `structuredContent` (so SDK-aware
+ * clients get typed fields without parsing prose). No outputSchema is declared,
+ * so the SDK passes structuredContent through without validation.
+ */
+function jsonResult(payload) {
+    return {
+        content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload,
+    };
+}
+
+/** Typed projection of a chunk for JSON output (no code body unless asked). */
+function chunkCard(chunk) {
+    return {
+        id: chunk.id,
+        name: chunk.name,
+        node_type: chunk.node_type,
+        file_path: chunk.file_path,
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        class_context: chunk.class_context || null,
+        params: chunk.params || [],
+        return_type: chunk.return_type || null,
+        type_refs: chunk.type_refs || [],
+        decorators: chunk.decorators || [],
+        extends: chunk.extends || [],
+        docstring: chunk.docstring || null,
+        calls: chunk.calls || [],
+    };
+}
+
+/**
+ * Files that historically change together with the target's file(s) — a git
+ * blast-radius hint. Aggregates co-change across all defining files, drops the
+ * target's own files, and returns the strongest partners. Empty when no signals.
+ */
+function coChangeFiles(gitSignals, files, limit = 5) {
+    if (!gitSignals) return [];
+    const own = new Set(files);
+    const agg = new Map();
+    for (const f of files) {
+        for (const { file, count } of coChangesFor(gitSignals, f, limit)) {
+            if (own.has(file)) continue;
+            agg.set(file, Math.max(agg.get(file) || 0, count));
+        }
+    }
+    return [...agg.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, limit)
+        .map(([file, count]) => ({ file, count }));
+}
+
+/** One-line git co-change blast-radius hint for markdown output. */
+function coChangeLine(coChanges) {
+    return `🔄 Historically changes with: ${coChanges.map(c => `\`${c.file}\` (${c.count}×)`).join(', ')}`;
+}
+
+/** Typed projection of a referencing chunk (caller / subclass / type user). */
+function refCard({ chunk, recvHint, reason, confidence }) {
+    return {
+        id: chunk.id,
+        name: chunk.name,
+        node_type: chunk.node_type,
+        class_context: chunk.class_context || null,
+        file_path: chunk.file_path,
+        start_line: chunk.start_line,
+        end_line: chunk.end_line,
+        via: recvHint || null,
+        confidence: confidence || (reason ? 'high' : 'name-only'),
+        reason: reason || null,
+    };
+}
+
+// ─── Call-graph confidence (precise blast radius) ────────────────────────────────
+
+/**
+ * Split the bare name-match callers of a function into **high-confidence** (the
+ * real blast radius) vs **name-only** (an ambiguous same-named symbol elsewhere).
+ *
+ * The call graph matches by callee name, so `get_call_graph("save")` otherwise
+ * returns callers of *every* `save()` in the repo. This re-classifies them using
+ * only cheap, index-time signals — no type inference:
+ *   • target uniqueness  — one symbol named X ⇒ every caller is unambiguous;
+ *   • receiver hints      — `this.X` from the same class, or a direct `X()` to a
+ *                           free function (captured by parser-utils.extractCallSites);
+ *   • the file import graph — a caller whose file imports the file defining X is
+ *                            very likely calling that X.
+ * `targetClass` scopes the question to one class's method.
+ *
+ * @returns {{ high:Array, nameOnly:Array, targetDefs:object[], ambiguous:boolean,
+ *             hasSiteData:boolean, classFiltered:boolean }}
+ *          high/nameOnly items are { chunk, reason, recvHint }.
+ */
+export function classifyCallers(db, targetFunction, { targetClass = null } = {}) {
+    const callers = db.findCallers(targetFunction);
+    const allDefs = db.resolveSymbol(targetFunction);
+    let targetDefs = allDefs;
+
+    let classFiltered = false;
+    if (targetClass) {
+        const tcl = String(targetClass).toLowerCase();
+        const scoped = allDefs.filter(d => (d.class_context || '').toLowerCase() === tcl);
+        if (scoped.length) { targetDefs = scoped; classFiltered = true; }
+    }
+
+    const targetClasses = new Set(targetDefs.map(d => (d.class_context || '').toLowerCase()).filter(Boolean));
+    const targetFiles = new Set(targetDefs.map(d => d.file_path));
+    const targetIsFreeFn = targetDefs.some(d => !d.class_context);
+    const uniqueTarget = targetDefs.length <= 1;
+    const ambiguous = allDefs.length > 1;
+    const tcl = targetClass ? String(targetClass).toLowerCase() : null;
+
+    let hasSiteData = false;
+    const high = [], nameOnly = [];
+
+    for (const caller of callers) {
+        const sites = (caller.call_sites || []).filter(s => s && s.name === targetFunction);
+        if (sites.length) hasSiteData = true;
+        const recvs = new Set(sites.map(s => s.recv));
+        const callerClass = (caller.class_context || '').toLowerCase();
+        const deps = db.getDependencies(caller.file_path) || [];
+
+        let reason = '';
+        if (uniqueTarget && !classFiltered) reason = 'sole definition';
+        else if (recvs.has('this') && callerClass && targetClasses.has(callerClass)) reason = `this.${targetFunction}()`;
+        else if (recvs.has('') && targetIsFreeFn) reason = `${targetFunction}()`;
+        else if (deps.some(d => targetFiles.has(d))) reason = 'imports definition';
+        else if (targetFiles.has(caller.file_path)) reason = 'same file';
+        else if (tcl && [...recvs].some(r => r && r.toLowerCase() === tcl)) reason = `${targetClass}.${targetFunction}()`;
+
+        const recvHint = [...recvs].map(r =>
+            r === '' ? `${targetFunction}()` : r === 'this' ? `this.${targetFunction}()` : `${r}.${targetFunction}()`
+        ).join(', ');
+
+        (reason ? high : nameOnly).push({ chunk: caller, reason, recvHint });
+    }
+
+    return { high, nameOnly, targetDefs, ambiguous, hasSiteData, classFiltered };
+}
+
+// ─── Symbol-level references (file→file topology, sharpened to symbol→symbol) ─────
+
+/**
+ * Resolve *which symbols* reference a target symbol — not just which files. Fuses
+ * the three reference kinds the index records and classifies each by confidence
+ * using the same cheap, index-time signals as the call graph (no type inference):
+ *
+ *   • calls    — `findCallers` + classifyCallers (high / name-only blast radius);
+ *   • inherits — chunks whose `extends` names the symbol (subclasses / implementers);
+ *   • types    — chunks whose `type_refs` names the symbol (params, returns, fields).
+ *
+ * For the non-call kinds, a referer is **high-confidence** when the target is the
+ * sole definition, the referer's file imports a file that defines it, or it is
+ * defined in the same file; otherwise it is **name-only** (a same-named symbol
+ * may be meant). This is the symbol-granular "used by" that file-level topology
+ * (getImportedBy) can only approximate.
+ *
+ * @returns {{ symbol:string, targetDefs:object[], ambiguous:boolean,
+ *             calls:ReturnType<typeof classifyCallers>,
+ *             inherits:Array, types:Array }}
+ *          inherits/types items are { chunk, confidence, reason }.
+ */
+export function findReferences(db, symbol, { targetClass = null } = {}) {
+    const calls = classifyCallers(db, symbol, { targetClass });
+    const { targetDefs, ambiguous } = calls;
+    const targetFiles = new Set(targetDefs.map(d => d.file_path));
+    const uniqueTarget = targetDefs.length <= 1;
+    const key = String(symbol).toLowerCase().trim();
+
+    const inherits = [], types = [];
+    for (const ref of db.findReferers(symbol)) {
+        const deps = db.getDependencies(ref.file_path) || [];
+        const imports = deps.some(d => targetFiles.has(d));
+        const sameFile = targetFiles.has(ref.file_path);
+        const reason = uniqueTarget ? 'sole definition'
+            : imports ? 'imports definition'
+                : sameFile ? 'same file' : '';
+        const confidence = reason ? 'high' : 'name-only';
+        if ((ref.extends || []).some(t => t.toLowerCase() === key)) inherits.push({ chunk: ref, confidence, reason });
+        if ((ref.type_refs || []).some(t => t.toLowerCase() === key)) types.push({ chunk: ref, confidence, reason });
+    }
+    // High-confidence first, then by file for stable output.
+    const order = (a, b) => (a.confidence === b.confidence
+        ? a.chunk.file_path.localeCompare(b.chunk.file_path)
+        : a.confidence === 'high' ? -1 : 1);
+    inherits.sort(order); types.sort(order);
+
+    return { symbol, targetDefs, ambiguous, calls, inherits, types };
+}
+
 // ─── Tool registration ──────────────────────────────────────────────────────────
 
 /**
@@ -85,11 +281,14 @@ export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
  * @param {string} opts.artifactPath      Index file whose mtime represents freshness.
  * @param {string} opts.pidFile           Watch-daemon PID file (may not exist).
  * @param {boolean} opts.embeddingsEnabled
- * @param {string} [opts.ollamaHost]      Resolved Ollama endpoint for query embedding.
- * @param {string} [opts.embedModel]      Embedding model (must match the index).
+ * @param {object} [opts.embedder]        Query embedder (embeddings.createEmbedder); its
+ *                                        provider/model must match the index that was built.
  * @param {{enabled:boolean, model:string, topM:number}} [opts.rerank] LLM rerank config.
+ * @param {string} [opts.ollamaHost]      Ollama endpoint for the rerank judge.
+ * @param {object|null} [opts.gitSignals] Loaded git-signals sidecar (churn/recency/co-change), or null.
+ * @param {number} [opts.gitRankBoost]    0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged).
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, ollamaHost, embedModel, rerank }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, ollamaHost = 'http://localhost:11434', gitSignals = null, gitRankBoost = 0 }) {
 
     // ─── search_code ────────────────────────────────────────────────────────────
     server.tool(
@@ -114,13 +313,20 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 + 'natural-language queries, ~1–2 s extra). Defaults to the '
                 + '`rerank.enabled` project config; only fires on NL queries.'
             ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default): token-efficient cards for an LLM to read. "
+                + "'json': typed structured fields (id, file, lines, signature, topology, body) "
+                + 'for programmatic clients — avoids parsing prose.'
+            ),
         },
-        async ({ query, exact_tokens, include_topology, min_score, top_k, token_budget, detail, rerank: rerankParam }) => {
+        async ({ query, exact_tokens, include_topology, min_score, top_k, token_budget, detail, rerank: rerankParam, response_format }) => {
             try {
                 const fullQuery = exact_tokens ? `${query} ${exact_tokens}` : query;
                 let queryVector = null;
-                try { queryVector = await getLocalEmbedding(fullQuery, true, { ollamaHost, model: embedModel }); }
-                catch { /* lexical fallback */ }
+                if (embedder) {
+                    try { queryVector = await embedder.embedQuery(fullQuery); }
+                    catch { /* lexical fallback */ }
+                }
 
                 // Opt-in LLM rerank: only for natural-language queries (symbol
                 // lookups are already rank-1-dominant), never when the caller
@@ -135,9 +341,15 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 // reorder but never RESCUE a correct-but-deep hit into the top_k —
                 // which is exactly where the semantic recall lives. Pool size is
                 // capped well above top_k; the user still receives only top_k cards.
+                // Opt-in git ranking boost (default OFF): nudge results toward
+                // recently-/frequently-changed files. Like rerank it over-fetches so
+                // a hot-but-deep hit can be rescued into top_k. It lives here in the
+                // tool layer — never in db.searchHybrid — so the measured retrieval
+                // ranking (and backend parity) is unchanged unless explicitly enabled.
+                const applyGitBoost = gitRankBoost > 0 && gitSignals;
                 const poolSize = willRerank
                     ? Math.min(Math.max(top_k, rerank?.poolSize ?? 15), 25)
-                    : top_k;
+                    : applyGitBoost ? Math.min(Math.max(top_k * 2, 12), 25) : top_k;
                 let matches = db.searchHybrid(fullQuery, queryVector, poolSize, min_score, exact_tokens || null);
 
                 if (willRerank && matches.length > 1) {
@@ -150,8 +362,37 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         }),
                     });
                 }
+                if (applyGitBoost && matches.length > 1) {
+                    matches = matches
+                        .map(m => ({ ...m, score: m.score * (1 + gitRankBoost * gitBoostScore(gitSignals, m.chunk.file_path)) }))
+                        .sort((a, b) => b.score - a.score);
+                }
                 matches = matches.slice(0, top_k);
-                if (matches.length === 0) return { content: [{ type: 'text', text: 'No results found.' }] };
+                if (matches.length === 0) {
+                    return response_format === 'json'
+                        ? jsonResult({ query: fullQuery, count: 0, results: [] })
+                        : { content: [{ type: 'text', text: 'No results found.' }] };
+                }
+
+                if (response_format === 'json') {
+                    const qTokens = fullQuery.toLowerCase().split(/[\s\W_]+/).filter(t => t.length >= 3);
+                    const results = matches.map(({ score, chunk }, i) => {
+                        const result = { rank: i + 1, score: Number(score.toFixed(4)), ...chunkCard(chunk) };
+                        if (include_topology) {
+                            result.topology = {
+                                dependencies: db.getDependencies(chunk.file_path),
+                                used_by: db.getImportedBy(chunk.file_path),
+                            };
+                        }
+                        if (detail !== 'signatures' && chunk.code_snippet) {
+                            result.body = detail === 'full'
+                                ? chunk.code_snippet
+                                : pruneBodyByQuery(chunk.code_snippet, qTokens);
+                        }
+                        return result;
+                    });
+                    return jsonResult({ query: fullQuery, count: results.length, reranked: willRerank, detail, results });
+                }
 
                 const depSignature = (depPath) => {
                     const syms = [];
@@ -231,11 +472,29 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             view: z.enum(['full', 'signature']).default('full').describe(
                 "'full': complete source body. 'signature': just the function signature line (~5 tokens)."
             ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed fields + topology + code)."
+            ),
         },
-        async ({ chunk_id, view }) => {
+        async ({ chunk_id, view, response_format }) => {
             try {
                 const chunk = db.getChunk(chunk_id);
-                if (!chunk) return { content: [{ type: 'text', text: `Chunk '${chunk_id}' not found. Run search_code to get valid IDs.` }] };
+                if (!chunk) {
+                    return response_format === 'json'
+                        ? jsonResult({ chunk_id, found: false })
+                        : { content: [{ type: 'text', text: `Chunk '${chunk_id}' not found. Run search_code to get valid IDs.` }] };
+                }
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        ...chunkCard(chunk),
+                        topology: {
+                            dependencies: db.getDependencies(chunk.file_path),
+                            used_by: db.getImportedBy(chunk.file_path),
+                        },
+                        code: view === 'signature' ? extractSignatureLine(chunk.code_snippet) : chunk.code_snippet,
+                    });
+                }
 
                 const parts = [
                     `# ${chunk.name}`,
@@ -267,12 +526,33 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
     server.tool(
         'resolve_symbol',
         'Instantly finds the definition of any symbol (function, class, type, variable) by exact name — O(1) lookup, no search needed. Returns the defining chunk and cross-file topology.',
-        { symbol: z.string().describe("Exact symbol name (e.g. 'validateToken', 'User', 'PaymentService').") },
-        async ({ symbol }) => {
+        {
+            symbol: z.string().describe("Exact symbol name (e.g. 'validateToken', 'User', 'PaymentService')."),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed definition list + topology)."
+            ),
+        },
+        async ({ symbol, response_format }) => {
             try {
                 const defs = db.resolveSymbol(symbol);
                 if (defs.length === 0) {
-                    return { content: [{ type: 'text', text: `Symbol '${symbol}' not in index. Try search_code(query="${symbol}") for fuzzy search.` }] };
+                    return response_format === 'json'
+                        ? jsonResult({ symbol, count: 0, definitions: [] })
+                        : { content: [{ type: 'text', text: `Symbol '${symbol}' not in index. Try search_code(query="${symbol}") for fuzzy search.` }] };
+                }
+                if (response_format === 'json') {
+                    return jsonResult({
+                        symbol,
+                        count: defs.length,
+                        definitions: defs.map(chunk => ({
+                            ...chunkCard(chunk),
+                            topology: {
+                                dependencies: db.getDependencies(chunk.file_path),
+                                used_by: db.getImportedBy(chunk.file_path),
+                            },
+                            signature: extractSignatureLine(chunk.code_snippet),
+                        })),
+                    });
                 }
                 const lines = [`# Symbol: \`${symbol}\` — ${defs.length} definition(s)\n`];
                 for (const chunk of defs) {
@@ -310,11 +590,57 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 + 'Use when you need to understand the interfaces of called functions in a single shot, '
                 + 'without issuing a separate tool call per dependency.'
             ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed signature + docstring + resolved calls)."
+            ),
         },
-        async ({ chunk_id, expand_calls }) => {
+        async ({ chunk_id, expand_calls, response_format }) => {
             try {
                 const chunk = db.getChunk(chunk_id);
-                if (!chunk) return { content: [{ type: 'text', text: `Chunk '${chunk_id}' not found.` }] };
+                if (!chunk) {
+                    return response_format === 'json'
+                        ? jsonResult({ chunk_id, found: false })
+                        : { content: [{ type: 'text', text: `Chunk '${chunk_id}' not found.` }] };
+                }
+
+                const resolveCalls = () => {
+                    const out = [];
+                    const seen = new Set();
+                    for (const callName of (chunk.calls || [])) {
+                        if (seen.size >= 6) break;
+                        const key = callName.toLowerCase();
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        const target = db.resolveSymbol(callName)[0];
+                        if (!target?.code_snippet) continue;
+                        out.push({
+                            name: callName,
+                            file_path: target.file_path,
+                            start_line: target.start_line,
+                            signature: extractSignatureLine(target.code_snippet).split('\n')[0].trim().slice(0, 120),
+                        });
+                    }
+                    return out;
+                };
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        id: chunk.id,
+                        name: chunk.name,
+                        node_type: chunk.node_type,
+                        file_path: chunk.file_path,
+                        start_line: chunk.start_line,
+                        end_line: chunk.end_line,
+                        params: chunk.params || [],
+                        return_type: chunk.return_type || null,
+                        type_refs: chunk.type_refs || [],
+                        decorators: chunk.decorators || [],
+                        docstring: chunk.docstring || null,
+                        signature: extractSignatureLine(chunk.code_snippet),
+                        calls: chunk.calls || [],
+                        resolved_calls: expand_calls ? resolveCalls() : undefined,
+                    });
+                }
 
                 const lines = [
                     `# ${chunk.name} · ${chunk.file_path}:${chunk.start_line}–${chunk.end_line}`,
@@ -366,22 +692,44 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
     server.tool(
         'get_file_skeleton',
         'Returns all top-level exports and definitions in a file with line numbers — no code bodies (~50 tokens vs 5000).',
-        { file_path: z.string().describe("Relative path (e.g. 'src/app.ts').") },
-        async ({ file_path }) => {
+        {
+            file_path: z.string().describe("Relative path (e.g. 'src/app.ts')."),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' ({ file_path, skeleton } string fields)."
+            ),
+        },
+        async ({ file_path, response_format }) => {
             try {
                 const absolutePath = resolve(projectRoot, file_path);
                 const safeRoot = path.normalize(projectRoot);
-                if (!path.normalize(absolutePath).startsWith(safeRoot + path.sep) &&
-                    path.normalize(absolutePath) !== safeRoot) {
+                const norm = path.normalize(absolutePath);
+                if (norm !== safeRoot && !norm.startsWith(safeRoot + path.sep)) {
                     throw new Error('Access denied: path is outside the project root.');
                 }
                 if (!fs.existsSync(absolutePath)) throw new Error('File not found.');
+                // Defence in depth: the textual check above can be defeated by a
+                // symlink *inside* the project that points outside it. Resolve
+                // symlinks on both the root and the target and re-check containment
+                // so a tool call can never read a file outside the project root.
+                let realRoot, realPath;
+                try { realRoot = fs.realpathSync(safeRoot); } catch { realRoot = safeRoot; }
+                try { realPath = fs.realpathSync(absolutePath); } catch { realPath = norm; }
+                if (realPath !== realRoot && !realPath.startsWith(realRoot + path.sep)) {
+                    throw new Error('Access denied: path resolves outside the project root.');
+                }
                 const content = fs.readFileSync(absolutePath, 'utf-8');
                 const ext = path.extname(absolutePath);
                 const parser = getParserForFile(ext);
-                if (!parser) return { content: [{ type: 'text', text: 'Language not supported.' }] };
+                if (!parser) {
+                    return response_format === 'json'
+                        ? jsonResult({ file_path, language_supported: false, skeleton: null })
+                        : { content: [{ type: 'text', text: 'Language not supported.' }] };
+                }
                 const tree = parser.parse((offset) => offset < content.length ? content.slice(offset, offset + 4096) : null);
                 const skeleton = extractFileSkeleton(tree.rootNode, content);
+                if (response_format === 'json') {
+                    return jsonResult({ file_path, language_supported: true, skeleton: skeleton || '' });
+                }
                 return { content: [{ type: 'text', text: `# Skeleton: ${file_path}\n\n${skeleton || '_No semantic signatures found_'}` }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -392,25 +740,151 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
     // ─── get_call_graph ─────────────────────────────────────────────────────────
     server.tool(
         'get_call_graph',
-        'Finds all chunks that call a specific function. CRITICAL for safe refactoring.',
-        { target_function: z.string().describe("Exact function name (e.g. 'validateToken').") },
-        async ({ target_function }) => {
+        'Finds all chunks that call a specific function, split into high-confidence callers '
+        + '(the real blast radius) and name-only matches (an ambiguous same-named symbol). '
+        + 'CRITICAL for safe refactoring — call before changing any exported signature.',
+        {
+            target_function: z.string().describe("Exact function name (e.g. 'validateToken')."),
+            target_class: z.string().optional().describe(
+                "Optional class/type that owns the method (e.g. 'OrderService') — scopes the "
+                + "blast radius to one class's method when several symbols share the name."
+            ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { high, name_only } caller arrays)."
+            ),
+        },
+        async ({ target_function, target_class, response_format }) => {
             try {
-                const callers = db.findCallers(target_function).map(chunk =>
-                    `- [${chunk.node_type}] \`${chunk.name}\` in \`${chunk.file_path}\` (lines ${chunk.start_line}–${chunk.end_line})`
-                );
-                if (callers.length === 0) {
-                    return { content: [{ type: 'text', text: `✅ Safe to modify: no callers of '${target_function}' found.` }] };
+                const { high, nameOnly, targetDefs, ambiguous, hasSiteData, classFiltered } =
+                    classifyCallers(db, target_function, { targetClass: target_class || null });
+                const total = high.length + nameOnly.length;
+                const label = classFiltered ? `${target_class}.${target_function}` : target_function;
+                const coChanges = coChangeFiles(gitSignals, [...new Set(targetDefs.map(d => d.file_path))]);
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        target_function,
+                        target_class: target_class || null,
+                        ambiguous,
+                        definition_count: targetDefs.length,
+                        receiver_aware: hasSiteData,
+                        caller_count: total,
+                        high_confidence: high.map(h => refCard({ ...h, confidence: 'high' })),
+                        name_only: nameOnly.map(n => refCard({ ...n, confidence: 'name-only' })),
+                        co_changes: coChanges,
+                    });
                 }
-                return {
-                    content: [{
-                        type: 'text', text: [
-                            `# ⚠️ Call Graph: \`${target_function}\``,
-                            `${callers.length} caller(s) depend on this — review before changing signature:`,
-                            ...callers,
-                        ].join('\n')
-                    }]
-                };
+
+                if (total === 0) {
+                    const safe = `✅ Safe to modify: no callers of \`${label}\` found.`;
+                    return { content: [{ type: 'text', text: coChanges.length ? `${safe}\n${coChangeLine(coChanges)}` : safe }] };
+                }
+
+                const fmt = ({ chunk, recvHint }) =>
+                    `- [${chunk.node_type}] \`${chunk.class_context ? chunk.class_context + '.' : ''}${chunk.name}\``
+                    + ` in \`${chunk.file_path}\` (lines ${chunk.start_line}–${chunk.end_line})`
+                    + (recvHint ? ` · via ${recvHint}` : '');
+
+                const lines = [`# ⚠️ Call Graph: \`${label}\``];
+                const split = ambiguous && !classFiltered;
+
+                if (split) {
+                    lines.push(`${total} name-match caller(s) · ⚠️ ${targetDefs.length}+ symbols named \`${target_function}\` — grouped by confidence:`);
+                } else {
+                    lines.push(`${total} caller(s) depend on this — review before changing signature:`);
+                }
+
+                if (high.length) {
+                    if (split) lines.push('', `## ✅ High-confidence callers (${high.length})`);
+                    for (const h of high) lines.push(fmt(h));
+                }
+                if (nameOnly.length) {
+                    lines.push('', `## ❔ Name-only matches (${nameOnly.length}) — verify; may call a different \`${target_function}\``);
+                    for (const n of nameOnly) lines.push(fmt(n));
+                    if (!classFiltered) lines.push('', `> Pass \`target_class\` to scope the blast radius to one class's \`${target_function}\`.`);
+                }
+                if (!hasSiteData && ambiguous) {
+                    lines.push('', `> ℹ️ This index predates receiver-aware call graphs — re-run \`npm run mcp:index\` for precise grouping.`);
+                }
+                if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── find_references ──────────────────────────────────────────────────────────
+    server.tool(
+        'find_references',
+        'Every symbol that references a target symbol — symbol-level, not just file-level. '
+        + 'Fuses three reference kinds: callers (the blast radius), subclasses/implementers '
+        + '(extends), and type users (params, returns, fields). Each is split by confidence '
+        + 'using receiver hints and the import graph. Broader than get_call_graph: use it before '
+        + 'renaming or changing a class/interface/type, not just a function.',
+        {
+            symbol: z.string().describe("Exact symbol name (function, class, interface, or type)."),
+            target_class: z.string().optional().describe(
+                "Optional owning class/type to scope the call dimension when several symbols share the name."
+            ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { called_by, subclassed_by, used_as_type_by })."
+            ),
+        },
+        async ({ symbol, target_class, response_format }) => {
+            try {
+                const { targetDefs, ambiguous, calls, inherits, types } =
+                    findReferences(db, symbol, { targetClass: target_class || null });
+                const callTotal = calls.high.length + calls.nameOnly.length;
+                const total = callTotal + inherits.length + types.length;
+                const coChanges = coChangeFiles(gitSignals, [...new Set(targetDefs.map(d => d.file_path))]);
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        symbol,
+                        target_class: target_class || null,
+                        ambiguous,
+                        definition_count: targetDefs.length,
+                        reference_count: total,
+                        called_by: {
+                            high: calls.high.map(h => refCard({ ...h, confidence: 'high' })),
+                            name_only: calls.nameOnly.map(n => refCard({ ...n, confidence: 'name-only' })),
+                        },
+                        subclassed_by: inherits.map(refCard),
+                        used_as_type_by: types.map(refCard),
+                        co_changes: coChanges,
+                    });
+                }
+
+                if (total === 0) {
+                    const none = `✅ No references to \`${symbol}\` found in the index.`;
+                    return { content: [{ type: 'text', text: coChanges.length ? `${none}\n${coChangeLine(coChanges)}` : none }] };
+                }
+
+                const fmt = ({ chunk, recvHint, confidence }) =>
+                    `- [${chunk.node_type}] \`${chunk.class_context ? chunk.class_context + '.' : ''}${chunk.name}\``
+                    + ` in \`${chunk.file_path}\` (lines ${chunk.start_line}–${chunk.end_line})`
+                    + (recvHint ? ` · via ${recvHint}` : '')
+                    + (confidence === 'name-only' ? ' · ⚠️ unverified' : '');
+
+                const lines = [`# 🔗 References to \`${symbol}\` — ${total} total`];
+                if (ambiguous) lines.push(`⚠️ ${targetDefs.length} symbols named \`${symbol}\` — name-only matches may target a different one.`);
+
+                if (callTotal) {
+                    lines.push('', `## 📞 Called by (${callTotal})`);
+                    for (const h of calls.high) lines.push(fmt({ ...h, confidence: 'high' }));
+                    for (const n of calls.nameOnly) lines.push(fmt({ ...n, confidence: 'name-only' }));
+                }
+                if (inherits.length) {
+                    lines.push('', `## 🧬 Subclassed / implemented by (${inherits.length})`);
+                    for (const it of inherits) lines.push(fmt(it));
+                }
+                if (types.length) {
+                    lines.push('', `## 🏷  Used as a type by (${types.length})`);
+                    for (const it of types) lines.push(fmt(it));
+                }
+                if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
             }
@@ -429,8 +903,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             sort_by: z.enum(['importance', 'path']).default('importance').describe(
                 "'importance' (default): most-imported files first (PageRank). 'path': alphabetical."
             ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { files: [{ file_path, symbols }] })."
+            ),
         },
-        async ({ path_filter, max_files, sort_by }) => {
+        async ({ path_filter, max_files, sort_by, response_format }) => {
             try {
                 const fileChunks = new Map();
                 const filterLower = path_filter ? path_filter.toLowerCase() : null;
@@ -442,13 +919,15 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 }
 
                 if (fileChunks.size === 0) {
-                    return {
-                        content: [{
-                            type: 'text', text: path_filter
-                                ? `No files found matching '${path_filter}'. Try a broader filter.`
-                                : 'Index is empty. Run `npm run mcp:index` first.'
-                        }]
-                    };
+                    return response_format === 'json'
+                        ? jsonResult({ total_files: 0, total_symbols: 0, files: [] })
+                        : {
+                            content: [{
+                                type: 'text', text: path_filter
+                                    ? `No files found matching '${path_filter}'. Try a broader filter.`
+                                    : 'Index is empty. Run `npm run mcp:index` first.'
+                            }]
+                        };
                 }
 
                 let sortedFiles = Array.from(fileChunks.keys());
@@ -462,6 +941,30 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
 
                 const totalFiles = fileChunks.size;
                 const totalSymbols = Array.from(fileChunks.values()).reduce((s, a) => s + a.length, 0);
+
+                if (response_format === 'json') {
+                    const files = sortedFiles.map(filePath => {
+                        const seen = new Set();
+                        const symbols = [];
+                        for (const c of fileChunks.get(filePath)) {
+                            const key = c.name.toLowerCase();
+                            if (seen.has(key)) continue;
+                            seen.add(key);
+                            symbols.push({
+                                name: c.name, node_type: c.node_type,
+                                params: c.params || [], return_type: c.return_type || null,
+                                start_line: c.start_line, end_line: c.end_line,
+                            });
+                        }
+                        return { file_path: filePath, symbol_count: symbols.length, symbols };
+                    });
+                    return jsonResult({
+                        total_files: totalFiles, total_symbols: totalSymbols,
+                        shown_files: sortedFiles.length, sort_by, path_filter: path_filter || null,
+                        files,
+                    });
+                }
+
                 const lines = [
                     `# Repo Map — ${totalSymbols} symbols across ${totalFiles} files`,
                     path_filter ? `(filtered to '${path_filter}')` : '',
@@ -506,31 +1009,58 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
     server.tool(
         'list_index_stats',
         'Returns index health: chunk count, embedding status, daemon status, search mode, storage backend, and index freshness.',
-        {},
-        async () => {
+        {
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed health fields)."
+            ),
+        },
+        async ({ response_format }) => {
             try {
                 const s = db.stats();
 
                 let indexAge = 'unknown';
+                let ageSeconds = null;
                 try {
-                    const ageSec = Math.floor((Date.now() - fs.statSync(artifactPath).mtimeMs) / 1000);
-                    indexAge = ageSec < 60 ? `${ageSec}s ago` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago` : `${Math.floor(ageSec / 3600)}h ago`;
+                    ageSeconds = Math.floor((Date.now() - fs.statSync(artifactPath).mtimeMs) / 1000);
+                    indexAge = ageSeconds < 60 ? `${ageSeconds}s ago` : ageSeconds < 3600 ? `${Math.floor(ageSeconds / 60)}m ago` : `${Math.floor(ageSeconds / 3600)}h ago`;
                 } catch { }
 
                 let daemonStatus = 'not running';
+                let daemonRunning = false;
                 try {
                     if (pidFile && fs.existsSync(pidFile)) {
                         const pid = parseInt(fs.readFileSync(pidFile, 'utf-8'), 10);
                         process.kill(pid, 0);
                         daemonStatus = `running (PID: ${pid})`;
+                        daemonRunning = true;
                     }
                 } catch { daemonStatus = 'not running (stale PID)'; }
 
+                const embedLabel = embedder ? describeEmbedder(embedder) : '🔤 Lexical only';
+                const searchModeText = !embeddingsEnabled ? 'lexical-only' : s.hasVectors ? 'hybrid' : 'lexical-only';
                 const searchMode = !embeddingsEnabled
-                    ? '🔤 Lexical only (INDEXER_EMBEDDINGS=off)'
+                    ? '🔤 Lexical only (embeddings disabled)'
                     : s.hasVectors
-                        ? `🧠 Hybrid (semantic + lexical RRF) — vectors: ${s.vectorSource}`
-                        : '🔤 Lexical only (Ollama unavailable or not yet indexed)';
+                        ? `🧠 Hybrid (semantic + lexical RRF) · ${embedLabel} — vectors: ${s.vectorSource}`
+                        : '🔤 Lexical only (no vectors indexed yet)';
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        backend: s.backend,
+                        chunks: s.chunks,
+                        files: s.files,
+                        symbols: s.symbols,
+                        vectors: s.vectors,
+                        has_vectors: s.hasVectors,
+                        search_mode: searchModeText,
+                        embeddings_enabled: Boolean(embeddingsEnabled),
+                        embedder: embedder ? { provider: embedder.provider, model: embedder.model, dim: embedder.dim ?? null } : null,
+                        lazy_mode: s.lazyMode,
+                        daemon_running: daemonRunning,
+                        index_age_seconds: ageSeconds,
+                        ext_counts: Object.fromEntries(s.extCounts),
+                    });
+                }
 
                 const lines = [
                     `# 📊 graph-indexer Index Stats`, '',

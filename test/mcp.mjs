@@ -76,7 +76,7 @@ async function main() {
         const names = (tools.result?.tools || []).map(t => t.name);
         check('tools/list exposes the full surface', () => {
             for (const t of ['search_code', 'get_chunk', 'resolve_symbol', 'get_chunk_summary',
-                'get_file_skeleton', 'get_call_graph', 'get_repo_map', 'list_index_stats']) {
+                'get_file_skeleton', 'get_call_graph', 'find_references', 'get_repo_map', 'list_index_stats']) {
                 assert.ok(names.includes(t), `missing tool: ${t}`);
             }
         });
@@ -102,6 +102,19 @@ async function main() {
             const txt = textOf(stats);
             assert.ok(/Storage backend/.test(txt), 'no backend row');
             assert.ok(/In-memory/.test(txt), `expected in-memory backend, got:\n${txt.slice(0, 300)}`);
+        });
+
+        const json = await srv.request(6, 'tools/call', {
+            name: 'search_code',
+            arguments: { query: 'response json serialize object', top_k: 3, detail: 'signatures', response_format: 'json' },
+        });
+        check('search_code json mode yields structuredContent over stdio', () => {
+            const sc = json?.result?.structuredContent;
+            assert.ok(sc && Array.isArray(sc.results), 'structuredContent.results missing');
+            assert.ok(sc.results.length > 0, 'no results in structured payload');
+            assert.equal(typeof sc.results[0].id, 'string', 'result id should be a typed field');
+            // The JSON text block must parse back to the same object.
+            assert.deepEqual(JSON.parse(textOf(json)), sc, 'text block mirrors structuredContent');
         });
     } finally {
         srv.child.kill('SIGTERM');

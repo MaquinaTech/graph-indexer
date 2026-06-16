@@ -13,14 +13,16 @@
 import fs from 'fs';
 import path from 'path';
 import {
-    MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter, getLocalEmbeddingsBatch,
+    MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter,
     extractImportsFromAST, extractSemanticChunks, resolveLocalImports, buildEmbeddingPayload,
 } from './parser-utils.mjs';
 import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
+import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta } from './embeddings.mjs';
 import { resolveConfig } from './config.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { enrichCoreChunks } from './enrichment.mjs';
+import { collectGitSignals, writeGitSignals } from './git-signals.mjs';
 
 const config = resolveConfig();
 const PROJECT_ROOT = config.projectRoot;
@@ -55,7 +57,19 @@ async function main() {
     const files = walkRepo(PROJECT_ROOT, PROJECT_ROOT, ig);
     console.log(`Found ${files.length} files to analyse.\n`);
 
-    const existingCache = readEmbeddingBinary(EMBEDDINGS_PATH);
+    // Resolve the embedding provider for this run (Ollama → in-process local →
+    // lexical, unless forced). Index time and query time must share the model.
+    const embedder = await createEmbedder(config);
+    console.log(`🔎 Embeddings: ${describeEmbedder(embedder)}\n`);
+
+    let existingCache = readEmbeddingBinary(EMBEDDINGS_PATH);
+    // A model switch invalidates the cached vectors — vectors of different models
+    // (and dims) must never be mixed in one bin. Re-embed from scratch.
+    const prevMeta = readEmbedMeta(EMBEDDINGS_PATH);
+    if (prevMeta?.model && embedder.model && prevMeta.model !== embedder.model) {
+        console.log(`⚠️  Embedding model changed (${prevMeta.model} → ${embedder.model}); re-embedding from scratch.`);
+        existingCache = new Map();
+    }
     console.log(`📦 Loaded ${existingCache.size} cached embeddings from previous runs.\n`);
 
     const indexData = { chunks: [], graph: { dependencies: {}, importedBy: {} }, embeddingCache: {} };
@@ -123,7 +137,7 @@ async function main() {
         }
     }
 
-    console.log(`\n\n🧠 Embedding Generation (Ollama)`);
+    console.log(`\n\n🧠 Embedding Generation — ${describeEmbedder(embedder)}`);
     console.log(`Chunks reused from cache: ${indexData.chunks.length}`);
     console.log(`New chunks to process: ${toEmbed.length}`);
 
@@ -145,9 +159,7 @@ async function main() {
                 const sText = summaryEmbeddingText(c);
                 if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
             }
-            const matrix = await getLocalEmbeddingsBatch(entries.map(e => e.text), true, {
-                ollamaHost: config.ollamaHost, model: config.embedModel,
-            });
+            const matrix = await embedder.embedDocuments(entries.map(e => e.text));
             if (matrix && matrix.length === entries.length) {
                 for (let j = 0; j < entries.length; j++) {
                     indexData.embeddingCache[entries[j].key] = matrix[j];
@@ -192,6 +204,30 @@ async function main() {
             fs.promises.rename(tmpBinPath, EMBEDDINGS_PATH),
         ]);
         console.log(`\n🎉 Indexing completed blazingly fast. Total fragments: ${indexData.chunks.length}\n`);
+    }
+
+    // Stamp which model produced the shared embeddings bin, so the server queries
+    // with the same provider and the next index run detects a model switch.
+    writeEmbedMeta(EMBEDDINGS_PATH, {
+        provider: embedder.provider,
+        model: embedder.model,
+        dim: embedder.dim ?? prevMeta?.dim ?? null,
+    });
+
+    // ── Git signals (air-gapped: local commit log only) ───────────────────────────
+    // A sidecar of churn / recency / co-change, consumed by the blast-radius tools
+    // and the opt-in ranking boost. Kept out of the index/ranking math so the
+    // measured retrieval ranking is unchanged. No-op outside a git repo.
+    if (config.gitSignals) {
+        const signals = collectGitSignals(PROJECT_ROOT);
+        if (signals) {
+            writeGitSignals(config.gitSignalsPath, signals);
+            console.log(`🔄 Git signals: ${signals.commits} commits · ${Object.keys(signals.churn).length} files (churn/recency/co-change).\n`);
+        } else {
+            // Not a git repo (or a subtree with no tracked history) — drop any stale
+            // sidecar so degenerate/foreign signals never linger.
+            try { fs.unlinkSync(config.gitSignalsPath); } catch { /* none to remove */ }
+        }
     }
 }
 

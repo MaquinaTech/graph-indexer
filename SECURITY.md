@@ -26,15 +26,31 @@ are not maintained; please upgrade to the latest version.
 graph-indexer is designed to run locally as a developer tool. Its threat model is
 shaped by a few deliberate choices:
 
-- **Air-gapped by default.** The only outbound network call is to a *local* Ollama
-  endpoint (`OLLAMA_HOST`, default `http://localhost:11434`) for embeddings. With
-  `INDEXER_EMBEDDINGS=off`, even that call is skipped and the tool is fully offline.
-  There are no analytics, telemetry, crash reporters, or third-party API calls.
+- **Air-gapped by default.** In normal operation the only outbound network call is to
+  a *local* Ollama endpoint (`OLLAMA_HOST`, default `http://localhost:11434`) for
+  embeddings. With `INDEXER_EMBEDDINGS=off`, even that call is skipped and the tool is
+  fully offline. There are no analytics, telemetry, crash reporters, or third-party API
+  calls. **One exception:** the optional in-process embedding provider
+  (`embedProvider: "local"`, or `"auto"` when no Ollama is found) downloads its model
+  weights from the Hugging Face CDN **once** on first index, then runs fully offline
+  from the local cache. Your source code is never sent anywhere — only model weights
+  are fetched. For strictly air-gapped installs, set `embedProvider` to `"ollama"` or
+  `"off"`, or pre-populate the model cache on a connected machine.
 - **No code execution.** Source files are parsed into ASTs with Tree-sitter. The
-  indexer never imports, evaluates, or runs the code it indexes.
+  indexer never imports, evaluates, or runs the code it indexes. The one subprocess
+  it spawns is a local, read-only `git log` (see "git signals" below) — never the
+  indexed code.
+- **Local git signals.** At index time the indexer optionally reads the repository's
+  *local* commit log (`git log` on `MCP_PROJECT_ROOT`) to derive churn / recency /
+  co-change ranking hints. No remote is contacted and no source content leaves the
+  machine — only commit metadata (paths, timestamps) is read locally. Disable it
+  entirely with `INDEXER_GIT_SIGNALS=off`, `--no-git-signals`, or
+  `"gitSignals": false`.
 - **Path-traversal guard.** The `get_file_skeleton` MCP tool resolves and normalizes
-  the requested path and rejects anything outside `MCP_PROJECT_ROOT`, so a tool call
-  cannot read arbitrary files on the host.
+  the requested path and rejects anything outside `MCP_PROJECT_ROOT`. Beyond the
+  textual check it also resolves symlinks with `realpath` on both the root and the
+  target and re-verifies containment, so a symlink *inside* the project that points
+  outside it cannot be used to read arbitrary files on the host.
 - **Local artifacts only.** The index (`code-index.json`) and embeddings
   (`code-index.embeddings.bin`) are written inside the project and are git-ignored by
   `init`. They contain snippets of your source code — treat them with the same

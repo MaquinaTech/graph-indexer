@@ -211,7 +211,7 @@ OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b \
 
 ## Getting started
 
-**Requirements:** Node.js v18+ · Ollama (optional, for semantic search and enrichment) · Node.js v22.5+ for the optional SQLite backend
+**Requirements:** Node.js v18+ · Ollama (optional — for higher-quality embeddings and LLM enrichment; semantic search also runs with no Ollama via a bundled in-process model) · Node.js v22.5+ for the optional SQLite backend
 
 ### 1. Install
 
@@ -269,19 +269,29 @@ Navigate menus with **↑ ↓** (multi-selects toggle with **Space**), confirm w
 
 ### 2. Index your codebase
 
-**With semantic search (recommended):**
+**Semantic search, zero setup (default):**
+```bash
+npm run mcp:index
+```
+With the default `embedProvider: "auto"`, the indexer uses a running Ollama if it
+finds one and otherwise falls back to a small **in-process** model (via the optional
+`@huggingface/transformers` dependency, downloaded once on first index) — so
+conceptual queries work with no daemon to install. Force it explicitly with
+`INDEXER_EMBED_PROVIDER=local npm run mcp:index`.
+
+**Higher-quality embeddings with Ollama:**
 ```bash
 # Install Ollama: https://ollama.ai
 ollama pull nomic-embed-text
-npm run mcp:index
+INDEXER_EMBED_PROVIDER=ollama npm run mcp:index
 ```
 
-**Lexical-only (no Ollama required):**
+**Lexical-only (no vectors at all):**
 ```bash
 INDEXER_EMBEDDINGS=off npm run mcp:index
 ```
 
-Lexical-only still scores loose recall@5 = 0.90 and strict symbolic MRR 0.81 on the benchmarks above — only the semantic (behavioural-query) channel needs embeddings.
+Lexical-only still scores loose recall@5 = 0.90 and strict symbolic MRR 0.81 on the benchmarks above — only the semantic (behavioural-query) channel needs embeddings. The index records which model produced its vectors, so the server always queries with the same one.
 
 **On a large monorepo, keep retrieval RAM flat with the SQLite backend:**
 ```bash
@@ -390,6 +400,8 @@ For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the laye
 
 ## MCP tools
 
+> **Structured output.** Every query/read tool accepts `response_format: "markdown" | "json"` (default `"markdown"`). In `"json"` mode the tool returns typed fields — chunk `id`, `file_path`, line range, signature parts, topology, callers/references — both as a JSON text block (readable by any client) and as MCP `structuredContent` (typed, no prose-parsing). The markdown view stays the default so the token-efficient agent cards are unchanged. Verified in [test/json-output.mjs](test/json-output.mjs) (`npm run test:jsonout`).
+
 ### `search_code`
 
 Hybrid BM25 + vector search over the index. The primary entry point for agents.
@@ -419,13 +431,18 @@ For purely conceptual queries with no lexical overlap, `"smart"` falls back to a
 
 ### `get_call_graph`
 
-Every chunk across the repo that calls a specific function.
+Every chunk across the repo that calls a specific function, **split by confidence** so an ambiguous name doesn't drown the real blast radius.
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `target_function` | string | Exact function name (e.g. `"validateToken"`) |
+| `target_class` | string? | Class/type that owns the method (e.g. `"OrderService"`) — scopes the blast radius to one class's `save()` when several symbols share the name |
 
 **This is the blast-radius tool.** Call it before modifying any exported function to find every call site across the entire codebase. The agent can then update all callers in one consistent pass instead of discovering them in CI.
+
+The call graph matches by callee name, so a query for a common method (`save`, `validate`) would otherwise return callers of *every* same-named symbol. graph-indexer captures each call's **receiver** at index time (`this.save()` vs `order.save()` vs a bare `save()`) and uses it — together with target uniqueness and the file import graph — to separate **high-confidence callers** (the real blast radius) from **name-only matches** (an ambiguous same-named symbol elsewhere, listed separately to verify). On a labelled fixture this lifts caller precision from 0.50 (name-only) to 1.00 while keeping full recall — see [test/callgraph.mjs](test/callgraph.mjs) (`npm run test:callgraph`). No type inference is involved; it uses only cheap, index-time signals.
+
+When git signals are available it also appends a **co-change hint** — *"🔄 Historically changes with: `x.ts`, `y.ts`"* — derived from the local commit log, so the blast radius includes files that empirically change *together* with the target even when there is no static edge between them.
 
 ```
 # Agent workflow for safe refactoring:
@@ -434,6 +451,29 @@ Every chunk across the repo that calls a specific function.
 3. get_chunk(caller_id) for each caller   → read what needs updating
 4. Make all changes in one pass            → no broken callers
 ```
+
+---
+
+### `find_references`
+
+Every **symbol** that references a target symbol — not just every file. Where `get_call_graph` answers "who *calls* this function," `find_references` is broader: use it before renaming or changing a **class, interface, or type**, where the blast radius is calls *plus* subclasses and type usages.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `symbol` | string | Exact symbol name (function, class, interface, or type) |
+| `target_class` | string? | Owning class/type to scope the call dimension when the name is shared |
+
+It fuses the three reference kinds the index records and splits each by confidence using the same cheap, index-time signals as the call graph — receiver hints and the file import graph, **no type inference**:
+
+| Kind | Source | Example |
+| :--- | :--- | :--- |
+| **Called by** | call sites (`get_call_graph`) | `order.save()` |
+| **Subclassed / implemented by** | `extends` / `implements` clauses | `class Admin extends User` |
+| **Used as a type by** | parameter / return / field annotations | `function handle(u: User)` |
+
+This sharpens file→file topology ("`auth.ts` is used by `api.ts`") into symbol→symbol ("`User` is subclassed by `Admin` and used as a type by `handle`"). A referer that imports a file defining the symbol — or matches a sole definition — is **high-confidence**; an annotation against a same-named symbol it never imports is listed as **name-only** to verify. Measured deterministically in [test/references.mjs](test/references.mjs) (`npm run test:references`).
+
+> **Language coverage.** The *callers* dimension works across all indexed languages. The *subclasses* (`extends`/`implements`) and *type-annotation users* dimensions are populated for **TypeScript/JavaScript and Python**, where the parser extracts heritage and type annotations; in the other languages `find_references` returns callers only (use `search_code(exact_tokens: "Name")` for type consumers there). Extending heritage/type extraction to the remaining languages is the natural next increment.
 
 ---
 
@@ -630,8 +670,10 @@ All persistent settings live in one file inside the data dir, written by `init` 
 | :--- | :--- | :--- |
 | `languages` | all installed | Parsers to load. Valid keys: `typescript`, `javascript`, `python`, `go`, `rust`, `php`, `java`, `kotlin`, `csharp`, `ruby`, `css`. |
 | `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency) or `"sqlite"` (disk-backed). |
+| `embedProvider` | `"auto"` | How vectors are produced: `"auto"` (a running Ollama, else the in-process local model, else lexical), `"ollama"`, `"local"`, or `"off"`. |
 | `ollamaHost` | `"http://localhost:11434"` | Ollama endpoint (also settable via `OLLAMA_HOST`). |
-| `embedModel` | `"nomic-embed-text"` | Embedding model (index and queries must use the same one). |
+| `embedModel` | `"nomic-embed-text"` | Ollama embedding model (index and queries must use the same one). |
+| `localEmbedModel` | `"Xenova/all-MiniLM-L6-v2"` | In-process model used by the `local` provider (via the optional `@huggingface/transformers` dependency; downloaded once on first index). |
 | `enrichment.enabled` | `false` | Run local-LLM enrichment during indexing. |
 | `enrichment.model` | `"qwen2.5-coder:1.5b"` | Ollama model used for generation. |
 | `enrichment.coreRatio` | `1.0` | Share of production files eligible (by PageRank). `1.0` = all; tests/examples are always excluded. |
@@ -641,6 +683,8 @@ All persistent settings live in one file inside the data dir, written by `init` 
 | `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none; a 14B judge scores higher still. |
 | `rerank.topM` | `12` | Candidates shown to the judge to reorder. |
 | `rerank.poolSize` | `15` | Over-fetch depth when reranking (capped at 25), so a correct-but-deep hit can be rescued into `top_k`. |
+| `gitSignals` | `true` | Collect churn / recency / co-change from the **local** commit log at index time (air-gapped — see [Security](SECURITY.md)). Powers the co-change blast-radius hint. |
+| `gitRankBoost` | `0` | Opt-in `0..1` weight that nudges `search_code` toward recently-/frequently-changed files. **`0` leaves retrieval ranking byte-identical** (the eval is unaffected); raise it to trade some precision for recency. |
 
 ### CLI flags
 
@@ -654,6 +698,8 @@ Flags override the config file for a single run:
 | `--enrich-model <name>` | `"enrichment.model"` |
 | `--enrich-max <n>` | `"enrichment.maxChunks"` for this run |
 | `--enrich-concurrency <n>` | `"enrichment.concurrency"` for this run |
+| `--no-git-signals` | `"gitSignals": false` for this run |
+| `--git-rank-boost <n>` | `"gitRankBoost"` (`0..1`) for this run |
 
 ### Environment variables
 
@@ -662,6 +708,9 @@ Flags override the config file for a single run:
 | `MCP_PROJECT_ROOT` | `process.cwd()` | Project root directory |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
 | `INDEXER_EMBEDDINGS` | — | Set to `off` to disable vector embeddings |
+| `INDEXER_EMBED_PROVIDER` | `auto` | Override the embedding provider for one run: `auto` \| `ollama` \| `local` \| `off` |
+| `INDEXER_GIT_SIGNALS` | — | Set to `off` to skip reading the local git log |
+| `INDEXER_GIT_RANK_BOOST` | `0` | Override the `0..1` git ranking boost for one run |
 
 Re-run `init` at any time to change languages, or `init --all-languages` to enable every installed parser without the prompt.
 
@@ -707,7 +756,7 @@ sqlite-store.mjs  SqliteGraphStore — the disk-backed store (node:sqlite) with
 storage.mjs       createStore(config) — picks a backend; documents the contract
                   both implement (searchHybrid, getChunk, applyFileUpdate, …).
 enrichment.mjs    Optional LLM summaries + concept tags, cached by content hash.
-mcp-tools.mjs     The eight tools, written against the storage contract only.
+mcp-tools.mjs     The nine tools, written against the storage contract only.
 mcp-server.mjs    Thin bootstrap: config → store → tools → stdio.
 indexer.mjs       Bootstrap indexer.   watch-daemon.mjs  Incremental updates.
 layout.mjs        Single source of truth for the .graph-indexer/ data dir +
@@ -829,16 +878,25 @@ npm run mcp:daemon:status  # daemon + index state (start | stop | restart | logs
 | `npm run test:enrich` | HyDE enrichment, including the lexically-disjoint rank-1 flip |
 | `npm run test:mcp` | End-to-end MCP server over stdio |
 | `npm run test:scale` | Mock 50k-chunk corpus proving SQLite RAM stays bounded |
+| `npm run test:callgraph` | Call-graph precision/recall: receiver-aware vs name-only (0.50 → 1.00) |
+| `npm run test:references` | Symbol-level references: high-confidence vs name-only via the import graph |
+| `npm run test:jsonout` | Structured `response_format: "json"` output across every tool |
+| `npm run test:gitsignals` | Git churn/recency/co-change from a temp repo + co-change hint + opt-in rank boost |
+| `npm run test:security` | `get_file_skeleton` path-traversal + symlink-escape (realpath) guard |
+| `npm run test:embed` | Embedding-provider selection, fallback, meta-stamping + a real local-model smoke |
 | `npm run test:all` | Every dependency-free suite above, no Ollama required |
 
 ---
 
 ## Security
 
-graph-indexer runs locally and is air-gapped by default — its only outbound calls
-are to a local Ollama endpoint for embeddings and optional enrichment (skipped entirely with
-`INDEXER_EMBEDDINGS=off` and without `--llm-enrichment`). It never executes the code it indexes,
-and the index artifacts contain source snippets, so keep them git-ignored (as `init` configures).
+graph-indexer runs locally and is air-gapped by default — in normal operation its only
+outbound calls are to a local Ollama endpoint for embeddings and optional enrichment
+(skipped entirely with `INDEXER_EMBEDDINGS=off` and without `--llm-enrichment`). The
+optional in-process embedding provider downloads its model weights once on first index
+(source code is never sent); set `embedProvider` to `"ollama"` or `"off"` for a strictly
+air-gapped install. It never executes the code it indexes, and the index artifacts contain
+source snippets, so keep them git-ignored (as `init` configures).
 
 See [SECURITY.md](SECURITY.md) for the full threat model and how to report a
 vulnerability.

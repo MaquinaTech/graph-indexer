@@ -588,7 +588,10 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 })())
                 : chunkNode.text.slice(0, 3000);
             const hash = generateChunkHash(docstring + snippet);
-            const outgoingCalls = extractCalls(chunkNode);
+            // Receiver-aware call sites (bounded for index size); the legacy
+            // name-only `calls` list is derived from them so they never diverge.
+            const callSites = extractCallSites(chunkNode).slice(0, 256);
+            const outgoingCalls = Array.from(new Set(callSites.map(s => s.name)));
 
             // 🥇 PARAMETER / TYPE / CLASS CONTEXT ENRICHMENT (improves recall on undocumented code)
             const params = extractParams(chunkNode, ext);
@@ -606,7 +609,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 id, file_path: relPath, node_type: chunkNode.type, name: nameText,
                 docstring: docstring, code_snippet: snippet, content_hash: hash,
                 start_line: chunkNode.startPosition.row + 1, end_line: chunkNode.endPosition.row + 1,
-                calls: outgoingCalls,
+                calls: outgoingCalls, call_sites: callSites,
                 params, return_type: returnType, class_context: classContext,
                 type_refs: typeRefs, decorators, extends: heritage,
             });
@@ -643,7 +646,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                     docstring, code_snippet: snippet,
                     content_hash: generateChunkHash(docstring + snippet),
                     start_line: node.startPosition.row + 1, end_line: node.endPosition.row + 1,
-                    calls: [], params: [], return_type: '', class_context: '',
+                    calls: [], call_sites: [], params: [], return_type: '', class_context: '',
                     type_refs: [], decorators: [], extends: [],
                 });
             }
@@ -1136,50 +1139,92 @@ export function extractTypeAnnotations(chunkNode, ext) {
     return Array.from(types).slice(0, 20);
 }
 
-export function extractCalls(rootNode) {
-    const calls = new Set();
+// Call names that are framework/stdlib noise rather than project call edges.
+const CALL_NOISE = new Set(['require', 'console', 'log', 'expect', 'test', 'it', 'describe', 'setTimeout', 'print', 'println!']);
+function _validCallName(c) { return Boolean(c) && c.length > 2 && !CALL_NOISE.has(c); }
+
+/**
+ * Collapse a call's receiver expression into a compact disambiguation hint:
+ *   • ''        — unqualified call (`foo()`): a free function or in-scope name.
+ *   • 'this'    — `this.`/`self.`-rooted: dispatch on the SAME instance/class.
+ *   • '<ident>' — the last identifier of the receiver expression (`db.save()` → 'db',
+ *                 `UserService.find()` → 'UserService'), the only cheap type signal
+ *                 available without full inference.
+ * This is what lets get_call_graph separate the real callers of `OrderService.save`
+ * from every unrelated `save()` in the repo (see mcp-tools.classifyCallers).
+ */
+function _receiverHint(objNode) {
+    if (!objNode) return '';
+    const t = objNode.text || '';
+    if (/^(this|self)\b/.test(t)) return 'this';
+    const segs = t.split(/[^A-Za-z0-9_$]+/).filter(Boolean);
+    return segs.length ? segs[segs.length - 1] : '';
+}
+
+/**
+ * Walk a subtree and collect every call site as { name, recv } (receiver hint).
+ * Deduplicated by (name, recv). Cross-language: call_expression (JS/TS/Go/Rust),
+ * call (Python), macro_invocation (Rust), method_invocation (Java/C#),
+ * method_call (Ruby). The receiver is the precision half of the call graph —
+ * extractCalls() derives the legacy name-only list from these sites.
+ */
+export function extractCallSites(rootNode) {
+    const sites = [];
+    const seen = new Set();
+    const add = (name, recv) => {
+        if (!name) return;
+        const key = name + ' ' + recv;
+        if (seen.has(key)) return;
+        seen.add(key);
+        sites.push({ name, recv });
+    };
     function walk(node) {
-        // JavaScript / TypeScript / Go / Rust: call_expression
-        if (node.type === 'call_expression') {
+        const t = node.type;
+        if (t === 'call_expression') {
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {
-                if (funcNode.type === 'identifier') calls.add(funcNode.text);
+                if (funcNode.type === 'identifier') add(funcNode.text, '');
                 else if (funcNode.type === 'member_expression' || funcNode.type === 'property_identifier') {
                     const prop = funcNode.childForFieldName?.('property');
-                    if (prop) calls.add(prop.text);
-                    else calls.add(funcNode.text.split('.').pop());
+                    if (prop) add(prop.text, _receiverHint(funcNode.childForFieldName?.('object')));
+                    else add(funcNode.text.split('.').pop(), '');
                 }
             }
-        }
-        // Python: `call` node type (different name from call_expression)
-        else if (node.type === 'call') {
+        } else if (t === 'call') { // Python
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {
-                if (funcNode.type === 'identifier') calls.add(funcNode.text);
+                if (funcNode.type === 'identifier') add(funcNode.text, '');
                 else if (funcNode.type === 'attribute') {
                     const attr = funcNode.childForFieldName?.('attribute');
-                    if (attr) calls.add(attr.text);
+                    if (attr) add(attr.text, _receiverHint(funcNode.childForFieldName?.('object')));
                 }
             }
-        }
-        // Rust: macro_invocation (e.g. vec!, println!, format!)
-        else if (node.type === 'macro_invocation') {
+        } else if (t === 'macro_invocation') { // Rust
             const macroNode = node.childForFieldName?.('macro') || node.children[0];
-            if (macroNode && macroNode.type === 'identifier') calls.add(macroNode.text + '!');
-        }
-        // Java / C#: method_invocation
-        else if (node.type === 'method_invocation') {
+            if (macroNode && macroNode.type === 'identifier') add(macroNode.text + '!', '');
+        } else if (t === 'method_invocation') { // Java / C#
             const nameNode = node.childForFieldName?.('name') || node.children.find(c => c.type === 'identifier');
-            if (nameNode) calls.add(nameNode.text);
-        }
-        // Ruby: method_call / call
-        else if (node.type === 'method_call') {
+            if (nameNode) add(nameNode.text, _receiverHint(node.childForFieldName?.('object')));
+        } else if (t === 'method_call') { // Ruby
             const method = node.childForFieldName?.('method') || node.children.find(c => c.type === 'identifier');
-            if (method && method.type === 'identifier') calls.add(method.text);
+            if (method && method.type === 'identifier') add(method.text, _receiverHint(node.childForFieldName?.('receiver')));
         }
         node.children.forEach(walk);
     }
     walk(rootNode);
-    const noise = new Set(['require', 'console', 'log', 'expect', 'test', 'it', 'describe', 'setTimeout', 'print', 'println!']);
-    return Array.from(calls).filter(c => c && c.length > 2 && !noise.has(c));
+    return sites.filter(s => _validCallName(s.name));
+}
+
+/** Legacy name-only outgoing-call list (unique callee names). Derived from
+ *  extractCallSites so the two never diverge; preserved for the BM25 document
+ *  and the back-compat findCallers contract. */
+export function extractCalls(rootNode) {
+    const seen = new Set();
+    const out = [];
+    for (const { name } of extractCallSites(rootNode)) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        out.push(name);
+    }
+    return out;
 }
