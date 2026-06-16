@@ -47,18 +47,21 @@ jobs:
       - name: Verify supported languages
         run: |
           # Verify LANGUAGE_MAP includes all required extensions
-          grep -q "'.ts': TypeScript.typescript" parser-utils.mjs && echo "✓ TypeScript support"
-          grep -q "'.js': JavaScript" parser-utils.mjs && echo "✓ JavaScript support"
-          grep -q "'.py': Python" parser-utils.mjs && echo "✓ Python support"
-          grep -q "'.rs': Rust" parser-utils.mjs && echo "✓ Rust support"
-          grep -q "'.go': Go" parser-utils.mjs && echo "✓ Go support"
-          grep -q "'.php': PHP" parser-utils.mjs && echo "✓ PHP support"
-          grep -q "'.java': Java" parser-utils.mjs && echo "✓ Java support"
-          grep -q "'.kt': Kotlin" parser-utils.mjs && echo "✓ Kotlin support"
-          grep -q "'.cs': CSharp" parser-utils.mjs && echo "✓ C# support"
-          grep -q "'.rb': Ruby" parser-utils.mjs && echo "✓ Ruby support"
-          grep -q "'.css': CSS" parser-utils.mjs && echo "✓ CSS support"
-          echo "✓ All 11 languages verified"
+          grep -qF "'.ts': TypeScript.typescript" parser-utils.mjs && echo "✓ TypeScript support"
+          grep -qF "'.js': JavaScript" parser-utils.mjs && echo "✓ JavaScript support"
+          grep -qF "'.py': Python" parser-utils.mjs && echo "✓ Python support"
+          grep -qF "'.rs': Rust" parser-utils.mjs && echo "✓ Rust support"
+          grep -qF "'.go': Go" parser-utils.mjs && echo "✓ Go support"
+          grep -qF "'.php': PHP" parser-utils.mjs && echo "✓ PHP support"
+          grep -qF "'.java': Java" parser-utils.mjs && echo "✓ Java support"
+          grep -qF "'.kt': Kotlin" parser-utils.mjs && echo "✓ Kotlin support"
+          grep -qF "'.cs': CSharp" parser-utils.mjs && echo "✓ C# support"
+          grep -qF "'.rb': Ruby" parser-utils.mjs && echo "✓ Ruby support"
+          grep -qF "'.css': CSS" parser-utils.mjs && echo "✓ CSS/SCSS support"
+          grep -qF "'.c': C" parser-utils.mjs && echo "✓ C support"
+          grep -qF "'.sh': Bash" parser-utils.mjs && echo "✓ Bash support"
+          grep -qF "'.swift': Swift" parser-utils.mjs && echo "✓ Swift support"
+          echo "✓ All 14 languages verified"
 
       - name: Unit tests (pure helpers, no fixtures)
         run: npm run test:unit
@@ -81,4 +84,4 @@ jobs:
 
       - name: Verify index files created
         run: |
-          [ -f code-index.json ] && echo "✓ code-index.json created" || (echo "✗ code-index.json missing"; exit 1)
+          [ -f .graph-indexer/code-index.json ] && echo "✓ code-index.json created" || (echo "✗ .graph-indexer/code-index.json missing"; exit 1)

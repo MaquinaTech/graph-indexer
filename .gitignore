@@ -25,6 +25,7 @@ Cargo.lock
 .vscode/
 .idea/
 .cursor/
+.claude/
 *.swp
 *.swo
 *~
