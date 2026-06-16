@@ -47,8 +47,8 @@ export function cosineSimilarity(vecA, vecB) {
     let dot = 0, nA = 0, nB = 0;
     for (let i = 0; i < vecA.length; i++) {
         dot += vecA[i] * vecB[i];
-        nA  += vecA[i] * vecA[i];
-        nB  += vecB[i] * vecB[i];
+        nA += vecA[i] * vecA[i];
+        nB += vecB[i] * vecB[i];
     }
     return nA === 0 || nB === 0 ? 0 : dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
@@ -137,7 +137,7 @@ export function buildLexicalDocument(chunk, depRelPaths = []) {
 // prose, so heavy length normalisation wrongly penalises long implementations vs
 // short export stubs.
 export const BM25_K1 = 1.5;
-export const BM25_B  = 0.3;
+export const BM25_B = 0.3;
 
 /** Okapi IDF — always positive, avoids negative IDF for very common terms. */
 export function okapiIdf(docCount, docFreq) {
@@ -184,8 +184,20 @@ export function finalizeVectorCandidates(entries, cap = VECTOR_FUSION_CAP) {
         .map(([id, score], i) => ({ id, score, rank: i + 1 }));
 }
 
+// Non-natural-language channel weights (keyword / symbol-lookup queries). The
+// vector weight was lowered 1.0 → 0.7 after the 15-fixture search-eval was fixed
+// to actually exercise embeddings (its "semantic" pass had been silently lexical,
+// because the test bridge forced embeddings off — so the prior 1.0 was tuned
+// against a vector-less harness). With honest measurement, a full-strength vector
+// channel slightly OVER-contributes on keyword queries (BM25's home turf): it
+// displaces a confident exact-name lexical rank-1 with a same-prefixed sibling
+// (`Map`→`key`, `GardenPlantingRepository`→`…Dao`). 0.7 is the top of the winning
+// plateau — it restores those rank-1s (broad kw MRR 0.569 → 0.588, +1 hit@1) while
+// keeping the vector channel's recall lift, and leaves the 5-suite repo-eval
+// byte-identical (symbolic 0.78/0.83). Below 0.7 the repo-eval symbolic starts to
+// erode; the NL path keeps its own (higher) vector weight below.
 const LEXICAL_WEIGHT = 1.5;
-const VECTOR_WEIGHT  = 1.0;
+const VECTOR_WEIGHT = 0.7;
 
 // Natural-language queries keep the lexical channel at full strength (exact-name and
 // keyword matches are the most reliable signal); the vector channel's weight depends on
@@ -206,8 +218,8 @@ const VECTOR_WEIGHT  = 1.0;
 //
 // The engine selects the regime per index via `corpusEnriched` (see core-engine /
 // sqlite-store), so a repo indexed without --enrich is never hurt by the strong weight.
-const NL_LEXICAL_WEIGHT         = 1.5;
-const NL_VECTOR_WEIGHT_PLAIN    = 0.4;
+const NL_LEXICAL_WEIGHT = 1.5;
+const NL_VECTOR_WEIGHT_PLAIN = 0.4;
 const NL_VECTOR_WEIGHT_ENRICHED = 0.6;
 
 const QUERY_STOPWORDS = new Set([
@@ -268,8 +280,8 @@ export function fuseAndRank({
     docCount, rrfK, topK, queryText, exactBoostName = null, resolveExact = null,
     corpusEnriched = false,
 }) {
-    const rrfScores  = new Map();
-    const K          = rrfK;
+    const rrfScores = new Map();
+    const K = rrfK;
     const queryLower = queryText.toLowerCase();
 
     const _queryPathTokens = queryLower.split(/[\s\W_]+/).filter(t => t.length >= 3);
@@ -288,7 +300,7 @@ export function fuseAndRank({
     const nlQuery = vectorResults.length > 0 && isNaturalLanguageQuery(queryText);
     const nlVecWeight = corpusEnriched ? NL_VECTOR_WEIGHT_ENRICHED : NL_VECTOR_WEIGHT_PLAIN;
     const wLex = nlQuery ? NL_LEXICAL_WEIGHT : LEXICAL_WEIGHT;
-    const wVec = nlQuery ? nlVecWeight       : VECTOR_WEIGHT;
+    const wVec = nlQuery ? nlVecWeight : VECTOR_WEIGHT;
 
     // Re-rank the vector channel with test/example demotion applied to the cosine
     // scores BEFORE ranks are assigned: a test helper that out-scores the real
@@ -377,7 +389,7 @@ export function fuseAndRank({
                 const hasPrefix = !hasExact && _queryPathTokens.some(t =>
                     t.length >= 4 && Array.from(pathToks).some(pt => pt.startsWith(t.slice(0, 5)))
                 );
-                if (hasExact)       baseScore *= 1.4;
+                if (hasExact) baseScore *= 1.4;
                 else if (hasPrefix) baseScore *= 1.2;
             }
         }
@@ -387,8 +399,8 @@ export function fuseAndRank({
         // Plural equivalence (`BackgroundTask` ↔ `BackgroundTasks`) is included —
         // API names pluralize and a strict equality check missed them.
         if (canBoost && chunk.name && chunk.name !== 'anonymous') {
-            const nameLower      = chunk.name.toLowerCase();
-            const lastDotted     = nameLower.split('.').pop() ?? nameLower;
+            const nameLower = chunk.name.toLowerCase();
+            const lastDotted = nameLower.split('.').pop() ?? nameLower;
             const queryTokensAll = _queryNameTokens;
             const eq = (a, b) => a === b || a === b + 's' || b === a + 's';
             if (queryTokensAll.some(t => eq(nameLower, t) || eq(lastDotted, t))) {
@@ -398,7 +410,7 @@ export function fuseAndRank({
                 baseScore *= 2.0;
             } else {
                 const snakeParts = nameLower.split(/[._]+/);
-                const lastSnake  = snakeParts[snakeParts.length - 1] ?? '';
+                const lastSnake = snakeParts[snakeParts.length - 1] ?? '';
                 if (snakeParts.length >= 2 && lastSnake.length >= 3 && queryTokensAll.includes(lastSnake)) {
                     baseScore *= 1.4;
                 }

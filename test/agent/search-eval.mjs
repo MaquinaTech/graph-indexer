@@ -60,9 +60,9 @@ function firstHitRank(cards, expectList) {
     return 0;
 }
 
-async function runFixture(fixture, host) {
+async function runFixture(fixture, host, { embeddings = false } = {}) {
     process.env.OLLAMA_HOST = host;
-    const bridge = await createBridge({ fixture });
+    const bridge = await createBridge({ fixture, embeddings });
     const cases = SEARCH_CASES[fixture] || [];
     const out = [];
     for (const c of cases) {
@@ -91,7 +91,7 @@ const fixtures = (wanted.length ? wanted : Object.keys(SEARCH_CASES));
 const report = [];
 for (const fx of fixtures) {
     const lex = await runFixture(fx, DEAD_HOST);
-    const sem = await runFixture(fx, SEMANTIC_HOST);
+    const sem = await runFixture(fx, SEMANTIC_HOST, { embeddings: true });
     report.push({ fixture: fx, lex, sem });
 }
 

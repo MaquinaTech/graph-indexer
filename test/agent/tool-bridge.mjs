@@ -17,6 +17,7 @@ import path from 'path';
 import { resolveConfig } from '../../config.mjs';
 import { createStore } from '../../storage.mjs';
 import { registerTools } from '../../mcp-tools.mjs';
+import { createEmbedder, readEmbedMeta } from '../../embeddings.mjs';
 
 const CHARS_PER_TOKEN = 4;
 
@@ -35,21 +36,40 @@ export function resolveFixtureRoot(nameOrPath) {
  *
  * @param {object} opts
  * @param {string} opts.fixture  Fixture name (e.g. "nestjs") or a repo path.
+ * @param {boolean} [opts.embeddings=false]  Build a real query embedder (pinned to
+ *        the index's stamped provider/model, exactly like the live mcp-server) so
+ *        the hybrid/semantic ranking is exercised. Default false = deterministic,
+ *        Ollama-free lexical-only. A query-embed failure degrades to lexical, so an
+ *        unreachable Ollama transparently makes this equivalent to lexical-only.
  * @returns {Promise<{ callTool(name, args): Promise<{text, tokens, isError}>, tools: string[], stats: object }>}
  */
-export async function createBridge({ fixture }) {
+export async function createBridge({ fixture, embeddings = false }) {
     const projectRoot = resolveFixtureRoot(fixture);
 
-    // Lexical-only, no Ollama: deterministic and dependency-free. The handlers
-    // still try a query embedding and fall back to lexical on connection refusal.
+    // Lexical-only by default (deterministic, dependency-free). With embeddings:true
+    // we leave INDEXER_EMBEDDINGS at its resolved value so the hybrid channel runs.
     const config = resolveConfig({
         argv: ['--repo', projectRoot],
-        env: { ...process.env, INDEXER_EMBEDDINGS: 'off' },
+        env: embeddings ? { ...process.env } : { ...process.env, INDEXER_EMBEDDINGS: 'off' },
         cwd: projectRoot,
     });
 
     const db = await createStore(config, { cacheEmbeddings: false });
     db.load();
+
+    // Query embedder: pin to the provider/model stamped in the index meta (the same
+    // logic mcp-server uses), so query vectors are produced by the model that built
+    // the document vectors. Null in lexical mode → handlers run pure BM25.
+    let embedder = null;
+    if (embeddings) {
+        const embedMeta = readEmbedMeta(config.embeddingPath);
+        embedder = await createEmbedder(
+            config,
+            embedMeta?.provider
+                ? { provider: embedMeta.provider, model: embedMeta.model }
+                : { provider: config.embeddingsEnabled ? 'ollama' : 'off', model: config.embedModel },
+        );
+    }
 
     // Mock MCP server: capture each tool registration.
     const registry = new Map();
@@ -65,7 +85,8 @@ export async function createBridge({ fixture }) {
         projectRoot,
         artifactPath: config.indexPath,
         pidFile: null,
-        embeddingsEnabled: false,
+        embeddingsEnabled: Boolean(embedder) && embedder.provider !== 'off',
+        embedder,
         ollamaHost: config.ollamaHost,
         embedModel: config.embedModel,
         rerank: config.rerank,
