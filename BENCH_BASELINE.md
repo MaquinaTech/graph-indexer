@@ -1,0 +1,302 @@
+# BENCH_BASELINE.md
+
+Frozen baseline captured **before any code change**, against which every work-item
+delta is measured. Regenerated from real runs — never hand-edited per number.
+
+- **Captured:** 2026-06-17 (commit `13daaff`, branch `feat/prompts`, v1.3.0)
+- **Host:** darwin, Node v24.16.0
+- **Ollama:** reachable at `http://localhost:11434` — models present:
+  `nomic-embed-text`, `qwen2.5-coder:1.5b`, `qwen2.5-coder:7b`, `qwen3:8b`,
+  `qwen2.5:14b-instruct`, `gemma4`.
+- **In-process embedder:** `@huggingface/transformers@3.8.1` installed (optional dep
+  present) → the `local` provider (`Xenova/all-MiniLM-L6-v2`, 384-dim) is available.
+
+## How to reproduce
+
+```bash
+npm run test                                                              # loose hit-rate + savings + index time (lexical)
+npm run test:eval                                                         # strict, lexical-only channel
+OLLAMA_HOST=http://localhost:11434 node test/run.mjs --embeddings         # build memory index WITH nomic vectors (plain corpus)
+OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings    # strict, hybrid
+OLLAMA_HOST=http://localhost:11434 node test/run.mjs --embeddings --use-sqlite
+OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings --use-sqlite   # parity
+OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b node test/evaluate.mjs --embeddings --rerank
+npm run test:all
+```
+
+Note: the embeddings baseline is the **plain corpus** (no `--llm-enrichment`), so the
+NL vector channel runs at the `NL_VECTOR_WEIGHT_PLAIN` (0.4) regime. WI2 will measure
+the enriched corpus separately.
+
+---
+
+## 1. Strict symbol-level eval (`test/evaluate.mjs`) — the honesty harness
+
+Overall = mean across the 5 suites (axios, express-js, nestjs, fastapi, gin;
+100 queries total: 69 symbolic + 31 semantic/agent-style).
+
+| Channel | s@1 strict | s@5 strict | rank-1 | prec@5 | MRR strict | nDCG@5 | file-only inflation |
+|---|---|---|---|---|---|---|---|
+| **Lexical-only** (no Ollama path *not yet measurable* — see WI1) | 0.58 | 0.76 | 0.58 | 0.28 | 0.65 | 0.67 | **0.1%** |
+| **Hybrid** (nomic, plain corpus, memory) | 0.60 | 0.79 | 0.60 | 0.31 | 0.68 | 0.69 | **0.1%** |
+| **Hybrid** (nomic, plain corpus, **SQLite**) | 0.60 | 0.79 | 0.60 | 0.31 | 0.68 | 0.69 | **0.1%** |
+| **Hybrid + LLM rerank** (qwen2.5-coder:7b) | 0.64 | 0.80 | 0.64 | 0.31 | 0.71 | 0.72 | **0.1%** |
+
+### The weak link — semantic vs symbolic split (the whole point of this work)
+
+| Channel | symbolic rank-1 | symbolic MRR | **semantic rank-1** | **semantic MRR** | **semantic s@5** |
+|---|---|---|---|---|---|
+| Lexical-only | 0.75 | 0.81 | **0.19** | **0.29** | **0.48** |
+| Hybrid (nomic, plain) | 0.77 | 0.82 | **0.23** | **0.35** | **0.58** |
+| Hybrid + 7B rerank | 0.77 | 0.82 | **0.35** | **0.45** | **0.61** |
+
+Per-suite semantic rank-1 / MRR / s@5 (lexical → hybrid-nomic):
+
+| Suite | n | lex r1 | hyb r1 | lex MRR | hyb MRR | lex s@5 | hyb s@5 |
+|---|---|---|---|---|---|---|---|
+| Axios | 5 | 0.00 | 0.00 | 0.20 | 0.22 | 0.60 | 0.60 |
+| Express | 7 | 0.43 | 0.43 | 0.49 | 0.53 | 0.57 | 0.57 |
+| NestJS | 7 | 0.14 | 0.14 | 0.22 | 0.26 | 0.43 | 0.57 |
+| FastAPI | 7 | 0.14 | 0.29 | 0.23 | 0.35 | 0.29 | 0.57 |
+| Gin | 5 | 0.20 | 0.20 | 0.30 | 0.34 | 0.60 | 0.60 |
+
+**Reading:** the symbolic channel is strong (MRR ≈ 0.81–0.82). The semantic/agent-style
+channel is the weak link — rank-1 0.19 lexical, 0.23 hybrid, 0.35 with the 7B reranker.
+Closing this gap (while keeping inflation ≤ 0.1% and parity intact) is the objective.
+
+---
+
+## 2. Loose hit-rate + token savings + indexing (`test/run.mjs`, lexical)
+
+| Suite | Lang | Chunks | Recall@5 | MRR | Savings | Index time |
+|---|---|---|---|---|---|---|
+| Axios v1.6.0 | JS | 450 | 0.89 | 0.74 | 70.7% | 0.98 s |
+| Express 4.18.2 | JS | 389 | 0.90 | 0.86 | 89.6% | 1.19 s |
+| NestJS v10.4.9 | TS | 2675 | 0.95 | 0.80 | 66.9% | 6.34 s |
+| FastAPI 0.103.0 | Py | 3694 | 0.76 | 0.72 | 86.0% | 4.83 s |
+| Gin v1.9.1 | Go | 1088 | 1.00 | 0.84 | 84.6% | 0.78 s |
+| **TOTAL / MEAN** | | **8296** | **0.90** | **0.79** | **79.6%** | **14.12 s** |
+
+Loose recall@5 with hybrid (nomic) is unchanged at 0.90 (per-suite identical); the loose
+metric is already near-saturated, which is exactly why the **strict** split above is the
+one that matters.
+
+### Indexing time (all 5 suites, 8296 chunks)
+
+| Mode | Total time | Notes |
+|---|---|---|
+| Lexical (no embeddings) | 14.12 s | embeddings off |
+| + nomic embeddings (memory) | 94.83 s | cold embed; NestJS alone 59 s |
+| + nomic embeddings (SQLite) | 15.19 s | warm — vectors served from the shared content-hash bin cache |
+
+---
+
+## 3. Backend parity (in-memory ↔ SQLite)
+
+The hybrid strict eval is **byte-identical** across the in-memory engine and the SQLite
+store on every metric (s@1/s@5/rank-1/prec@5/MRR/nDCG/inflation AND the semantic split:
+0.23 / 0.35 / 0.58). This is the aggregate-level parity guarantee. A per-query top-5-id
+assertion check is a follow-up (see goal: "add a parity assertion to CI if not enforced").
+
+---
+
+## 4. `npm run test:all` — full unit/integration suite
+
+**All green** (exit 0). 13 suite groups: unit, sqlite, enrichment, mcp, scale, callgraph,
+references, json-output, git-signals, security, embeddings, languages — 0 failures. The
+embeddings suite confirms `embedQuery` degrades to null (lexical fallback) on backend
+failure; the languages suite confirms C/Bash/Swift extraction.
+
+---
+
+## 5. Not yet measured (gaps the work items must fill)
+
+- **No-Ollama in-process embedder (WI1):** `evaluate.mjs` hardwires query embedding to
+  `nomic-embed-text` via Ollama and ignores the index's stamped provider, so the `local`
+  MiniLM path is **structurally unmeasurable** today. The lexical-only row above is the de
+  facto "no-Ollama" number (semantic rank-1 0.19). WI1 must make the harness honour the
+  index's embed-meta and report the local path.
+- **Enriched corpus (WI2):** all embeddings numbers above are the plain corpus. The
+  enriched corpus (summary vectors, `NL_VECTOR_WEIGHT_ENRICHED` 0.6) is unmeasured here.
+- **Amortized token savings (WI8):** the 79.6% is per-query retrieval only; it ignores
+  indexing + enrichment + `get_chunk` expansions.
+
+---
+
+## Work-item deltas (after-results)
+
+Each row is the strict semantic/agent-style channel (31 queries) unless noted. Symbolic and
+`fileOnlyHitRate` reported when they move. All vs the frozen baseline above.
+
+### WI1 — no-Ollama in-process embedder (measurable + documented)
+
+Reproduce: `INDEXER_EMBED_PROVIDER=local node test/run.mjs --embeddings` then
+`node test/evaluate.mjs --embeddings` (auto-detects `local` from embed-meta), or force with
+`node test/evaluate.mjs --embeddings --embed-provider local`.
+
+| Config | sem rank-1 | sem MRR | sem s@5 | sym rank-1 | sym MRR | inflation | parity (mem==sqlite) |
+|---|---|---|---|---|---|---|---|
+| Lexical-only (baseline floor) | 0.19 | 0.29 | 0.48 | 0.75 | 0.81 | 0.1% | — |
+| **In-process MiniLM, no Ollama** (plain) | **0.23** | **0.35** | **0.52** | 0.74 | 0.80 | 0.1% | ✅ byte-identical |
+| Ollama nomic (plain, for reference) | 0.23 | 0.35 | 0.58 | 0.77 | 0.82 | 0.1% | ✅ |
+| **Δ vs floor** | **+0.04** | **+0.06** | **+0.04** | −0.01 | −0.01 | 0.0 | — |
+
+Verdict: the no-daemon path materially beats lexical-only (semantic rank-1 +21%, MRR +21%),
+matches Ollama-nomic on rank-1/MRR, holds symbolic and inflation, and preserves backend parity.
+Cost: a one-time CPU embed (405 s for 8296 chunks vs 95 s on Ollama); query latency unchanged.
+Change was test-harness + docs + an observable-fallback log line — **no production ranking change**.
+
+### Default Ollama embed model → `qwen3-embedding:4b` (user request)
+
+Switched the default Ollama embedder from `nomic-embed-text` (768-dim) to
+`qwen3-embedding:4b` (2560-dim), a much stronger NL+code retrieval model. Supporting
+changes: model-aware prefixing (`needsNomicPrefix` — only nomic-style models get the
+`search_query:`/`search_document:` prefixes; qwen3/others embed raw text), a graceful
+`auto` fallback (`ollamaHasModel` — Ollama up but model not pulled → in-process model,
+never crashes the indexer), and a robust embedding pipeline (configurable
+`INDEXER_EMBED_CONCURRENCY` / `INDEXER_EMBED_TIMEOUT_MS`, and **per-batch graceful
+degradation** so a slow/failed batch indexes those chunks lexically instead of silently
+losing the whole index).
+
+**Indexing-time reality (important):** qwen3-embedding:4b runs at **~8 chunks/s** on this
+hardware (≈5.5 min for express's 389 chunks at concurrency=1). At the indexer's old
+concurrency-4 / 60 s-timeout settings every batch timed out and the index silently came up
+empty — the robustness fix is what makes a 4B embedder usable at all. The full 5-suite
+benchmark (~8.3k chunks) is impractical to re-embed here (~hours), so this is a **bounded,
+single-suite measurement** (express), not a full re-baseline. For speed-sensitive installs,
+`qwen3-embedding:0.6b` or staying on nomic remains a valid choice.
+
+Express (21q: 14 symbolic + 7 semantic), plain corpus, memory vs SQLite identical:
+
+| Express channel | lexical | nomic 768 | **qwen3-embedding:4b 2560** | Δ vs nomic |
+|---|---|---|---|---|
+| semantic rank-1 | 0.43 | 0.43 | **0.43** | 0.00 |
+| semantic MRR | 0.49 | 0.53 | **0.52** | −0.01 |
+| **semantic s@5** | 0.57 | 0.57 | **0.71** | **+0.14** |
+| symbolic rank-1 / MRR | 0.79 / 0.86 | 0.79 / 0.87 | 0.79 / 0.87 | ~0 |
+| file-only inflation | 0.1% | 0.1% | 0.1% | 0 |
+
+Verdict: qwen3-embedding:4b materially improves **top-5 semantic recall** (s@5 0.57→0.71 on
+express — more behavioural queries land the right symbol in the top-5) while holding rank-1,
+symbolic, and inflation, with **exact memory↔SQLite parity at 2560-dim**. The cost is
+indexing throughput. Default changed per request; degrades gracefully where the model is
+absent or too slow.
+
+### WI4 — low-confidence handoff (gated, ranking-derived)
+
+`search_code` now appends, on a behavioural query with no dominant match, a compact
+`candidate_files` list + a `get_file_skeleton` hint (markdown) / `low_confidence` +
+`candidate_files` fields (json). Gate (`assessConfidence`, unit-tested in test/unit.mjs):
+fires only when NOT `exact_tokens`-pinned, the query is natural-language, the top fused score
+does **not** dominate #2 by ≥2× (the exact-name boost factor — a structural constant, not
+tuned to the benchmark), and results span ≥2 files. Never fires on confident symbolic hits,
+so token cards don't bloat. Documented in prompts/CORE.md. No ranking change → eval + parity
+unaffected.
+
+### WI2 — enrichment upgrade (richer prompt + auto stronger model)
+
+Code shipped (all **opt-in**, enrichment disabled by default — no change to the default path):
+richer SUMMARY prompt (problem / inputs-outputs / side-effects, single-line contract preserved
+so `parseEnrichResponse` stays trivial), `resolveEnrichModel("auto")` picking the strongest
+local code model (1.5B floor, graceful when Ollama/model absent — 4 unit tests), wired into
+indexer + watch-daemon, dual-vector flow intact (richer summary → summary vector). Measured on
+the **local MiniLM embedder** (fast, isolates the enrichment lever), express + gin.
+
+**Finding 1 — enrichment ALONE can regress.** Semantic, no rerank:
+
+| suite | plain rank-1/MRR/s@5 | enriched-1.5B | enriched-7B |
+|---|---|---|---|
+| Express (7q) | 0.43 / 0.50 / 0.57 | 0.43 / **0.53** / 0.57 | — |
+| Gin (5q) | 0.20 / 0.45 / 0.80 | **0.00 / 0.31** / 0.80 | **0.00 / 0.33** / 0.80 |
+
+A stronger model (7B, 268 chunks, 0 failures, ~21 min) did **not** fix gin — the cause is
+structural: enrichment flips the corpus into the `NL_VECTOR_WEIGHT_ENRICHED` (0.6) regime, so a
+plausible-but-wrong summary vector displaces the exact code hit at rank-1.
+
+**Finding 2 — enrichment WITH rerank (its documented design) is a clear win.** Gin semantic,
+both with the 7B rerank judge:
+
+| gin semantic | rank-1 | MRR | s@5 |
+|---|---|---|---|
+| plain + rerank | 0.60 | 0.80 | 1.00 |
+| **enriched(7B) + rerank** | **0.80** | **0.87** | **1.00** |
+
+The reranker reorders the enriched pool (which has the better *recall* — right answers present)
+to recover and exceed rank-1. **Verdict:** ship enrichment as opt-in infrastructure that pairs
+with rerank; do NOT claim a standalone semantic gain (it regresses solo). The levers stack:
+gin semantic rank-1 **0.20 (plain) → 0.60 (rerank) → 0.80 (enrich+rerank)**. file-only inflation
+held at 0.1% throughout; symbolic unchanged.
+
+### WI3 — query-side HyDE (opt-in, gated)
+
+Code shipped in `mcp-tools.mjs` (`hydeQueryVector`/`blendVectors`/`buildHydePrompt`, 3 unit
+tests), wired through `search_code(hyde:)` + `hyde.enabled` config + the eval harness `--hyde`
+flag, documented in README + prompts/CORE.md. A local model writes a hypothetical snippet, it's
+embedded with the index's own model and **blended** (α=0.5, never replaces) into the query
+vector; cached per query; best-effort (any failure → raw vector). Only fires on NL queries with
+a vector channel.
+
+**Byte-identical when off — proven:** `--hyde` off reproduced the prior numbers exactly
+(express 0.43/0.53/0.57; gin 0.00/0.33/0.80). On (HyDE model qwen2.5-coder:7B):
+
+| suite (semantic) | HyDE off | HyDE on | Δ s@5 |
+|---|---|---|---|
+| Express (7q) | 0.43 / 0.53 / 0.57 | 0.43 / 0.51 / 0.57 | 0 (neutral) |
+| Gin (5q) | 0.00 / 0.33 / **0.80** | 0.00 / 0.34 / **1.00** | **+0.20** |
+
+HyDE materially lifts top-5 recall on the hard suite (gin s@5 0.80→1.00) at a per-query cost
+(~75s for the whole 2-suite sweep). rank-1 unchanged — HyDE is a recall lever (gets the answer
+into the pool); rerank is the rank-1 lever (orders the pool). They are complementary.
+
+### WI5 — bounded connected-subgraph retrieval (`get_subgraph`)
+
+New MCP tool + pure `buildSubgraph(db, seed, {maxNodes, maxDepth, tokenBudget})` (exported,
+tested in test/callgraph.mjs). BFS around a seed symbol over three edge kinds — callees
+(`chunk.calls`), high-confidence callers (`classifyCallers`, the precise blast radius), and
+type/inheritance referers (`findReferers`) — bounded by node count, hop depth AND a token
+budget, fully deterministic (every neighbour list sorted, ties on id) so it is reproducible and
+backend-agnostic. Resolves a cross-cutting "trace this flow" task in one call instead of
+chaining search_code → get_call_graph → find_references. Markdown + json output; graceful
+not-found; uses only index-time signals (no type inference, no ranking change). Verified: seed
++ caller + callee edges present, `max_nodes`/`token_budget` honoured (truncation flagged),
+identical output across runs, missing seed → `found:false`. e2e smoke over stdio in test/mcp.mjs.
+
+### WI6 — index-freshness contract
+
+A stale call graph silently misleads an agent, so tool responses now carry a freshness signal.
+The indexer stamps the build commit into the git-signals sidecar (`head`); at query time
+`currentGitState` (cached ~5s, injectable, graceful outside git) reads the current short HEAD +
+count of uncommitted *source* changes, and the pure `computeFreshness` derives the verdict:
+**fresh / syncing (drift but a live daemon is catching up) / stale (drift and no daemon)**. Wired
+into `search_code`, `get_call_graph`, `find_references`, `get_subgraph` (JSON always carries the
+structured `index` field; the markdown footer appears **only when NOT fresh** — so up-to-date
+cards keep their lean token size, honouring the no-bloat principle) and `list_index_stats`
+(commit / pending / freshness rows). `get_call_graph`'s "✅ safe to modify" — the most dangerous
+thing to get wrong on a stale index — now carries the staleness warning. Unit-tested
+(`computeFreshness`, 4 cases) + e2e green.
+
+**Atomicity verified (no code change needed):** the SQLite write paths `buildFrom` and
+`applyFileUpdate` wrap all writes in a single `BEGIN…COMMIT` transaction under WAL (ACID — a
+mid-write crash rolls back), and the in-memory backend uses tmp→rename; both are crash-safe. The
+shared embeddings bin is a content-hash cache where a torn write degrades to "lexical-only for
+that chunk until re-index", never corrupting the index.
+
+---
+
+## Status summary (P0–P2 complete)
+
+| Priority | Items | State |
+|---|---|---|
+| P0 | WI1 (no-Ollama embedder), WI2 (enrichment) | ✅ done, measured |
+| — | embed-model → qwen3-embedding:4b (user request), backend-parity hardening | ✅ done, measured |
+| P1 | WI3 (query-side HyDE), WI4 (low-confidence handoff) | ✅ done, measured |
+| P2 | WI5 (connected subgraph), WI6 (freshness contract) | ✅ done, tested |
+| P3 | WI7 (heritage/type parity for the remaining languages), WI8 (eval expansion + held-out split + end-to-end + amortized savings) | ⏳ remaining |
+| after WI8 | code-smell: learned fusion / boost gating (only on held-out data) | ⏳ blocked on WI8 |
+
+All honesty guarantees held throughout: strict scoring + inflation gap preserved (0.1%
+throughout), in-memory↔SQLite parity byte-identical (now CI-enforced over 100 queries + a
+synthetic-vector hybrid gate), no tuning to the benchmark queries (every new constant is
+structural), no cloud calls / telemetry, default `response_format` unchanged, markdown cards not
+bloated (freshness footer only when non-fresh; handoff only on low-confidence NL queries).
+`npm run test:all` green after every step.

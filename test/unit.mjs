@@ -19,6 +19,8 @@ import {
     extractSemanticChunks,
     EXTENSIONS,
 } from '../parser-utils.mjs';
+import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp-tools.mjs';
+import { computeFreshness } from '../git-signals.mjs';
 
 let passed = 0;
 let failed = 0;
@@ -391,6 +393,78 @@ test('isNaturalLanguageQuery separates behavioural questions from symbol lookups
     assert.ok(!isNaturalLanguageQuery('ShouldBindJSON bind request body'));
     assert.ok(!isNaturalLanguageQuery('validateToken'));
     assert.ok(!isNaturalLanguageQuery('router handle request next'));
+});
+
+// ─── assessConfidence (low-confidence handoff gate) ──────────────────────────
+test('assessConfidence fires the handoff only on ambiguous behavioural queries', () => {
+    const mk = (score, file) => ({ score, chunk: { file_path: file } });
+    const nlQuery = 'Where is the code that parses an incoming request body into a model object?';
+    const symbolQuery = 'parseBody'; // not natural language → never a handoff
+
+    // Flat fused scores spread across files on an NL query → low confidence.
+    const flat = [mk(0.10, 'a.ts'), mk(0.095, 'b.ts'), mk(0.09, 'c.ts')];
+    const r1 = assessConfidence(flat, nlQuery, false);
+    assert.ok(r1.lowConfidence, 'flat NL multi-file result should be low confidence');
+    assert.deepEqual(r1.candidateFiles, ['a.ts', 'b.ts', 'c.ts'], 'candidate files are the distinct top files in rank order');
+
+    // A dominant top result (≥2× the #2 score) → confident, no handoff, no candidate bloat.
+    const dominant = [mk(0.30, 'a.ts'), mk(0.10, 'b.ts')];
+    const r2 = assessConfidence(dominant, nlQuery, false);
+    assert.ok(!r2.lowConfidence, 'a dominant top result is confident');
+    assert.deepEqual(r2.candidateFiles, [], 'confident queries carry no candidate_files (no token bloat)');
+
+    // Symbol-lookup (non-NL) query → never a handoff, even when flat.
+    assert.ok(!assessConfidence(flat, symbolQuery, false).lowConfidence, 'non-NL symbol lookup never hands off');
+    // Pinned exact_tokens → caller already knows the symbol.
+    assert.ok(!assessConfidence(flat, nlQuery, true).lowConfidence, 'pinned exact_tokens is confident');
+    // All hits in one file → nothing cross-file to hand off.
+    assert.ok(!assessConfidence([mk(0.10, 'a.ts'), mk(0.099, 'a.ts')], nlQuery, false).lowConfidence, 'single-file result needs no handoff');
+});
+
+// ─── Query-side HyDE (WI3) ───────────────────────────────────────────────────
+test('blendVectors is the weighted average and buildHydePrompt asks for code only', () => {
+    const a = new Float32Array([1, 0, 0]);
+    const b = new Float32Array([0, 1, 0]);
+    const blended = blendVectors(a, b, 0.5);
+    assert.ok(Math.abs(blended[0] - 0.5) < 1e-6 && Math.abs(blended[1] - 0.5) < 1e-6, 'alpha 0.5 → midpoint');
+    const p = buildHydePrompt('parse a JWT and return the claims');
+    assert.ok(/parse a JWT/.test(p), 'prompt embeds the query');
+    assert.ok(/ONLY code/i.test(p), 'prompt asks for code only');
+});
+
+try {
+    const raw = new Float32Array([1, 0, 0, 0]);
+    const fakeEmbedder = { embedQuery: async () => [0, 1, 0, 0] };
+    let gens = 0;
+    const generate = async () => { gens++; return 'function f(){ return verify(token); }'; };
+
+    const out = await hydeQueryVector('where is the token verified for a request', raw, { embedder: fakeEmbedder, generate });
+    assert.ok(out[0] > 0 && out[1] > 0, 'blended vector mixes query + hypothetical directions');
+    assert.equal(gens, 1, 'one generation');
+    // Cached: a second call with the same query does not regenerate.
+    await hydeQueryVector('where is the token verified for a request', raw, { embedder: fakeEmbedder, generate });
+    assert.equal(gens, 1, 'second identical query served from cache');
+    // Graceful: a failing generator yields the raw vector unchanged.
+    const safe = await hydeQueryVector('a different behavioural query about caching layers', raw,
+        { embedder: fakeEmbedder, generate: async () => { throw new Error('model down'); } });
+    assert.deepEqual(Array.from(safe), Array.from(raw), 'generator failure → raw vector, never worse than baseline');
+    passed++; console.log('  ✓ hydeQueryVector blends, degrades gracefully, and caches');
+} catch (err) { failed++; console.log(`  ✗ hydeQueryVector blends, degrades gracefully, and caches\n      ${err.message}`); }
+
+// ─── Index freshness (WI6) ───────────────────────────────────────────────────
+test('computeFreshness distinguishes fresh / syncing / stale', () => {
+    // Clean tree, daemon up → fresh.
+    const a = computeFreshness({ ageSeconds: 30, indexedCommit: 'abc', current: { head: 'abc', dirtyCount: 0 }, daemonRunning: true });
+    assert.equal(a.stale, false); assert.equal(a.syncing, false); assert.equal(a.ageLabel, '30s');
+    // Uncommitted source changes, NO daemon → stale.
+    const b = computeFreshness({ ageSeconds: 7200, indexedCommit: 'abc', current: { head: 'abc', dirtyCount: 3 }, daemonRunning: false });
+    assert.equal(b.stale, true, 'dirty tree with no daemon is stale'); assert.equal(b.ageLabel, '2h');
+    // HEAD moved but a daemon is live → syncing, not stale.
+    const c = computeFreshness({ ageSeconds: 60, indexedCommit: 'abc', current: { head: 'def', dirtyCount: 0 }, daemonRunning: true });
+    assert.equal(c.commitMoved, true); assert.equal(c.syncing, true); assert.equal(c.stale, false);
+    // No git info at all → never falsely "stale" (age-only, graceful).
+    const d = computeFreshness({ ageSeconds: 10, indexedCommit: null, current: null, daemonRunning: false });
+    assert.equal(d.stale, false); assert.equal(d.currentCommit, null); assert.equal(d.pendingChanges, null);
 });
 
 // ─── Summary ────────────────────────────────────────────────────────────────

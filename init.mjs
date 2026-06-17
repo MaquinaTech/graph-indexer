@@ -892,8 +892,8 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
 
         // Ollama embedding model — only when Ollama can be the embedder.
         const embedModel = (embedProvider === 'ollama' || embedProvider === 'auto')
-            ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'nomic-embed-text', models })
-            : (existing.embedModel || 'nomic-embed-text');
+            ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'qwen3-embedding:4b', models })
+            : (existing.embedModel || 'qwen3-embedding:4b');
         const localEmbedModel = existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2';
 
         // LLM enrichment (opt-in)

@@ -48,6 +48,9 @@ import { loadIndex } from './harness.mjs';
 import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery } from '../search-core.mjs';
 import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
+import { artifactPaths } from '../layout.mjs';
+import { createEmbedder, readEmbedMeta, needsNomicPrefix } from '../embeddings.mjs';
+import { hydeQueryVector } from '../mcp-tools.mjs';
 
 import * as axiosSuite from './suites/axios.mjs';
 import * as expressJsSuite from './suites/express-js.mjs';
@@ -65,8 +68,20 @@ const verbose = args.includes('--verbose') || args.includes('-v');
 const useEmbeddings = args.includes('--embeddings');
 const useSqlite = args.includes('--use-sqlite');
 const useRerank = args.includes('--rerank');
+// Query-side HyDE (WI3): blend a hypothetical-snippet embedding into each NL query
+// vector before fusion. Off by default → results are byte-identical to no-HyDE.
+const useHyde = args.includes('--hyde');
+const HYDE_MODEL = process.env.HYDE_MODEL || 'qwen2.5-coder:1.5b';
+// Force a query-embedding provider for measurement (e.g. the no-daemon in-process
+// model). Default: honour whatever provider/model the index was built with, read
+// from the embed-meta sidecar — so query vectors always live in the same space as
+// the chunk vectors. Values: 'ollama' | 'local'.
+const embedProviderOverride = args.includes('--embed-provider')
+    ? args[args.indexOf('--embed-provider') + 1] : null;
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-const EMBED_MODEL = 'nomic-embed-text';
+// Legacy fallback only — used when an index has no embed-meta sidecar (pre-WI1).
+// Modern indexes stamp their model and resolveQueryProvider reads it back.
+const EMBED_MODEL = 'qwen3-embedding:4b';
 const RERANK_MODEL = process.env.RERANK_MODEL || 'qwen2.5-coder:1.5b';
 
 const KS = [1, 3, 5, 10];
@@ -76,17 +91,52 @@ const KS = [1, 3, 5, 10];
  * Uses the "search_query:" prefix required by nomic-embed-text (mirrors
  * test/run-embeddings.mjs). Returns Map<queryId, Float32Array> or null on failure.
  */
-async function embedQueries(queries) {
-    const input = queries.map(q => `search_query: ${q.query}`);
+async function embedQueries(model, queries) {
+    // Mirror production: nomic-style models need the search_query: prefix; others
+    // (qwen3-embedding, …) embed raw text. The prefix decision follows the model
+    // name, exactly as the indexer/server do, so query and chunk vectors agree.
+    const pfx = needsNomicPrefix(model) ? 'search_query: ' : '';
+    const input = queries.map(q => pfx + q.query);
     const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: EMBED_MODEL, input }),
+        body: JSON.stringify({ model, input }),
     });
     if (!res.ok) throw new Error(`Ollama /api/embed HTTP ${res.status}`);
     const data = await res.json();
     const map = new Map();
     queries.forEach((q, i) => map.set(q.id, new Float32Array(data.embeddings[i])));
     return map;
+}
+
+/**
+ * Embed the suite's queries with the in-process model (no Ollama daemon). MiniLM
+ * is symmetric, so queries and documents are embedded the same way (no prefixes);
+ * createEmbedder handles that. This is what lets the harness measure the
+ * "no-Ollama" semantic channel honestly — query vectors are produced by the SAME
+ * model that produced the chunk vectors (stamped in the embed-meta sidecar).
+ * The transformer pipeline is loaded once and cached across suites.
+ */
+async function embedQueriesLocal(model, queries) {
+    const embedder = await createEmbedder(
+        { ollamaHost: OLLAMA_HOST, localEmbedModel: model, embedModel: EMBED_MODEL },
+        { provider: 'local', model },
+    );
+    const map = new Map();
+    for (const q of queries) {
+        const v = await embedder.embedQuery(q.query);
+        if (v) map.set(q.id, new Float32Array(v));
+    }
+    return map;
+}
+
+/** Resolve which provider/model to embed queries with for a given index. */
+function resolveQueryProvider(fixtureDir) {
+    const meta = readEmbedMeta(artifactPaths(fixtureDir).embeddingPath);
+    const provider = embedProviderOverride || meta?.provider || 'ollama';
+    const model = provider === 'local'
+        ? (meta?.model || 'Xenova/all-MiniLM-L6-v2')
+        : (meta?.model || EMBED_MODEL);
+    return { provider, model };
 }
 
 // ─── Relevance predicates ──────────────────────────────────────────────────────
@@ -160,13 +210,42 @@ async function evaluateSuite(suite) {
     if (!db) return { META: suite.META, error: 'index not found — run `node test/run.mjs` first' };
 
     // Optional hybrid channel: embed queries and pass vectors into searchHybrid.
+    // Query vectors must come from the SAME model that built the index (read from
+    // the embed-meta sidecar) so they share an embedding space — otherwise the
+    // dims mismatch and the vector channel silently no-ops to lexical-only.
     let queryVectors = null;
+    let queryProvider = null;
     if (useEmbeddings) {
         if (db.vectorCount() === 0) {
             return { META: suite.META, error: 'no embeddings in index — re-index with INDEXER_EMBEDDINGS=on' };
         }
-        try { queryVectors = await embedQueries(suite.QUERIES); }
+        queryProvider = resolveQueryProvider(fixtureDir);
+        try {
+            queryVectors = queryProvider.provider === 'local'
+                ? await embedQueriesLocal(queryProvider.model, suite.QUERIES)
+                : await embedQueries(queryProvider.model, suite.QUERIES);
+        }
         catch (e) { return { META: suite.META, error: `query embedding failed: ${e.message}` }; }
+
+        // Query-side HyDE: blend a hypothetical-snippet embedding into each NL
+        // query vector, using the SAME embedder model the index was built with so
+        // dims match. Mirrors the production path (mcp-tools.hydeQueryVector).
+        if (useHyde && queryVectors) {
+            const { provider, model } = queryProvider;
+            const embedder = await createEmbedder(
+                { ollamaHost: OLLAMA_HOST, localEmbedModel: model, embedModel: model },
+                { provider, model },
+            );
+            const gen = (prompt) => ollamaGenerate(prompt, {
+                model: HYDE_MODEL, ollamaHost: OLLAMA_HOST, timeoutMs: 30000,
+                options: { temperature: 0.2, num_predict: 220 },
+            });
+            for (const q of suite.QUERIES) {
+                if (!isNaturalLanguageQuery(q.query)) continue;
+                const raw = queryVectors.get(q.id);
+                if (raw) queryVectors.set(q.id, await hydeQueryVector(q.query, raw, { embedder, generate: gen }));
+            }
+        }
     }
 
     // Sweep knobs (harness only): retrieve deeper than 10 so the reranker can
@@ -303,7 +382,12 @@ if (suites.length === 0) { console.error(`Unknown suite: ${suiteFilter}`); proce
 
 console.log('\n' + c.bold('═'.repeat(72)));
 console.log(c.bold('  EVALUATION  ') + c.dim('— strict symbol-level ground truth (no file-path fallback)'));
-console.log(c.dim(`  channel: ${useEmbeddings ? `hybrid (lexical + ${EMBED_MODEL} @ ${OLLAMA_HOST})` : 'lexical-only'}${useRerank ? ` + LLM rerank (${RERANK_MODEL})` : ''}`));
+const _embedLabel = embedProviderOverride === 'local'
+    ? 'in-process local model (no Ollama)'
+    : embedProviderOverride === 'ollama'
+        ? `${EMBED_MODEL} @ ${OLLAMA_HOST}`
+        : `per-index embed-meta @ ${OLLAMA_HOST}`;
+console.log(c.dim(`  channel: ${useEmbeddings ? `hybrid (lexical + ${_embedLabel})` : 'lexical-only'}${useRerank ? ` + LLM rerank (${RERANK_MODEL})` : ''}`));
 console.log(c.bold('═'.repeat(72)));
 
 const results = [];

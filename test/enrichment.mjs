@@ -22,6 +22,7 @@ import { buildEmbeddingPayload } from '../parser-utils.mjs';
 import {
     parseEnrichResponse, selectCoreChunks, enrichCoreChunks,
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,
+    resolveEnrichModel, buildEnrichPrompt,
 } from '../enrichment.mjs';
 
 let passed = 0, failed = 0;
@@ -188,6 +189,46 @@ await test('enrichCoreChunks serves a second run entirely from cache (0 new LLM 
     assert.equal(llmCalls, 1, 'no further LLM calls expected');
     assert.equal(chunks2[0].summary, 'charges a card');
     assert.deepEqual(chunks2[0].concepts, ['payment', 'billing']);
+});
+
+// ─── resolveEnrichModel: "auto" picks the strongest local code model ───────────
+await test('resolveEnrichModel returns a pinned model unchanged without probing', async () => {
+    let probed = false;
+    const fetchImpl = async () => { probed = true; return { ok: true, json: async () => ({ models: [] }) }; };
+    const m = await resolveEnrichModel('qwen2.5-coder:7b', 'http://unused', { fetchImpl });
+    assert.equal(m, 'qwen2.5-coder:7b');
+    assert.equal(probed, false, 'a concrete model must not trigger a network probe');
+});
+
+await test('resolveEnrichModel "auto" picks the strongest available code model', async () => {
+    const tags = (names) => async () => ({ ok: true, json: async () => ({ models: names.map(n => ({ name: n })) }) });
+    // 7B present alongside 1.5B → prefer 7B.
+    assert.equal(await resolveEnrichModel('auto', 'h', { fetchImpl: tags(['qwen2.5-coder:1.5b', 'qwen2.5-coder:7b', 'llama3:8b']) }), 'qwen2.5-coder:7b');
+    // Only the 1.5B floor present.
+    assert.equal(await resolveEnrichModel('auto', 'h', { fetchImpl: tags(['qwen2.5-coder:1.5b']) }), 'qwen2.5-coder:1.5b');
+    // No preferred model, but some other coder → use it.
+    assert.equal(await resolveEnrichModel('auto', 'h', { fetchImpl: tags(['starcoder2:3b', 'llama3:8b']) }), 'starcoder2:3b');
+});
+
+await test('resolveEnrichModel falls back to the 1.5B floor when Ollama is unreachable', async () => {
+    const fetchImpl = async () => { throw new Error('ECONNREFUSED'); };
+    assert.equal(await resolveEnrichModel('auto', 'http://nope', { fetchImpl }), 'qwen2.5-coder:1.5b');
+});
+
+// ─── Richer prompt still parses to the two-line contract ───────────────────────
+await test('buildEnrichPrompt keeps the SUMMARY/TAGS contract and a richer summary round-trips', () => {
+    const prompt = buildEnrichPrompt({
+        node_type: 'function', name: 'chargeCard', class_context: 'Billing',
+        file_path: 'src/billing.ts', code_snippet: 'function chargeCard(){}', docstring: '',
+    });
+    assert.ok(/SUMMARY:/.test(prompt) && /TAGS:/.test(prompt), 'prompt asks for the two-line format');
+    assert.ok(/SIDE EFFECTS|INPUTS|PROBLEM/i.test(prompt), 'prompt elicits problem / inputs / side-effects');
+    // A long, multi-clause summary (what a stronger model returns) parses intact.
+    const rich = 'SUMMARY: charges a saved card via the Stripe API, taking a customer id and amount and returning a payment intent, retrying on rate limits and throwing PaymentError on a declined card\n'
+        + 'TAGS: payments, stripe, billing, charge, retry, payment intent';
+    const r = parseEnrichResponse(rich);
+    assert.ok(r.summary.length > 80, 'rich summary captured whole');
+    assert.ok(r.concepts.includes('stripe') && r.concepts.includes('payment intent'));
 });
 
 for (const f of tmp) { try { fs.unlinkSync(f); } catch { } }

@@ -58,14 +58,20 @@ export function attachEnrichment(chunk, entry) {
     return Boolean(chunk.summary || chunk.concepts.length);
 }
 
-// Two-line output format optimised for small (1.5B–3B) models:
-//  • SUMMARY  — declarative sentence in developer vocabulary; goes into the vector
-//               embedding as the leading field, aligned with nomic-embed-text's
-//               search_document: training objective.
+// Two-line output format — robust to parse, rich enough to discriminate:
+//  • SUMMARY  — one declarative sentence (or two), in developer search vocabulary,
+//               that now also states the PROBLEM solved, key INPUTS/OUTPUTS and
+//               notable SIDE EFFECTS. It leads the summary-only embedding vector
+//               (search-core.summaryEmbeddingText), so a richer summary directly
+//               sharpens the conceptual channel — and because enrichment is offline
+//               and cached by content hash, that quality costs nothing at query time.
 //  • TAGS     — comma-separated domain keywords; joined into chunk.hyde so BM25
 //               receives high-IDF concept terms instead of question stopword noise.
 //
-// One-shot example is mandatory for 1.5B models to reliably follow the format.
+// The single-line SUMMARY contract keeps parseEnrichResponse trivial regardless of
+// how capable the model is; a stronger model (see resolveEnrichModel / config
+// enrichment.model: "auto") simply packs more accurate intent into the same shape.
+// One-shot example is mandatory for small (1.5B) models to follow the format.
 export const buildEnrichPrompt = (chunk) => {
     const code = (chunk.code_snippet || '').slice(0, 1000);
     const base = path.basename(chunk.file_path);
@@ -75,19 +81,54 @@ export const buildEnrichPrompt = (chunk) => {
         `You are indexing source code for semantic search. A developer will search by INTENT\n`
         + `("where is the code that …", "how does it …") in plain words — NOT by the symbol name.\n\n`
         + `Describe this ${chunk.node_type} "${chunk.name}"${ctx} in ${base} as exactly two lines:\n`
-        + `SUMMARY: one specific sentence stating WHAT IT DOES and the DOMAIN it acts on, in the\n`
-        + `  vocabulary a developer would search with. Use concrete domain nouns and action verbs.\n`
-        + `  Do NOT restate the symbol name and do NOT use filler words like "function", "method",\n`
-        + `  "class", "handles", "manages", or "responsible for".\n`
+        + `SUMMARY: one or two sentences on a SINGLE line, in the vocabulary a developer would\n`
+        + `  search with, covering: WHAT IT DOES and the DOMAIN it acts on; the PROBLEM it solves;\n`
+        + `  its key INPUTS and OUTPUTS; and any notable SIDE EFFECTS (I/O, state mutation, network\n`
+        + `  calls, errors thrown). Use concrete domain nouns and action verbs. Do NOT restate the\n`
+        + `  symbol name and do NOT use filler words like "function", "method", "class", "handles",\n`
+        + `  "manages", or "responsible for".\n`
         + `TAGS: 5-8 comma-separated domain keywords a developer would type to find this code.\n\n`
         + `Example:\n`
-        + `SUMMARY: validates JWT bearer tokens and refreshes expired authentication sessions for incoming requests\n`
+        + `SUMMARY: validates JWT bearer tokens against the signing key and refreshes expired sessions, taking the incoming request's Authorization header and returning the decoded principal, rejecting tampered or expired tokens with a 401 so downstream handlers only ever see authenticated requests\n`
         + `TAGS: authentication, JWT, token validation, session refresh, middleware, authorization\n\n`
         + doc
         + `Code:\n${code}\n`
         + `Output:`
     );
 };
+
+// Preference ladder for `enrichment.model: "auto"` — pick the strongest code-aware
+// model the local Ollama actually has pulled, falling back to the fast 1.5B floor.
+// Enrichment is offline and cached, so a heavier model here costs nothing at query
+// time; "auto" means "use the best you have" without the user naming it.
+const ENRICH_MODEL_FLOOR = 'qwen2.5-coder:1.5b';
+const ENRICH_MODEL_PREFERENCE = [
+    'qwen2.5-coder:7b', 'qwen2.5-coder:3b', 'deepseek-coder-v2', 'qwen2.5-coder:1.5b',
+    'codellama:13b', 'codellama:7b',
+];
+
+/**
+ * Resolve the enrichment model. A concrete name is returned as-is; "auto" probes
+ * the Ollama model list and returns the strongest available code model (then any
+ * coder/code model, then the 1.5B floor). Best-effort and non-throwing — an
+ * unreachable Ollama yields the floor (enrichment then no-ops gracefully anyway).
+ *
+ * @param {string} model        Configured model, or "auto".
+ * @param {string} ollamaHost
+ * @param {{timeoutMs?:number, fetchImpl?:typeof fetch}} [opts]  fetchImpl injectable for tests.
+ */
+export async function resolveEnrichModel(model, ollamaHost, { timeoutMs = 2000, fetchImpl = fetch } = {}) {
+    if (model && model !== 'auto') return model;
+    try {
+        const res = await fetchImpl(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
+        if (!res.ok) return ENRICH_MODEL_FLOOR;
+        const names = ((await res.json()).models || []).map(m => m.name);
+        const has = (p) => names.some(n => n === p || n === `${p}:latest` || n.startsWith(`${p}:`) || n.split(':')[0] === p);
+        for (const pref of ENRICH_MODEL_PREFERENCE) if (has(pref)) return pref;
+        const coder = names.find(n => /coder|code/i.test(n));
+        return coder || ENRICH_MODEL_FLOOR;
+    } catch { return ENRICH_MODEL_FLOOR; }
+}
 
 /**
  * Default generator: a single non-streaming Ollama /api/generate call. Returns the
@@ -283,8 +324,12 @@ export function selectCoreChunks(chunks, graph, { coreRatio = 1.0, maxChunks = 5
  * @returns {Promise<{enriched:number, attempted:number, cached:number}>}
  */
 export async function enrichCoreChunks(chunks, graph, config, { generate, concurrency, cachePath } = {}) {
-    const { model, coreRatio, maxChunks } = config.enrichment;
+    const { coreRatio, maxChunks } = config.enrichment;
     const ollamaHost = config.ollamaHost;
+    // Resolve "auto" → the strongest code model the local Ollama has (1.5B floor).
+    // A pinned generate (tests) skips the network probe — model is only used to
+    // build the default generator and to stamp cache provenance.
+    const model = generate ? config.enrichment.model : await resolveEnrichModel(config.enrichment.model, ollamaHost);
     // 60 s timeout: a larger judge model on a busy/CPU-bound local Ollama can take
     // 10–25 s per generation; the old 20 s cap made every call fail there and aborted
     // enrichment entirely. Concurrency defaults low for the same reason — parallel

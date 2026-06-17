@@ -42,7 +42,7 @@ import {
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import {
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,
-    ollamaGenerate, parseEnrichResponse, buildEnrichPrompt,
+    ollamaGenerate, parseEnrichResponse, buildEnrichPrompt, resolveEnrichModel,
 } from './enrichment.mjs';
 
 const config = resolveConfig();
@@ -100,6 +100,15 @@ function scheduleEnrichCacheSave() {
     }, 3000);
 }
 
+// Resolve the enrichment model once (handles "auto" → strongest local code model),
+// cached for the daemon's lifetime — same policy as the bootstrap indexer.
+let _enrichModel = null;
+async function getEnrichModel() {
+    if (_enrichModel) return _enrichModel;
+    _enrichModel = await resolveEnrichModel(config.enrichment.model, config.ollamaHost);
+    return _enrichModel;
+}
+
 let _coreFiles = null;
 function isEnrichableFile(filename) {
     if (TEST_FILE_RE.test(filename) || EXAMPLE_DIR_RE.test(filename)) return false;
@@ -125,10 +134,11 @@ async function enrichChunks(filename, chunks) {
     // Live enrichment of changed core chunks: sequential and best-effort — a file
     // save touches a handful of chunks, so latency stays low and failures only
     // mean "no enrichment until the next full index run".
+    const model = await getEnrichModel();
     for (const chunk of pending) {
         if ((chunk.end_line - chunk.start_line) < 4) continue; // trivial stubs
         const raw = await ollamaGenerate(buildEnrichPrompt(chunk), {
-            model: config.enrichment.model, ollamaHost: config.ollamaHost, timeoutMs: 20000,
+            model, ollamaHost: config.ollamaHost, timeoutMs: 20000,
         });
         const parsed = parseEnrichResponse(raw);
         if (!parsed) break; // model unreachable — stop trying for this batch
@@ -136,7 +146,7 @@ async function enrichChunks(filename, chunks) {
         chunk.concepts = parsed.concepts;
         chunk.hyde     = parsed.hyde;
         enrichCache.set(chunk.content_hash, {
-            summary: parsed.summary, concepts: parsed.concepts, model: config.enrichment.model,
+            summary: parsed.summary, concepts: parsed.concepts, model,
         });
         enrichCacheDirty = true;
     }

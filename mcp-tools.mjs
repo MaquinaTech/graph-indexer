@@ -16,7 +16,7 @@ import { computePageRank, isNaturalLanguageQuery } from './search-core.mjs';
 import { getParserForFile, extractFileSkeleton } from './parser-utils.mjs';
 import { describeEmbedder } from './embeddings.mjs';
 import { rerankResults, ollamaGenerate } from './enrichment.mjs';
-import { coChangesFor, gitBoostScore } from './git-signals.mjs';
+import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from './git-signals.mjs';
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────────
 
@@ -134,6 +134,85 @@ function coChangeFiles(gitSignals, files, limit = 5) {
 /** One-line git co-change blast-radius hint for markdown output. */
 function coChangeLine(coChanges) {
     return `🔄 Historically changes with: ${coChanges.map(c => `\`${c.file}\` (${c.count}×)`).join(', ')}`;
+}
+
+// ─── Low-confidence handoff ───────────────────────────────────────────────────
+// The dominant failure mode for behavioural queries is "didn't nail the exact
+// symbol" — yet most of those misses still land the correct FILE in the top
+// results. When a natural-language query yields no dominant match, surfacing the
+// distinct candidate files lets the agent `get_file_skeleton` them instead of
+// reading whole files blind. The gate is derived entirely from the returned
+// ranking (no extra work, a few tokens) and is deliberately conservative so it
+// NEVER fires on a confident symbolic hit:
+//   • a pinned `exact_tokens` → the caller already knows the symbol;
+//   • a keyword / symbol-lookup query (not natural language) → rank-1-dominant;
+//   • a top result that clearly separates from #2 (≥2× the fused score, the same
+//     factor as the exact-name boost) → a dominant match;
+//   • results confined to a single file → nothing cross-file to hand off.
+// The 2× separation maps to fuseAndRank's exact-name boost multiplier — it is a
+// structural constant, not a value fit to the benchmark queries.
+export function assessConfidence(matches, fullQuery, exactPinned, limit = 5) {
+    const distinctFiles = [];
+    const seen = new Set();
+    for (const m of matches) {
+        const fp = m?.chunk?.file_path;
+        if (fp && !seen.has(fp)) { seen.add(fp); distinctFiles.push(fp); }
+    }
+    const dominates = matches.length >= 2 && matches[0].score >= 2 * matches[1].score;
+    const lowConfidence = !exactPinned
+        && isNaturalLanguageQuery(fullQuery)
+        && matches.length >= 2
+        && !dominates
+        && distinctFiles.length >= 2;
+    return { lowConfidence, candidateFiles: lowConfidence ? distinctFiles.slice(0, limit) : [] };
+}
+
+// ─── Query-side HyDE (opt-in) ─────────────────────────────────────────────────
+// Behavioural queries often share NO vocabulary with the code that answers them.
+// HyDE (Hypothetical Document Embeddings) closes that gap on the QUERY side: a
+// local LLM writes a short hypothetical implementation of the request, we embed
+// THAT, and blend it with the raw query vector (never replace it — the raw query
+// is the anchor). The chunk side already does this via chunk.hyde/summaries; this
+// is its query-time complement. Gated off by default → when disabled, search is
+// byte-identical and the eval/parity are untouched. Per-query result is cached for
+// the process lifetime so repeated queries pay the generation cost once.
+const HYDE_ALPHA = 0.5;          // blend weight on the hypothetical vector (0 = pure query, 1 = pure HyDE)
+const _hydeCache = new Map();    // normalized query → blended Float32Array
+
+export function buildHydePrompt(query) {
+    return (
+        `Write a short, realistic code snippet (5-15 lines, any language) that implements or `
+        + `directly answers the request below. Output ONLY code — no prose, no markdown fences, `
+        + `no comments explaining yourself.\n\nRequest: ${query}\n\nCode:`
+    );
+}
+
+/** Blend two vectors (cosine normalises magnitude, so only the direction matters). */
+export function blendVectors(a, b, alpha = HYDE_ALPHA) {
+    const out = new Float32Array(a.length);
+    for (let i = 0; i < a.length; i++) out[i] = (1 - alpha) * a[i] + alpha * b[i];
+    return out;
+}
+
+/**
+ * Augment a query vector with a hypothetical-snippet embedding. Best-effort: any
+ * failure (generator down, dim mismatch, empty snippet) returns the raw vector
+ * unchanged, so HyDE can never degrade a query below the no-HyDE baseline.
+ */
+export async function hydeQueryVector(query, rawVec, { embedder, generate }) {
+    if (!rawVec || !embedder || !generate) return rawVec;
+    const norm = query.trim().toLowerCase();
+    if (_hydeCache.has(norm)) return _hydeCache.get(norm);
+    let blended = rawVec;
+    try {
+        const snippet = await generate(buildHydePrompt(query));
+        if (snippet && snippet.trim()) {
+            const hydeVec = await embedder.embedQuery(snippet.slice(0, 2000));
+            if (hydeVec && hydeVec.length === rawVec.length) blended = blendVectors(rawVec, hydeVec);
+        }
+    } catch { /* keep the raw vector */ }
+    _hydeCache.set(norm, blended);
+    return blended;
 }
 
 /** Typed projection of a referencing chunk (caller / subclass / type user). */
@@ -269,6 +348,103 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
     return { symbol, targetDefs, ambiguous, calls, inherits, types };
 }
 
+// ─── Bounded connected-subgraph traversal (multi-hop in one call) ─────────────────
+
+/** ~tokens for a node card (1 token ≈ 4 chars). */
+function _subgraphCardTokens(c) {
+    return Math.ceil(`${c.class_context ? c.class_context + '.' : ''}${c.name} [${c.node_type}] ${c.file_path}:${c.start_line}-${c.end_line} ${extractSignatureLine(c.code_snippet).split('\n')[0]}`.length / 4);
+}
+
+/** Stable order so the subgraph is byte-identical across backends and runs. */
+function _subgraphSort(arr) {
+    return arr.slice().sort((a, b) =>
+        (a.file_path < b.file_path ? -1 : a.file_path > b.file_path ? 1 : 0)
+        || (a.start_line - b.start_line)
+        || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * Breadth-first connected subgraph around a seed symbol — callees (what it calls),
+ * high-confidence callers (the precise blast radius, via classifyCallers), and
+ * type/inheritance referers — bounded by node count, hop depth AND a token budget.
+ * One call replaces the search_code → get_call_graph → find_references round-trips a
+ * "trace this flow across files" task otherwise needs. Reuses only index-time signals
+ * (no type inference); fully deterministic (every neighbour list is sorted, ties broken
+ * on id) so it is reproducible and backend-agnostic.
+ *
+ * @returns {{ seed:string, found:boolean, truncated:boolean,
+ *             nodes:Array<{id,name,node_type,class_context,file_path,start_line,end_line,signature,depth}>,
+ *             edges:Array<{from:string,to:string,kind:'calls'|'references'}> }}
+ */
+export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudget = null } = {}) {
+    const seedDefs = db.resolveSymbol(seed);
+    if (seedDefs.length === 0) return { seed, found: false, truncated: false, nodes: [], edges: [] };
+
+    const nodes = new Map();           // id → { chunk, depth }
+    const edges = [];
+    const edgeSeen = new Set();
+    let budget = (tokenBudget != null && tokenBudget > 0) ? tokenBudget : Infinity;
+    let truncated = false;
+
+    const addEdge = (from, to, kind) => {
+        if (!from || !to || from === to) return;
+        const k = `${from} ${to} ${kind}`;
+        if (!edgeSeen.has(k)) { edgeSeen.add(k); edges.push({ from, to, kind }); }
+    };
+    // Add a node if it fits the node-count and token budgets. Returns true when newly added.
+    const tryAdd = (c, depth) => {
+        if (!c) return false;
+        if (nodes.has(c.id)) return false;
+        if (nodes.size >= maxNodes) { truncated = true; return false; }
+        const t = _subgraphCardTokens(c);
+        if (nodes.size > 0 && t > budget) { truncated = true; return false; }
+        nodes.set(c.id, { chunk: c, depth });
+        budget -= t;
+        return true;
+    };
+
+    const queue = [];
+    for (const d of _subgraphSort(seedDefs)) if (tryAdd(d, 0)) queue.push(d.id);
+
+    for (let head = 0; head < queue.length; head++) {
+        const entry = nodes.get(queue[head]);
+        if (!entry || entry.depth >= maxDepth) continue;
+        const chunk = entry.chunk;
+        const d = entry.depth + 1;
+
+        // Callees: symbols this chunk calls (first matching def, deterministic).
+        for (const name of [...new Set(chunk.calls || [])].sort()) {
+            const defs = db.resolveSymbol(name);
+            if (!defs.length) continue;
+            const target = _subgraphSort(defs)[0];
+            const added = tryAdd(target, d);
+            if (nodes.has(target.id)) addEdge(chunk.id, target.id, 'calls');
+            if (added) queue.push(target.id);
+        }
+        // High-confidence callers (real blast radius).
+        if (chunk.name && chunk.name !== 'anonymous') {
+            for (const caller of _subgraphSort(classifyCallers(db, chunk.name).high.map(h => h.chunk))) {
+                const added = tryAdd(caller, d);
+                if (nodes.has(caller.id)) addEdge(caller.id, chunk.id, 'calls');
+                if (added) queue.push(caller.id);
+            }
+            // Type / inheritance referers.
+            for (const ref of _subgraphSort(db.findReferers(chunk.name))) {
+                const added = tryAdd(ref, d);
+                if (nodes.has(ref.id)) addEdge(ref.id, chunk.id, 'references');
+                if (added) queue.push(ref.id);
+            }
+        }
+    }
+
+    const nodeList = [...nodes.values()].map(({ chunk: c, depth }) => ({
+        id: c.id, name: c.name, node_type: c.node_type, class_context: c.class_context || null,
+        file_path: c.file_path, start_line: c.start_line, end_line: c.end_line,
+        signature: extractSignatureLine(c.code_snippet).split('\n')[0].trim().slice(0, 120), depth,
+    }));
+    return { seed, found: true, truncated, nodes: nodeList, edges };
+}
+
 // ─── Tool registration ──────────────────────────────────────────────────────────
 
 /**
@@ -288,7 +464,44 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
  * @param {object|null} [opts.gitSignals] Loaded git-signals sidecar (churn/recency/co-change), or null.
  * @param {number} [opts.gitRankBoost]    0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged).
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, ollamaHost = 'http://localhost:11434', gitSignals = null, gitRankBoost = 0 }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', gitSignals = null, gitRankBoost = 0 }) {
+
+    // ── Index-freshness contract ──────────────────────────────────────────────
+    // A stale call graph silently misleads the agent, so tool responses carry a
+    // freshness signal: index age, the commit it was built at (git-signals stamp),
+    // and whether the working tree has drifted since. Computed once per call
+    // (cheap, cached git read). JSON always carries the structured `index` field;
+    // the markdown footer is shown ONLY when the index is NOT fresh — so confident,
+    // up-to-date cards keep their lean token size (no per-call bloat).
+    const isDaemonAlive = () => {
+        try {
+            if (!pidFile || !fs.existsSync(pidFile)) return false;
+            process.kill(parseInt(fs.readFileSync(pidFile, 'utf-8'), 10), 0);
+            return true;
+        } catch { return false; }
+    };
+    const indexFreshness = () => {
+        let ageSeconds = null;
+        try { ageSeconds = Math.floor((Date.now() - fs.statSync(artifactPath).mtimeMs) / 1000); } catch { /* no index file */ }
+        return computeFreshness({
+            ageSeconds,
+            indexedCommit: gitSignals?.head ?? null,
+            current: currentGitState(projectRoot),
+            daemonRunning: isDaemonAlive(),
+        });
+    };
+    /** Compact one-line freshness footer, or null when the index is fresh (keep cards lean). */
+    const freshnessNote = (f) => {
+        if (!f.stale && !f.syncing && !(f.pendingChanges > 0) && !f.commitMoved) return null;
+        const bits = [`🕰 index ${f.ageLabel} old`];
+        if (f.indexedCommit) bits.push(`built @ ${f.indexedCommit}`);
+        if (f.pendingChanges > 0) bits.push(`${f.pendingChanges} uncommitted source change(s)`);
+        if (f.commitMoved) bits.push(`HEAD now ${f.currentCommit}`);
+        bits.push(f.stale
+            ? '⚠️ STALE — results may miss recent edits; run `npm run mcp:index`'
+            : 'daemon syncing…');
+        return bits.join(' · ');
+    };
 
     // ─── search_code ────────────────────────────────────────────────────────────
     server.tool(
@@ -313,19 +526,40 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 + 'natural-language queries, ~1–2 s extra). Defaults to the '
                 + '`rerank.enabled` project config; only fires on NL queries.'
             ),
+            hyde: z.boolean().optional().describe(
+                'Query-side HyDE: generate a hypothetical code snippet for the query, '
+                + 'embed it and blend with the query vector to bridge vocabulary gaps on '
+                + 'behavioural queries (~1 s extra). Defaults to the `hyde.enabled` project '
+                + 'config; only fires on NL queries with a vector channel.'
+            ),
             response_format: z.enum(['markdown', 'json']).default('markdown').describe(
                 "'markdown' (default): token-efficient cards for an LLM to read. "
                 + "'json': typed structured fields (id, file, lines, signature, topology, body) "
                 + 'for programmatic clients — avoids parsing prose.'
             ),
         },
-        async ({ query, exact_tokens, include_topology, min_score, top_k, token_budget, detail, rerank: rerankParam, response_format }) => {
+        async ({ query, exact_tokens, include_topology, min_score, top_k, token_budget, detail, rerank: rerankParam, hyde: hydeParam, response_format }) => {
             try {
                 const fullQuery = exact_tokens ? `${query} ${exact_tokens}` : query;
                 let queryVector = null;
                 if (embedder) {
                     try { queryVector = await embedder.embedQuery(fullQuery); }
                     catch { /* lexical fallback */ }
+                }
+
+                // Opt-in query-side HyDE: blend a hypothetical-snippet embedding into
+                // the query vector for natural-language queries (never when a symbol
+                // is pinned). Off → queryVector is untouched (byte-identical search).
+                const wantHyde = hydeParam ?? Boolean(hyde?.enabled);
+                if (wantHyde && queryVector && !exact_tokens && isNaturalLanguageQuery(fullQuery)) {
+                    queryVector = await hydeQueryVector(fullQuery, queryVector, {
+                        embedder,
+                        generate: (prompt) => ollamaGenerate(prompt, {
+                            model: hyde?.model || 'qwen2.5-coder:1.5b',
+                            ollamaHost, timeoutMs: 20000,
+                            options: { temperature: 0.2, num_predict: 220 },
+                        }),
+                    });
                 }
 
                 // Opt-in LLM rerank: only for natural-language queries (symbol
@@ -374,6 +608,9 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         : { content: [{ type: 'text', text: 'No results found.' }] };
                 }
 
+                const { lowConfidence, candidateFiles } = assessConfidence(matches, fullQuery, Boolean(exact_tokens));
+                const fresh = indexFreshness();
+
                 if (response_format === 'json') {
                     const qTokens = fullQuery.toLowerCase().split(/[\s\W_]+/).filter(t => t.length >= 3);
                     const results = matches.map(({ score, chunk }, i) => {
@@ -391,7 +628,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         }
                         return result;
                     });
-                    return jsonResult({ query: fullQuery, count: results.length, reranked: willRerank, detail, results });
+                    return jsonResult({
+                        query: fullQuery, count: results.length, reranked: willRerank, detail,
+                        low_confidence: lowConfidence,
+                        ...(lowConfidence ? { candidate_files: candidateFiles } : {}),
+                        index: fresh,
+                        results,
+                    });
                 }
 
                 const depSignature = (depPath) => {
@@ -456,6 +699,16 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     }
                 }
 
+                // Low-confidence handoff: no dominant match on a behavioural query —
+                // point the agent at the distinct candidate files to skeleton next.
+                if (lowConfidence) {
+                    lines.push(`\n${'─'.repeat(50)}`);
+                    lines.push(`⚠️ Low confidence — no dominant match. Candidate files (top distinct): ${candidateFiles.map(f => `\`${f}\``).join(', ')}`);
+                    lines.push(`→ Try \`get_file_skeleton\` on these, or refine with a symbol name / \`exact_tokens\`.`);
+                }
+
+                const _note = freshnessNote(fresh);
+                if (_note) lines.push('', _note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -760,6 +1013,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 const total = high.length + nameOnly.length;
                 const label = classFiltered ? `${target_class}.${target_function}` : target_function;
                 const coChanges = coChangeFiles(gitSignals, [...new Set(targetDefs.map(d => d.file_path))]);
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
 
                 if (response_format === 'json') {
                     return jsonResult({
@@ -772,12 +1027,16 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         high_confidence: high.map(h => refCard({ ...h, confidence: 'high' })),
                         name_only: nameOnly.map(n => refCard({ ...n, confidence: 'name-only' })),
                         co_changes: coChanges,
+                        index: fresh,
                     });
                 }
 
                 if (total === 0) {
-                    const safe = `✅ Safe to modify: no callers of \`${label}\` found.`;
-                    return { content: [{ type: 'text', text: coChanges.length ? `${safe}\n${coChangeLine(coChanges)}` : safe }] };
+                    // A stale index makes "no callers" dangerously misleading — surface it.
+                    const parts = [`✅ Safe to modify: no callers of \`${label}\` found.`];
+                    if (coChanges.length) parts.push(coChangeLine(coChanges));
+                    if (note) parts.push(note);
+                    return { content: [{ type: 'text', text: parts.join('\n') }] };
                 }
 
                 const fmt = ({ chunk, recvHint }) =>
@@ -807,6 +1066,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     lines.push('', `> ℹ️ This index predates receiver-aware call graphs — re-run \`npm run mcp:index\` for precise grouping.`);
                 }
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (note) lines.push('', note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -838,6 +1098,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 const callTotal = calls.high.length + calls.nameOnly.length;
                 const total = callTotal + inherits.length + types.length;
                 const coChanges = coChangeFiles(gitSignals, [...new Set(targetDefs.map(d => d.file_path))]);
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
 
                 if (response_format === 'json') {
                     return jsonResult({
@@ -853,12 +1115,15 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         subclassed_by: inherits.map(refCard),
                         used_as_type_by: types.map(refCard),
                         co_changes: coChanges,
+                        index: fresh,
                     });
                 }
 
                 if (total === 0) {
-                    const none = `✅ No references to \`${symbol}\` found in the index.`;
-                    return { content: [{ type: 'text', text: coChanges.length ? `${none}\n${coChangeLine(coChanges)}` : none }] };
+                    const parts = [`✅ No references to \`${symbol}\` found in the index.`];
+                    if (coChanges.length) parts.push(coChangeLine(coChanges));
+                    if (note) parts.push(note);
+                    return { content: [{ type: 'text', text: parts.join('\n') }] };
                 }
 
                 const fmt = ({ chunk, recvHint, confidence }) =>
@@ -884,6 +1149,62 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     for (const it of types) lines.push(fmt(it));
                 }
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (note) lines.push('', note);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── get_subgraph ─────────────────────────────────────────────────────────────
+    server.tool(
+        'get_subgraph',
+        'Trace a flow across files in ONE call: returns a bounded connected subgraph around a '
+        + 'seed symbol — what it calls, its high-confidence callers (precise blast radius), and '
+        + 'its type/inheritance users — within a node and token budget. Use instead of chaining '
+        + 'search_code → get_call_graph → find_references for cross-cutting "how does X flow" questions.',
+        {
+            symbol: z.string().describe('Seed symbol name (function, method, class, or type).'),
+            depth: z.number().int().min(1).max(3).default(2).describe('Hops to traverse from the seed (1–3).'),
+            max_nodes: z.number().int().min(1).max(40).default(12).describe('Max chunks in the subgraph.'),
+            token_budget: z.number().int().min(100).optional().describe(
+                'Token budget for the subgraph (1 token ≈ 4 chars). Omit for node-count-only bounding.'
+            ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { nodes, edges })."
+            ),
+        },
+        async ({ symbol, depth, max_nodes, token_budget, response_format }) => {
+            try {
+                const g = buildSubgraph(db, symbol, { maxNodes: max_nodes, maxDepth: depth, tokenBudget: token_budget ?? null });
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
+                if (!g.found) {
+                    return response_format === 'json'
+                        ? jsonResult({ symbol, found: false, nodes: [], edges: [], index: fresh })
+                        : { content: [{ type: 'text', text: `Symbol '${symbol}' not in index. Try search_code(query="${symbol}").${note ? '\n' + note : ''}` }] };
+                }
+                if (response_format === 'json') return jsonResult({ ...g, index: fresh });
+
+                const byId = new Map(g.nodes.map(n => [n.id, n]));
+                const label = (id) => { const n = byId.get(id); return n ? `${n.class_context ? n.class_context + '.' : ''}${n.name}` : id; };
+                const lines = [
+                    `# 🕸  Subgraph around \`${symbol}\` — ${g.nodes.length} node(s), ${g.edges.length} edge(s)`
+                    + (g.truncated ? ` · ⚠️ truncated at the budget (raise max_nodes / token_budget for more)` : ''),
+                    '',
+                    `## Nodes`,
+                ];
+                for (const n of g.nodes) {
+                    lines.push(`- [d${n.depth}] [${n.node_type}] \`${n.class_context ? n.class_context + '.' : ''}${n.name}\` · \`${n.file_path}:${n.start_line}–${n.end_line}\``);
+                }
+                if (g.edges.length) {
+                    lines.push('', `## Edges`);
+                    for (const e of g.edges) {
+                        lines.push(`- \`${label(e.from)}\` ${e.kind === 'calls' ? '→ calls →' : '⇢ references ⇢'} \`${label(e.to)}\``);
+                    }
+                }
+                if (note) lines.push('', note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -1044,6 +1365,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         ? `🧠 Hybrid (semantic + lexical RRF) · ${embedLabel} — vectors: ${s.vectorSource}`
                         : '🔤 Lexical only (no vectors indexed yet)';
 
+                const fresh = indexFreshness();
+
                 if (response_format === 'json') {
                     return jsonResult({
                         backend: s.backend,
@@ -1058,6 +1381,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         lazy_mode: s.lazyMode,
                         daemon_running: daemonRunning,
                         index_age_seconds: ageSeconds,
+                        freshness: {
+                            indexed_commit: fresh.indexedCommit,
+                            current_commit: fresh.currentCommit,
+                            pending_changes: fresh.pendingChanges,
+                            stale: fresh.stale,
+                            syncing: fresh.syncing,
+                        },
                         ext_counts: Object.fromEntries(s.extCounts),
                     });
                 }
@@ -1074,6 +1404,9 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     `| **Lazy vec mode** | ${s.lazyMode ? '✅ Yes (enterprise scale)' : '❌ No (small corpus)'} |`,
                     `| **Daemon** | ${daemonStatus} |`,
                     `| **Index age** | ${indexAge} |`,
+                    `| **Built at commit** | ${fresh.indexedCommit || '—'}${fresh.commitMoved ? ` (HEAD now ${fresh.currentCommit})` : ''} |`,
+                    `| **Pending changes** | ${fresh.pendingChanges == null ? '—' : fresh.pendingChanges} |`,
+                    `| **Freshness** | ${fresh.stale ? '⚠️ STALE — run `npm run mcp:index`' : fresh.syncing ? '🔄 daemon syncing' : '✅ fresh'} |`,
                     '', `## Extension Breakdown`,
                     ...Array.from(s.extCounts.entries()).sort((a, b) => b[1] - a[1]).map(([e, n]) => `- .${e}: ${n} chunks`),
                 ];

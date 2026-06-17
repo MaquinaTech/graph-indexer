@@ -31,13 +31,19 @@ const baseConfig = {
 const up = async () => true;
 const down = async () => false;
 
-test('auto prefers Ollama when reachable', async () => {
-    const r = await resolveEmbedProvider(baseConfig, { probe: up, hasLocal: up });
+test('auto prefers Ollama when reachable AND the embed model is pulled', async () => {
+    const r = await resolveEmbedProvider(baseConfig, { probe: up, hasLocal: up, hasModel: up });
     assert.deepEqual(r, { provider: 'ollama', model: 'nomic-embed-text' });
 });
 
+test('auto falls back to the in-process local model when Ollama is up but the embed model is NOT pulled', async () => {
+    // The configured embedModel was never `ollama pull`-ed — don't crash the indexer.
+    const r = await resolveEmbedProvider(baseConfig, { probe: up, hasLocal: up, hasModel: down });
+    assert.deepEqual(r, { provider: 'local', model: 'Xenova/all-MiniLM-L6-v2' });
+});
+
 test('auto falls back to the in-process local model when Ollama is down', async () => {
-    const r = await resolveEmbedProvider(baseConfig, { probe: down, hasLocal: up });
+    const r = await resolveEmbedProvider(baseConfig, { probe: down, hasLocal: up, hasModel: down });
     assert.deepEqual(r, { provider: 'local', model: 'Xenova/all-MiniLM-L6-v2' });
 });
 

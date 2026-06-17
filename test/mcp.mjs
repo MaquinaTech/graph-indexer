@@ -76,7 +76,7 @@ async function main() {
         const names = (tools.result?.tools || []).map(t => t.name);
         check('tools/list exposes the full surface', () => {
             for (const t of ['search_code', 'get_chunk', 'resolve_symbol', 'get_chunk_summary',
-                'get_file_skeleton', 'get_call_graph', 'find_references', 'get_repo_map', 'list_index_stats']) {
+                'get_file_skeleton', 'get_call_graph', 'find_references', 'get_subgraph', 'get_repo_map', 'list_index_stats']) {
                 assert.ok(names.includes(t), `missing tool: ${t}`);
             }
         });
@@ -95,6 +95,17 @@ async function main() {
         });
         check('resolve_symbol finds an exact symbol', () => {
             assert.ok(/Layer/.test(textOf(resolve)), 'Layer not resolved');
+        });
+
+        const subgraph = await srv.request(7, 'tools/call', {
+            name: 'get_subgraph', arguments: { symbol: 'Router', depth: 2, max_nodes: 8, response_format: 'json' },
+        });
+        check('get_subgraph returns a bounded subgraph over stdio', () => {
+            const sc = subgraph?.result?.structuredContent;
+            assert.ok(sc, 'no structuredContent');
+            // Either the seed resolved (nodes/edges arrays present) or a clean not-found.
+            assert.ok(Array.isArray(sc.nodes) && Array.isArray(sc.edges), 'nodes/edges arrays present');
+            if (sc.found) assert.ok(sc.nodes.length >= 1 && sc.nodes.length <= 8, 'respects max_nodes');
         });
 
         const stats = await srv.request(5, 'tools/call', { name: 'list_index_stats', arguments: {} });

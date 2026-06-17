@@ -149,8 +149,13 @@ behavioural descriptions sharing few or no words with the code).
 
 Strict scoring: a result counts **only** if its symbol name (or its class, for method chunks)
 exactly equals the ground truth — no substring matching, no file-path credit. Hybrid =
-BM25 + `nomic-embed-text` vectors with `qwen2.5-coder:1.5b` enrichment; rerank adds the
+BM25 + Ollama embedding vectors with `qwen2.5-coder:1.5b` enrichment; rerank adds the
 opt-in `qwen2.5-coder:7b` judge on natural-language queries.
+
+> The table below was measured with `nomic-embed-text`. The **default** Ollama embedder is now
+> `qwen3-embedding:4b` (2560-dim) — a bounded spot-check on Express lifts semantic success@5
+> 0.57 → 0.71 with backend parity intact, at a notably higher indexing cost (~8 chunks/s); see
+> `BENCH_BASELINE.md`. `auto` falls back to the in-process model when it isn't pulled.
 
 | Project | Strict success@5 | **Rank-1 (strict)** | MRR (strict) |
 | :--- | ---: | ---: | ---: |
@@ -168,7 +173,16 @@ Split by query style and configuration (the numbers that matter for agent workfl
 | **Symbolic** (name-lookup, 69q), hybrid | **0.80** | **0.84** | — |
 | **Semantic** (behavioural, 31q), hybrid + rerank | **0.35** | **0.47** | **0.65** |
 | Semantic, hybrid (no rerank) | 0.23 | 0.37 | 0.55 |
-| Semantic, lexical-only (no Ollama) | 0.19 | 0.29 | 0.48 |
+| Semantic, in-process model, **no Ollama** (bundled MiniLM) | 0.23 | 0.35 | 0.52 |
+| Semantic, lexical-only (no vectors at all) | 0.19 | 0.29 | 0.48 |
+
+**No Ollama? Semantic search still works.** With the default `embedProvider: "auto"`, a machine
+with no Ollama daemon falls back to a bundled in-process embedder (`Xenova/all-MiniLM-L6-v2`,
+384-dim, via the optional `@huggingface/transformers`). It lifts the semantic channel from the
+lexical-only floor (rank-1 0.19) to **0.23** — matching Ollama's `nomic-embed-text` on rank-1
+and MRR — with the symbolic channel and backend parity unchanged. (Plain corpus, no LLM
+enrichment, which needs a local LLM; enrichment lifts it further — see [Semantic enrichment](#semantic-enrichment).)
+Measure it yourself: `node test/evaluate.mjs --embeddings --embed-provider local`.
 
 Read the semantic rows with their denominator in mind: under *strict* scoring several of those
 queries are unwinnable in-repo (the expected symbol is an anonymous default export, or is
@@ -282,9 +296,12 @@ conceptual queries work with no daemon to install. Force it explicitly with
 **Higher-quality embeddings with Ollama:**
 ```bash
 # Install Ollama: https://ollama.ai
-ollama pull nomic-embed-text
+ollama pull qwen3-embedding:4b          # the default Ollama embedder (strong NL+code retrieval)
 INDEXER_EMBED_PROVIDER=ollama npm run mcp:index
 ```
+With `embedProvider: "auto"`, if Ollama is reachable but the configured `embedModel` isn't
+pulled, the indexer falls back to the in-process model rather than failing — so a missing pull
+never breaks indexing.
 
 **Lexical-only (no vectors at all):**
 ```bash
@@ -672,10 +689,10 @@ All persistent settings live in one file inside the data dir, written by `init` 
 | `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency) or `"sqlite"` (disk-backed). |
 | `embedProvider` | `"auto"` | How vectors are produced: `"auto"` (a running Ollama, else the in-process local model, else lexical), `"ollama"`, `"local"`, or `"off"`. |
 | `ollamaHost` | `"http://localhost:11434"` | Ollama endpoint (also settable via `OLLAMA_HOST`). |
-| `embedModel` | `"nomic-embed-text"` | Ollama embedding model (index and queries must use the same one). |
+| `embedModel` | `"qwen3-embedding:4b"` | Ollama embedding model (index and queries must use the same one; `auto` falls back to the in-process model if it isn't pulled). |
 | `localEmbedModel` | `"Xenova/all-MiniLM-L6-v2"` | In-process model used by the `local` provider (via the optional `@huggingface/transformers` dependency; downloaded once on first index). |
 | `enrichment.enabled` | `false` | Run local-LLM enrichment during indexing. |
-| `enrichment.model` | `"qwen2.5-coder:1.5b"` | Ollama model used for generation. |
+| `enrichment.model` | `"auto"` | Ollama model for generation. `"auto"` picks the strongest code model you have pulled (1.5B floor); or pin one (e.g. `"qwen2.5-coder:7b"`). Offline + cached, so a heavier model costs nothing at query time. |
 | `enrichment.coreRatio` | `1.0` | Share of production files eligible (by PageRank). `1.0` = all; tests/examples are always excluded. |
 | `enrichment.maxChunks` | `500` | Cap on **new** LLM calls per index run — the cache accumulates coverage across runs. |
 | `enrichment.concurrency` | `4` | Parallel Ollama requests during enrichment. Keep low — a single local model serves requests fastest one-at-a-time; raise only when `OLLAMA_NUM_PARALLEL` + hardware allow. |
@@ -683,6 +700,8 @@ All persistent settings live in one file inside the data dir, written by `init` 
 | `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none; a 14B judge scores higher still. |
 | `rerank.topM` | `12` | Candidates shown to the judge to reorder. |
 | `rerank.poolSize` | `15` | Over-fetch depth when reranking (capped at 25), so a correct-but-deep hit can be rescued into `top_k`. |
+| `hyde.enabled` | `false` | Opt-in query-side HyDE (or `search_code(..., hyde: true)`): a local model writes a hypothetical snippet for an NL query, which is embedded and **blended** into the query vector to bridge vocabulary gaps. Off → query vectors are byte-identical. |
+| `hyde.model` | `"qwen2.5-coder:1.5b"` | Local coder model that writes the hypothetical snippet (one generation per NL query). |
 | `gitSignals` | `true` | Collect churn / recency / co-change from the **local** commit log at index time (air-gapped — see [Security](SECURITY.md)). Powers the co-change blast-radius hint. |
 | `gitRankBoost` | `0` | Opt-in `0..1` weight that nudges `search_code` toward recently-/frequently-changed files. **`0` leaves retrieval ranking byte-identical** (the eval is unaffected); raise it to trade some precision for recency. |
 

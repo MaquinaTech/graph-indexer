@@ -14,10 +14,17 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { MemoryGraphIndex } from '../core-engine.mjs';
+import { MemoryGraphIndex, writeEmbeddingBinary } from '../core-engine.mjs';
 import { SqliteGraphStore } from '../sqlite-store.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { FIXTURES_DIR } from './setup.mjs';
+import * as axiosSuite from './suites/axios.mjs';
+import * as expressSuite from './suites/express-js.mjs';
+import * as nestjsSuite from './suites/nestjs.mjs';
+import * as fastapiSuite from './suites/fastapi.mjs';
+import * as ginSuite from './suites/gin.mjs';
+
+const BENCHMARK_SUITES = [axiosSuite, expressSuite, nestjsSuite, fastapiSuite, ginSuite];
 
 let passed = 0, failed = 0;
 const tmpFiles = [];
@@ -89,29 +96,87 @@ test('SqliteGraphStore round-trips chunks, symbols, callers and topology', () =>
     db.close();
 });
 
-// ─── 2. Rank consistency with the in-memory engine ──────────────────────────────
-test('SqliteGraphStore matches MemoryGraphIndex rank-1 + top-5 set on a real fixture', () => {
-    const indexPath = artifactPaths(path.join(FIXTURES_DIR, 'express-js')).indexPath;
-    if (!fs.existsSync(indexPath)) { console.log('      (skipped — express-js fixture not indexed)'); return; }
+// ─── 2. Cross-backend rank parity (the 100/100-query guarantee) ─────────────────
+// The whole reason fuseAndRank + finalizeVectorCandidates live in search-core is so
+// the in-memory engine and the SQLite store rank IDENTICALLY. The README states this
+// as a hard guarantee ("identical top-5 chunk ids for 100/100 benchmark queries").
+// These two tests enforce it: (a) ORDERED chunk-id parity over the FULL benchmark for
+// the lexical channel (opportunistic — needs fixtures indexed), and (b) a
+// self-contained synthetic-vector pass so the VECTOR-fusion path is covered
+// cross-backend with no Ollama (a hard gate that always runs in CI).
 
-    const mem = new MemoryGraphIndex(indexPath);
-    mem.load();
-    const chunks = [...mem.chunks.values()];
-    const sq = buildAndReopen(chunks, mem.graph);
-
-    const queries = [
-        'response json serialize object',
-        'router handle request next',
-        'Layer match path',
-        'application listen port server',
-    ];
-    for (const q of queries) {
-        const m = mem.searchHybrid(q, null, 5).map(r => r.chunk.name);
-        const s = sq.searchHybrid(q, null, 5).map(r => r.chunk.name);
-        assert.equal(s[0], m[0], `rank-1 mismatch for "${q}": memory=${m[0]} sqlite=${s[0]}`);
-        assert.deepEqual(new Set(s), new Set(m), `top-5 set mismatch for "${q}": memory=[${m}] sqlite=[${s}]`);
+test('memory ↔ sqlite: identical ORDERED top-5 ids on the FULL benchmark (lexical)', () => {
+    let totalQ = 0, checkedSuites = 0;
+    for (const suite of BENCHMARK_SUITES) {
+        const indexPath = artifactPaths(path.join(FIXTURES_DIR, suite.META.id)).indexPath;
+        if (!fs.existsSync(indexPath)) continue;
+        checkedSuites++;
+        const mem = new MemoryGraphIndex(indexPath);
+        mem.load();
+        const sq = buildAndReopen([...mem.chunks.values()], mem.graph);
+        for (const q of suite.QUERIES) {
+            const m = mem.searchHybrid(q.query, null, 5).map(r => r.chunk.id);
+            const s = sq.searchHybrid(q.query, null, 5).map(r => r.chunk.id);
+            assert.deepEqual(s, m,
+                `top-5 id ORDER mismatch [${suite.META.id}/${q.id}] "${q.query}"`
+                + `\n      memory=${JSON.stringify(m)}\n      sqlite=${JSON.stringify(s)}`);
+            totalQ++;
+        }
+        sq.close();
     }
-    sq.close();
+    if (checkedSuites === 0) { console.log('      (skipped — no fixtures indexed; run `npm run test` first)'); return; }
+    console.log(`      (verified ${totalQ} queries across ${checkedSuites} suite(s))`);
+});
+
+test('memory ↔ sqlite: identical ORDERED top-5 ids WITH a query vector (synthetic, no Ollama)', () => {
+    // Deterministic mini-corpus + deterministic vectors → both backends must agree
+    // through the vector-fusion path (scan → finalizeVectorCandidates → fuseAndRank).
+    const DIM = 16;
+    const detVec = (seed) => {
+        const v = new Float32Array(DIM);
+        let x = (seed * 2654435761) >>> 0;
+        for (let d = 0; d < DIM; d++) { x = (x * 1103515245 + 12345) >>> 0; v[d] = ((x % 2000) / 1000) - 1; }
+        return v;
+    };
+    const N = 40;
+    const chunks = [];
+    const cache = new Map();
+    for (let i = 0; i < N; i++) {
+        const hash = `synh${i}`;
+        chunks.push({
+            id: `sc${i}`, file_path: `src/mod${i % 7}.ts`, node_type: 'function_declaration',
+            name: `handler${i}`, docstring: '', code_snippet: `function handler${i}(req){ return route${i % 5}(req); }`,
+            content_hash: hash, start_line: 1, end_line: 6, calls: [`route${i % 5}`],
+            params: ['req'], return_type: '', class_context: '', type_refs: [], decorators: [], extends: [],
+        });
+        cache.set(hash, detVec(i + 1));
+    }
+    const graph = { dependencies: Object.fromEntries(chunks.map(c => [c.file_path, []])), importedBy: {} };
+
+    // Memory backend loads from disk artifacts (json + embeddings bin) — write temps.
+    const memJson = path.join(os.tmpdir(), `gi-mempar-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    const memBin = memJson.replace(/\.json$/, '.embeddings.bin');
+    tmpFiles.push(memJson, memBin);
+    fs.writeFileSync(memJson, JSON.stringify({ chunks, graph }));
+    fs.writeFileSync(memBin, writeEmbeddingBinary(cache));
+    const mem = new MemoryGraphIndex(memJson);
+    mem.load();
+
+    const sq = buildAndReopen(chunks, graph, cache);
+
+    let checked = 0;
+    for (let s = 1; s <= 12; s++) {
+        const qv = detVec(s * 97 + 3);
+        const queryText = `handler route ${s}`;
+        const m = mem.searchHybrid(queryText, qv, 5, 0.0).map(r => r.chunk.id);
+        const r = sq.searchHybrid(queryText, qv, 5, 0.0).map(r => r.chunk.id);
+        assert.deepEqual(r, m,
+            `vector top-5 id ORDER mismatch for query-seed ${s}`
+            + `\n      memory=${JSON.stringify(m)}\n      sqlite=${JSON.stringify(r)}`);
+        checked++;
+    }
+    mem.close(); sq.close();
+    console.log(`      (verified ${checked} vector queries on a ${N}-chunk synthetic corpus)`);
 });
 
 // ─── 3. Incremental updates (watch-daemon write path) ───────────────────────────

@@ -159,6 +159,7 @@ registerTools(server, db, {
     embeddingsEnabled: config.embeddingsEnabled && embedder.provider !== 'off',
     embedder,
     rerank: config.rerank,
+    hyde: config.hyde,
     ollamaHost: config.ollamaHost,
     gitSignals,
     gitRankBoost: config.gitRankBoost,

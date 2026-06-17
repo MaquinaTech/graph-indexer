@@ -25,6 +25,13 @@ export const LOCAL_EMBED_MODEL_DEFAULT = 'Xenova/all-MiniLM-L6-v2';
 export const LOCAL_EMBED_DIM = 384;
 const DOC_CHAR_LIMIT = 8000;
 
+// Per-batch document-embedding timeout. A larger model (e.g. qwen3-embedding:4b)
+// embeds a 64-chunk batch far slower than nomic, so the old hard 60s cap aborted
+// every batch and the indexer silently produced no vectors. Default raised to 120s
+// and overridable for very large models / slow hardware.
+const EMBED_DOC_TIMEOUT_MS = Number(process.env.INDEXER_EMBED_TIMEOUT_MS) > 0
+    ? Number(process.env.INDEXER_EMBED_TIMEOUT_MS) : 120000;
+
 // ─── Availability probes ─────────────────────────────────────────────────────
 
 /** Is a local Ollama reachable? A fast, cheap GET so `auto` can decide quickly. */
@@ -32,6 +39,24 @@ export async function probeOllama(host, timeoutMs = 1500) {
     try {
         const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
         return res.ok;
+    } catch { return false; }
+}
+
+/**
+ * Does the reachable Ollama actually have `model` pulled? `auto` uses this so a
+ * configured embed model that was never `ollama pull`-ed doesn't crash the indexer
+ * (embedDocuments would throw on every batch) — instead `auto` falls back to the
+ * bundled in-process model. Matches an untagged name against any tag and the
+ * implicit `:latest`. Returns false (not throwing) on any error.
+ */
+export async function ollamaHasModel(host, model, timeoutMs = 1500) {
+    if (!model) return false;
+    try {
+        const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
+        if (!res.ok) return false;
+        const names = ((await res.json()).models || []).map(m => m.name);
+        return names.some(n => n === model || n === `${model}:latest`
+            || (!model.includes(':') && n.startsWith(`${model}:`)));
     } catch { return false; }
 }
 
@@ -50,15 +75,23 @@ export async function localEmbedAvailable() {
  *
  * @returns {Promise<{provider:'ollama'|'local'|'off', model:(string|null)}>}
  */
-export async function resolveEmbedProvider(config, { probe = probeOllama, hasLocal = localEmbedAvailable } = {}) {
+export async function resolveEmbedProvider(config, { probe = probeOllama, hasLocal = localEmbedAvailable, hasModel = ollamaHasModel } = {}) {
     if (config.embeddingsEnabled === false) return { provider: 'off', model: null };
     const want = config.embedProvider || 'auto';
     const localModel = config.localEmbedModel || LOCAL_EMBED_MODEL_DEFAULT;
     if (want === 'off') return { provider: 'off', model: null };
     if (want === 'ollama') return { provider: 'ollama', model: config.embedModel };
     if (want === 'local') return { provider: 'local', model: localModel };
-    // auto
-    if (await probe(config.ollamaHost)) return { provider: 'ollama', model: config.embedModel };
+    // auto: prefer a running Ollama, but only when it actually HAS the configured
+    // embed model pulled — otherwise the indexer would crash on the first batch.
+    // Fall back to the bundled in-process model, then to lexical-only.
+    if (await probe(config.ollamaHost)) {
+        if (await hasModel(config.ollamaHost, config.embedModel)) {
+            return { provider: 'ollama', model: config.embedModel };
+        }
+        if (await hasLocal()) return { provider: 'local', model: localModel };
+        return { provider: 'off', model: null };
+    }
     if (await hasLocal()) return { provider: 'local', model: localModel };
     return { provider: 'off', model: null };
 }
@@ -72,22 +105,29 @@ async function _withRetry(fn, tries = 3) {
     }
 }
 
-// nomic-style models are asymmetric and want `search_query:` / `search_document:`
-// prefixes; this mirrors the historical parser-utils behaviour exactly.
+// nomic-style models are ASYMMETRIC and require `search_query:` / `search_document:`
+// prefixes. Other embedders (qwen3-embedding, mxbai, …) are trained on raw text —
+// injecting nomic's prefix tokens into them adds noise and degrades retrieval — so
+// the prefix is gated on the model family. Index time and query time MUST agree on
+// the prefix, which they do because both derive it from the same model name.
+export function needsNomicPrefix(model) { return /nomic/i.test(model || ''); }
+
 async function _ollamaEmbedOne(host, model, text) {
+    const prompt = needsNomicPrefix(model) ? 'search_query: ' + truncateForEmbedding(text) : truncateForEmbedding(text);
     const res = await fetch(`${host}/api/embeddings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt: 'search_query: ' + truncateForEmbedding(text) }),
+        body: JSON.stringify({ model, prompt }),
         signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()).embedding;
 }
 async function _ollamaEmbedMany(host, model, texts) {
+    const pfx = needsNomicPrefix(model) ? 'search_document: ' : '';
     const res = await fetch(`${host}/api/embed`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input: texts.map(t => 'search_document: ' + (t.length > DOC_CHAR_LIMIT ? t.slice(0, DOC_CHAR_LIMIT) : t)) }),
-        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({ model, input: texts.map(t => pfx + (t.length > DOC_CHAR_LIMIT ? t.slice(0, DOC_CHAR_LIMIT) : t)) }),
+        signal: AbortSignal.timeout(EMBED_DOC_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()).embeddings;

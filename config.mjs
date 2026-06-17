@@ -15,14 +15,14 @@ import { artifactPaths, CONFIG_FILE_NAME, DATA_DIR_NAME } from './layout.mjs';
 export const DEFAULTS = Object.freeze({
     storage: 'memory',                 // 'memory' (default, zero-dependency) | 'sqlite'
     embedProvider: 'auto',             // 'auto' (Ollama→local→lexical) | 'ollama' | 'local' | 'off'
-    embedModel: 'nomic-embed-text',    // Ollama embedding model
+    embedModel: 'qwen3-embedding:4b',  // Ollama embedding model (strong code/NL embedder; pull with `ollama pull qwen3-embedding:4b`)
     localEmbedModel: 'Xenova/all-MiniLM-L6-v2', // in-process model (optional @huggingface/transformers)
     ollamaHost: 'http://localhost:11434',
     gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
     gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
     enrichment: Object.freeze({
         enabled: false,
-        model: 'qwen2.5-coder:1.5b',   // small, code-aware; configurable, opt-in
+        model: 'auto',                 // 'auto' = strongest code model Ollama has (1.5B floor); or pin one. Opt-in.
         coreRatio: 1.0,                // 1.0 = all production files (tests/examples always excluded);
                                        // <1 bounds enrichment to the most-central share by PageRank
         maxChunks: 500,                // cap on NEW LLM calls per index run (cache accumulates across runs)
@@ -37,6 +37,10 @@ export const DEFAULTS = Object.freeze({
         topM: 12,                      // candidates shown to the judge to reorder
         poolSize: 15,                  // over-fetch depth when reranking, so a correct-but-deep
                                        // hit can be RESCUED into top_k (then truncated to top_k)
+    }),
+    hyde: Object.freeze({
+        enabled: false,                // opt-in: query-side HyDE — one LLM call per NL query, blended into the query vector
+        model: 'qwen2.5-coder:1.5b',   // local coder model that writes the hypothetical snippet
     }),
 });
 
@@ -156,6 +160,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
             model: (file.rerank || {}).model || DEFAULTS.rerank.model,
             topM: Number.isInteger((file.rerank || {}).topM) ? (file.rerank || {}).topM : DEFAULTS.rerank.topM,
             poolSize: Number.isInteger((file.rerank || {}).poolSize) ? (file.rerank || {}).poolSize : DEFAULTS.rerank.poolSize,
+        }),
+
+        hyde: Object.freeze({
+            enabled: Boolean((file.hyde || {}).enabled),
+            model: (file.hyde || {}).model || DEFAULTS.hyde.model,
         }),
     });
 }

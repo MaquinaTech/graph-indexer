@@ -19,7 +19,7 @@ import os from 'os';
 import path from 'path';
 import { MemoryGraphIndex } from '../core-engine.mjs';
 import { getParserForFile, extractSemanticChunks } from '../parser-utils.mjs';
-import { classifyCallers } from '../mcp-tools.mjs';
+import { classifyCallers, buildSubgraph } from '../mcp-tools.mjs';
 
 // ── Fixture: two modules export a same-named free function `save`. Callers that
 //    import one of them are real callers of an indexed save; a caller that hits a
@@ -174,4 +174,28 @@ test('unambiguous names stay fully credited (no false demotion)', () => {
     assert.equal(ambiguous, false, 'checkout is unambiguous');
     assert.deepEqual(high.map(h => h.chunk.name).sort(), ['run']);
     assert.equal(nameOnly.length, 0, 'no name-only matches for a unique symbol');
+});
+
+test('buildSubgraph returns a bounded, deterministic connected subgraph', () => {
+    const idx = parseFixture();
+    if (!idx) return;
+    const g = buildSubgraph(idx, 'checkout', { maxNodes: 12, maxDepth: 2 });
+    assert.equal(g.found, true, 'seed resolves');
+    const ids = new Map(g.nodes.map(n => [n.id, n.name]));
+    const names = new Set(g.nodes.map(n => n.name));
+    assert.ok(names.has('checkout'), 'seed is in the subgraph');
+    assert.ok(g.nodes.length <= 12, 'respects max_nodes');
+    // checkout calls save → an outgoing calls-edge from the seed.
+    assert.ok(g.edges.some(e => ids.get(e.from) === 'checkout' && e.kind === 'calls'), 'seed has an outgoing calls edge');
+    // run() calls checkout() → run is pulled in as a high-confidence caller.
+    assert.ok(names.has('run'), 'high-confidence caller run() is included');
+    assert.ok(g.edges.some(e => ids.get(e.from) === 'run' && ids.get(e.to) === 'checkout' && e.kind === 'calls'), 'run → checkout edge present');
+    // Fully deterministic.
+    assert.deepEqual(buildSubgraph(idx, 'checkout', { maxNodes: 12, maxDepth: 2 }), g, 'subgraph is reproducible');
+    // Token budget bounds it and flags truncation.
+    const tiny = buildSubgraph(idx, 'checkout', { maxNodes: 12, maxDepth: 2, tokenBudget: 15 });
+    assert.ok(tiny.nodes.length < g.nodes.length, 'a tiny token budget shrinks the subgraph');
+    assert.ok(tiny.truncated, 'truncation is flagged when the budget bites');
+    // A missing seed is handled, not thrown.
+    assert.equal(buildSubgraph(idx, 'doesNotExistXYZ', {}).found, false, 'missing seed → found:false');
 });

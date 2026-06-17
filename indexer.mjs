@@ -60,7 +60,16 @@ async function main() {
     // Resolve the embedding provider for this run (Ollama → in-process local →
     // lexical, unless forced). Index time and query time must share the model.
     const embedder = await createEmbedder(config);
-    console.log(`🔎 Embeddings: ${describeEmbedder(embedder)}\n`);
+    console.log(`🔎 Embeddings: ${describeEmbedder(embedder)}`);
+    // Make the `auto` fallback ladder observable — never silently lexical-only.
+    if (config.embedProvider === 'auto') {
+        if (embedder.provider === 'local') {
+            console.log(`   ↪ Ollama not reachable at ${config.ollamaHost}; using the bundled in-process model (no daemon required).`);
+        } else if (embedder.provider === 'off') {
+            console.log(`   ↪ No Ollama and no in-process model installed (\`npm i @huggingface/transformers\`) — indexing lexical-only.`);
+        }
+    }
+    console.log('');
 
     let existingCache = readEmbeddingBinary(EMBEDDINGS_PATH);
     // A model switch invalidates the cached vectors — vectors of different models
@@ -143,11 +152,18 @@ async function main() {
 
     if (toEmbed.length > 0) {
         const BATCH_SIZE = 64;
-        const CONCURRENCY = 4;
+        // Embedding concurrency. A single local Ollama model serves requests
+        // serially, so a high fan-out just queues batches and risks per-request
+        // timeouts (a large model like qwen3-embedding:4b made every queued batch
+        // breach the old cap). Default 4 (fast on small models / when
+        // OLLAMA_NUM_PARALLEL is set); lower it (e.g. 1) for big models on modest
+        // hardware via INDEXER_EMBED_CONCURRENCY.
+        const CONCURRENCY = Number(process.env.INDEXER_EMBED_CONCURRENCY) > 0
+            ? Number(process.env.INDEXER_EMBED_CONCURRENCY) : 4;
         const batches = [];
         for (let i = 0; i < toEmbed.length; i += BATCH_SIZE) batches.push(toEmbed.slice(i, i + BATCH_SIZE));
 
-        let completed = 0;
+        let completed = 0, vectorBatches = 0, failedBatches = 0;
         console.time('Embedding Generation Duration');
         const worker = async (batch) => {
             // Enriched chunks get TWO vectors: the full code payload (base key)
@@ -159,11 +175,18 @@ async function main() {
                 const sText = summaryEmbeddingText(c);
                 if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
             }
-            const matrix = await embedder.embedDocuments(entries.map(e => e.text));
+            // Per-batch graceful degradation: a slow/failed embedding batch (e.g. a
+            // timeout on a big model) must NOT abort the whole index. Those chunks
+            // are still indexed lexically — they just miss their vector until the
+            // next run re-tries them (the cache only stores what succeeded).
+            let matrix = null;
+            try { matrix = await embedder.embedDocuments(entries.map(e => e.text)); }
+            catch (e) { failedBatches++; process.stderr.write(`\n⚠️  embedding batch failed (${e.message}); indexing ${batch.length} chunks lexical-only this run.\n`); }
             if (matrix && matrix.length === entries.length) {
                 for (let j = 0; j < entries.length; j++) {
                     indexData.embeddingCache[entries[j].key] = matrix[j];
                 }
+                vectorBatches++;
             }
             for (const chunk of batch) indexData.chunks.push(chunk);
             completed += batch.length;
@@ -173,6 +196,10 @@ async function main() {
             await Promise.all(batches.slice(i, i + CONCURRENCY).map(worker));
         }
         console.timeEnd('Embedding Generation Duration');
+        if (failedBatches > 0) {
+            console.log(`⚠️  ${failedBatches}/${batches.length} embedding batches failed (lexical-only for those chunks); re-run to fill them in. `
+                + `Tip: a large embed model on modest hardware wants INDEXER_EMBED_CONCURRENCY=1 and/or a higher INDEXER_EMBED_TIMEOUT_MS.`);
+        }
     }
 
     // ── Reverse topology edges ────────────────────────────────────────────────────
