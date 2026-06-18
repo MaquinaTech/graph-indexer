@@ -494,6 +494,7 @@ function saveStackConfig({ languages, frameworks, engine, interactive }) {
     // topM, poolSize, …) survive a re-run.
     if (engine) {
         existing.storage = engine.storage;
+        existing.embeddings = engine.embeddings;
         if (engine.embedProvider) existing.embedProvider = engine.embedProvider;
         existing.ollamaHost = engine.ollamaHost;
         existing.embedModel = engine.embedModel;
@@ -860,25 +861,28 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
         const storage = await interactiveSelect({
             title: 'Storage backend',
             items: [
-                { key: 'memory', label: 'In-memory', desc: c.dim('default · fastest · ideal for most repos') },
-                { key: 'sqlite', label: 'SQLite', desc: c.dim('persistent · for very large repos (1M+ LOC)') },
+                { key: 'auto', label: 'Auto', desc: c.dim('recommended · in-memory now, SQLite past 15k chunks') },
+                { key: 'memory', label: 'In-memory', desc: c.dim('force · fastest · ideal for most repos') },
+                { key: 'sqlite', label: 'SQLite', desc: c.dim('force · persistent · for very large repos (1M+ LOC)') },
             ],
-            selectedKey: existing.storage === 'sqlite' ? 'sqlite' : 'memory',
+            selectedKey: existing.storage || 'auto',
         });
 
-        // Semantic search engine — how query/code vectors are produced. 'auto'
-        // prefers a running Ollama and otherwise uses a small in-process model
-        // (no daemon), so conceptual search works out of the box.
+        // Semantic search engine — how query/code vectors are produced. Embeddings
+        // are opt-in (the default lexical + stemming path needs zero dependencies),
+        // so 'Lexical only' is highlighted; choosing a provider enables them. 'auto'
+        // prefers a running Ollama and otherwise a small in-process model (no daemon).
         const embedProvider = await interactiveSelect({
             title: 'Semantic search engine',
             items: [
-                { key: 'auto', label: 'Auto', desc: c.dim('recommended · Ollama if running, else a bundled local model — no setup') },
+                { key: 'off', label: 'Lexical only', desc: c.dim('default · keyword/symbol + stemming · no vectors, no dependencies') },
+                { key: 'auto', label: 'Auto', desc: c.dim('Ollama if running, else a bundled local model — no setup') },
                 { key: 'ollama', label: 'Ollama', desc: c.dim('highest quality · needs the Ollama app + a pulled model') },
                 { key: 'local', label: 'Local (in-process)', desc: c.dim('no daemon · downloads a ~25 MB model on first index') },
-                { key: 'off', label: 'Lexical only', desc: c.dim('keyword/symbol search · no vectors') },
             ],
-            selectedKey: existing.embedProvider || 'auto',
+            selectedKey: existing.embeddings === true ? (existing.embedProvider || 'auto') : 'off',
         });
+        const embeddingsEnabled = embedProvider !== 'off';
 
         // Ollama endpoint — powers Ollama embeddings, enrichment and reranking.
         const ollamaHost = normalizeHost(await promptText({
@@ -890,10 +894,11 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
         if (models) line(glyph.ok, 'Ollama', `${models.length} model(s) at ${ollamaHost}`);
         else line(glyph.warn, 'Ollama', `not reachable at ${ollamaHost} — you can still name models to pull later`);
 
-        // Ollama embedding model — only when Ollama can be the embedder.
+        // Ollama embedding model — only when Ollama can be the embedder. nomic is the
+        // safe default; qwen3-embedding:4b is the documented opt-in upgrade.
         const embedModel = (embedProvider === 'ollama' || embedProvider === 'auto')
-            ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'qwen3-embedding:4b', models })
-            : (existing.embedModel || 'qwen3-embedding:4b');
+            ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'nomic-embed-text', models })
+            : (existing.embedModel || 'nomic-embed-text');
         const localEmbedModel = existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2';
 
         // LLM enrichment (opt-in)
@@ -918,13 +923,14 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
             }
         }
 
-        engineConfig = { storage, embedProvider, ollamaHost, embedModel, localEmbedModel, enrichment, rerank };
+        engineConfig = { storage, embeddings: embeddingsEnabled, embedProvider, ollamaHost, embedModel, localEmbedModel, enrichment, rerank };
 
         const embedSummary = embedProvider === 'off' ? 'lexical only'
             : embedProvider === 'local' ? `local · ${localEmbedModel}`
                 : embedProvider === 'ollama' ? `Ollama · ${embedModel}`
                     : `auto · Ollama ${embedModel} → local`;
-        line(glyph.ok, 'Backend', storage === 'sqlite' ? 'SQLite (large repos)' : 'In-memory (default)');
+        line(glyph.ok, 'Backend', storage === 'sqlite' ? 'SQLite (large repos)'
+            : storage === 'memory' ? 'In-memory (forced)' : 'Auto (in-memory → SQLite past 15k chunks)');
         line(embedProvider === 'off' ? glyph.skip : glyph.ok, 'Embeddings', embedSummary);
         line(enrichEnabled ? glyph.ok : glyph.skip, 'Enrichment', enrichEnabled ? enrichment.model : 'disabled (default)');
         line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? rerank.model : 'disabled (default)');

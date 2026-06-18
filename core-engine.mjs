@@ -10,6 +10,7 @@ import {
     EMBEDDING_CONTEXT_LIMIT, truncateForEmbedding, cosineSimilarity, tokenize,
     okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     SUMMARY_VEC_SUFFIX, LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
+    isNaturalLanguageQuery,
 } from './search-core.mjs';
 
 // Re-exported for backward compatibility — callers historically imported these
@@ -613,7 +614,7 @@ export class MemoryGraphIndex {
     // ─── Lexical index (TRUE inverted index) ──────────────────────────────────
 
     _indexLexical(chunkId, text, filePath = '') {
-        const tokens = tokenize(text);
+        const tokens = tokenize(text);               // raw + additive Porter stems
         if (tokens.length === 0) return;
 
         const termCounts = new Map();
@@ -622,11 +623,14 @@ export class MemoryGraphIndex {
         }
 
         // Track document length for BM25 length normalization.
-        // Only content tokens are counted — path tokens are handled separately
-        // in searchHybrid to avoid BM25 length normalisation amplifying short
-        // export stubs that share a path with a larger implementation.
-        this.docLens.set(chunkId, tokens.length);
-        this.totalDocLen += tokens.length;
+        // RAW token count only — the additive stem tokens earn their own postings
+        // (so behavioural queries can match them) but must NOT inflate docLen, or
+        // they would perturb length normalisation for exact symbolic matches. With
+        // raw-based docLen, raw-term BM25 is byte-identical to the pre-stem index.
+        // Path tokens are handled separately in searchHybrid.
+        const rawLen = tokenize(text, false).length;
+        this.docLens.set(chunkId, rawLen);
+        this.totalDocLen += rawLen;
 
         const chunkTokenSet = new Set();
         for (const [term, count] of termCounts) {
@@ -645,7 +649,7 @@ export class MemoryGraphIndex {
         // Path matching is done multiplicatively in searchHybrid, which avoids
         // amplifying short stubs that happen to share a path with a long function.
         if (filePath) {
-            const pathTokenSet = new Set(tokenize(filePath.replace(/[/\-_.]/g, ' ')));
+            const pathTokenSet = new Set(tokenize(filePath.replace(/[/\-_.]/g, ' '), false));
             if (!this.pathTokens) this.pathTokens = new Map();
             this.pathTokens.set(chunkId, pathTokenSet);
         }
@@ -678,7 +682,10 @@ export class MemoryGraphIndex {
     }
 
     _searchLexical(queryText) {
-        const queryTokens = tokenize(queryText);
+        // Asymmetric stemming: the index always carries stems, but only stem the
+        // QUERY for natural-language/behavioural queries — symbolic name lookups
+        // stay exact so stem collisions never dilute a precise symbol match.
+        const queryTokens = tokenize(queryText, isNaturalLanguageQuery(queryText));
         const scores = new Map();
         const avgdl = this.docCount > 0 ? this.totalDocLen / this.docCount : 1;
 

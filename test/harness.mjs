@@ -25,6 +25,7 @@ import {
     ndcgAtK,
     firstRelevantRank,
     computeTokenSavings,
+    amortizedTokenSavings,
     totalSourceTokens,
     mean,
     median,
@@ -178,6 +179,8 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
 
         // Token savings: compare top-5 chunk tokens vs full source files
         const savings5 = computeTokenSavings(results.slice(0, 5), fixtureDir);
+        // Honest, expansion-aware savings (net of one get_chunk full-body expansion).
+        const amortized5 = amortizedTokenSavings(results.slice(0, 5), fixtureDir);
 
         // Surface the best matching chunk for the report
         const firstHitIdx = rank - 1; // -1 if not found
@@ -198,6 +201,7 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
             ndcgs,
             searchMs: bestMs,
             tokenSavings: savings5,
+            amortizedSavings: amortized5,
             firstHit,
         });
     }
@@ -212,6 +216,7 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
     }
     const avgSearchMs = mean(queryResults.map(r => r.searchMs));
     const avgTokenSavings = mean(queryResults.map(r => r.tokenSavings.savingsPct));
+    const avgAmortizedSavings = mean(queryResults.map(r => r.amortizedSavings.savingsPct));
 
     // ── By difficulty ─────────────────────────────────────────────────────────
     const byDifficulty = {};
@@ -237,6 +242,7 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
             ndcgs: aggNdcgs,
             avgSearchMs,
             avgTokenSavings,
+            avgAmortizedSavings,
             byDifficulty,
         },
     };

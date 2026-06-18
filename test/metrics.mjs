@@ -130,6 +130,36 @@ export function computeTokenSavings(results, fixtureDir) {
 }
 
 /**
+ * Honest, expansion-aware ("amortized") token savings. The headline savingsPct
+ * above counts only the top-k chunk excerpts vs full files and ignores that an
+ * agent typically EXPANDS a couple of results to full bodies via get_chunk. This
+ * models the realistic spend: top-k compact cards (~cardTokens each) PLUS the full
+ * bodies of the `expansions` largest results, versus reading the full source files
+ * of those results. The net figure is lower than the gross one — and honest.
+ *
+ * @param {Array<{chunk:object}>} results            top results (sliced to ≤5)
+ * @param {string} fixtureDir
+ * @param {{expansions?:number, cardTokens?:number}} [opts]
+ * @returns {{withToolTokens:number, fileTokens:number, expansions:number, savingsPct:number}}
+ */
+export function amortizedTokenSavings(results, fixtureDir, { expansions = 1, cardTokens = 20 } = {}) {
+    const top = results.slice(0, 5);
+    let withToolTokens = top.length * cardTokens;                 // one compact card per result
+    const bodies = top.map(r => approxTokens(r.chunk?.code_snippet)).sort((a, b) => b - a);
+    for (let i = 0; i < Math.min(expansions, bodies.length); i++) withToolTokens += bodies[i]; // full-body expansions
+    const seen = new Set();
+    let fileTokens = 0;
+    for (const r of top) {
+        const p = r.chunk?.file_path;
+        if (!p || seen.has(p)) continue;
+        seen.add(p);
+        try { fileTokens += approxTokens(fs.readFileSync(path.join(fixtureDir, p), 'utf-8')); } catch { /* unreadable */ }
+    }
+    const savingsPct = fileTokens > 0 ? Math.max(0, (1 - withToolTokens / fileTokens) * 100) : 0;
+    return { withToolTokens, fileTokens, expansions, savingsPct };
+}
+
+/**
  * Count approximate total source tokens across all source files in a directory.
  * Excludes non-source files and common build/dependency directories.
  */

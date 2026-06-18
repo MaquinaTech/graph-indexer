@@ -237,4 +237,9 @@ export const QUERIES = [
         expected_names: ['NestInterceptor', 'Interceptor'],
         expected_files: ['interceptors'],
     },
+
+    // ── HELD-OUT (validation only — never used to tune ranking) ──
+    { id: 'HO-NJ1', query: 'Reflector', difficulty: 'easy', expected_names: ['Reflector'], heldOut: true },
+    { id: 'HO-NJ2', query: 'read decorator metadata attached to a class or route handler', difficulty: 'semantic', topK: 10, expected_names: ['Reflector', 'MetadataScanner'], heldOut: true },
+    { id: 'HO-NJ3', query: 'ExceptionsHandler', difficulty: 'easy', expected_names: ['ExceptionsHandler'], heldOut: true },
 ];

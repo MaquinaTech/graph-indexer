@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
-import { resolveConfig } from './config.mjs';
+import { resolveConfig, describeConfig, configNotices } from './config.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { daemonStatus } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
@@ -69,22 +69,26 @@ function ensureDaemonRunning() {
 
 // ─── Boot ──────────────────────────────────────────────────────────────────────
 
-if (config.storage === 'sqlite') {
-    process.stderr.write('🗄  Storage backend: SQLite (disk-backed, live daemon updates).\n');
-}
 ensureDaemonRunning();
 
 const version = readPackageVersion();
 const server = new McpServer({ name: 'graph-indexer', version });
 
 const db = await createStore(config, { cacheEmbeddings: false });
+const backend = db.backend; // 'auto' is resolved to a concrete backend by createStore.
+
+// Effective configuration, so users can see exactly what is running, never silently.
+process.stderr.write('⚙️  Effective configuration:\n');
+for (const line of describeConfig(config, { backend })) process.stderr.write(`     ${line}\n`);
+for (const notice of configNotices(config)) process.stderr.write(`⚠️  ${notice}\n`);
+
 try { db.load(); } catch (err) { process.stderr.write(`⏳ Waiting for initial indexing… (${err.message})\n`); }
 
 // In-memory backend: the daemon is a separate process that rewrites
 // code-index.json — without reloading, this server would answer from a stale
 // snapshot until restart. (The SQLite store refreshes itself per query via
 // PRAGMA data_version, so no watcher is needed there.)
-if (config.storage !== 'sqlite' && typeof db.reload === 'function') {
+if (backend !== 'sqlite' && typeof db.reload === 'function') {
     let reloadTimer = null;
     const scheduleReload = () => {
         if (reloadTimer) clearTimeout(reloadTimer);
@@ -154,7 +158,7 @@ const gitSignals = config.gitSignals ? loadGitSignals(config.gitSignalsPath) : n
 // ─── Tools ───────────────────────────────────────────────────────────────────
 registerTools(server, db, {
     projectRoot: PROJECT_ROOT,
-    artifactPath: config.storage === 'sqlite' ? config.sqlitePath : config.indexPath,
+    artifactPath: backend === 'sqlite' ? config.sqlitePath : config.indexPath,
     pidFile: PID_FILE,
     embeddingsEnabled: config.embeddingsEnabled && embedder.provider !== 'off',
     embedder,
@@ -167,4 +171,4 @@ registerTools(server, db, {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-process.stderr.write(`✅ graph-indexer MCP server running (v${version}, ${config.storage} backend).\n`);
+process.stderr.write(`✅ graph-indexer MCP server running (v${version}, ${backend} backend).\n`);

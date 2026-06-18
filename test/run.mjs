@@ -154,6 +154,7 @@ function renderSuiteResult(result) {
     console.log(`\n  ${c.bold('TOKEN SAVINGS')}  ${c.dim('(top-5 chunks vs full source files)')}`);
     console.log('  ' + HR3);
     console.log(`  ${pad('Avg savings per query', 26)} ${colourSavings(agg.avgTokenSavings)}`);
+    console.log(`  ${pad('  net of 1 get_chunk', 26)} ${colourSavings(agg.avgAmortizedSavings)}  ${c.dim('(honest: cards + 1 full-body expansion vs full files)')}`);
 
     // ── Per-query table ────────────────────────────────────────────────────────
     console.log(`\n  ${c.bold('PER-QUERY DETAIL')}`);

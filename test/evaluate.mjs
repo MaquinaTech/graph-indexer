@@ -277,6 +277,7 @@ async function evaluateSuite(suite) {
 
         const row = {
             id: q.id, query: q.query, difficulty: q.difficulty ?? 'medium',
+            heldOut: Boolean(q.heldOut),
             expected_names: names,
             top1: results[0] ? { name: results[0].chunk?.name, file: results[0].chunk?.file_path } : null,
             looseSuccess: {}, strictSuccess: {}, precision: {}, ndcg: {},
@@ -297,19 +298,28 @@ async function evaluateSuite(suite) {
         rows.push(row);
     }
 
-    const agg = (sel) => mean(rows.map(sel));
-    const aggregate = {
-        queryCount: rows.length,
-        looseSuccess: Object.fromEntries(KS.map(k => [k, agg(r => r.looseSuccess[k])])),
-        strictSuccess: Object.fromEntries(KS.map(k => [k, agg(r => r.strictSuccess[k])])),
-        precision: Object.fromEntries(KS.map(k => [k, agg(r => r.precision[k])])),
-        ndcg: Object.fromEntries(KS.map(k => [k, agg(r => r.ndcg[k])])),
-        rank1Strict: agg(r => r.rank1Strict),
-        mrrStrict: agg(r => r.mrrStrict),
-        mrrLoose: agg(r => r.mrrLoose),
-        fileOnlyHitRate: agg(r => r.fileOnlyHit),
+    // Aggregate over the TUNING rows only (held-out queries are reported
+    // separately) so the headline numbers stay comparable to the pre-WI8 baseline.
+    const tuningRows = rows.filter(r => !r.heldOut);
+    const heldRows = rows.filter(r => r.heldOut);
+    const aggOf = (rs) => (sel) => mean(rs.map(sel));
+    const buildAgg = (rs) => {
+        const a = aggOf(rs);
+        return {
+            queryCount: rs.length,
+            looseSuccess: Object.fromEntries(KS.map(k => [k, a(r => r.looseSuccess[k])])),
+            strictSuccess: Object.fromEntries(KS.map(k => [k, a(r => r.strictSuccess[k])])),
+            precision: Object.fromEntries(KS.map(k => [k, a(r => r.precision[k])])),
+            ndcg: Object.fromEntries(KS.map(k => [k, a(r => r.ndcg[k])])),
+            rank1Strict: a(r => r.rank1Strict),
+            mrrStrict: a(r => r.mrrStrict),
+            mrrLoose: a(r => r.mrrLoose),
+            fileOnlyHitRate: a(r => r.fileOnlyHit),
+        };
     };
-    return { META: suite.META, rows, aggregate };
+    const aggregate = buildAgg(tuningRows);
+    const heldOutAggregate = heldRows.length ? buildAgg(heldRows) : null;
+    return { META: suite.META, rows: tuningRows, heldRows, aggregate, heldOutAggregate };
 }
 
 // ─── Rendering ─────────────────────────────────────────────────────────────────
@@ -430,6 +440,26 @@ if (ok.length > 0) {
         console.log(`  ${pad('  semantic (agent-style)', 30)} rank-1: ${scoreColour(semR1)}  MRR: ${scoreColour(semMRR)}  s@5: ${scoreColour(semS5)}${embNote}`);
     }
     console.log('═'.repeat(72) + '\n');
+
+    // ── HELD-OUT validation set (authored fresh, NEVER used to tune ranking) ──
+    // Reported separately so any ranking change — learned fusion, smarter boost
+    // gating — can be judged on data it did not see. A change that wins here, not
+    // just on the tuning set, is the only kind worth keeping (see the code smell).
+    const heldAll = ok.flatMap(r => r.heldRows || []);
+    if (heldAll.length > 0) {
+        const hm = (sel) => mean(heldAll.map(sel));
+        const hSem = heldAll.filter(r => r.difficulty === 'semantic');
+        const hSym = heldAll.filter(r => r.difficulty !== 'semantic');
+        console.log(c.bold(c.cyan('  HELD-OUT (validation — never tuned)')) + c.dim(`  ${heldAll.length} queries across ${ok.length} suites`));
+        console.log('═'.repeat(72));
+        console.log(`  ${pad('success@5 strict', 24)} ${scoreColour(hm(r => r.strictSuccess[5]))}`);
+        console.log(`  ${pad('rank-1 strict', 24)} ${scoreColour(hm(r => r.rank1Strict))}`);
+        console.log(`  ${pad('MRR strict', 24)} ${scoreColour(hm(r => r.mrrStrict))}`);
+        console.log(`  ${pad('file-only inflation', 24)} ${hm(r => r.fileOnlyHit) > 0 ? c.red(fmtPct(hm(r => r.fileOnlyHit))) : c.green('0.0%')}`);
+        if (hSym.length) console.log(`  ${pad('  symbolic', 24)} rank-1: ${scoreColour(mean(hSym.map(r => r.rank1Strict)))}  MRR: ${scoreColour(mean(hSym.map(r => r.mrrStrict)))}`);
+        if (hSem.length) console.log(`  ${pad('  semantic', 24)} rank-1: ${scoreColour(mean(hSem.map(r => r.rank1Strict)))}  MRR: ${scoreColour(mean(hSem.map(r => r.mrrStrict)))}  s@5: ${scoreColour(mean(hSem.map(r => r.strictSuccess[5])))}`);
+        console.log('═'.repeat(72) + '\n');
+    }
 }
 
 if (writeJson) {

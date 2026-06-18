@@ -21,6 +21,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { resolveConfig } from './config.mjs';
+import { resolveBackend } from './storage.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { daemonStatus, readPid, isAlive } from './daemon-lock.mjs';
 import { c, glyph, log } from './cli-ui.mjs';
@@ -33,7 +34,7 @@ const ROOT = config.projectRoot;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function relArtifact() {
-    const p = config.storage === 'sqlite' ? config.sqlitePath : config.indexPath;
+    const p = resolveBackend(config) === 'sqlite' ? config.sqlitePath : config.indexPath;
     return path.relative(ROOT, p) || p;
 }
 
@@ -64,12 +65,13 @@ function spawnDaemon() {
 
 function cmdStatus() {
     const { running, pid } = daemonStatus(config.pidFile);
-    const artifact = config.storage === 'sqlite' ? config.sqlitePath : config.indexPath;
+    const backend = resolveBackend(config);
+    const artifact = backend === 'sqlite' ? config.sqlitePath : config.indexPath;
     log('');
     log(`  ${c.bold('graph-indexer')} ${c.dim('· daemon status')}`);
     log(`  ${running ? glyph.run : glyph.stop} Daemon       ${running ? c.green(`running (PID ${pid})`) : c.dim('stopped')}`);
     log(`  ${glyph.arrow} Project      ${c.dim(ROOT)}`);
-    log(`  ${glyph.arrow} Backend      ${config.storage === 'sqlite' ? 'SQLite (disk-backed)' : 'in-memory'}`);
+    log(`  ${glyph.arrow} Backend      ${backend === 'sqlite' ? 'SQLite (disk-backed)' : 'in-memory'}${config.storage === 'auto' ? c.dim(' · auto') : ''}`);
     log(`  ${glyph.arrow} Index        ${c.dim(relArtifact())} ${c.dim('· ' + freshness(artifact))}`);
     log(`  ${glyph.arrow} Logs         ${c.dim(path.relative(ROOT, config.logFile) || config.logFile)}`);
     log('');

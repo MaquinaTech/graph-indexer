@@ -29,7 +29,7 @@ import chokidar from 'chokidar';
 import { resolveConfig } from './config.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { acquireLock, releaseLock, readPid } from './daemon-lock.mjs';
-import { createStore } from './storage.mjs';
+import { createStore, resolveBackend } from './storage.mjs';
 import {
     embeddingKeyFor, computePageRank, TEST_FILE_RE, EXAMPLE_DIR_RE,
     summaryEmbeddingText, SUMMARY_VEC_SUFFIX,
@@ -159,7 +159,8 @@ async function enrichChunks(filename, chunks) {
 // not modified since the index artifact was last written are already indexed —
 // skipping them turns daemon start from O(repo) parse work into O(changed files),
 // while still picking up edits made while the daemon was down.
-const ARTIFACT_PATH = config.storage === 'sqlite' ? config.sqlitePath : config.indexPath;
+const BACKEND = resolveBackend(config); // 'auto' → concrete backend by artifact presence.
+const ARTIFACT_PATH = BACKEND === 'sqlite' ? config.sqlitePath : config.indexPath;
 let indexBuiltAt = 0;
 try { indexBuiltAt = fs.statSync(ARTIFACT_PATH).mtimeMs; } catch { /* no index yet → full scan */ }
 let initialScan = true;
@@ -227,7 +228,7 @@ async function processFileChange(absolutePath) {
         db.applyFileUpdate(filename, { chunks: newChunks, imports, embeddings });
         process.stderr.write(
             `[daemon] 🔄 Synced: ${filename} (${newChunks.length} chunks, `
-            + `${newChunks.length - chunksToEmbed.length} cached vectors, ${config.storage})\n`
+            + `${newChunks.length - chunksToEmbed.length} cached vectors, ${BACKEND})\n`
         );
     } catch (err) {
         process.stderr.write(`[daemon] ❌ Error in ${filename}: ${err.message}\n`);
@@ -241,7 +242,7 @@ function enqueue(absolutePath) {
     queue = queue.then(() => processFileChange(absolutePath)).catch(() => {});
 }
 
-process.stderr.write(`🚀 Watcher Daemon started in: ${PROJECT_ROOT} (backend: ${config.storage})\n`);
+process.stderr.write(`🚀 Watcher Daemon started in: ${PROJECT_ROOT} (backend: ${BACKEND})\n`);
 
 // Only watch source files we can actually index. Critically, this prevents
 // chokidar from descending into node_modules / dist / .git / .gitignored dirs —

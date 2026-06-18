@@ -204,4 +204,11 @@ export const QUERIES = [
         expected_names: ['mergeConfig'],
         expected_files: ['core/mergeConfig'],
     },
+
+    // ── HELD-OUT (validation only — authored fresh, NEVER used to tune ranking;
+    //    evaluate.mjs reports these separately so learned/changed ranking can be
+    //    validated on data it did not see). Targets verified to exist in the index. ──
+    { id: 'HO-AX1', query: 'buildFullPath', difficulty: 'easy', expected_names: ['buildFullPath'], heldOut: true },
+    { id: 'HO-AX2', query: 'combine a base URL with a relative path into one absolute request URL', difficulty: 'semantic', topK: 10, expected_names: ['buildFullPath'], heldOut: true },
+    { id: 'HO-AX3', query: 'AxiosHeaders normalize set get header value', difficulty: 'medium', expected_names: ['AxiosHeaders'], heldOut: true },
 ];

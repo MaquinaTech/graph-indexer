@@ -228,5 +228,10 @@ export const QUERIES = [
         description: 'Locates the general response building functions',
         expected_names: ['send', 'json', 'sendFile'],
         expected_files: ['lib/response'],
-    }
+    },
+
+    // ── HELD-OUT (validation only — never used to tune ranking) ──
+    { id: 'HO-EX1', query: 'sendfile', difficulty: 'easy', expected_names: ['sendfile'], heldOut: true },
+    { id: 'HO-EX2', query: 'parse an Accept header into acceptable media types ordered by quality', difficulty: 'semantic', topK: 10, expected_names: ['acceptParams'], heldOut: true },
+    { id: 'HO-EX3', query: 'Router', difficulty: 'easy', expected_names: ['Router'], heldOut: true },
 ];

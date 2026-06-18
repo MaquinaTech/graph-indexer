@@ -13,16 +13,24 @@ import path from 'path';
 import { artifactPaths, CONFIG_FILE_NAME, DATA_DIR_NAME } from './layout.mjs';
 
 export const DEFAULTS = Object.freeze({
-    storage: 'memory',                 // 'memory' (default, zero-dependency) | 'sqlite'
+    // 'auto' keeps the index in memory below AUTO_SQLITE_CHUNK_THRESHOLD chunks and
+    // switches to disk-backed SQLite above it. Force either with --use-sqlite /
+    // INDEXER_STORAGE. (see storage.mjs: resolveBackend / AUTO_SQLITE_CHUNK_THRESHOLD)
+    storage: 'auto',                   // 'auto' (default) | 'memory' | 'sqlite'
+    embeddings: false,                 // OFF by default — lexical + stemming need zero dependencies.
+                                       // Opt in with --embeddings or INDEXER_EMBEDDINGS=on.
     embedProvider: 'auto',             // 'auto' (Ollama→local→lexical) | 'ollama' | 'local' | 'off'
-    embedModel: 'qwen3-embedding:4b',  // Ollama embedding model (strong code/NL embedder; pull with `ollama pull qwen3-embedding:4b`)
+    embedModel: 'nomic-embed-text',    // default Ollama embed model when embeddings are enabled.
+                                       // qwen3-embedding:4b is a documented opt-in upgrade
+                                       // (--embed-model / EMBED_MODEL), never a hardcoded default.
     localEmbedModel: 'Xenova/all-MiniLM-L6-v2', // in-process model (optional @huggingface/transformers)
     ollamaHost: 'http://localhost:11434',
     gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
     gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
     enrichment: Object.freeze({
         enabled: false,
-        model: 'auto',                 // 'auto' = strongest code model Ollama has (1.5B floor); or pin one. Opt-in.
+        model: 'qwen2.5-coder:1.5b',   // smallest coder model; quality sufficient for summaries.
+                                       // Opt in with --enrichment or ENRICH_MODEL=<model>.
         coreRatio: 1.0,                // 1.0 = all production files (tests/examples always excluded);
                                        // <1 bounds enrichment to the most-central share by PageRank
         maxChunks: 500,                // cap on NEW LLM calls per index run (cache accumulates across runs)
@@ -87,17 +95,27 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     const file = loadConfigFile(projectRoot);
     const fileEnrich = file.enrichment || {};
 
-    // Storage: --use-sqlite flag or "storage" key. The in-memory engine remains
-    // the default so the zero-dependency baseline is never disturbed implicitly.
-    const storage = argv.includes('--use-sqlite') ? 'sqlite'
-        : (file.storage === 'sqlite' ? 'sqlite' : DEFAULTS.storage);
+    // Storage: --use-sqlite forces SQLite; otherwise INDEXER_STORAGE / "storage" key
+    // / default 'auto' (resolved to memory-or-sqlite by chunk count at index time and
+    // by artifact presence at query time — see storage.mjs:resolveBackend).
+    const storageRaw = argv.includes('--use-sqlite') ? 'sqlite'
+        : (env.INDEXER_STORAGE || file.storage || DEFAULTS.storage);
+    const storage = ['memory', 'sqlite', 'auto'].includes(storageRaw) ? storageRaw : DEFAULTS.storage;
 
-    const enrichmentEnabled = argv.includes('--llm-enrichment')
-        || argv.includes('--enrich')
+    // Enrichment is OFF unless explicitly requested: --enrichment flag, ENRICH_MODEL
+    // env (naming a model implies enabling it), or the project config.
+    const enrichModelEnv = env.ENRICH_MODEL || undefined;
+    const enrichmentEnabled = argv.includes('--enrichment')
+        || Boolean(enrichModelEnv)
         || Boolean(fileEnrich.enabled);
 
     const ollamaHost = env.OLLAMA_HOST || file.ollamaHost || DEFAULTS.ollamaHost;
-    const embeddingsEnabled = env.INDEXER_EMBEDDINGS !== 'off';
+
+    // Embeddings are OFF by default (lexical + stemming need zero dependencies).
+    // Enable with --embeddings or INDEXER_EMBEDDINGS=on; INDEXER_EMBEDDINGS=off always wins.
+    const embeddingsEnabled = env.INDEXER_EMBEDDINGS === 'off'
+        ? false
+        : (argv.includes('--embeddings') || env.INDEXER_EMBEDDINGS === 'on' || file.embeddings === true);
 
     // Embedding provider: env > --embed-provider flag > config > default 'auto'.
     // 'auto' prefers a running Ollama and falls back to the in-process local model
@@ -138,14 +156,16 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         ollamaHost,
         embeddingsEnabled,
         embedProvider,
-        embedModel: file.embedModel || DEFAULTS.embedModel,
+        // Embed model: --embed-model flag > EMBED_MODEL env > config > nomic default.
+        // This is the model `auto`/`ollama` providers pull (e.g. qwen3-embedding:4b).
+        embedModel: flagValue(argv, '--embed-model') || env.EMBED_MODEL || file.embedModel || DEFAULTS.embedModel,
         localEmbedModel: file.localEmbedModel || DEFAULTS.localEmbedModel,
         gitSignals,
         gitRankBoost,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
-            model: flagValue(argv, '--enrich-model') || fileEnrich.model || DEFAULTS.enrichment.model,
+            model: flagValue(argv, '--enrich-model') || enrichModelEnv || fileEnrich.model || DEFAULTS.enrichment.model,
             coreRatio: Number(fileEnrich.coreRatio) > 0 ? Number(fileEnrich.coreRatio) : DEFAULTS.enrichment.coreRatio,
             maxChunks: Number(flagValue(argv, '--enrich-max')) > 0
                 ? Number(flagValue(argv, '--enrich-max'))
@@ -156,8 +176,10 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         }),
 
         rerank: Object.freeze({
-            enabled: Boolean((file.rerank || {}).enabled),
-            model: (file.rerank || {}).model || DEFAULTS.rerank.model,
+            // OFF unless requested: --rerank flag, RERANK_MODEL env (naming a model
+            // implies enabling it), or the project config.
+            enabled: argv.includes('--rerank') || Boolean(env.RERANK_MODEL) || Boolean((file.rerank || {}).enabled),
+            model: env.RERANK_MODEL || (file.rerank || {}).model || DEFAULTS.rerank.model,
             topM: Number.isInteger((file.rerank || {}).topM) ? (file.rerank || {}).topM : DEFAULTS.rerank.topM,
             poolSize: Number.isInteger((file.rerank || {}).poolSize) ? (file.rerank || {}).poolSize : DEFAULTS.rerank.poolSize,
         }),
@@ -174,4 +196,51 @@ let _cached = null;
 export function getConfig() {
     if (!_cached) _cached = resolveConfig();
     return _cached;
+}
+
+/**
+ * Human-readable lines describing the effective configuration, printed at startup
+ * by the indexer / MCP server / daemon so users can see exactly what is running
+ * (storage backend, model names, which optional features are on).
+ *
+ * @param {object} config  Resolved config from resolveConfig().
+ * @param {object} [opts]
+ * @param {string} [opts.backend]  Concrete backend ('memory'|'sqlite') once 'auto'
+ *                                 has been resolved; defaults to config.storage.
+ * @returns {string[]}
+ */
+export function describeConfig(config, { backend = config.storage } = {}) {
+    const emb = config.embeddingsEnabled
+        ? `on · provider=${config.embedProvider}, model=${config.embedModel}`
+        : 'off (lexical + stemming only)';
+    return [
+        `storage     : ${backend}`,
+        `embeddings  : ${emb}`,
+        `enrichment  : ${config.enrichment.enabled ? `on · model=${config.enrichment.model}` : 'off'}`,
+        `reranker    : ${config.rerank.enabled ? `on · model=${config.rerank.model}` : 'off'}`,
+        `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
+    ];
+}
+
+/**
+ * Operational warnings for risky / edge configurations. The transition between
+ * default and an opt-in feature must never be silent: callers print these at
+ * startup so a user who enabled enrichment-only or the reranker sees the measured
+ * trade-off before they wonder why precision moved.
+ *
+ * @param {object} config  Resolved config from resolveConfig().
+ * @returns {string[]}
+ */
+export function configNotices(config) {
+    const out = [];
+    if (config.enrichment.enabled && !config.rerank.enabled) {
+        out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '
+            + 'regress semantic precision (measured: gin MRR 0.48→0.39 on qwen3 embeddings).');
+    }
+    if (config.rerank.enabled) {
+        out.push('Reranker improves rank-1 for Go/Python repositories (gin: 0.20→0.40) but has shown '
+            + 'regressions on JavaScript repositories (express: 0.43→0.29). Behaviour depends on '
+            + 'repository language. See README for per-language benchmark data.');
+    }
+    return out;
 }

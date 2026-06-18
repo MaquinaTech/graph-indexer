@@ -231,4 +231,9 @@ export const QUERIES = [
         expected_names: ['HTTPException', 'RequestValidationError'],
         expected_files: ['exceptions'],
     },
+
+    // ── HELD-OUT (validation only — never used to tune ranking) ──
+    { id: 'HO-FA1', query: 'jsonable_encoder', difficulty: 'easy', expected_names: ['jsonable_encoder'], heldOut: true },
+    { id: 'HO-FA2', query: 'convert a pydantic model or dataclass into JSON-serialisable primitives', difficulty: 'semantic', topK: 10, expected_names: ['jsonable_encoder'], heldOut: true },
+    { id: 'HO-FA3', query: 'solve_dependencies', difficulty: 'medium', expected_names: ['solve_dependencies'], heldOut: true },
 ];

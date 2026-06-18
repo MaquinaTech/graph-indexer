@@ -201,4 +201,9 @@ export const QUERIES = [
         expected_names: ['Group', 'RouterGroup'],
         expected_files: ['routergroup'],
     },
+
+    // ── HELD-OUT (validation only — never used to tune ranking) ──
+    { id: 'HO-GN1', query: 'RunTLS', difficulty: 'easy', expected_names: ['RunTLS'], heldOut: true },
+    { id: 'HO-GN2', query: 'join two URL path segments while preserving a trailing slash', difficulty: 'semantic', topK: 10, expected_names: ['joinPaths'], heldOut: true },
+    { id: 'HO-GN3', query: 'SecureJSON', difficulty: 'easy', expected_names: ['SecureJSON'], heldOut: true },
 ];

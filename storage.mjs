@@ -24,7 +24,30 @@
  *   stats()                                  → engine health facts
  *   close()                                  Release fds / db handles.
  */
+import fs from 'fs';
 import { MemoryGraphIndex } from './core-engine.mjs';
+
+// 'auto' storage keeps the index in memory until a repo is large enough that the
+// disk-backed SQLite store earns its slightly higher per-query latency. The indexer
+// decides by the real chunk count it just built; readers decide by which artifact
+// exists on disk (see resolveBackend).
+export const AUTO_SQLITE_CHUNK_THRESHOLD = 15000;
+
+/**
+ * Resolve the abstract storage setting ('auto'|'memory'|'sqlite') to a concrete
+ * read backend. Explicit settings win; 'auto' picks SQLite when a SQLite artifact
+ * is present (the indexer writes one only for large repos and removes the other
+ * backend's artifact, so presence is unambiguous), else the in-memory JSON index.
+ *
+ * @param {object} config  Resolved config from config.mjs.
+ * @returns {'memory'|'sqlite'}
+ */
+export function resolveBackend(config) {
+    if (config.storage === 'sqlite') return 'sqlite';
+    if (config.storage === 'memory') return 'memory';
+    try { if (fs.existsSync(config.sqlitePath)) return 'sqlite'; } catch { /* fall through to memory */ }
+    return 'memory';
+}
 
 /**
  * Construct (but do not yet load) the configured store.
@@ -35,7 +58,7 @@ import { MemoryGraphIndex } from './core-engine.mjs';
  * @returns {Promise<object>} a store implementing the contract above.
  */
 export async function createStore(config, { cacheEmbeddings = false } = {}) {
-    if (config.storage === 'sqlite') {
+    if (resolveBackend(config) === 'sqlite') {
         // Imported lazily so the default path never loads node:sqlite.
         const { SqliteGraphStore } = await import('./sqlite-store.mjs');
         return new SqliteGraphStore(config.sqlitePath, { embeddingPath: config.embeddingPath });

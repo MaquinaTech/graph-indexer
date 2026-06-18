@@ -21,6 +21,11 @@ import {
 } from '../parser-utils.mjs';
 import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp-tools.mjs';
 import { computeFreshness } from '../git-signals.mjs';
+import { amortizedTokenSavings } from './metrics.mjs';
+import { stemToken, tokenize, STEM_PREFIX, fuseAndRank } from '../search-core.mjs';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 let passed = 0;
 let failed = 0;
@@ -465,6 +470,96 @@ test('computeFreshness distinguishes fresh / syncing / stale', () => {
     // No git info at all → never falsely "stale" (age-only, graceful).
     const d = computeFreshness({ ageSeconds: 10, indexedCommit: null, current: null, daemonRunning: false });
     assert.equal(d.stale, false); assert.equal(d.currentCommit, null); assert.equal(d.pendingChanges, null);
+});
+
+// ─── Amortized token savings (WI8) ───────────────────────────────────────────
+test('amortizedTokenSavings is honest: positive but below the gross top-k figure', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-amort-'));
+    // A big file; the returned chunk is a small slice of it.
+    fs.writeFileSync(path.join(dir, 'big.js'), 'x'.repeat(8000)); // ~2000 tokens
+    const results = [{ chunk: { file_path: 'big.js', code_snippet: 'y'.repeat(400) } }]; // ~100-token body
+    const amort = amortizedTokenSavings(results, dir, { expansions: 1, cardTokens: 20 });
+    assert.ok(amort.savingsPct > 0 && amort.savingsPct < 100, `expected 0<savings<100, got ${amort.savingsPct}`);
+    // With-tool cost = 1 card (20) + 1 full body (~100) ≪ full file (~2000) → big saving but honest.
+    assert.ok(amort.withToolTokens < amort.fileTokens, 'tool spend must be below reading the full file');
+    // More expansions → lower savings (you read more bodies).
+    const more = amortizedTokenSavings(
+        [{ chunk: { file_path: 'big.js', code_snippet: 'y'.repeat(400) } },
+         { chunk: { file_path: 'big.js', code_snippet: 'z'.repeat(400) } }], dir, { expansions: 2 });
+    assert.ok(more.savingsPct <= amort.savingsPct + 1e-9, 'more expansions never increase savings');
+    fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ─── Porter stemmer + additive namespaced tokenization ───────────────────────
+
+test('stemToken collapses morphological variants to a shared root', () => {
+    const same = (a, b) => assert.equal(stemToken(a), stemToken(b), `${a} vs ${b}`);
+    same('intercepting', 'interceptor');   // agent-noun -or bridge (code)
+    same('injection', 'injectable');
+    same('bootstrapping', 'bootstrap');    // -ing + de-doubling
+    same('managing', 'manager');
+    same('validation', 'validate');
+    same('running', 'run');
+    same('adapter', 'adapting');
+});
+
+test('stemToken leaves short tokens and acronyms untouched (symbolic precision)', () => {
+    for (const w of ['get', 'id', 'css', 'sql', 'jwt']) assert.equal(stemToken(w), w);
+});
+
+test('tokenize is additive: raw token always present, stem added in its own namespace', () => {
+    const toks = tokenize('Interceptor');
+    assert.ok(toks.includes('interceptor'), 'raw token kept');
+    assert.ok(toks.includes(STEM_PREFIX + 'intercept'), 'namespaced stem added');
+    // Namespace isolation: a raw [A-Za-z0-9] query token can never equal a stem term.
+    assert.ok(toks.every(t => t === 'interceptor' || t.startsWith(STEM_PREFIX)));
+});
+
+test('tokenize(text, false) emits NO stems — the exact/symbolic query path', () => {
+    const toks = tokenize('intercepting requests', false);
+    assert.ok(toks.every(t => !t.startsWith(STEM_PREFIX)), 'no stem terms when stemming disabled');
+    assert.ok(toks.includes('intercepting') && toks.includes('requests'));
+});
+
+test('namespaced stems bridge NL queries but not exact tokens', () => {
+    // Index side carries the stem of "Interceptor"; an NL query for "intercepting"
+    // emits the SAME namespaced stem, so they meet — while a raw token cannot.
+    const indexTerms = new Set(tokenize('class InterceptorManager'));
+    const nlQuery = tokenize('intercepting the request', true);
+    assert.ok(nlQuery.some(t => t.startsWith(STEM_PREFIX) && indexTerms.has(t)), 'NL query reaches the stem bridge');
+    const exactQuery = tokenize('intercepting the request', false);
+    assert.ok(!exactQuery.some(t => indexTerms.has(t) && t.startsWith(STEM_PREFIX)), 'exact path never uses stems');
+});
+
+// ─── File-path boost IDF gate (NL queries only) ──────────────────────────────
+// A generic low-IDF query word ("path") that merely appears in a filename must
+// NOT lift a chunk in that file above a better-ranked chunk — but ONLY for
+// natural-language queries. Symbolic/keyword queries keep the boost byte-for-byte.
+test('file-path boost is IDF-gated for NL queries, untouched for symbolic queries', () => {
+    const chunks = {
+        // cleanPath lives in path.go: the generic word "path" matches its filename.
+        A: { id: 'A', name: 'cleanPath', file_path: 'path.go', node_type: 'function_declaration' },
+        // joinSegments lives in utils.go: no query word matches its filename.
+        B: { id: 'B', name: 'joinSegments', file_path: 'utils.go', node_type: 'function_declaration' },
+    };
+    const pathToks = { A: new Set(['path', 'go']), B: new Set(['utils', 'go']) };
+    // "path" is a common word (df 50/100 ⇒ IDF 0, below ln(100/2)=3.9); all else rare.
+    const common = {
+        lexicalResults: [{ id: 'B', rank: 1 }, { id: 'A', rank: 2 }], // B is the stronger lexical hit
+        vectorResults: [],
+        getChunk: (id) => chunks[id],
+        getPathTokens: (id) => pathToks[id],
+        getDf: (t) => (t === 'path' ? 50 : 1),
+        docCount: 100, rrfK: 60, topK: 10, resolveExact: () => [],
+    };
+    // NL query: the generic "path" must be gated out, so A keeps no boost and the
+    // better-ranked B stays on top (without the gate, A's ×1.4 would flip it to #1).
+    const nl = fuseAndRank({ ...common, queryText: 'show me the code that builds a path here' });
+    assert.equal(nl[0].chunk.id, 'B', 'NL: a generic filename word must not promote the path.go chunk');
+    // Symbolic/keyword query: NL gate is off, so "path" still fires the ×1.4 boost
+    // and A (path.go) outranks B — proving symbolic behaviour is byte-identical.
+    const sym = fuseAndRank({ ...common, queryText: 'path here' });
+    assert.equal(sym[0].chunk.id, 'A', 'symbolic: file-path boost still fires (unchanged)');
 });
 
 // ─── Summary ────────────────────────────────────────────────────────────────

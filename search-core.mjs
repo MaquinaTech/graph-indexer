@@ -53,21 +53,118 @@ export function cosineSimilarity(vecA, vecB) {
     return nA === 0 || nB === 0 ? 0 : dot / (Math.sqrt(nA) * Math.sqrt(nB));
 }
 
+// ─── Light Porter stemmer (additive recall bridge) ─────────────────────────────
+// Collapses English morphological variants to a shared root so behavioural queries
+// reach code identifiers across the inflection gap that lexical match otherwise
+// misses: "intercepting"↔"Interceptor", "injection"↔"Injectable",
+// "bootstrapping"↔"bootstrap", "managing"↔"Manager". Classic Porter (1980) steps
+// 1–5 plus an agent-noun "-or" rule for code (Interceptor→intercept,
+// Constructor→construct). Used ADDITIVELY in tokenize(): the raw token is always
+// emitted and the stem only when it differs — so exact matches, df statistics and
+// the name/path boosts are byte-for-byte unchanged; only recall is added.
+// Deterministic and pure → both backends produce identical postings (parity-safe).
+const _isVowel = (s, i) => {
+    const c = s.charCodeAt(i);
+    // a e i o u
+    if (c === 97 || c === 101 || c === 105 || c === 111 || c === 117) return true;
+    if (s[i] === 'y') return i === 0 ? true : !_isVowel(s, i - 1);
+    return false;
+};
+const _measure = (s) => {
+    let n = 0, prevV = false;
+    for (let i = 0; i < s.length; i++) { const v = _isVowel(s, i); if (prevV && !v) n++; prevV = v; }
+    return n;
+};
+const _hasVowel = (s) => { for (let i = 0; i < s.length; i++) if (_isVowel(s, i)) return true; return false; };
+const _endsDoubleCons = (s) => s.length >= 2 && s[s.length - 1] === s[s.length - 2] && !_isVowel(s, s.length - 1);
+const _cvc = (s) => {
+    const n = s.length; if (n < 3) return false;
+    if (_isVowel(s, n - 1) || !_isVowel(s, n - 2) || _isVowel(s, n - 3)) return false;
+    const c = s[n - 1]; return c !== 'w' && c !== 'x' && c !== 'y';
+};
+const _STEP2 = [['ational', 'ate'], ['tional', 'tion'], ['enci', 'ence'], ['anci', 'ance'], ['izer', 'ize'], ['abli', 'able'], ['alli', 'al'], ['entli', 'ent'], ['eli', 'e'], ['ousli', 'ous'], ['ization', 'ize'], ['ation', 'ate'], ['ator', 'ate'], ['alism', 'al'], ['iveness', 'ive'], ['fulness', 'ful'], ['ousness', 'ous'], ['aliti', 'al'], ['iviti', 'ive'], ['biliti', 'ble'], ['logi', 'log']];
+const _STEP3 = [['icate', 'ic'], ['ative', ''], ['alize', 'al'], ['iciti', 'ic'], ['ical', 'ic'], ['ful', ''], ['ness', '']];
+// Longest-first; 'or' added to Porter's set so agent nouns reduce like '-er'.
+const _STEP4 = ['ement', 'ance', 'ence', 'able', 'ible', 'ment', 'ant', 'ent', 'ion', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize', 'al', 'er', 'or', 'ic', 'ou'];
+
+/** Porter stem of a single lowercase word. Returns the input unchanged for short
+ *  tokens (≤3 chars: acronyms, short API names) so precise symbols never blur. */
+export function stemToken(word) {
+    let w = word;
+    if (w.length <= 3) return w;
+
+    // Step 1a — plurals
+    if (w.endsWith('sses')) w = w.slice(0, -2);
+    else if (w.endsWith('ies')) w = w.slice(0, -2);
+    else if (!w.endsWith('ss') && w.endsWith('s')) w = w.slice(0, -1);
+
+    // Step 1b — -eed / -ed / -ing (with the classic clean-up)
+    let fix = false;
+    if (w.endsWith('eed')) { if (_measure(w.slice(0, -3)) > 0) w = w.slice(0, -1); }
+    else if (w.endsWith('ed') && _hasVowel(w.slice(0, -2))) { w = w.slice(0, -2); fix = true; }
+    else if (w.endsWith('ing') && _hasVowel(w.slice(0, -3))) { w = w.slice(0, -3); fix = true; }
+    if (fix) {
+        if (w.endsWith('at') || w.endsWith('bl') || w.endsWith('iz')) w += 'e';
+        else if (_endsDoubleCons(w) && !/[lsz]$/.test(w)) w = w.slice(0, -1);
+        else if (_measure(w) === 1 && _cvc(w)) w += 'e';
+    }
+
+    // Step 1c — terminal y → i when a vowel precedes
+    if (w.length > 2 && w.endsWith('y') && _hasVowel(w.slice(0, -1))) w = w.slice(0, -1) + 'i';
+
+    // Step 2 & 3 — derivational suffixes (only when the stem has measure > 0)
+    for (const [suf, rep] of _STEP2) { if (w.endsWith(suf)) { const st = w.slice(0, -suf.length); if (_measure(st) > 0) w = st + rep; break; } }
+    for (const [suf, rep] of _STEP3) { if (w.endsWith(suf)) { const st = w.slice(0, -suf.length); if (_measure(st) > 0) w = st + rep; break; } }
+
+    // Step 4 — strip the suffix entirely on multi-syllable stems
+    for (const suf of _STEP4) {
+        if (w.endsWith(suf)) {
+            const st = w.slice(0, -suf.length);
+            if (suf === 'ion') { if (_measure(st) > 1 && /[st]$/.test(st)) w = st; }
+            else if (_measure(st) > 1) w = st;
+            break;
+        }
+    }
+
+    // Step 5 — final -e and double-l clean-up
+    if (w.endsWith('e')) { const st = w.slice(0, -1); const m = _measure(st); if (m > 1 || (m === 1 && !_cvc(st))) w = st; }
+    if (_measure(w) > 1 && w.endsWith('l') && _endsDoubleCons(w)) w = w.slice(0, -1);
+
+    return w;
+}
+
 /**
  * Tokenise code/identifiers: lowercase words plus camelCase sub-parts, so
- * `dispatchRequest` indexes as `dispatchrequest`, `dispatch`, `request`.
+ * `dispatchRequest` indexes as `dispatchrequest`, `dispatch`, `request`. Each
+ * emitted token also contributes its Porter stem (when different) so behavioural
+ * queries bridge the inflection gap to code names — see stemToken. Additive: the
+ * raw token is never dropped, so exact match and the boost ladder are unaffected.
  */
-export function tokenize(text) {
+// Stem postings live in a separate term namespace (sentinel-prefixed) so a raw
+// query token can NEVER match a stem posting: symbolic/exact lookups stay precisely
+// what they were before stemming existed, and only a query that opts in (emits the
+// prefixed stem) reaches the morphological bridges. Index always emits both; the
+// query emits the prefixed stem only for natural-language queries.
+export const STEM_PREFIX = '~stem~'; // sentinel namespace: raw tokens are [A-Za-z0-9]+, so '~' can never collide
+
+export function tokenize(text, stem = true) {
     if (!text) return [];
     const rawTokens = text.split(/[\s\W_]+/);
     const tokens = [];
+    const emit = (t) => {
+        const lo = t.toLowerCase();
+        tokens.push(lo);
+        if (!stem) return;
+        const s = stemToken(lo);
+        if (s !== lo && s.length >= 3) tokens.push(STEM_PREFIX + s);
+    };
     for (const word of rawTokens) {
         if (word.length < 2) continue;
-        tokens.push(word.toLowerCase());
+        emit(word);
         const camelParts = word.replace(/([a-z])([A-Z])/g, '$1 $2').split(' ');
         if (camelParts.length > 1) {
             for (const part of camelParts) {
-                if (part.length >= 2) tokens.push(part.toLowerCase());
+                if (part.length >= 2) emit(part);
             }
         }
     }
@@ -286,6 +383,23 @@ export function fuseAndRank({
 
     const _queryPathTokens = queryLower.split(/[\s\W_]+/).filter(t => t.length >= 3);
 
+    // File-path boost discriminativeness gate (natural-language queries only).
+    // The file-path boost (further down) fires when a query token matches a
+    // filename segment — but a common low-IDF word ("path", "url", "config",
+    // "index") that merely appears in a filename then over-promotes EVERY chunk in
+    // that file (an NL query mentioning "path" boosts all of path.go, burying the
+    // real answer that lives elsewhere). Restrict the boost to query terms
+    // discriminative enough to be a genuine filename signal: IDF ≥ ln(docCount/2),
+    // a per-corpus structural threshold (not tuned to any query). Symbolic/keyword
+    // queries are excluded by the NL gate and keep the original token set
+    // byte-for-byte. Measured: lifts agent-style recall@5 (overall s@5 0.77→0.81;
+    // tuning-semantic s@5 0.52→0.61) with symbolic rankings unchanged, no regression.
+    const _pathBoostIsNL = isNaturalLanguageQuery(queryText);
+    const _pathBoostMinIdf = Math.log(Math.max(docCount, 2) / 2);
+    const _queryPathTokensBoost = _pathBoostIsNL
+        ? _queryPathTokens.filter(t => okapiIdf(docCount, getDf(t)) >= _pathBoostMinIdf)
+        : _queryPathTokens;
+
     // Name-boost eligibility: long tokens, or short-but-discriminative ones whose
     // document frequency is ≤15% of the corpus (self-tunes per repo/language,
     // surfacing exact matches on short API names without re-introducing stopwords).
@@ -382,11 +496,11 @@ export function fuseAndRank({
         // File-path boost via the separate path-token set (not the BM25 index), so
         // length normalisation never penalises long implementations sharing a path.
         const canBoost = !boostEligible || boostEligible.has(id);
-        if (canBoost && _queryPathTokens.length > 0) {
+        if (canBoost && _queryPathTokensBoost.length > 0) {
             const pathToks = getPathTokens(id);
             if (pathToks) {
-                const hasExact = _queryPathTokens.some(t => pathToks.has(t));
-                const hasPrefix = !hasExact && _queryPathTokens.some(t =>
+                const hasExact = _queryPathTokensBoost.some(t => pathToks.has(t));
+                const hasPrefix = !hasExact && _queryPathTokensBoost.some(t =>
                     t.length >= 4 && Array.from(pathToks).some(pt => pt.startsWith(t.slice(0, 5)))
                 );
                 if (hasExact) baseScore *= 1.4;

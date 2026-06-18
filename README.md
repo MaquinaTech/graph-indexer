@@ -4,10 +4,7 @@
   <h1>Graph Indexer</h1>
 
   <p>
-    <strong>Topology-Aware · Caller-Safe · Air-Gapped · Hybrid Search · Monorepo-Scale</strong>
-  </p>
-  <p>
-    <em>An MCP server that gives AI coding agents structural awareness of your codebase — so they find the right code, see everything that depends on it, and make changes that don't break what they never read.</em>
+    <em>A local MCP server that gives AI coding agents an AST-precise, topology-aware index of your codebase.</em>
   </p>
 
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=007acc&style=for-the-badge" alt="npm version"></a>
@@ -18,919 +15,190 @@
 
 <br />
 
----
-
-## Table of Contents
-
-- [Why agents fail on real codebases](#why-agents-fail-on-real-codebases)
-- [What it does](#what-it-does)
-- [Key use cases](#key-use-cases)
-- [Results](#results)
-- [Getting started](#getting-started)
-- [Agent prompt suite](#agent-prompt-suite)
-- [MCP tools](#mcp-tools)
-- [Storage backends](#storage-backends)
-- [Semantic enrichment](#semantic-enrichment)
-- [Configuration](#configuration)
-- [Supported languages](#supported-languages)
-- [How it works](#how-it-works)
-- [Best practices](#best-practices)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [Security](#security)
-- [License](#license)
-
----
-
-## Why agents fail on real codebases
-
-Without structural awareness, AI coding agents operate on incomplete information:
-
-- **They read the wrong files** — grabbing full file contents when only one function is relevant, burning context on code that doesn't matter.
-- **They miss callers** — editing a function's signature without knowing which other functions call it, breaking things they never saw.
-- **They can't see side effects** — changing behavior in one module that ripples into three others they never read.
-- **They lose coherence on large repos** — reading full files pushes the relevant code out of the context window, or they hallucinate because they never found it at all.
-
-These aren't model failures. They're information failures. Agents make decisions with whatever context they have — and file-reading gives them an incomplete, topology-blind slice of your codebase.
-
----
-
 ## What it does
 
-graph-indexer pre-indexes your codebase into an AST-precise, topology-aware search index and exposes it as an MCP server. Instead of reading full files, agents search by concept and get back the exact functions that match — with type signatures, docstrings, decorators, inheritance edges, and **the full call graph**: what the function calls and what calls it.
+Graph Indexer is a local [Model Context Protocol](https://modelcontextprotocol.io) server that builds an AST-precise index of your repository with Tree-sitter and serves it to AI coding agents. Instead of grepping text or embedding whole files, it indexes *semantic chunks* — functions, classes, methods — and the call graph and import topology that connect them, so an agent can find the right symbol, see every caller and dependency that would be affected by a change, and resolve references across files. It runs entirely on your machine: the default search path is lexical (BM25 + morphological stemming) and needs no model, no daemon, and no network. Dense vector embeddings, LLM enrichment, and an LLM reranker are all available but off by default — you opt into each one when you have a measured reason to.
 
-**The call graph is the critical piece.** Before modifying any function, an agent can call `get_call_graph("processPayment")` and see every caller across the entire repo. It can update them all in one consistent pass instead of discovering broken callers in CI.
+## Quick start
 
-Here's what that looks like in practice:
-
-```
-Task: "Refactor processPayment to accept a new currency parameter"
-
-─────────────────────────────────────────────────────────────────
-WITHOUT graph-indexer
-─────────────────────────────────────────────────────────────────
-readFile("src/payments/service.ts")       →  8,400 tokens
-readFile("src/payments/handlers.ts")      →  6,200 tokens
-readFile("src/types/payment.ts")          →  1,800 tokens
-                                 Total:  ~16,400 tokens
-
-Agent edits processPayment signature. Submits change.
-CI fails: retryQueue, webhookHandler, auditLogger all call
-processPayment — the agent never saw them.
-
-─────────────────────────────────────────────────────────────────
-WITH graph-indexer
-─────────────────────────────────────────────────────────────────
-search_code("payment processing")         →    650 tokens
-get_call_graph("processPayment")          →    280 tokens
-                                          (3 callers returned:
-                                           retryQueue, webhookHandler,
-                                           auditLogger)
-
-Agent updates processPayment + all 3 callers. CI passes.
-                                 Total:  ~  930 tokens
-─────────────────────────────────────────────────────────────────
-```
-
-The token difference (94% fewer in this example) is a side effect of precision, not the primary goal. The primary goal is that the agent sees the blast radius of its change before making it.
-
-graph-indexer runs entirely on your machine. No external database, no cloud APIs, no telemetry. Two design choices make it suitable for any repository size:
-
-- A **default in-memory engine** that is instant and dependency-free, and an optional **disk-backed SQLite backend** that holds the index on disk so retrieval RAM stays flat on enterprise monorepos.
-- Optional **local-LLM semantic enrichment** that teaches the index what each core component *does*, so conceptual queries match code that shares none of their words.
-
----
-
-## Key use cases
-
-**Safe refactoring across callers**
-Before modifying any exported function, call `get_call_graph` to retrieve every call site across the entire repo. Update them all in one pass. Never break a caller you didn't know existed.
-
-**Orienting in an unfamiliar codebase**
-`get_repo_map` returns a compact, PageRank-ordered symbol map — most-imported modules first — in ~1,500 tokens. An agent understands the architecture before writing a single line.
-
-**Conceptual and cross-cutting feature work**
-Search by behavior ("rate limiting middleware", "auth token refresh flow") without knowing function names. Semantic enrichment finds code that shares none of your query's words by matching on LLM-generated intent summaries.
-
-**Consistent changes across a large codebase**
-When a shared interface, type, or utility changes, `search_code` finds every implementation, and `get_call_graph` finds every consumer. The agent touches everything that needs updating — no partial migrations.
-
-**Large monorepo work without OOM**
-The SQLite backend holds the index on disk; retrieval RAM stays flat at ~79 MB regardless of corpus size. The binary-quantized vector sketch keeps search interactive at <11 ms across 200k+ chunks.
-
----
-
-## Results
-
-Measured across 5 production open-source codebases (8,296 AST chunks, 100 ground-truth queries:
-69 **symbolic** — the developer names or paraphrases the symbol — and 31 **semantic** — agent-style
-behavioural descriptions sharing few or no words with the code).
-
-* **Average Token Savings:** 79.0%
-* **Strict Success@5 (Hybrid + Rerank):** 82%
-* **Strict MRR (Symbolic queries):** 0.84
-
-### Token savings per query
-
-| Project | Language | Chunks | Recall@5 (loose) | Savings |
-| :--- | :--- | ---: | ---: | ---: |
-| Axios v1.6.0 | JavaScript | 450 | 0.89 | **69.7%** |
-| Express 4.18.2 | JavaScript | 389 | 0.95 | **88.7%** |
-| NestJS v10.4.9 | TypeScript | 2,675 | 0.95 | **67.5%** |
-| FastAPI 0.103.0 | Python | 3,694 | 0.76 | **85.5%** |
-| Gin v1.9.1 | Go | 1,088 | 0.94 | **83.7%** |
-| **Mean** | | **8,296** | **0.90** | **79.0%** |
-
-> Savings = tokens in the returned chunk snippets vs the full source files containing the top-5
-> results, at 4 chars/token. Search latency is sub-millisecond lexical; the hybrid channel adds
-> one local embedding call plus a streamed vector scan (a few ms at this corpus size).
-
-### Search quality (strict)
-
-Strict scoring: a result counts **only** if its symbol name (or its class, for method chunks)
-exactly equals the ground truth — no substring matching, no file-path credit. Hybrid =
-BM25 + Ollama embedding vectors with `qwen2.5-coder:1.5b` enrichment; rerank adds the
-opt-in `qwen2.5-coder:7b` judge on natural-language queries.
-
-> The table below was measured with `nomic-embed-text`. The **default** Ollama embedder is now
-> `qwen3-embedding:4b` (2560-dim) — a bounded spot-check on Express lifts semantic success@5
-> 0.57 → 0.71 with backend parity intact, at a notably higher indexing cost (~8 chunks/s); see
-> `BENCH_BASELINE.md`. `auto` falls back to the in-process model when it isn't pulled.
-
-| Project | Strict success@5 | **Rank-1 (strict)** | MRR (strict) |
-| :--- | ---: | ---: | ---: |
-| Axios v1.6.0 | 0.74 | 0.68 | 0.72 |
-| Express 4.18.2 | 0.90 | 0.62 | 0.73 |
-| NestJS v10.4.9 | 0.67 | 0.57 | 0.60 |
-| FastAPI 0.103.0 | 0.81 | 0.67 | 0.74 |
-| Gin v1.9.1 | 1.00 | 0.78 | 0.84 |
-| **Mean (hybrid + rerank)** | **0.82** | **0.66** | **0.73** |
-
-Split by query style and configuration (the numbers that matter for agent workflows):
-
-| Channel | Rank-1 | MRR | Success@5 |
-| :--- | ---: | ---: | ---: |
-| **Symbolic** (name-lookup, 69q), hybrid | **0.80** | **0.84** | — |
-| **Semantic** (behavioural, 31q), hybrid + rerank | **0.35** | **0.47** | **0.65** |
-| Semantic, hybrid (no rerank) | 0.23 | 0.37 | 0.55 |
-| Semantic, in-process model, **no Ollama** (bundled MiniLM) | 0.23 | 0.35 | 0.52 |
-| Semantic, lexical-only (no vectors at all) | 0.19 | 0.29 | 0.48 |
-
-**No Ollama? Semantic search still works.** With the default `embedProvider: "auto"`, a machine
-with no Ollama daemon falls back to a bundled in-process embedder (`Xenova/all-MiniLM-L6-v2`,
-384-dim, via the optional `@huggingface/transformers`). It lifts the semantic channel from the
-lexical-only floor (rank-1 0.19) to **0.23** — matching Ollama's `nomic-embed-text` on rank-1
-and MRR — with the symbolic channel and backend parity unchanged. (Plain corpus, no LLM
-enrichment, which needs a local LLM; enrichment lifts it further — see [Semantic enrichment](#semantic-enrichment).)
-Measure it yourself: `node test/evaluate.mjs --embeddings --embed-provider local`.
-
-Read the semantic rows with their denominator in mind: under *strict* scoring several of those
-queries are unwinnable in-repo (the expected symbol is an anonymous default export, or is
-re-exported from a dependency whose implementation isn't in the codebase), and most strict
-"misses" still land the right file in the top-2 — which the loose channel (0.89) credits and an
-agent can use. Symbol-naming queries — the bulk of real agent traffic — find the exact chunk
-first try 80% of the time and in the top ranks (MRR 0.84) almost always.
-
-Ranking favours exact symbol matches even for short, high-signal names — `res.json`,
-`req.get`, `app.all` — by gating the name boost on corpus **document frequency** instead of a
-blunt length cutoff (with singular/plural equivalence, so `BackgroundTask` finds
-`BackgroundTasks`). Natural-language queries are detected and ranked **vector-first** (with the
-name/path boosts gated on semantic agreement), so behavioural questions aren't drowned by
-keyword noise. Test, spec, example and sandbox chunks are demoted in both channels.
-
-**Backend parity is exact**: every rank-assigning sort uses deterministic tie-breaking and both
-stores funnel vector candidates through one shared finalizer, so the in-memory engine and the
-SQLite store return **identical top-5 chunk ids for 100/100 benchmark queries** — verified, not
-approximate.
-
-Reproduce every view:
+The default path works with zero external dependencies — just Node.js (18+ for the in-memory index; 22+ if you use the optional SQLite backend).
 
 ```bash
-npm run test:setup     # clone the 5 fixture repos
-npm run test           # loose hit-rate + token savings + indexing stats
-npm run test:eval      # strict symbol-level accuracy, lexical channel
-OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings              # hybrid
-OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings --use-sqlite # parity
-OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b \
-  node test/evaluate.mjs --embeddings --rerank                                      # + judge
+npx graph-indexer /path/to/your/repo
 ```
 
-> The strict harness ([test/evaluate.mjs](test/evaluate.mjs)) exists specifically to keep
-> these numbers honest and prevent the tool from being tuned to a friendly benchmark — it
-> reports the inflation gap (loose minus strict) per suite so regressions in real precision
-> can't hide behind a permissive hit-rate, and it splits the symbolic and semantic channels
-> so neither inflates the other.
+That runs the interactive setup, indexes the repo, and prints the MCP command to connect. Then point your agent at the server:
 
----
-
-## Getting started
-
-**Requirements:** Node.js v18+ · Ollama (optional — for higher-quality embeddings and LLM enrichment; semantic search also runs with no Ollama via a bundled in-process model) · Node.js v22.5+ for the optional SQLite backend
-
-### 1. Install
+**Claude Code**
 
 ```bash
-npm install graph-indexer --save-dev
-npx graph-indexer init
+claude mcp add graph-indexer -- npx -y graph-indexer idx-mcp --repo /path/to/your/repo
 ```
 
-`init` is safe to re-run any time — it **merges** into existing configs (it never deletes your other MCP servers or prompts), **migrates** older layouts in place, and reports exactly what it created, updated, kept, or migrated. It auto-detects your IDEs (Claude, Cursor, VS Code), wires the MCP server, installs npm scripts (index + daemon control), tidies generated artifacts into `.graph-indexer/`, and updates `.gitignore`. Setup is a short guided flow — **press Enter at any prompt to accept the shown default**:
+**Cursor / Cody / any MCP client** — add to the client's MCP config:
 
-1. **Languages** to index — pre-checked from what's detected in the repo
-2. **Frameworks** — adds framework-specific rules to the agent prompt
-3. **Search engine & LLM features** — storage backend, Ollama endpoint and models (details below)
-4. **Editors & MCP wiring**
-5. **Project files & daemon control** — npm scripts, `.gitignore`, `config.json`
-6. **Agent instructions** — the layered prompt suite
-
-Step 1 is an arrow-key multi-select (detected languages start checked):
-
-```
-  [1/6] Languages to index
-  Select languages (↑↓/Tab move · Space toggle · Enter confirm)
-
-  ❯ ◉ TypeScript / TSX             .ts, .tsx  · detected
-    ◯ JavaScript                   .js, .jsx, .mjs, .cjs
-    ◯ Python                       .py
-    …
-```
-
-Step 3 picks the storage backend and configures local-LLM features. It **reads your installed Ollama models** and lets you choose one for embeddings, enrichment and reranking — every prompt defaults on **Enter**, so the whole step is a few keystrokes:
-
-```
-  [3/6] Search engine & LLM features
-  Storage backend (↑↓ move · Enter select)
-
-  ❯ ◉ In-memory                  default · fastest · ideal for most repos
-    ◯ SQLite                     persistent · for very large repos (1M+ LOC)
-
-  ? Ollama host [http://localhost:11434] (URL or port)
-  ›
-  ✓ Ollama  6 model(s) at http://localhost:11434
-
-  Model for embeddings (↑↓ move · Enter select)
-  ❯ ◉ nomic-embed-text           installed
-    ◯ mxbai-embed-large          installed
-    ◯ Other (type a name)…
-
-  ? Enable LLM enrichment?  (richer semantics, slower indexing) [y/N]
-  ? Enable LLM reranker?  (one LLM call per query, sharper top hits) [y/N]
-```
-
-Navigate menus with **↑ ↓** (multi-selects toggle with **Space**), confirm with **Enter**. Leaving all languages unselected enables every language; if Ollama isn't running you can still type model names to pull later. Everything you choose is written to `.graph-indexer/config.json`, so the indexer, daemon and MCP server all pick it up automatically — power-user keys you set by hand (e.g. `enrichment.coreRatio`) are preserved across re-runs. Pass `--all-languages` for a non-interactive run (auto-detect + defaults, no prompts), or `--dry-run` to preview every change without writing anything.
-
-> **Generated files live in one place.** Everything graph-indexer generates — the index, vectors, SQLite db, enrichment cache, and daemon pid/log — is kept under a single `.graph-indexer/` directory so your project root stays clean. Files other tools must discover at conventional paths (the agent prompts `CLAUDE.md` / `GRAPH_INDEXER_PROMPT.md` / Cursor rules, and IDE MCP configs like `.vscode/mcp.json`) stay where they belong. Upgrading from an older version? `init` (or the next index/daemon run) relocates the old root artifacts automatically.
-
-### 2. Index your codebase
-
-**Semantic search, zero setup (default):**
-```bash
-npm run mcp:index
-```
-With the default `embedProvider: "auto"`, the indexer uses a running Ollama if it
-finds one and otherwise falls back to a small **in-process** model (via the optional
-`@huggingface/transformers` dependency, downloaded once on first index) — so
-conceptual queries work with no daemon to install. Force it explicitly with
-`INDEXER_EMBED_PROVIDER=local npm run mcp:index`.
-
-**Higher-quality embeddings with Ollama:**
-```bash
-# Install Ollama: https://ollama.ai
-ollama pull qwen3-embedding:4b          # the default Ollama embedder (strong NL+code retrieval)
-INDEXER_EMBED_PROVIDER=ollama npm run mcp:index
-```
-With `embedProvider: "auto"`, if Ollama is reachable but the configured `embedModel` isn't
-pulled, the indexer falls back to the in-process model rather than failing — so a missing pull
-never breaks indexing.
-
-**Lexical-only (no vectors at all):**
-```bash
-INDEXER_EMBEDDINGS=off npm run mcp:index
-```
-
-Lexical-only still scores loose recall@5 = 0.90 and strict symbolic MRR 0.81 on the benchmarks above — only the semantic (behavioural-query) channel needs embeddings. The index records which model produced its vectors, so the server always queries with the same one.
-
-**On a large monorepo, keep retrieval RAM flat with the SQLite backend:**
-```bash
-npm run mcp:index -- --use-sqlite
-```
-
-**Sharpen conceptual recall with local-LLM enrichment:**
-```bash
-ollama pull qwen2.5-coder:1.5b
-npm run mcp:index -- --llm-enrichment
-```
-
-The two options compose (`--use-sqlite --llm-enrichment`) and can be made permanent in `.graph-indexer/config.json` — see [Configuration](#configuration).
-
-### 3. Configure your IDE
-
-`init` writes the config automatically. Manual examples:
-
-**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
     "graph-indexer": {
-      "command": "npm",
-      "args": ["run", "--prefix", "/path/to/project", "mcp:start"],
-      "env": { "MCP_PROJECT_ROOT": "/path/to/project" }
+      "command": "npx",
+      "args": ["-y", "graph-indexer", "idx-mcp", "--repo", "/path/to/your/repo"]
     }
   }
 }
 ```
 
-**Cursor** (`.cursor/mcp.json`) and **Claude Code** (`.mcp.json`):
-```json
-{
-  "mcpServers": {
-    "graph-indexer": {
-      "command": "npm",
-      "args": ["run", "mcp:start"],
-      "env": { "MCP_PROJECT_ROOT": "${workspaceFolder}" }
+Once connected, the agent can call `search_code`. A query like `search_code("rate limiting middleware")` returns ranked semantic chunks, not whole files:
+
+```jsonc
+[
+  {
+    "score": 8.41,
+    "chunk": {
+      "id": "src/middleware/rateLimit.ts:14",
+      "file_path": "src/middleware/rateLimit.ts",
+      "name": "rateLimiter",
+      "node_type": "function_declaration",
+      "start_line": 14, "end_line": 47,
+      "calls": ["tokenBucket", "getClientKey"],
+      "class_context": ""
     }
   }
-}
+]
 ```
 
-**VS Code** (`.vscode/mcp.json`):
-```json
-{
-  "servers": {
-    "graph-indexer": {
-      "type": "stdio",
-      "command": "npm",
-      "args": ["run", "mcp:start"],
-      "env": { "MCP_PROJECT_ROOT": "${workspaceFolder}" }
-    }
-  }
-}
-```
-
-The server reads the backend from `.graph-indexer/config.json`, so the same launch config works for both the in-memory and SQLite indexes.
-
-### 4. Add the agent system prompt
-
-`init` does this automatically: it assembles the layered prompt suite for your selected languages and frameworks into `GRAPH_INDEXER_PROMPT.md`, wires it into `CLAUDE.md` (Claude Code) and `.cursor/rules/` (Cursor), and drops a `GRAPH_INDEXER_DOMAIN.md` template for your project-specific rules.
-
-For other agents or manual setup, see [Agent prompt suite](#agent-prompt-suite) and [prompts/INTEGRATION.md](./prompts/INTEGRATION.md).
-
----
-
-## Agent prompt suite
-
-Tools alone don't make an agent efficient or safe. Left unprompted, agents fall into two failure modes: **exploration paralysis** (reading every file in a dependency tree before acting) and **tunnel vision** (editing a function without checking who calls it). The [prompts/](./prompts/) directory ships a **3-layer system-prompt architecture** that fixes both.
-
-The prompts are **protocol-based, not advisory**. Four inviolable hard limits govern every agent session:
-
-- **4-Call Budget** — forced synthesis at the wall, no self-granted extensions
-- **Batch-don't-iterate** — N known names = one search, never N serial lookups
-- **Consume-before-call** — a result's topology must be read before the next call is allowed
-- **Rule of One** — at most one example hop
-
-These aren't style guidelines. They're enforced constraints that make token and latency budgets hold even on small, fast models, and they ensure the agent actually *uses* the call graph and topology data before acting — not after.
-
-| Layer | File(s) | Contents |
-| :--- | :--- | :--- |
-| **1 — Core** | [prompts/CORE.md](./prompts/CORE.md) | The four hard limits, the call protocol, task playbooks, the tool/cost table, query rules, anti-patterns, and the fallback protocol. Always required. |
-| **2 — Environment** | [prompts/languages/](./prompts/languages/) · [prompts/frameworks/](./prompts/frameworks/) | Version-agnostic index facts per stack: which call edges exist, which don't, whether import topology is trustworthy, and the stack's highest-leverage playbook. Load only the ones matching your code. |
-| **3 — Domain** | [prompts/DOMAIN_TEMPLATE.md](./prompts/DOMAIN_TEMPLATE.md) | A template for *your* project's rules: entry points, domain vocabulary, critical paths, no-go zones. |
-
-**Layer 2 coverage** — every indexed language has a layer: JS/TS, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, C, Bash, Swift, CSS/SCSS. Framework layers: React (JSX tags are not `CallExpression`s, so `get_call_graph` can't see render sites), Node/Express/NestJS (anonymous route handlers, middleware order, DI wiring), FastAPI/Django (decorator routing, `Depends`, metaclass ORM managers, signals), Spring Boot (annotations-as-behaviour, interface-to-impl container wiring, derived query methods with no body), Ruby on Rails (convention wiring, ActiveRecord macro-generated methods), Laravel/Symfony (facades, container bindings, Eloquent magic), ASP.NET Core (attribute routing, DI registrations, deferred LINQ), Android (framework-driven lifecycle, Compose recomposition, Hilt DI).
-
-All prompts are strict XML, instantly parsable by downstream LLMs. Combination is plain concatenation in layer order — Layer 1's hard limits are inviolable; lower layers refine, never relax.
-
-### What `init` generates
-
-`npx graph-indexer init` asks for your languages and frameworks (pre-selecting what it detects in the project) and assembles the right layers:
-
-| File | Contents | Ownership |
-| :--- | :--- | :--- |
-| `GRAPH_INDEXER_PROMPT.md` | Layers 1+2 for your selection | Generated — regenerated on every `init` |
-| `GRAPH_INDEXER_DOMAIN.md` | Layer 3 template | **Yours** — never overwritten |
-| `CLAUDE.md` | `@`-imports of the two files above | Appended once, idempotent |
-| `.cursor/rules/graph-indexer.mdc` | Same layers as an always-on Cursor rule | Generated — regenerated on every `init` |
-
-For `.cursorrules`, `.clauderc`, or any other agent format, concatenate the layers yourself — [prompts/INTEGRATION.md](./prompts/INTEGRATION.md) has copy-paste recipes and worked examples per stack.
-
----
-
-## MCP tools
-
-> **Structured output.** Every query/read tool accepts `response_format: "markdown" | "json"` (default `"markdown"`). In `"json"` mode the tool returns typed fields — chunk `id`, `file_path`, line range, signature parts, topology, callers/references — both as a JSON text block (readable by any client) and as MCP `structuredContent` (typed, no prose-parsing). The markdown view stays the default so the token-efficient agent cards are unchanged. Verified in [test/json-output.mjs](test/json-output.mjs) (`npm run test:jsonout`).
-
-### `search_code`
-
-Hybrid BM25 + vector search over the index. The primary entry point for agents.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `query` | string | required | Natural language description of the logic to find |
-| `exact_tokens` | string? | — | Exact symbol name — guarantees rank-1 placement |
-| `detail` | `"signatures"` \| `"smart"` \| `"full"` | `"smart"` | How much code to return per result |
-| `top_k` | number | `5` | Results to return (1–20) |
-| `include_topology` | boolean | `true` | Include imports / used-by / calls |
-| `min_score` | number | `0.3` | Minimum relevance threshold |
-| `token_budget` | number? | auto | Cap total tokens returned |
-| `rerank` | boolean? | config | LLM-judge rerank for natural-language queries (see `rerank.*` config) |
-
-**`detail` levels:**
-
-| Value | Cost | Returns |
-| :--- | ---: | :--- |
-| `"signatures"` | ~20 tok | Name, type, params, return type, topology |
-| `"smart"` (default) | ~150 tok | Signature + lines relevant to the query |
-| `"full"` | ~300 tok | Signature + complete source body |
-
-For purely conceptual queries with no lexical overlap, `"smart"` falls back to a structural skeleton — control-flow lines and call sites — so the agent always gets meaningful signal about what the code does, never a blind truncation.
-
----
-
-### `get_call_graph`
-
-Every chunk across the repo that calls a specific function, **split by confidence** so an ambiguous name doesn't drown the real blast radius.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `target_function` | string | Exact function name (e.g. `"validateToken"`) |
-| `target_class` | string? | Class/type that owns the method (e.g. `"OrderService"`) — scopes the blast radius to one class's `save()` when several symbols share the name |
-
-**This is the blast-radius tool.** Call it before modifying any exported function to find every call site across the entire codebase. The agent can then update all callers in one consistent pass instead of discovering them in CI.
-
-The call graph matches by callee name, so a query for a common method (`save`, `validate`) would otherwise return callers of *every* same-named symbol. graph-indexer captures each call's **receiver** at index time (`this.save()` vs `order.save()` vs a bare `save()`) and uses it — together with target uniqueness and the file import graph — to separate **high-confidence callers** (the real blast radius) from **name-only matches** (an ambiguous same-named symbol elsewhere, listed separately to verify). On a labelled fixture this lifts caller precision from 0.50 (name-only) to 1.00 while keeping full recall — see [test/callgraph.mjs](test/callgraph.mjs) (`npm run test:callgraph`). No type inference is involved; it uses only cheap, index-time signals.
-
-When git signals are available it also appends a **co-change hint** — *"🔄 Historically changes with: `x.ts`, `y.ts`"* — derived from the local commit log, so the blast radius includes files that empirically change *together* with the target even when there is no static edge between them.
-
-```
-# Agent workflow for safe refactoring:
-1. search_code("payment validation")       → find the function
-2. get_call_graph("processPayment")        → see all callers
-3. get_chunk(caller_id) for each caller   → read what needs updating
-4. Make all changes in one pass            → no broken callers
-```
-
----
-
-### `find_references`
-
-Every **symbol** that references a target symbol — not just every file. Where `get_call_graph` answers "who *calls* this function," `find_references` is broader: use it before renaming or changing a **class, interface, or type**, where the blast radius is calls *plus* subclasses and type usages.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `symbol` | string | Exact symbol name (function, class, interface, or type) |
-| `target_class` | string? | Owning class/type to scope the call dimension when the name is shared |
-
-It fuses the three reference kinds the index records and splits each by confidence using the same cheap, index-time signals as the call graph — receiver hints and the file import graph, **no type inference**:
-
-| Kind | Source | Example |
-| :--- | :--- | :--- |
-| **Called by** | call sites (`get_call_graph`) | `order.save()` |
-| **Subclassed / implemented by** | `extends` / `implements` clauses | `class Admin extends User` |
-| **Used as a type by** | parameter / return / field annotations | `function handle(u: User)` |
-
-This sharpens file→file topology ("`auth.ts` is used by `api.ts`") into symbol→symbol ("`User` is subclassed by `Admin` and used as a type by `handle`"). A referer that imports a file defining the symbol — or matches a sole definition — is **high-confidence**; an annotation against a same-named symbol it never imports is listed as **name-only** to verify. Measured deterministically in [test/references.mjs](test/references.mjs) (`npm run test:references`).
-
-> **Language coverage.** The *callers* dimension works across all indexed languages. The *subclasses* (`extends`/`implements`) and *type-annotation users* dimensions are populated for **TypeScript/JavaScript and Python**, where the parser extracts heritage and type annotations; in the other languages `find_references` returns callers only (use `search_code(exact_tokens: "Name")` for type consumers there). Extending heritage/type extraction to the remaining languages is the natural next increment.
-
----
-
-### `resolve_symbol`
-
-O(1) lookup by exact name — no search ranking needed.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `symbol` | string | Exact function, class, or type name (e.g. `"validateToken"`) |
-
----
-
-### `get_chunk`
-
-Returns the source code of a single chunk by its ID.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `chunk_id` | string | required | ID from `search_code` results |
-| `view` | `"full"` \| `"signature"` | `"full"` | Full body or first line only |
-
----
-
-### `get_chunk_summary`
-
-Signature + docstring + calls without the body. ~50 tokens vs ~300 for full.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `chunk_id` | string | required | ID from `search_code` results |
-| `expand_calls` | boolean | `false` | Resolve each outgoing call's signature inline (~150 tok) instead of issuing a follow-up tool call per dependency |
-
----
-
-### `get_file_skeleton`
-
-All top-level exports and definitions in a file with line numbers — no bodies.
-
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `file_path` | string | Relative path (e.g. `src/utils/auth.ts`) |
-
----
-
-### `get_repo_map`
-
-Compact symbol map ordered by PageRank (most-imported files first). Orients agents in an unfamiliar codebase in ~1,500 tokens.
-
-| Parameter | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `path_filter` | string? | — | Limit to files whose path contains this string |
-| `max_files` | number | `80` | Maximum files to include |
-| `sort_by` | `"importance"` \| `"path"` | `"importance"` | Sort order |
-
----
-
-### `list_index_stats`
-
-Index health snapshot: storage backend, chunk count, file count, symbol table size, vector count, search mode, daemon status, index age.
-
----
-
-### `graph://dependencies/{file_path}` (resource)
-
-Full bidirectional dependency topology for a file: what it imports and what imports it.
-
----
-
-## Storage backends
-
-The same index, the same tools, the same ranking — two ways to hold the data. The MCP tools are written against a storage contract and never see which backend is active.
-
-| Backend | Default | Resident RAM* | Dependencies | Best for |
-| :--- | :--- | ---: | :--- | :--- |
-| **In-memory** | ✅ | ~586 MB | none | Single packages and services; instant cold start. |
-| **SQLite** | `--use-sqlite` | ~79 MB | none — uses Node's built-in `node:sqlite` | Monorepos / 1M+ LOC where holding every chunk in the heap would OOM. |
-
-> *Resident set serving the **same** 50,000-chunk corpus, measured in isolated processes by
-> [test/scale.mjs](test/scale.mjs). The in-memory engine keeps every chunk and the full inverted
-> index in the heap, so its footprint grows with the codebase; the SQLite store keeps only the
-> small file-level dependency graph resident and reads chunks, posting lists and vectors from disk
-> on demand, so its footprint stays flat regardless of corpus size — an **87% smaller** resident
-> set here, and the gap widens as the repo grows.
-
-The SQLite backend adds **no external dependency**: `node:sqlite` ships inside Node (v22.5+). Lexical BM25 reads from an indexed `postings` table, symbols and call edges from indexed columns, and vectors live in the shared `.graph-indexer/code-index.embeddings.bin` — point reads are `pread` on demand. Because both backends feed the same fusion-and-boost ranker with deterministic tie-breaking, switching is purely an operational choice with **zero** quality trade-off (identical top-5 ids on the full benchmark).
-
-### Vector search that stays fast at monorepo scale
-
-Below 10k vectors the semantic channel runs an exact streaming scan of the bin (~20 ms worst
-case). Above it, a **binary-quantized sketch** takes over: each vector's sign bits (768 dims →
-96 bytes, 0.1 % of the float data) are kept in RAM; a query does a Hamming-distance pass over
-packed Uint32 words, then exact-cosine rescores only the top candidates from disk. Measured on
-synthetic corpora (warm):
-
-| Corpus | Exact scan | Sketch | Speedup | Sketch RAM |
-| ---: | ---: | ---: | ---: | ---: |
-| 50,000 vectors | 104 ms | **5–11 ms** | ~20× | ~9 MB |
-| 200,000 vectors | 519 ms | **11 ms** | ~36× | ~35 MB |
-
-The sketch recovers the exact top-10 (10/10 in validation) because it rescores 2× the candidate
-budget with true cosine before ranking. It is **append-aware**: daemon updates extend it by
-scanning only the unseen tail of the bin, and a full re-index is detected by fingerprint and
-triggers a rebuild. `test/scale.mjs` asserts hybrid queries stay interactive (<60 ms) at 50k
-chunks on both backends.
-
-```bash
-npm run mcp:index -- --use-sqlite     # writes .graph-indexer/code-index.db
-```
-
-### Live updates on both backends
-
-The watch daemon keeps **whichever backend is configured** fresh, incrementally:
-
-- **In-memory** — the daemon rewrites the JSON snapshot; a running MCP server watches the file and reloads it automatically.
-- **SQLite** — each file save becomes one WAL transaction (`applyFileUpdate`): the file's old chunks, postings and call edges are replaced with exact BM25 bookkeeping, and new vectors are *appended* to the embeddings bin (O(changed chunks), never a full rewrite). Running MCP servers detect the commit via `PRAGMA data_version` on their next query and refresh themselves — no re-indexing, no restarts.
-
-Daemon startup is also O(changed files): files older than the index artifact are skipped during the initial scan, so edits made while the daemon was down are picked up without re-parsing the whole repo.
-
-### One daemon per project, controlled from npm
-
-The MCP server auto-starts the watch daemon, but you can drive it yourself with the scripts `init` adds to your `package.json`:
-
-```bash
-npm run mcp:daemon:start      # start it (no-op if already running)
-npm run mcp:daemon:status     # daemon + index state (default)
-npm run mcp:daemon:stop       # stop it gracefully
-npm run mcp:daemon:restart    # stop then start
-npm run mcp:daemon:logs       # recent logs (add ` -- -f` to follow)
-```
-
-Exactly **one** daemon runs per project. The daemon holds an atomic PID lock (`.graph-indexer/daemon.pid`), so any redundant launch — whether from the MCP server, `mcp:daemon:start`, or a stray `idx-watch` — detects the live instance and exits immediately instead of racing a second watcher onto the same index. Stale locks left by a crash are cleared automatically.
-
----
-
-## Semantic enrichment
-
-Embeddings match text proximity, not intent. A query like *"payment gateway webhook bottleneck"* misses the function that handles it if that function never spells out those words. Enrichment closes that gap.
-
-With `--llm-enrichment`, the indexer routes every substantive **production-source chunk** (tests, specs and example trees are excluded — agents search for implementations) through a local LLM via Ollama, producing per chunk:
-
-- a one-line **summary** in developer vocabulary, and
-- a set of **concept tags** (e.g. `authentication, JWT, middleware`).
-
-These ride **three** retrieval paths: the tags join the chunk's BM25 lexical document as high-IDF domain terms; the summary leads the code-payload embedding; and — decisive for natural-language queries — each enriched chunk gets a **second, summary-only vector**. A one-line behavioural query embeds far closer to a one-line summary than to hundreds of characters of code, so conceptual searches hit code that shares none of their words.
-
-Enrichment is **incremental**: results are cached in `.graph-indexer/code-index.enrichment.json` keyed by content hash, so a re-index only sends new or changed code to the LLM (the embedding cache keys account for enrichment too, so nothing is re-embedded needlessly). Each run enriches up to `maxChunks` new chunks, ordered by file centrality (PageRank), and coverage accumulates across runs. The watch daemon re-attaches cached enrichment on every file save and live-enriches changed chunks. Generation is best-effort — if the model is unreachable the index is built without enrichment rather than failing.
-
-```bash
-ollama pull qwen2.5-coder:1.5b
-npm run mcp:index -- --llm-enrichment
-```
-
-The model, the file-selection ratio and the per-run cap are all configurable (see [Configuration](#configuration)). Enrichment is fully optional and leaves the default index byte-for-byte unchanged when disabled.
-
-### LLM reranking (query time, opt-in)
-
-Fusion resolves most queries, but a natural-language query can end in a near-tie between the
-semantically right chunk and a lexically similar neighbour — a gap no static boost can close.
-With `rerank.enabled` (or `search_code(..., rerank: true)`), the engine **over-fetches a deeper
-candidate pool** (`rerank.poolSize`, capped at 25), shows the top `rerank.topM` to a local LLM
-judge — one line per candidate — which reorders them, then truncates back to `top_k`. The
-over-fetch matters: without it the judge only ever sees the `top_k` it was asked for and can
-reorder but never *rescue* a correct-but-deep hit into view. Measured effect on the strict
-semantic channel (on top of the enriched default): **rank-1 0.23 → 0.42, MRR 0.37 → 0.52**, with
-success@5 already ~0.65 from enrichment + the adaptive vector weight (rerank sharpens *ordering*,
-recall comes from retrieval). The symbolic channel is untouched (the judge only fires on
-natural-language queries, never on symbol lookups or `exact_tokens` calls). Cost: one generation
-call per NL query (`qwen2.5-coder:7b` default; a larger judge such as `qwen2.5:14b-instruct` scores
-higher if you have the headroom). Best-effort — any model failure preserves the original order.
-
----
-
-## Configuration
-
-### `.graph-indexer/config.json`
-
-All persistent settings live in one file inside the data dir, written by `init` (its **Search engine & LLM features** step sets the backend, Ollama host and models interactively — reading your installed Ollama models for the model pickers) and read by the indexer, watcher and server. (Legacy `.graph-indexer.json` at the project root is still read for back-compat and is migrated automatically.) It is the one file under `.graph-indexer/` that is **not** git-ignored, so your team can share the stack selection:
-
-```json
-{
-  "languages": ["typescript", "javascript", "python"],
-  "storage": "sqlite",
-  "enrichment": {
-    "enabled": true,
-    "model": "qwen2.5-coder:1.5b",
-    "coreRatio": 0.15,
-    "maxChunks": 400
-  }
-}
-```
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `languages` | all installed | Parsers to load. Valid keys: `typescript`, `javascript`, `python`, `go`, `rust`, `php`, `java`, `kotlin`, `csharp`, `ruby`, `css`, `c`, `bash`, `swift`. |
-| `storage` | `"memory"` | `"memory"` (in-heap, zero-dependency) or `"sqlite"` (disk-backed). |
-| `embedProvider` | `"auto"` | How vectors are produced: `"auto"` (a running Ollama, else the in-process local model, else lexical), `"ollama"`, `"local"`, or `"off"`. |
-| `ollamaHost` | `"http://localhost:11434"` | Ollama endpoint (also settable via `OLLAMA_HOST`). |
-| `embedModel` | `"qwen3-embedding:4b"` | Ollama embedding model (index and queries must use the same one; `auto` falls back to the in-process model if it isn't pulled). |
-| `localEmbedModel` | `"Xenova/all-MiniLM-L6-v2"` | In-process model used by the `local` provider (via the optional `@huggingface/transformers` dependency; downloaded once on first index). |
-| `enrichment.enabled` | `false` | Run local-LLM enrichment during indexing. |
-| `enrichment.model` | `"auto"` | Ollama model for generation. `"auto"` picks the strongest code model you have pulled (1.5B floor); or pin one (e.g. `"qwen2.5-coder:7b"`). Offline + cached, so a heavier model costs nothing at query time. |
-| `enrichment.coreRatio` | `1.0` | Share of production files eligible (by PageRank). `1.0` = all; tests/examples are always excluded. |
-| `enrichment.maxChunks` | `500` | Cap on **new** LLM calls per index run — the cache accumulates coverage across runs. |
-| `enrichment.concurrency` | `4` | Parallel Ollama requests during enrichment. Keep low — a single local model serves requests fastest one-at-a-time; raise only when `OLLAMA_NUM_PARALLEL` + hardware allow. |
-| `rerank.enabled` | `false` | LLM-judge reranking of natural-language queries (semantic rank-1 0.23 → 0.42 measured; one generation per NL query). |
-| `rerank.model` | `"qwen2.5-coder:7b"` | Judge model. Quality matters: 7B measured a large gain where 1.5B measured ~none; a 14B judge scores higher still. |
-| `rerank.topM` | `12` | Candidates shown to the judge to reorder. |
-| `rerank.poolSize` | `15` | Over-fetch depth when reranking (capped at 25), so a correct-but-deep hit can be rescued into `top_k`. |
-| `hyde.enabled` | `false` | Opt-in query-side HyDE (or `search_code(..., hyde: true)`): a local model writes a hypothetical snippet for an NL query, which is embedded and **blended** into the query vector to bridge vocabulary gaps. Off → query vectors are byte-identical. |
-| `hyde.model` | `"qwen2.5-coder:1.5b"` | Local coder model that writes the hypothetical snippet (one generation per NL query). |
-| `gitSignals` | `true` | Collect churn / recency / co-change from the **local** commit log at index time (air-gapped — see [Security](SECURITY.md)). Powers the co-change blast-radius hint. |
-| `gitRankBoost` | `0` | Opt-in `0..1` weight that nudges `search_code` toward recently-/frequently-changed files. **`0` leaves retrieval ranking byte-identical** (the eval is unaffected); raise it to trade some precision for recency. |
-
-### CLI flags
-
-Flags override the config file for a single run:
-
-| Flag | Equivalent |
-| :--- | :--- |
-| `--repo <dir>` | Index a directory other than the cwd |
-| `--use-sqlite` | `"storage": "sqlite"` |
-| `--llm-enrichment` | `"enrichment.enabled": true` |
-| `--enrich-model <name>` | `"enrichment.model"` |
-| `--enrich-max <n>` | `"enrichment.maxChunks"` for this run |
-| `--enrich-concurrency <n>` | `"enrichment.concurrency"` for this run |
-| `--no-git-signals` | `"gitSignals": false` for this run |
-| `--git-rank-boost <n>` | `"gitRankBoost"` (`0..1`) for this run |
-
-### Environment variables
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `MCP_PROJECT_ROOT` | `process.cwd()` | Project root directory |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
-| `INDEXER_EMBEDDINGS` | — | Set to `off` to disable vector embeddings |
-| `INDEXER_EMBED_PROVIDER` | `auto` | Override the embedding provider for one run: `auto` \| `ollama` \| `local` \| `off` |
-| `INDEXER_GIT_SIGNALS` | — | Set to `off` to skip reading the local git log |
-| `INDEXER_GIT_RANK_BOOST` | `0` | Override the `0..1` git ranking boost for one run |
-
-Re-run `init` at any time to change languages, or `init --all-languages` to enable every installed parser without the prompt.
-
----
-
-## Supported languages
-
-| Language | Extensions | Chunks extracted |
-| :--- | :--- | :--- |
-| TypeScript / TSX | `.ts`, `.tsx` | functions, classes, methods, exports |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | functions, classes, expressions |
-| Python | `.py` | functions, classes |
-| Go | `.go` | functions, methods, types |
-| Rust | `.rs` | fn, struct, enum, trait, impl |
-| Java | `.java` | class, method, interface, constructor, enum |
-| Kotlin | `.kt`, `.kts` | function, class, object, companion |
-| C# | `.cs` | class, method, interface, property, enum |
-| Ruby | `.rb` | method, class, module |
-| PHP | `.php` | function, class |
-| C | `.c`, `.h` | functions, struct/union/enum, typedef, function-like macros |
-| Bash / Shell | `.sh`, `.bash` | functions (`source`/`.` tracked as deps) |
-| Swift | `.swift` | struct/class/enum/extension/actor, protocol, function |
-| CSS / SCSS | `.css`, `.scss` | rule sets |
-
-Oversized "god classes" are split automatically: a class longer than ~200 lines is indexed as a compact skeleton header plus one independently searchable chunk per method, so a single `get_chunk` never blows the token budget and every method stays reachable by search.
-
-> Each grammar is an **optional native dependency** — if one fails to install or build, graph-indexer logs a one-line warning and simply skips that language's files (everything else indexes normally). The Swift grammar (`tree-sitter-swift`) regenerates its parser at install time and therefore needs a working C toolchain; on hosts without one, Swift degrades gracefully like any other unavailable grammar.
-
----
+The agent can then call `get_call_graph("rateLimiter")` to see what calls it (the blast radius) before changing it.
 
 ## How it works
 
-### Architecture
+- **AST indexing.** Tree-sitter parses each file into a syntax tree, and the indexer extracts one *chunk* per top-level definition (function, class, method, struct, …) with its name, parameters, line range, call sites, and enclosing class. A "god class" is split so its methods become their own chunks. Supported languages: **TypeScript/JavaScript** (`.ts .tsx .js .jsx .mjs .cjs`), **Python**, **Go**, **Rust**, **Java**, **Kotlin**, **C#**, **C**, **Ruby**, **PHP**, **Bash**, and **Swift**, plus **CSS/SCSS**.
+- **Retrieval.** A hybrid ranker fuses a lexical channel (BM25 with camelCase splitting and language-agnostic Porter stemming) with an optional dense-vector channel (local embeddings) via Reciprocal Rank Fusion. With embeddings off, only the lexical channel runs — and it is the default.
+- **Call graph.** `get_call_graph` returns the callers and callees of a symbol — the *blast radius* of a change — so an agent can see what it might break before editing code it never read.
+- **Backend parity.** The in-memory and SQLite backends share the same ranking core, so they return identical top-5 results for the same query (enforced by `test/sqlite.mjs`).
 
-graph-indexer is organised around a small set of cohesive modules with a strict separation between *retrieval math*, *storage*, and *transport*:
+### MCP tools
 
-```
-config.mjs        Resolves CLI flags > env > .graph-indexer/config.json into one config.
-parser-utils.mjs  Tree-sitter parsing, chunk extraction, Ollama embeddings.
-search-core.mjs   Shared retrieval math: tokenisation, BM25, RRF fusion + boosts
-                  (query-adaptive NL weighting), PageRank, embedding cache keys.
-                  The numbers are measured once here and reused.
-core-engine.mjs   MemoryGraphIndex — the default in-heap store — plus the
-                  embeddings-bin codecs (write/read/append/scan) and the
-                  binary-quantized vector sketch (Hamming prefilter + rescore).
-sqlite-store.mjs  SqliteGraphStore — the disk-backed store (node:sqlite) with
-                  per-file incremental writes and data_version live refresh.
-storage.mjs       createStore(config) — picks a backend; documents the contract
-                  both implement (searchHybrid, getChunk, applyFileUpdate, …).
-enrichment.mjs    Optional LLM summaries + concept tags, cached by content hash.
-mcp-tools.mjs     The nine tools, written against the storage contract only.
-mcp-server.mjs    Thin bootstrap: config → store → tools → stdio.
-indexer.mjs       Bootstrap indexer.   watch-daemon.mjs  Incremental updates.
-layout.mjs        Single source of truth for the .graph-indexer/ data dir +
-                  legacy→current migration.   daemon-lock.mjs  Atomic single-
-                  instance PID lock.   daemon-ctl.mjs  idx-daemon start/stop/
-                  restart/status/logs.   cli-ui.mjs  Shared console styling.
-init.mjs          Guided, idempotent project setup (merge-safe, migrating).
-```
+| Tool | Returns |
+|------|---------|
+| `search_code` | Ranked semantic chunks for a natural-language or symbol query. |
+| `get_chunk` | The full source of one chunk by id. |
+| `get_chunk_summary` | A compact summary of a chunk (signature, calls, context). |
+| `resolve_symbol` | Exact, case-insensitive symbol lookup by name. |
+| `get_file_skeleton` | The top-level structure (symbols + signatures) of a file. |
+| `get_call_graph` | Callers and callees of a symbol — the blast radius. |
+| `find_references` | Where a symbol is used: callers, subclasses, and type references. |
+| `get_subgraph` | The dependency/import neighbourhood around a file. |
+| `get_repo_map` | A high-level map of the repository's modules and topology. |
+| `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
 
-Because both stores call the identical `fuseAndRank` from `search-core`, the in-memory and SQLite backends are rank-consistent by construction, and a single change to the ranking math applies everywhere.
+## Configuration
 
-### Indexing
+Everything beyond the lexical default is opt-in. The server, indexer, and daemon all print their **effective configuration** at startup (storage backend, model names, which optional features are on), and emit a visible warning whenever an opt-in feature has a known trade-off — nothing is enabled silently.
 
-When you run `npm run mcp:index`:
+### Headline trade-offs
 
-1. **Parses** every source file with Tree-sitter — no regex, exact AST boundaries.
-2. **Extracts chunks**: named functions, classes, methods, and exports — including Go/Rust `type`/`struct` declarations by their real name — each with docstring, parameters, return type, call sites, type references, **decorators/annotations** (`@Controller`, `@Injectable`, `@app.route`), and **inheritance edges** (`extends`/`implements`/base classes).
-3. **Builds a dependency graph**: bidirectional import map so each chunk knows what it imports and what imports it.
-4. **(Optional) Enriches** production-source chunks with LLM summaries + concept tags (cache-first; only new code pays an LLM call).
-5. **Creates two indexes**: a BM25 inverted index (lexical) and per-chunk float32 embeddings via Ollama `nomic-embed-text` (optional) — two vectors per enriched chunk (code payload + summary-only).
-6. **Persists** to the configured backend under `.graph-indexer/`: `code-index.json` + `code-index.embeddings.bin`, or `code-index.db` + the same embeddings binary.
+| Option | Default | When to enable | Cost |
+|--------|---------|----------------|------|
+| `--embeddings` | off | Larger repos where recall matters; lifts success@5 | Requires Ollama or the in-process MiniLM model; slower indexing |
+| `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | Better code recall + symbolic precision | ~18 min to embed ~1k chunks at ~1.4 chunks/s; requires Ollama |
+| `--enrichment` | off | Only useful paired with `--rerank`; alone it regresses | LLM call per chunk; thousands of chunks ≈ hours |
+| `--rerank` | off | Go/Python repos with weak semantic recall; regresses JS repos | Requires an Ollama 7B model; adds query latency |
+| `--use-sqlite` | `auto` | Repos past ~15k chunks or memory-constrained environments | Slightly higher query latency; needs Node 22+ |
 
-A background watcher daemon applies changed files incrementally to **either** backend (JSON
-snapshot rewrites for in-memory, per-file WAL transactions for SQLite). It respects
-`.gitignore` and skips `node_modules`, build output, and dot-directories, so it never traverses
-(or exhausts OS file-watcher limits on) dependency trees.
+For most repos, the default (lexical + stemming, no embeddings) is the right starting point. Enable embeddings when you notice the agent missing chunks it should find. Enable the reranker only on Go or Python repos after measuring whether it helps — it is known to regress JavaScript repositories.
 
-### Search pipeline
+### All CLI flags
 
-```
-Source files
-     │
-     ▼
-Tree-sitter AST
-     │
-     ├──► Chunks ──► BM25 inverted index ──┐
-     │         └──► Float32 embeddings  ──┤── RRF fusion ──► Ranked results ──► MCP tools
-     │                                     │   (search-core)
-     └──► Dependency graph ────────────────┘
-```
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--repo <path>` | current directory | Repository to index / serve. |
+| `--embeddings` | off | Enable the dense-vector channel. |
+| `--embed-model <model>` | `nomic-embed-text` | Ollama embedding model (e.g. `qwen3-embedding:4b`). |
+| `--embed-provider <auto\|ollama\|local\|off>` | `auto` | Force the embedding backend. |
+| `--use-sqlite` | `auto` | Force the disk-backed SQLite backend. |
+| `--enrichment` | off | Enable LLM enrichment of central chunks. |
+| `--enrich-model <model>` | `qwen2.5-coder:1.5b` | Model used for enrichment. |
+| `--enrich-max <n>` | 500 | Cap on new LLM calls per index run. |
+| `--enrich-concurrency <n>` | 4 | Parallel Ollama requests during enrichment. |
+| `--rerank` | off | Enable the LLM reranker (one call per NL query). |
+| `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
+| `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 
-1. **BM25 lexical search** — O(query_terms) over the inverted index / `postings` table.
-2. **Vector search** — exact cosine below 10k vectors; binary-sketch Hamming prefilter +
-   exact rescore above it (5–11 ms at 50k+, see [Storage backends](#storage-backends)). Both
-   code and summary vectors compete; hits fold onto their chunk through one shared finalizer.
-3. **RRF fusion** merges both lists — lexical-led (1.5×/1.0×) for keyword queries,
-   vector-led (1.0×/1.6×) for natural-language ones.
-4. **Score boosts**: exact name match +2.0× (df-gated, plural-aware), suffix match +1.4×,
-   path token +1.4×, test/example files demoted; on NL queries, boosts require semantic
-   agreement (the chunk must also be a vector candidate).
-5. **(Opt-in) LLM rerank** of the fused top-8 on natural-language queries.
+### All environment variables
 
----
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `MCP_PROJECT_ROOT` | current directory | Repository root when `--repo` is not given. |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for embeddings/enrichment/rerank. |
+| `INDEXER_EMBEDDINGS` | `off` | `on` enables embeddings; `off` always wins over `--embeddings`. |
+| `EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model (overrides config; overridden by `--embed-model`). |
+| `INDEXER_EMBED_PROVIDER` | `auto` | `auto` \| `ollama` \| `local` \| `off`. |
+| `INDEXER_STORAGE` | `auto` | `auto` \| `memory` \| `sqlite`. |
+| `ENRICH_MODEL` | (unset) | Naming a model enables enrichment and selects it. |
+| `RERANK_MODEL` | (unset) | Naming a model enables the reranker and selects it. |
+| `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
+| `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
+| `INDEXER_EMBED_CONCURRENCY` | 4 | Parallel embedding batches; lower to 1 for large models on modest hardware. |
+| `INDEXER_EMBED_TIMEOUT_MS` | 120000 | Per-batch embedding timeout; raise for very large models. |
 
-## Best practices
+When embeddings are enabled, the provider is selected in this order, and every fallback is logged (never silent): Ollama with `EMBED_MODEL` if set and reachable → Ollama with `nomic-embed-text` → the in-process MiniLM model (optional `@huggingface/transformers`) → lexical-only with a warning.
 
-**Write descriptive docstrings.** Docstrings are embedded alongside code — better documentation directly improves semantic search quality.
+## Benchmark results
 
-**Use specific function names.** Names like `fetchAndCacheUserProfile` trigger the exact-name boost (2.0×) and reliably appear as rank-1 results when queried by name.
+These benchmarks were run on 5 OSS repositories (axios, express, NestJS, FastAPI, gin) totalling **8,296 chunks**, with **100 ground-truth queries** (15 held-out, never used for tuning). Scoring is strict and symbol-level — a hit must be the correct *symbol*, not just the correct file. The **held-out set is the gold standard**: it was authored fresh and never used to tune ranking.
 
-**Export named functions, not anonymous ones.** Anonymous default exports can't be targeted by `resolve_symbol` and rank lower in name-boost scoring.
+### Default path (lexical + stemming) — 5 suites, no model required
 
-**Avoid catch-all utility files.** Files that mix unrelated utilities produce weaker per-chunk signals. One responsibility per module indexes more cleanly.
+| Metric | Before stemming | Default (lexical + stemming) |
+|--------|-----------------|------------------------------|
+| Held-out rank-1 | 0.733 | **0.800** |
+| Held-out semantic rank-1 | 0.200 | **0.400** |
+| Held-out MRR | 0.789 | **0.833** |
+| Overall rank-1 (strict) | 0.582 | 0.582 |
+| Overall success@5 (strict) | 0.764 | 0.775 |
+| Overall semantic s@5 | 0.497 | 0.526 |
+| Symbolic rank-1 / MRR | 0.755 / 0.807 | **0.755 / 0.807** (byte-identical) |
 
-**Run `get_call_graph` before any refactor.** Any change to an exported function's signature, return type, or behavior has a blast radius. Know it before you start.
+The morphological stemming bridge (added in this line of work) closes the inflection gap between behavioural queries and code identifiers — "validating" → `Validator`, "serializing" → `Serialize` — and **doubles held-out semantic rank-1 (0.20 → 0.40) while leaving symbolic ranking byte-identical.** It needs no model and applies to every supported language. See [IMPROVEMENT_STEMMING.md](IMPROVEMENT_STEMMING.md).
 
-**Reach for the SQLite backend when the heap gets tight.** If indexing a large monorepo pushes Node toward its memory limit, switch to `--use-sqlite`; retrieval quality is identical and resident memory stops scaling with the codebase.
+### Embeddings & reranker — gin + express subset (requires Ollama)
 
----
+A separate run measured the full embeddings/enrichment/reranker stack on a 2-suite subset — **gin** (Go, the hardest semantic suite) and **express** (JS) — to decide whether to commission a full 5-suite re-embed. These numbers are from that subset, **not** the 5-suite held-out set above. See [BENCH_FULL_SUITE.md](BENCH_FULL_SUITE.md).
 
-## Troubleshooting
+| Configuration | gin semantic rank-1 / MRR / s@5 | gin symbolic rank-1 | Notes |
+|---------------|----------------------------------|---------------------|-------|
+| Lexical (default) | 0.20 / 0.30 / 0.60 | 0.85 | no model |
+| + nomic embeddings | 0.20 / 0.30 / 0.60 | 0.85 | embeddings alone don't move rank-1 |
+| + qwen3-embedding:4b | 0.20 / 0.48 / **0.80** | **0.92** | recall + symbolic lift; slow indexing |
+| + qwen3:4b & reranker | **0.40** / 0.63 / 0.80 | 0.92 | best on gin; **regressed express** (sem rank-1 0.43 → 0.29) |
 
-**Index takes too long**
-- Verify Ollama is running: `curl http://localhost:11434/api/tags`
-- Use lexical-only mode: `INDEXER_EMBEDDINGS=off npm run mcp:index`
+The honest conclusion from that run: **embeddings are a recall lever (they get the answer into the top-5), the reranker is the rank-1 lever (it reorders the top), and they are complementary but inconsistent across languages.** qwen3 also *inverts* the enrichment verdict — enrichment helped a weak embedder but regresses a strong one (gin semantic MRR 0.48 → 0.39). The gate to justify a full 5-suite re-embed was gin semantic rank-1 > 0.65; the best achieved was **0.40**, so the full re-embed was not commissioned.
 
-**Indexing a huge repo runs out of memory**
-- Build with `--use-sqlite` so chunks live on disk instead of the heap
-- Confirm the active backend with `list_index_stats()`
+> Your results will vary by repository and language. To reproduce: `npm run test:setup && npm run test:eval`.
 
-**`--use-sqlite` reports node:sqlite is unavailable**
-- The SQLite backend needs Node v22.5+; upgrade Node, or use the default in-memory backend
+## Known limitations
 
-**Search returns irrelevant results**
-- Use `exact_tokens` for known symbol names
-- For conceptual queries, index with `--llm-enrichment` and embeddings enabled
-- Check coverage with `list_index_stats()`; increase `top_k` to see more candidates
+- Semantic rank-1 on the default path is **0.40 (held-out)**. Closing the remaining gap is bounded by the embedding/reranker channel, not lexical reweighting (see the table above).
+- The reranker is inconsistent across languages — it helps Go/Python and regresses JavaScript.
+- qwen3 embeddings improve symbolic recall but slow indexing significantly (~1.4 chunks/s on real payloads vs. ~32 for nomic).
+- Enrichment only pays off paired with the reranker; alone it regresses semantic precision.
 
-**MCP server won't connect**
-- Verify `MCP_PROJECT_ROOT` points to the indexed directory
-- Check the index exists: `ls -la .graph-indexer/` (`code-index.json` or `code-index.db`)
-- Test manually: `npm run mcp:start`
+## Contributing / reproducing the benchmarks
 
-**Results are stale after file changes**
-- The daemon updates both backends live and running servers refresh automatically; check `list_index_stats()` for daemon status
-- If the daemon isn't running, start it with `npm run mcp:daemon:start` (or restart the MCP server, which spawns it); check `npm run mcp:daemon:status`
-
----
-
-## Development
+The benchmark numbers in this README are generated by the eval harness, not hand-edited. The harness lives in [test/evaluate.mjs](test/evaluate.mjs); reproduce commands are documented in [BENCH_BASELINE.md](BENCH_BASELINE.md), [BENCH_FULL_SUITE.md](BENCH_FULL_SUITE.md), and [IMPROVEMENT_STEMMING.md](IMPROVEMENT_STEMMING.md).
 
 ```bash
-git clone https://github.com/MaquinaTech/graph-indexer.git
-cd graph-indexer
-npm install
-npm run mcp:index          # index this repo
-npm run mcp:start          # start MCP server (auto-starts the watch daemon)
-npm run mcp:daemon:status  # daemon + index state (start | stop | restart | logs)
+npm run test:all                  # full unit + integration suite
+npm run test:setup                # index the benchmark fixtures
+npm run test:eval                 # lexical (default-path) eval — matches the table above
+npm run test:eval -- --embeddings # hybrid eval (requires Ollama)
+node test/sqlite.mjs              # backend-parity gate (memory ↔ SQLite identical top-5)
 ```
 
-### Tests
-
-| Command | Scope |
-| :--- | :--- |
-| `npm run test` | Integration suite: indexing + loose hit-rate + token savings across 5 fixtures |
-| `npm run test:eval` | Strict symbol-level accuracy (rank-1, precision, nDCG) |
-| `npm run test:unit` | Pure helpers, chunk splitting |
-| `npm run test:sqlite` | SQLite round-trip + rank consistency vs the in-memory engine |
-| `npm run test:enrich` | HyDE enrichment, including the lexically-disjoint rank-1 flip |
-| `npm run test:mcp` | End-to-end MCP server over stdio |
-| `npm run test:scale` | Mock 50k-chunk corpus proving SQLite RAM stays bounded |
-| `npm run test:callgraph` | Call-graph precision/recall: receiver-aware vs name-only (0.50 → 1.00) |
-| `npm run test:references` | Symbol-level references: high-confidence vs name-only via the import graph |
-| `npm run test:jsonout` | Structured `response_format: "json"` output across every tool |
-| `npm run test:gitsignals` | Git churn/recency/co-change from a temp repo + co-change hint + opt-in rank boost |
-| `npm run test:security` | `get_file_skeleton` path-traversal + symlink-escape (realpath) guard |
-| `npm run test:embed` | Embedding-provider selection, fallback, meta-stamping + a real local-model smoke |
-| `npm run test:all` | Every dependency-free suite above, no Ollama required |
+To verify the default-path numbers: `npm run test:eval` and read the `HELD-OUT` block.
 
 ---
 
-## Security
-
-graph-indexer runs locally and is air-gapped by default — in normal operation its only
-outbound calls are to a local Ollama endpoint for embeddings and optional enrichment
-(skipped entirely with `INDEXER_EMBEDDINGS=off` and without `--llm-enrichment`). The
-optional in-process embedding provider downloads its model weights once on first index
-(source code is never sent); set `embedProvider` to `"ollama"` or `"off"` for a strictly
-air-gapped install. It never executes the code it indexes, and the index artifacts contain
-source snippets, so keep them git-ignored (as `init` configures).
-
-See [SECURITY.md](SECURITY.md) for the full threat model and how to report a
-vulnerability.
-
----
-
-## License
-
-Released under the [MIT License](LICENSE). Copyright (c) 2026 MaquinaTech.
-
----
-
-Built by [MaquinaTech](https://github.com/MaquinaTech) · [Issues](https://github.com/MaquinaTech/graph-indexer/issues) · [npm](https://www.npmjs.com/package/graph-indexer)
+<div align="center">
+  <sub>MIT licensed · runs entirely on your machine · see <a href="SECURITY.md">SECURITY.md</a> and <a href="TRADEMARK.md">TRADEMARK.md</a></sub>
+</div>

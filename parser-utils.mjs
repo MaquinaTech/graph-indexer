@@ -1210,8 +1210,80 @@ export function extractHeritage(chunkNode, ext) {
                 if (c.type === 'identifier' || c.type === 'attribute') bases.add(c.text);
             }
         }
+    } else {
+        // Other indexed languages: each grammar exposes the base class / implemented
+        // interface / supertrait names under a small set of "heritage clause" node
+        // types (discovered per grammar). We walk the chunk for those clause nodes
+        // and collect the capitalized type names inside — cheap, no type inference.
+        // A grammar we don't have a clause for simply yields [] (today's behaviour).
+        const CLAUSES = HERITAGE_CLAUSES[ext];
+        if (CLAUSES) {
+            const stack = [chunkNode];
+            let budget = 400;
+            while (stack.length && budget-- > 0) {
+                const n = stack.pop();
+                if (CLAUSES.has(n.type)) { collectHeritageNames(n, bases); continue; }
+                for (let i = 0; i < n.namedChildCount; i++) {
+                    const c = n.namedChild(i);
+                    if (!HERITAGE_BODY_TYPES.has(c.type)) stack.push(c); // base types sit before the body
+                }
+            }
+        }
+        // Go has no inheritance keyword — embedding (an anonymous field whose name IS
+        // a type) is the closest "is-a/has-a" edge, so surface embedded type names.
+        if (ext === '.go') collectGoEmbedding(chunkNode, bases);
     }
     return Array.from(bases).slice(0, 12);
+}
+
+// Per-grammar node types whose subtree holds base/interface/supertrait names.
+const HERITAGE_CLAUSES = {
+    '.java': new Set(['superclass', 'super_interfaces']),
+    '.cs':   new Set(['base_list']),
+    '.php':  new Set(['base_clause', 'class_interface_clause']),
+    '.kt':   new Set(['delegation_specifier']),
+    '.swift': new Set(['inheritance_specifier']),
+    '.rb':   new Set(['superclass']),
+    '.rs':   new Set(['trait_bounds']), // supertrait bounds on a trait_item
+};
+// Member-body nodes the heritage walk must not descend into (base types precede them).
+const HERITAGE_BODY_TYPES = new Set([
+    'class_body', 'declaration_list', 'enum_body', 'statement_block', 'block',
+    'function_body', 'field_declaration_list', 'interface_body', 'struct_body', 'class_body_declaration',
+]);
+
+/** Collect capitalized type names anywhere under a heritage-clause node. */
+function collectHeritageNames(node, set) {
+    const stack = [node];
+    let budget = 200;
+    while (stack.length && budget-- > 0) {
+        const n = stack.pop();
+        if (HERITAGE_NAME_TYPES.has(n.type) && /^[A-Z]/.test(n.text || '')) set.add(n.text);
+        for (let i = 0; i < n.namedChildCount; i++) stack.push(n.namedChild(i));
+    }
+}
+const HERITAGE_NAME_TYPES = new Set([
+    'type_identifier', 'identifier', 'constant', 'simple_identifier', 'name', 'scoped_type_identifier',
+]);
+
+/** Go struct/interface embedding: a field/spec whose name IS a bare type. */
+function collectGoEmbedding(chunkNode, set) {
+    const stack = [chunkNode];
+    let budget = 400;
+    while (stack.length && budget-- > 0) {
+        const n = stack.pop();
+        // An embedded field_declaration has a type but no field name; the type node
+        // is the embed. (A named field `leash Leash` has a `name` child.)
+        if (n.type === 'field_declaration' && !n.childForFieldName?.('name')) {
+            for (let i = 0; i < n.namedChildCount; i++) {
+                const c = n.namedChild(i);
+                if ((c.type === 'type_identifier' || c.type === 'qualified_type') && /^[A-Z]/.test(c.text || '')) {
+                    set.add(c.text.split('.').pop());
+                }
+            }
+        }
+        for (let i = 0; i < n.namedChildCount; i++) stack.push(n.namedChild(i));
+    }
 }
 
 /**
@@ -1221,8 +1293,13 @@ export function extractHeritage(chunkNode, ext) {
  */
 export function extractTypeAnnotations(chunkNode, ext) {
     const types = new Set();
-    const JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
-    if (!JS_LIKE.includes(ext) && ext !== '.py') return [];
+    // JS/TS + Python use the precise annotation branches below. Every other indexed
+    // language is covered by the shared `type_identifier` branch (that node appears
+    // ONLY in type position across Go/Rust/Java/Kotlin/Swift/C) plus a `named_type`
+    // branch for PHP — so the type-user dimension of find_references now works in
+    // those languages too, with no early-out and no type inference. C# (bare
+    // identifiers in type position) and Ruby (dynamically typed) carry no cheap type
+    // signal, so they naturally yield [].
 
     function walk(node) {
         // TypeScript: type_annotation nodes contain the type text
@@ -1234,10 +1311,17 @@ export function extractTypeAnnotations(chunkNode, ext) {
                 if (!PRIMITIVES.has(match[1].toLowerCase())) types.add(match[1]);
             }
         }
-        // TypeScript: generic_type, predefined_type (string, number…) skip, named types keep
+        // type_identifier / generic_type: a named type in type position. This is the
+        // cross-language branch — type_identifier is how Go/Rust/Java/Kotlin/Swift/C
+        // (and TS) all spell a referenced type name.
         else if (node.type === 'type_identifier' || node.type === 'generic_type') {
             const name = node.children[0]?.text || node.text;
             if (name && /^[A-Z]/.test(name)) types.add(name);
+        }
+        // PHP: a typed parameter / return uses `named_type` (e.g. `Owner`, `\App\User`).
+        else if (node.type === 'named_type') {
+            const seg = (node.text || '').replace(/^\?/, '').split('\\').pop().trim();
+            if (seg && /^[A-Z]/.test(seg)) types.add(seg);
         }
         // Python: type comments or annotations (annotation nodes)
         else if (node.type === 'annotation' && ext === '.py') {

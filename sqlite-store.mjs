@@ -29,6 +29,7 @@ import fs from 'fs';
 import {
     tokenize, okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     SUMMARY_VEC_SUFFIX, LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
+    isNaturalLanguageQuery,
 } from './search-core.mjs';
 import {
     writeEmbeddingBinary, appendEmbeddingBinary, scanEmbeddingBinary,
@@ -446,7 +447,9 @@ export class SqliteGraphStore {
         this._maybeRefresh();
 
         // 1. Lexical BM25 over posting lists (one indexed lookup per query term).
-        const qTokens = tokenize(queryText);
+        // Asymmetric stemming mirrors the in-memory engine (parity): stem the query
+        // only for natural-language queries; symbolic lookups stay exact.
+        const qTokens = tokenize(queryText, isNaturalLanguageQuery(queryText));
         const occ = new Map();
         for (const t of qTokens) occ.set(t, (occ.get(t) || 0) + 1);
 
@@ -547,8 +550,9 @@ export class SqliteGraphStore {
 
     /** Internal: index one chunk's lexical document + row + call edges. */
     _insertChunk(chunk, imports, vecEntry) {
-        const tokens = tokenize(buildLexicalDocument(chunk, imports));
-        const docLen = tokens.length;
+        const doc = buildLexicalDocument(chunk, imports);
+        const tokens = tokenize(doc);                       // raw + additive stems
+        const docLen = tokenize(doc, false).length;          // raw-only BM25 length (parity w/ memory engine)
 
         const termCounts = new Map();
         for (const t of tokens) termCounts.set(t, (termCounts.get(t) || 0) + 1);
@@ -557,7 +561,7 @@ export class SqliteGraphStore {
             this._stmtInsPost.run(term, chunk.id, cnt);
         }
 
-        const pathTokens = Array.from(new Set(tokenize(chunk.file_path.replace(/[/\-_.]/g, ' '))));
+        const pathTokens = Array.from(new Set(tokenize(chunk.file_path.replace(/[/\-_.]/g, ' '), false)));
         this._stmtInsChunk.run(
             chunk.id, chunk.file_path, chunk.node_type ?? null, chunk.name ?? null,
             nameLowerOf(chunk.name), chunk.docstring ?? '', chunk.code_snippet ?? '',
@@ -755,8 +759,9 @@ export class SqliteGraphStore {
 
         for (const chunk of chunks) {
             const deps = (graph?.dependencies?.[chunk.file_path]) || [];
-            const tokens = tokenize(buildLexicalDocument(chunk, deps));
-            const docLen = tokens.length;
+            const doc = buildLexicalDocument(chunk, deps);
+            const tokens = tokenize(doc);                       // raw + additive stems
+            const docLen = tokenize(doc, false).length;          // raw-only BM25 length (parity w/ memory engine)
             totalDocLen += docLen; docCount++;
 
             const termCounts = new Map();
@@ -766,7 +771,7 @@ export class SqliteGraphStore {
                 insPost.run(term, chunk.id, cnt);
             }
 
-            const pathTokens = Array.from(new Set(tokenize(chunk.file_path.replace(/[/\-_.]/g, ' '))));
+            const pathTokens = Array.from(new Set(tokenize(chunk.file_path.replace(/[/\-_.]/g, ' '), false)));
             const vecKey = chunk.content_hash ? embeddingKeyFor(chunk) : null;
             const vec = vecKey ? (offsets.get(vecKey) ?? offsets.get(chunk.content_hash)) : null;
 

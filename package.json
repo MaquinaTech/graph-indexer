@@ -51,7 +51,7 @@
         "test:reset": "rm -rf test/fixtures && node test/setup.mjs",
         "mcp:index": "idx-index --repo .",
         "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
-        "mcp:index:enriched": "node indexer.mjs --repo . --llm-enrichment",
+        "mcp:index:enriched": "node indexer.mjs --repo . --enrichment",
         "mcp:watch": "node watch-daemon.mjs",
         "mcp:start": "idx-mcp",
         "mcp:daemon": "node daemon-ctl.mjs status",

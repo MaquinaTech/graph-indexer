@@ -19,7 +19,8 @@ import {
 import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
 import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta } from './embeddings.mjs';
-import { resolveConfig } from './config.mjs';
+import { resolveConfig, describeConfig, configNotices } from './config.mjs';
+import { AUTO_SQLITE_CHUNK_THRESHOLD } from './storage.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { enrichCoreChunks } from './enrichment.mjs';
 import { collectGitSignals, writeGitSignals } from './git-signals.mjs';
@@ -51,7 +52,10 @@ function walkRepo(dir, root, ig, files = []) {
 
 async function main() {
     console.log(`\n🚀 Starting Optimized Indexer\n📂 Directory: ${PROJECT_ROOT}`);
-    console.log(`🗄  Storage: ${config.storage}${config.enrichment.enabled ? ` · 🧠 LLM enrichment: ${config.enrichment.model}` : ''}\n`);
+    console.log('⚙️  Effective configuration:');
+    for (const line of describeConfig(config)) console.log(`     ${line}`);
+    for (const notice of configNotices(config)) console.log(`⚠️  ${notice}`);
+    console.log('');
 
     const ig = buildIgnoreFilter(PROJECT_ROOT);
     const files = walkRepo(PROJECT_ROOT, PROJECT_ROOT, ig);
@@ -211,12 +215,24 @@ async function main() {
     }
 
     // ── Persist to the configured backend ─────────────────────────────────────────
-    if (config.storage === 'sqlite') {
+    // Resolve 'auto' now that the true chunk count is known: keep small repos in the
+    // zero-dependency in-memory JSON index; switch big ones to disk-backed SQLite.
+    const backend = config.storage === 'auto'
+        ? (indexData.chunks.length >= AUTO_SQLITE_CHUNK_THRESHOLD ? 'sqlite' : 'memory')
+        : config.storage;
+    if (config.storage === 'auto') {
+        console.log(`🗄  Storage: auto → ${backend} (${indexData.chunks.length} chunks, threshold ${AUTO_SQLITE_CHUNK_THRESHOLD}).`);
+    }
+
+    if (backend === 'sqlite') {
         const { SqliteGraphStore } = await import('./sqlite-store.mjs');
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
         });
+        store.close?.();
+        // Remove the in-memory artifact so readers (server/daemon) unambiguously pick SQLite.
+        for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
         console.log(`\n🎉 SQLite index built: ${res.chunks} chunks · ${res.terms} terms · dim ${res.dim}`);
         console.log(`   → ${config.sqlitePath}\n`);
     } else {
@@ -230,6 +246,10 @@ async function main() {
             fs.promises.rename(tmpPath, INDEX_PATH),
             fs.promises.rename(tmpBinPath, EMBEDDINGS_PATH),
         ]);
+        // Remove any SQLite artifact so readers unambiguously pick the in-memory index.
+        for (const p of [config.sqlitePath, `${config.sqlitePath}-wal`, `${config.sqlitePath}-shm`]) {
+            try { fs.unlinkSync(p); } catch { /* none */ }
+        }
         console.log(`\n🎉 Indexing completed blazingly fast. Total fragments: ${indexData.chunks.length}\n`);
     }
 

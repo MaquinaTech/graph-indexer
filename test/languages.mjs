@@ -18,6 +18,8 @@ import {
     getParserForFile,
     extractSemanticChunks,
     extractImportsFromAST,
+    extractHeritage,
+    extractTypeAnnotations,
     EXTENSIONS,
 } from '../parser-utils.mjs';
 
@@ -48,6 +50,18 @@ function parse(file, source) {
     };
 }
 const byName = (chunks, name) => chunks.find(c => c.name === name);
+
+/** Parse `source` and return the first node whose type matches `typeRe`. */
+function firstNodeOfType(ext, source, typeRe) {
+    const tree = getParserForFile(ext).parse(source);
+    const stack = [tree.rootNode];
+    while (stack.length) {
+        const n = stack.pop();
+        if (typeRe.test(n.type)) return n;
+        for (let i = 0; i < n.namedChildCount; i++) stack.push(n.namedChild(i));
+    }
+    return null;
+}
 
 console.log('\nLANGUAGE INTEGRATION TESTS (C / Bash / Swift)\n');
 
@@ -263,6 +277,69 @@ withLang('Swift', '.swift', () => {
         assert.ok(gc.some(c => c.name === 'method_0'), 'god-class methods not split into chunks');
         assert.ok(gc.length > 5, 'expected many method chunks from a god-class');
     });
+});
+
+// ─── WI7: heritage / type-reference parity across languages ───────────────────
+// These power find_references' "subclassed/implemented by" + "used as a type by"
+// dimensions. Extraction is exercised directly on the class/trait/function node
+// (chunking granularity differs per grammar, but the extractor is what matters).
+const has = (arr, name) => (arr || []).includes(name);
+/** test() that auto-skips when the grammar isn't built (graceful-degradation contract). */
+function langTest(label, ext, fn) {
+    if (!getParserForFile(ext)) { skipped++; console.log(`  ⊘ ${label} — grammar for ${ext} not built (skipped)`); return; }
+    test(label, fn);
+}
+
+langTest('Java: heritage + type refs', '.java', () => {
+    const cls = firstNodeOfType('.java', 'class Dog extends Animal implements Pet, Cmp<Dog> { Leash walk(Owner o){return null;} }', /class_declaration/);
+    const h = extractHeritage(cls, '.java');
+    assert.ok(has(h, 'Animal') && has(h, 'Pet'), `Java extends/implements → ${JSON.stringify(h)}`);
+    const tr = extractTypeAnnotations(cls, '.java');
+    assert.ok(has(tr, 'Owner') && has(tr, 'Leash'), `Java type refs → ${JSON.stringify(tr)}`);
+});
+langTest('C#: heritage (base list)', '.cs', () => {
+    const cls = firstNodeOfType('.cs', 'class Dog : Animal, IPet { public Leash Walk(Owner o){return null;} }', /class_declaration/);
+    const h = extractHeritage(cls, '.cs');
+    assert.ok(has(h, 'Animal') && has(h, 'IPet'), `C# base list → ${JSON.stringify(h)}`);
+});
+langTest('Kotlin: heritage (delegation specifiers)', '.kt', () => {
+    const cls = firstNodeOfType('.kt', 'class Dog(n: String) : Animal(n), Pet { fun walk(o: Owner): Leash { return Leash() } }', /class_declaration/);
+    const h = extractHeritage(cls, '.kt');
+    assert.ok(has(h, 'Animal') && has(h, 'Pet'), `Kotlin delegation specifiers → ${JSON.stringify(h)}`);
+});
+langTest('Swift: heritage + type refs', '.swift', () => {
+    const cls = firstNodeOfType('.swift', 'class Dog: Animal, Pet { func walk(o: Owner) -> Leash { return Leash() } }', /class_declaration/);
+    const h = extractHeritage(cls, '.swift');
+    assert.ok(has(h, 'Animal') && has(h, 'Pet'), `Swift inheritance clause → ${JSON.stringify(h)}`);
+    const tr = extractTypeAnnotations(cls, '.swift');
+    assert.ok(has(tr, 'Owner') && has(tr, 'Leash'), `Swift type refs → ${JSON.stringify(tr)}`);
+});
+langTest('Ruby: heritage (superclass)', '.rb', () => {
+    const cls = firstNodeOfType('.rb', 'class Dog < Animal\n  def walk(o)\n  end\nend', /class/);
+    const h = extractHeritage(cls, '.rb');
+    assert.ok(has(h, 'Animal'), `Ruby superclass → ${JSON.stringify(h)}`);
+});
+langTest('PHP: heritage + type refs', '.php', () => {
+    const cls = firstNodeOfType('.php', '<?php class Dog extends Animal implements Pet { function walk(Owner $o): Leash { return new Leash(); } }', /class_declaration/);
+    const h = extractHeritage(cls, '.php');
+    assert.ok(has(h, 'Animal') && has(h, 'Pet'), `PHP extends/implements → ${JSON.stringify(h)}`);
+    const tr = extractTypeAnnotations(cls, '.php');
+    assert.ok(has(tr, 'Owner') && has(tr, 'Leash'), `PHP named types → ${JSON.stringify(tr)}`);
+});
+langTest('Rust: supertrait bound', '.rs', () => {
+    const tr = firstNodeOfType('.rs', 'trait Pet: Animal {}', /trait_item/);
+    const h = extractHeritage(tr, '.rs');
+    assert.ok(has(h, 'Animal'), `Rust supertrait bound → ${JSON.stringify(h)}`);
+});
+langTest('Go: type refs (no inheritance keyword)', '.go', () => {
+    const fn = firstNodeOfType('.go', 'func Walk(o Owner) Leash { return Leash{} }', /function_declaration|method_declaration/);
+    const tr = extractTypeAnnotations(fn, '.go');
+    assert.ok(has(tr, 'Owner') && has(tr, 'Leash'), `Go signature type refs → ${JSON.stringify(tr)}`);
+});
+langTest('C: type refs', '.c', () => {
+    const fn = firstNodeOfType('.c', 'Leash walk(struct Owner *o) { return make(); }', /function_definition/);
+    const tr = extractTypeAnnotations(fn, '.c');
+    assert.ok(has(tr, 'Owner') || has(tr, 'Leash'), `C type refs → ${JSON.stringify(tr)}`);
 });
 
 // ─── summary ─────────────────────────────────────────────────────────────────
