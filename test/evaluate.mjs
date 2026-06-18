@@ -64,6 +64,10 @@ const ALL_SUITES = [axiosSuite, expressJsSuite, nestjsSuite, fastapiSuite, ginSu
 const args = process.argv.slice(2);
 const suiteFilter = args.includes('--suite') ? args[args.indexOf('--suite') + 1] : null;
 const writeJson = args.includes('--json');
+// Write the per-suite results to an exact path (used by the multi-language bench
+// harness, bench/cell.mjs, which scores one freshly-built fixture per cell). When
+// omitted, behaviour is unchanged: --json still writes a timestamped reports file.
+const outPath = args.includes('--out') ? args[args.indexOf('--out') + 1] : null;
 const verbose = args.includes('--verbose') || args.includes('-v');
 const useEmbeddings = args.includes('--embeddings');
 const useSqlite = args.includes('--use-sqlite');
@@ -387,7 +391,17 @@ function render(result) {
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
-const suites = suiteFilter ? ALL_SUITES.filter(s => s.META.id === suiteFilter) : ALL_SUITES;
+// Default (no --suite) runs exactly the original 5 core suites, so `test:eval`
+// is byte-identical. A --suite for a non-core language is loaded dynamically from
+// ./suites/<id>.mjs (authored for the multi-language benchmark) so the extra
+// fixtures never change the default headline.
+let suites = suiteFilter ? ALL_SUITES.filter(s => s.META.id === suiteFilter) : ALL_SUITES;
+if (suites.length === 0 && suiteFilter) {
+    try {
+        const mod = await import(`./suites/${suiteFilter}.mjs`);
+        if (mod?.META && Array.isArray(mod?.QUERIES)) suites = [mod];
+    } catch { /* fall through to the unknown-suite error */ }
+}
 if (suites.length === 0) { console.error(`Unknown suite: ${suiteFilter}`); process.exit(1); }
 
 console.log('\n' + c.bold('═'.repeat(72)));
@@ -462,7 +476,12 @@ if (ok.length > 0) {
     }
 }
 
-if (writeJson) {
+if (outPath) {
+    // Exact-path write for the bench harness: one suite's strict result per cell.
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
+    console.log(`📄  JSON report saved to: ${path.relative(process.cwd(), outPath)}\n`);
+} else if (writeJson) {
     const dir = path.join(__dirname, 'reports');
     fs.mkdirSync(dir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');

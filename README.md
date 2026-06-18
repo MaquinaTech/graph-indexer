@@ -100,8 +100,8 @@ Everything beyond the lexical default is opt-in. The server, indexer, and daemon
 | Option | Default | When to enable | Cost |
 |--------|---------|----------------|------|
 | `--embeddings` | off | Larger repos where recall matters; lifts success@5 | Requires Ollama or the in-process MiniLM model; slower indexing |
-| `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | Better code recall + symbolic precision | ~18 min to embed ~1k chunks at ~1.4 chunks/s; requires Ollama |
-| `--enrichment` | off | Only useful paired with `--rerank`; alone it regresses | LLM call per chunk; thousands of chunks ≈ hours |
+| `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | Better code recall + symbolic precision | slower indexing; requires Ollama |
+| `--enrichment` | off | Only useful paired with `--rerank`; alone it regresses | slowest indexing |
 | `--rerank` | off | Go/Python repos with weak semantic recall; regresses JS repos | Requires an Ollama 7B model; adds query latency |
 | `--use-sqlite` | `auto` | Repos past ~15k chunks or memory-constrained environments | Slightly higher query latency; needs Node 22+ |
 
@@ -182,7 +182,6 @@ The honest conclusion from that run: **embeddings are a recall lever (they get t
 
 - Semantic rank-1 on the default path is **0.40 (held-out)**. Closing the remaining gap is bounded by the embedding/reranker channel, not lexical reweighting (see the table above).
 - The reranker is inconsistent across languages — it helps Go/Python and regresses JavaScript.
-- qwen3 embeddings improve symbolic recall but slow indexing significantly (~1.4 chunks/s on real payloads vs. ~32 for nomic).
 - Enrichment only pays off paired with the reranker; alone it regresses semantic precision.
 - The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/C#/PHP/Kotlin/Swift/Rust/Go/C**, and are **empty for C# and Ruby** (no cheap static type signal). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
 - Call-graph callers reached through a dynamically-typed or unresolved receiver (e.g. `const s = getStore(); s.save()`) are reported in the lower-confidence **name-only** bucket — they are not statically disambiguated by class.

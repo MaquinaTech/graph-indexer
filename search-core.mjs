@@ -339,7 +339,7 @@ export function isNaturalLanguageQuery(queryText) {
     return stops >= 2 && stops / words.length >= 0.2;
 }
 
-export const TEST_FILE_RE = /\.(test|spec)\.|[/\\]__tests__[/\\]|_test\.|^tests?[/\\]|[/\\]tests?[/\\]|[/\\]spec[/\\]/;
+export const TEST_FILE_RE = /\.(test|spec)\.|[/\\]__tests__[/\\]|_test\.|^tests?[/\\]|[/\\]tests?[/\\]|[/\\]spec[/\\]/i;
 // Example/sample/demo/sandbox/etc. trees are a top-level project convention
 // (examples/, samples/, demo/, docs_src/, …). The keyword is matched ONLY as the
 // FIRST or SECOND path segment. Matching it at ANY depth (the previous behaviour)

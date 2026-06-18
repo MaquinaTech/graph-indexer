@@ -1,0 +1,259 @@
+{
+  "axios": {
+    "id": "axios",
+    "language": "JavaScript",
+    "repo": "https://github.com/axios/axios",
+    "ref": "v1.6.0",
+    "refType": "tag",
+    "commit": "f7adacdbaa569281253c8cfc623ad3f4dc909c60",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/setup.mjs (shallow clone at pinned tag)"
+  },
+  "express-js": {
+    "id": "express-js",
+    "language": "JavaScript",
+    "repo": "https://github.com/expressjs/express",
+    "ref": "4.18.2",
+    "refType": "tag",
+    "commit": "8368dc178af16b91b576c4c1d135f701a0007e5d",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/setup.mjs (shallow clone at pinned tag)"
+  },
+  "nestjs": {
+    "id": "nestjs",
+    "language": "TypeScript",
+    "repo": "https://github.com/nestjs/nest",
+    "ref": "v10.4.9",
+    "refType": "tag",
+    "commit": "416830c3924b37ec354d4e15c14119519e389afc",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/setup.mjs (shallow clone at pinned tag)"
+  },
+  "fastapi": {
+    "id": "fastapi",
+    "language": "Python",
+    "repo": "https://github.com/tiangolo/fastapi",
+    "ref": "0.103.0",
+    "refType": "tag",
+    "commit": "415eb1405a5bc93a32e14c15d690517c95d26743",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/setup.mjs (shallow clone at pinned tag)"
+  },
+  "gin": {
+    "id": "gin",
+    "language": "Go",
+    "repo": "https://github.com/gin-gonic/gin",
+    "ref": "v1.9.1",
+    "refType": "tag",
+    "commit": "4ea0e648e38a63d6caff14100f5eab5c50912bcd",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/setup.mjs (shallow clone at pinned tag)"
+  },
+  "spring": {
+    "id": "spring",
+    "language": "Java/Spring",
+    "repo": "https://github.com/spring-projects/spring-petclinic",
+    "ref": null,
+    "refType": null,
+    "commit": "a2c2ef994340d3970eb6db51247456a51bb161f8",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time)"
+  },
+  "rust": {
+    "id": "rust",
+    "language": "Rust",
+    "repo": "https://github.com/serde-rs/json",
+    "ref": null,
+    "refType": null,
+    "commit": "a1ae73ac6a6940a4a57c673aebaa13ed4dfe3e8c",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time)"
+  },
+  "android": {
+    "id": "android",
+    "language": "Kotlin/Android",
+    "repo": "https://github.com/android/sunflower",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "app/src/main/java"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "aspnet": {
+    "id": "aspnet",
+    "language": "C#/ASP.NET",
+    "repo": "https://github.com/dotnet-architecture/eShopOnWeb",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "src"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "react": {
+    "id": "react",
+    "language": "TS/React",
+    "repo": "https://github.com/react-bootstrap/react-bootstrap",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "src"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "django": {
+    "id": "django",
+    "language": "Python/Django",
+    "repo": "https://github.com/django-oscar/django-oscar",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "src/oscar/apps"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "symfony": {
+    "id": "symfony",
+    "language": "PHP/Symfony",
+    "repo": "https://github.com/symfony/symfony",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "src/Symfony/Component/HttpKernel"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "css": {
+    "id": "css",
+    "language": "SCSS",
+    "repo": "https://github.com/twbs/bootstrap",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "scss"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "rails": {
+    "id": "rails",
+    "language": "Ruby/Rails",
+    "repo": "https://github.com/mastodon/mastodon",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "app/controllers",
+      "app/models",
+      "app/services",
+      "app/serializers",
+      "app/workers",
+      "app/lib",
+      "app/policies",
+      "app/helpers",
+      "app/mailers",
+      "app/validators",
+      "app/presenters"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "laravel": {
+    "id": "laravel",
+    "language": "PHP/Laravel",
+    "repo": "https://github.com/koel/koel",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "app/Models",
+      "app/Services",
+      "app/Http",
+      "app/Repositories",
+      "app/Providers",
+      "app/Console",
+      "app/Events",
+      "app/Listeners",
+      "app/Policies",
+      "app/Rules",
+      "app/Values",
+      "app/Builders",
+      "app/Facades",
+      "app/Exceptions"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  },
+  "cjson": {
+    "id": "cjson",
+    "language": "C",
+    "repo": "https://github.com/DaveGamble/cJSON",
+    "ref": null,
+    "refType": null,
+    "commit": "fb16e5cf358798aabb049655975cde8427101056",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time)"
+  },
+  "nvm": {
+    "id": "nvm",
+    "language": "Bash",
+    "repo": "https://github.com/nvm-sh/nvm",
+    "ref": null,
+    "refType": null,
+    "commit": "a6ec73943099a86fba98bde3b04a1c60944a4549",
+    "subdirs": [
+      "."
+    ],
+    "pinned": true,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time)"
+  },
+  "alamofire": {
+    "id": "alamofire",
+    "language": "Swift",
+    "repo": "https://github.com/Alamofire/Alamofire",
+    "ref": null,
+    "refType": null,
+    "commit": null,
+    "subdirs": [
+      "Source"
+    ],
+    "pinned": false,
+    "source": "test/agent/fixtures.manifest.mjs (subdir-reduced, default branch at clone time) — .git stripped, COMMIT NOT PINNED"
+  }
+}

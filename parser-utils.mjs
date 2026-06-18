@@ -169,6 +169,7 @@ const LANGUAGE_QUERIES = {
     `,
     php: `
         (function_definition) @chunk
+        (method_declaration) @chunk
         (class_declaration) @chunk
         (expression_statement) @chunk
     `,
@@ -1372,6 +1373,19 @@ function _receiverHint(objNode) {
 }
 
 /**
+ * C#: the invoked-name node is either a plain `identifier` or a `generic_name`
+ * (`Method<T>`, children = identifier + type_argument_list) whose leading
+ * `identifier` is the real method name. Strip the type-argument list so the
+ * recorded callee is `Method`, not `Method<T>`.
+ */
+function _csInvokedName(node) {
+    if (!node) return '';
+    if (node.type === 'identifier') return node.text;
+    const id = node.children?.find(c => c.type === 'identifier');
+    return id ? id.text : (node.text || '').split('<')[0];
+}
+
+/**
  * Walk a subtree and collect every call site as { name, recv } (receiver hint).
  * Deduplicated by (name, recv). Cross-language: call_expression (JS/TS/Go/Rust/C and
  * Swift via simple_identifier/navigation_expression), call (Python), macro_invocation
@@ -1423,12 +1437,39 @@ export function extractCallSites(rootNode) {
         } else if (t === 'macro_invocation') { // Rust
             const macroNode = node.childForFieldName?.('macro') || node.children[0];
             if (macroNode && macroNode.type === 'identifier') add(macroNode.text + '!', '');
-        } else if (t === 'method_invocation') { // Java / C#
+        } else if (t === 'method_invocation') { // Java
             const nameNode = node.childForFieldName?.('name') || node.children.find(c => c.type === 'identifier');
             if (nameNode) add(nameNode.text, _receiverHint(node.childForFieldName?.('object')));
+        } else if (t === 'invocation_expression') { // C# — the grammar has NO method_invocation; a call is
+            // invocation_expression(function, arguments). The function is a bare identifier (same-class /
+            // using-static call) or a member_access_expression (obj.Method() / this.Method()).
+            const fn = node.childForFieldName?.('function');
+            if (fn) {
+                if (fn.type === 'member_access_expression') {
+                    const nm = _csInvokedName(fn.childForFieldName?.('name'));
+                    if (nm) add(nm, _receiverHint(fn.childForFieldName?.('expression')));
+                } else if (fn.type === 'identifier') {
+                    add(fn.text, '');
+                } else if (fn.type === 'generic_name') {
+                    const nm = _csInvokedName(fn);
+                    if (nm) add(nm, '');
+                }
+            }
         } else if (t === 'method_call') { // Ruby
             const method = node.childForFieldName?.('method') || node.children.find(c => c.type === 'identifier');
             if (method && method.type === 'identifier') add(method.text, _receiverHint(node.childForFieldName?.('receiver')));
+        } else if (t === 'function_call_expression') { // PHP: foo() / \App\Helpers\bar()
+            const fn = node.childForFieldName?.('function');
+            if (fn && (fn.type === 'name' || fn.type === 'qualified_name')) {
+                const nm = (fn.text || '').split('\\').filter(Boolean).pop();
+                if (nm) add(nm, '');
+            }
+        } else if (t === 'member_call_expression' || t === 'nullsafe_member_call_expression') { // PHP: $obj->method()
+            const nameNode = node.childForFieldName?.('name');
+            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(node.childForFieldName?.('object')));
+        } else if (t === 'scoped_call_expression') { // PHP: Class::method() / self::method() / parent::method()
+            const nameNode = node.childForFieldName?.('name');
+            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(node.childForFieldName?.('scope')));
         }
         node.children.forEach(walk);
     }

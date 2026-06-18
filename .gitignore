@@ -53,3 +53,10 @@ test/agent/traces/
 
 # Prompt-eval results (generated)
 test/agent/results/
+
+# Multi-language benchmark — generated artifacts (regenerate via bench/*.mjs + bench/run-*.sh).
+# Harness scripts (bench/*.mjs, bench/*.sh) and bench/provenance.json stay tracked;
+# per-cell results carry machine-specific timing/RSS, _chunks are scaffolding dumps, logs are transient.
+bench/results/
+bench/_chunks/
+bench/logs/
