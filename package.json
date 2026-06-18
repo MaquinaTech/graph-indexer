@@ -1,6 +1,6 @@
 {
     "name": "graph-indexer",
-    "version": "1.3.0",
+    "version": "2.0.0",
     "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph, with an optional zero-dependency SQLite backend for monorepo scale and optional local-LLM semantic enrichment.",
     "type": "module",
     "main": "core-engine.mjs",
