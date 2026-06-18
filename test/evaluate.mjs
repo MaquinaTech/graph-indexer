@@ -349,7 +349,7 @@ function render(result) {
     console.log(`  ${pad('precision@5 strict', 30)} ${scoreColour(a.precision[5])}`);
     console.log(`  ${pad('MRR strict', 30)} ${scoreColour(a.mrrStrict)}  ${c.dim('(loose ' + fmt(a.mrrLoose) + ')')}`);
     console.log(`  ${pad('nDCG@5 strict', 30)} ${scoreColour(a.ndcg[5])}`);
-    console.log(`  ${pad('file-only inflated hits', 30)} ${a.fileOnlyHitRate > 0 ? c.red(fmtPct(a.fileOnlyHitRate)) : c.green('0.0%')}`);
+    console.log(`  ${pad('file-only inflated hits', 30)} ${a.fileOnlyHitRate > 0 ? c.red(fmtPct(a.fileOnlyHitRate * 100)) : c.green('0.0%')}`);
 
     // Semantic channel breakdown — highlights the benchmark mismatch the agent prompt (prompts/CORE.md) revealed:
     // symbolic queries test name-lookup (what agents use resolve_symbol for), while semantic
@@ -419,7 +419,7 @@ if (ok.length > 0) {
     console.log(`  ${pad('precision@5', 22)} ${pad('—', 9)} ${scoreColour(m(r => r.aggregate.precision[5]))}`);
     console.log(`  ${pad('MRR', 22)} ${pad(fmt(m(r => r.aggregate.mrrLoose)), 9)} ${scoreColour(m(r => r.aggregate.mrrStrict))}`);
     console.log(`  ${pad('nDCG@5', 22)} ${pad('—', 9)} ${scoreColour(m(r => r.aggregate.ndcg[5]))}`);
-    console.log(`  ${pad('file-only inflation', 22)} ${pad('—', 9)} ${m(r => r.aggregate.fileOnlyHitRate) > 0 ? c.red(fmtPct(m(r => r.aggregate.fileOnlyHitRate))) : c.green('0.0%')}`);
+    console.log(`  ${pad('file-only inflation', 22)} ${pad('—', 9)} ${m(r => r.aggregate.fileOnlyHitRate) > 0 ? c.red(fmtPct(m(r => r.aggregate.fileOnlyHitRate) * 100)) : c.green('0.0%')}`);
 
     // Semantic vs symbolic cross-suite summary
     const allRows = ok.flatMap(r => r.rows || []);
@@ -455,7 +455,7 @@ if (ok.length > 0) {
         console.log(`  ${pad('success@5 strict', 24)} ${scoreColour(hm(r => r.strictSuccess[5]))}`);
         console.log(`  ${pad('rank-1 strict', 24)} ${scoreColour(hm(r => r.rank1Strict))}`);
         console.log(`  ${pad('MRR strict', 24)} ${scoreColour(hm(r => r.mrrStrict))}`);
-        console.log(`  ${pad('file-only inflation', 24)} ${hm(r => r.fileOnlyHit) > 0 ? c.red(fmtPct(hm(r => r.fileOnlyHit))) : c.green('0.0%')}`);
+        console.log(`  ${pad('file-only inflation', 24)} ${hm(r => r.fileOnlyHit) > 0 ? c.red(fmtPct(hm(r => r.fileOnlyHit) * 100)) : c.green('0.0%')}`);
         if (hSym.length) console.log(`  ${pad('  symbolic', 24)} rank-1: ${scoreColour(mean(hSym.map(r => r.rank1Strict)))}  MRR: ${scoreColour(mean(hSym.map(r => r.mrrStrict)))}`);
         if (hSem.length) console.log(`  ${pad('  semantic', 24)} rank-1: ${scoreColour(mean(hSem.map(r => r.rank1Strict)))}  MRR: ${scoreColour(mean(hSem.map(r => r.mrrStrict)))}  s@5: ${scoreColour(mean(hSem.map(r => r.strictSuccess[5])))}`);
         console.log('═'.repeat(72) + '\n');

@@ -155,11 +155,13 @@ These benchmarks were run on 5 OSS repositories (axios, express, NestJS, FastAPI
 | Held-out semantic rank-1 | 0.200 | **0.400** |
 | Held-out MRR | 0.789 | **0.833** |
 | Overall rank-1 (strict) | 0.582 | 0.582 |
-| Overall success@5 (strict) | 0.764 | 0.775 |
-| Overall semantic s@5 | 0.497 | 0.526 |
+| Overall success@5 (strict) | 0.764 | 0.807 |
+| Overall semantic s@5 | 0.497 | 0.613 |
 | Symbolic rank-1 / MRR | 0.755 / 0.807 | **0.755 / 0.807** (byte-identical) |
 
 The morphological stemming bridge (added in this line of work) closes the inflection gap between behavioural queries and code identifiers — "validating" → `Validator`, "serializing" → `Serialize` — and **doubles held-out semantic rank-1 (0.20 → 0.40) while leaving symbolic ranking byte-identical.** It needs no model and applies to every supported language. See [IMPROVEMENT_STEMMING.md](IMPROVEMENT_STEMMING.md).
+
+> The **Default** column is the current default path = lexical + stemming **and** the NL-gated IDF path boost shipped after the stemming work. Stemming produced the held-out semantic rank-1 doubling (0.20 → 0.40); the path boost added the overall success@5 (0.7749 → 0.8065) and overall semantic s@5 (0.5161 → 0.6129) lift, with held-out rank-1 unchanged. See [BENCH_BASELINE.md](BENCH_BASELINE.md).
 
 ### Embeddings & reranker — gin + express subset (requires Ollama)
 
@@ -182,6 +184,8 @@ The honest conclusion from that run: **embeddings are a recall lever (they get t
 - The reranker is inconsistent across languages — it helps Go/Python and regresses JavaScript.
 - qwen3 embeddings improve symbolic recall but slow indexing significantly (~1.4 chunks/s on real payloads vs. ~32 for nomic).
 - Enrichment only pays off paired with the reranker; alone it regresses semantic precision.
+- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/C#/PHP/Kotlin/Swift/Rust/Go/C**, and are **empty for C# and Ruby** (no cheap static type signal). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
+- Call-graph callers reached through a dynamically-typed or unresolved receiver (e.g. `const s = getStore(); s.save()`) are reported in the lower-confidence **name-only** bucket — they are not statically disambiguated by class.
 
 ## Contributing / reproducing the benchmarks
 

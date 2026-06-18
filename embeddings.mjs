@@ -187,7 +187,11 @@ export async function createEmbedder(config, opts = {}) {
     const ollamaOne = b.ollamaEmbedOne || _ollamaEmbedOne;
     const ollamaMany = b.ollamaEmbedMany || _ollamaEmbedMany;
     const localMany = b.localEmbedMany || _localEmbedMany;
-    let dim = provider === 'local' ? LOCAL_EMBED_DIM : null;
+    // Always derive the vector dimension from the first returned vector. The old
+    // `local → LOCAL_EMBED_DIM (384)` pre-set would mis-stamp any local model whose
+    // dim isn't 384 (e.g. jina-embeddings-v2-base-code = 768) into the .meta.json
+    // before the first embed call. Deriving it is correct for every model.
+    let dim = null;
 
     async function embedQuery(text) {
         if (provider === 'off' || !text) return null;

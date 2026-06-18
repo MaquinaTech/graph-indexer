@@ -586,15 +586,24 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     : applyGitBoost ? Math.min(Math.max(top_k * 2, 12), 25) : top_k;
                 let matches = db.searchHybrid(fullQuery, queryVector, poolSize, min_score, exact_tokens || null);
 
+                let rerankFailed = false;
                 if (willRerank && matches.length > 1) {
-                    matches = await rerankResults(fullQuery, matches, {
-                        topM: Math.min(rerank?.topM ?? 12, matches.length),
-                        generate: (prompt) => ollamaGenerate(prompt, {
-                            model: rerank?.model || 'qwen2.5-coder:7b',
-                            ollamaHost, timeoutMs: 60000,
-                            options: { temperature: 0, num_predict: 40 },
-                        }),
-                    });
+                    try {
+                        matches = await rerankResults(fullQuery, matches, {
+                            topM: Math.min(rerank?.topM ?? 12, matches.length),
+                            generate: (prompt) => ollamaGenerate(prompt, {
+                                model: rerank?.model || 'qwen2.5-coder:7b',
+                                ollamaHost, timeoutMs: 60000,
+                                options: { temperature: 0, num_predict: 40 },
+                            }),
+                        });
+                    } catch {
+                        // Rerank is a best-effort rank-1 lever: an unreachable or slow
+                        // Ollama judge must degrade to the un-reranked fused pool, never
+                        // turn the whole search into an error. `matches` keeps its pre-rerank
+                        // order because the throwing await never reassigned it.
+                        rerankFailed = true;
+                    }
                 }
                 if (applyGitBoost && matches.length > 1) {
                     matches = matches
@@ -603,9 +612,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 }
                 matches = matches.slice(0, top_k);
                 if (matches.length === 0) {
+                    const indexEmpty = db.chunkCount() === 0;
+                    const emptyHint = 'Index is empty — run `npm run mcp:index` (or `idx-index --repo <path>`) to build it.';
                     return response_format === 'json'
-                        ? jsonResult({ query: fullQuery, count: 0, results: [] })
-                        : { content: [{ type: 'text', text: 'No results found.' }] };
+                        ? jsonResult({ query: fullQuery, count: 0, ...(indexEmpty ? { index_status: 'empty', hint: emptyHint } : {}), results: [] })
+                        : { content: [{ type: 'text', text: indexEmpty ? `⚠️ ${emptyHint}` : 'No results found.' }] };
                 }
 
                 const { lowConfidence, candidateFiles } = assessConfidence(matches, fullQuery, Boolean(exact_tokens));
@@ -629,7 +640,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         return result;
                     });
                     return jsonResult({
-                        query: fullQuery, count: results.length, reranked: willRerank, detail,
+                        query: fullQuery, count: results.length, reranked: willRerank && !rerankFailed, detail,
+                        ...(rerankFailed ? { rerank_failed: true } : {}),
                         low_confidence: lowConfidence,
                         ...(lowConfidence ? { candidate_files: candidateFiles } : {}),
                         index: fresh,
@@ -707,6 +719,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     lines.push(`→ Try \`get_file_skeleton\` on these, or refine with a symbol name / \`exact_tokens\`.`);
                 }
 
+                if (rerankFailed) lines.push('', '⚠️ Rerank was requested but the judge model was unreachable — results are in raw fused order (not reranked).');
                 const _note = freshnessNote(fresh);
                 if (_note) lines.push('', _note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -789,9 +802,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             try {
                 const defs = db.resolveSymbol(symbol);
                 if (defs.length === 0) {
+                    const indexEmpty = db.chunkCount() === 0;
+                    const emptyHint = 'Index is empty — run `npm run mcp:index` (or `idx-index --repo <path>`) to build it.';
                     return response_format === 'json'
-                        ? jsonResult({ symbol, count: 0, definitions: [] })
-                        : { content: [{ type: 'text', text: `Symbol '${symbol}' not in index. Try search_code(query="${symbol}") for fuzzy search.` }] };
+                        ? jsonResult({ symbol, count: 0, ...(indexEmpty ? { index_status: 'empty', hint: emptyHint } : {}), definitions: [] })
+                        : { content: [{ type: 'text', text: indexEmpty ? `⚠️ ${emptyHint}` : `Symbol '${symbol}' not in index. Try search_code(query="${symbol}") for fuzzy search.` }] };
                 }
                 if (response_format === 'json') {
                     return jsonResult({
