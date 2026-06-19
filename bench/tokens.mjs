@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { artifactPaths } from '../layout.mjs';
-import { MemoryGraphIndex } from '../core-engine.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { computeTokenSavings, amortizedTokenSavings, mean } from '../test/metrics.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

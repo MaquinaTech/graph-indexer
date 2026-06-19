@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { artifactPaths } from '../layout.mjs';
-import { MemoryGraphIndex } from '../core-engine.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');

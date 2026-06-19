@@ -26,7 +26,7 @@
  *   close()                                  Release fds / db handles.
  */
 import fs from 'fs';
-import { MemoryGraphIndex } from './core-engine.mjs';
+import { MemoryGraphIndex } from './engine/memory.mjs';
 
 // 'auto' storage keeps the index in memory until a repo is large enough that the
 // disk-backed SQLite store earns its slightly higher per-query latency. The indexer
@@ -61,7 +61,7 @@ export function resolveBackend(config) {
 export async function createStore(config, { cacheEmbeddings = false } = {}) {
     if (resolveBackend(config) === 'sqlite') {
         // Imported lazily so the default path never loads node:sqlite.
-        const { SqliteGraphStore } = await import('./sqlite-store.mjs');
+        const { SqliteGraphStore } = await import('./engine/sqlite.mjs');
         return new SqliteGraphStore(config.sqlitePath, { embeddingPath: config.embeddingPath });
     }
     return new MemoryGraphIndex(config.indexPath, { cacheEmbeddings });

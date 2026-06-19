@@ -15,8 +15,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { SqliteGraphStore } from '../sqlite-store.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { SqliteGraphStore } from '../engine/sqlite.mjs';
 import { artifactPaths } from '../layout.mjs';
 import {
     approxTokens,

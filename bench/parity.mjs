@@ -15,8 +15,8 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { artifactPaths } from '../layout.mjs';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { SqliteGraphStore } from '../sqlite-store.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { SqliteGraphStore } from '../engine/sqlite.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');

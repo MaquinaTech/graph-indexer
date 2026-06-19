@@ -19,9 +19,12 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getParserForFile, extractSemanticChunks, extractRoutes } from '../parser-utils.mjs';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { findRoutes, registerTools } from '../mcp-tools.mjs';
+import { extractSemanticChunks } from '../parse/extractor.mjs';
+import { getParserForFile } from '../parse/languages.mjs';
+import { extractRoutes } from '../parse/routes.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { findRoutes } from '../mcp/topology.mjs';
+import { registerTools } from '../mcp/tools.mjs';
 
 let passed = 0, failed = 0;
 const tmpFiles = [];
@@ -121,7 +124,7 @@ test('graph.routes defaults to [] for an index built without the feature', () =>
 await (async () => {
     // ── SQLite parity (skips on Node < 22.5) ───────────────────────────────────
     let SqliteGraphStore;
-    try { ({ SqliteGraphStore } = await import('../sqlite-store.mjs')); }
+    try { ({ SqliteGraphStore } = await import('../engine/sqlite.mjs')); }
     catch { console.log('  ⊘ node:sqlite unavailable — parity test skipped'); return; }
 
     let sq;

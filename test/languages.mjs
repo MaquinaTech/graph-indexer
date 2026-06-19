@@ -14,14 +14,9 @@
  *   node test/languages.mjs        (exit 0 = pass, 1 = failure)
  */
 import assert from 'node:assert/strict';
-import {
-    getParserForFile,
-    extractSemanticChunks,
-    extractImportsFromAST,
-    extractHeritage,
-    extractTypeAnnotations,
-    EXTENSIONS,
-} from '../parser-utils.mjs';
+import { extractSemanticChunks, extractImportsFromAST } from '../parse/extractor.mjs';
+import { getParserForFile, EXTENSIONS } from '../parse/languages.mjs';
+import { extractHeritage, extractTypeAnnotations } from '../parse/metadata.mjs';
 
 let passed = 0, failed = 0, skipped = 0;
 

@@ -34,11 +34,9 @@ import {
     embeddingKeyFor, computePageRank, TEST_FILE_RE, EXAMPLE_DIR_RE,
     summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows,
 } from './search-core.mjs';
-import {
-    MAX_FILE_SIZE_BYTES, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports,
-    buildEmbeddingPayload, fullBodyForEmbedding,
-} from './parser-utils.mjs';
+import { MAX_FILE_SIZE_BYTES, buildIgnoreFilter, extractImportsFromAST, extractSemanticChunks } from './parse/extractor.mjs';
+import { getParserForFile } from './parse/languages.mjs';
+import { resolveLocalImports, buildEmbeddingPayload, fullBodyForEmbedding } from './parse/imports.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import {
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,

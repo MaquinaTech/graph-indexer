@@ -17,9 +17,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { getParserForFile, extractSemanticChunks } from '../parser-utils.mjs';
-import { classifyCallers, buildSubgraph } from '../mcp-tools.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { extractSemanticChunks } from '../parse/extractor.mjs';
+import { getParserForFile } from '../parse/languages.mjs';
+import { classifyCallers, buildSubgraph } from '../mcp/topology.mjs';
 
 // ── Fixture: two modules export a same-named free function `save`. Callers that
 //    import one of them are real callers of an indexed save; a caller that hits a

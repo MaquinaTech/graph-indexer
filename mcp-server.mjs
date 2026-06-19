@@ -20,7 +20,7 @@ import { resolveConfig, describeConfig, configNotices } from './config.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { daemonStatus } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
-import { registerTools } from './mcp-tools.mjs';
+import { registerTools } from './mcp/tools.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import { loadGitSignals } from './git-signals.mjs';
 

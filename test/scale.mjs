@@ -22,8 +22,9 @@ import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { MemoryGraphIndex, writeEmbeddingBinary } from '../core-engine.mjs';
-import { SqliteGraphStore } from '../sqlite-store.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { writeEmbeddingBinary } from '../engine/binary.mjs';
+import { SqliteGraphStore } from '../engine/sqlite.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const MB = 1024 * 1024;

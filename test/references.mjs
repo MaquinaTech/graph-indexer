@@ -19,9 +19,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'os';
 import path from 'path';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { getParserForFile, extractSemanticChunks } from '../parser-utils.mjs';
-import { findReferences, registerTools } from '../mcp-tools.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { extractSemanticChunks } from '../parse/extractor.mjs';
+import { getParserForFile } from '../parse/languages.mjs';
+import { findReferences } from '../mcp/topology.mjs';
+import { registerTools } from '../mcp/tools.mjs';
 
 // ── Fixture: two modules export a same-named class `User`. A referer that imports
 //    one of them resolves to an indexed User (high-confidence); a referer that

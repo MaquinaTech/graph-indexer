@@ -16,7 +16,7 @@ import { z } from 'zod';
 import path from 'path';
 import { resolveConfig } from '../../config.mjs';
 import { createStore } from '../../storage.mjs';
-import { registerTools } from '../../mcp-tools.mjs';
+import { registerTools } from '../../mcp/tools.mjs';
 import { createEmbedder, readEmbedMeta } from '../../embeddings.mjs';
 
 const CHARS_PER_TOKEN = 4;

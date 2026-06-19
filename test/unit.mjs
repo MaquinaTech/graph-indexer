@@ -10,17 +10,12 @@
  * Exit code 0 = all passed, 1 = a failure.
  */
 import assert from 'node:assert/strict';
-import {
-    buildEmbeddingPayload,
-    buildIgnoreFilter,
-    getParserForFile,
-    extractDecorators,
-    extractHeritage,
-    extractSemanticChunks,
-    extractRoutes,
-    EXTENSIONS,
-} from '../parser-utils.mjs';
-import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp-tools.mjs';
+import { buildIgnoreFilter, extractSemanticChunks } from '../parse/extractor.mjs';
+import { getParserForFile, EXTENSIONS } from '../parse/languages.mjs';
+import { extractDecorators, extractHeritage } from '../parse/metadata.mjs';
+import { extractRoutes } from '../parse/routes.mjs';
+import { buildEmbeddingPayload } from '../parse/imports.mjs';
+import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp/topology.mjs';
 import { computeFreshness } from '../git-signals.mjs';
 import { amortizedTokenSavings } from './metrics.mjs';
 import { stemToken, tokenize, STEM_PREFIX, fuseAndRank } from '../search-core.mjs';
@@ -423,7 +418,7 @@ test('extractSemanticChunks splits oversized TypeScript class into skeleton + me
 
 // ─── Embedding binary append + full scan ─────────────────────────────────────
 const { appendEmbeddingBinary, scanEmbeddingBinary, writeEmbeddingBinary, readEmbeddingBinary } =
-    await import('../core-engine.mjs');
+    await import('../engine/binary.mjs');
 const { embeddingKeyFor, isNaturalLanguageQuery } = await import('../search-core.mjs');
 const fsMod = await import('node:fs');
 const osMod = await import('node:os');
@@ -468,7 +463,7 @@ test('scanEmbeddingBinary streams the whole bin and ranks by cosine', () => {
 
 // ─── Binary vector sketch ────────────────────────────────────────────────────
 const { updateVectorSketch, searchVectorSketch, appendEmbeddingBinary: appendBin2 } =
-    await import('../core-engine.mjs');
+    await import('../engine/binary.mjs');
 
 test('vector sketch matches the exact scan top results and survives appends', () => {
     const p = pathMod.join(osMod.tmpdir(), `gi-sketch-${process.pid}-${Math.random().toString(36).slice(2)}.bin`);

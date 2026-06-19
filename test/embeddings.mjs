@@ -24,8 +24,9 @@ import {
     embeddingWindows, baseEmbeddingKey, EMBEDDING_CONTEXT_LIMIT, EMBEDDING_MAX_WINDOWS,
     WINDOW_VEC_SUFFIX,
 } from '../search-core.mjs';
-import { MemoryGraphIndex, writeEmbeddingBinary } from '../core-engine.mjs';
-import { buildEmbeddingPayload, fullBodyForEmbedding } from '../parser-utils.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { writeEmbeddingBinary } from '../engine/binary.mjs';
+import { buildEmbeddingPayload, fullBodyForEmbedding } from '../parse/imports.mjs';
 
 const baseConfig = {
     embeddingsEnabled: true,

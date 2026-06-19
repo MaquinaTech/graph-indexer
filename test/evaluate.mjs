@@ -50,7 +50,7 @@ import { isNaturalLanguageQuery } from '../search-core.mjs';
 import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { createEmbedder, readEmbedMeta, needsNomicPrefix } from '../embeddings.mjs';
-import { hydeQueryVector } from '../mcp-tools.mjs';
+import { hydeQueryVector } from '../mcp/topology.mjs';
 
 import * as axiosSuite from './suites/axios.mjs';
 import * as expressJsSuite from './suites/express-js.mjs';

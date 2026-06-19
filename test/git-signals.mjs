@@ -17,9 +17,10 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { getParserForFile, extractSemanticChunks } from '../parser-utils.mjs';
-import { registerTools } from '../mcp-tools.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { extractSemanticChunks } from '../parse/extractor.mjs';
+import { getParserForFile } from '../parse/languages.mjs';
+import { registerTools } from '../mcp/tools.mjs';
 import { collectGitSignals, coChangesFor, gitBoostScore } from '../git-signals.mjs';
 
 function gitAvailable() {

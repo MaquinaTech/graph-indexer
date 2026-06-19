@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
-import { registerTools } from '../mcp-tools.mjs';
+import { registerTools } from '../mcp/tools.mjs';
 
 function captureTools(projectRoot) {
     const handlers = new Map();

@@ -30,11 +30,11 @@ import {
     tokenize, okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
     isNaturalLanguageQuery, baseEmbeddingKey,
-} from './search-core.mjs';
+} from '../search-core.mjs';
 import {
     writeEmbeddingBinary, appendEmbeddingBinary, scanEmbeddingBinary,
     updateVectorSketch, searchVectorSketch,
-} from './core-engine.mjs';
+} from './binary.mjs';
 
 // node:sqlite is loaded lazily so the default in-memory path never requires it.
 let DatabaseSync = null;

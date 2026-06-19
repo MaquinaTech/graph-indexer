@@ -17,8 +17,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { MemoryGraphIndex } from '../core-engine.mjs';
-import { buildEmbeddingPayload } from '../parser-utils.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { buildEmbeddingPayload } from '../parse/imports.mjs';
 import {
     parseEnrichResponse, selectCoreChunks, enrichCoreChunks,
     loadEnrichmentCache, saveEnrichmentCache, attachEnrichment,

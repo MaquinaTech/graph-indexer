@@ -12,12 +12,11 @@
  */
 import fs from 'fs';
 import path from 'path';
-import {
-    MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, extractRoutes, resolveLocalImports, buildEmbeddingPayload,
-    fullBodyForEmbedding,
-} from './parser-utils.mjs';
-import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
+import { MAX_FILE_SIZE_BYTES, buildIgnoreFilter, extractImportsFromAST, extractSemanticChunks } from './parse/extractor.mjs';
+import { EXTENSIONS, getParserForFile } from './parse/languages.mjs';
+import { extractRoutes } from './parse/routes.mjs';
+import { resolveLocalImports, buildEmbeddingPayload, fullBodyForEmbedding } from './parse/imports.mjs';
+import { readEmbeddingBinary, writeEmbeddingBinary } from './engine/binary.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows } from './search-core.mjs';
 import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta } from './embeddings.mjs';
 import { resolveConfig, describeConfig, configNotices } from './config.mjs';
@@ -257,7 +256,7 @@ async function main() {
     }
 
     if (backend === 'sqlite') {
-        const { SqliteGraphStore } = await import('./sqlite-store.mjs');
+        const { SqliteGraphStore } = await import('./engine/sqlite.mjs');
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
