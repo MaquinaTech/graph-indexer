@@ -1,11 +1,12 @@
 <domain_prompt layer="3" name="project-domain" requires="graph-indexer-core">
 
     <!--
-        LAYER 3 — YOUR PROJECT'S RULES. This file is a template: replace every
-        [BRACKETED] placeholder with facts about your codebase, and delete any
-        section that does not apply. Keep it short — under ~40 lines. Layer 3
-        may ADD precision to Layers 1–2 but may NEVER relax the 4-Call Budget,
-        the prime directive, or the fallback protocol.
+        LAYER 3 — YOUR PROJECT'S RULES. Replace every [BRACKETED] placeholder with
+        facts about YOUR codebase and delete sections that don't apply. Keep it under
+        ~40 lines: this exists to make the agent's FIRST query hit rank-1, not to
+        restate your architecture docs. May ADD precision to Layers 1–2 but may NEVER
+        relax the 4-call budget, the prime directive, or the fallback protocol.
+        Tip: delete these comments once filled — they cost tokens every session.
     -->
 
     <project_identity>
@@ -14,7 +15,7 @@
     </project_identity>
 
     <entry_points>
-        <!-- Where execution starts. Saves the agent its first orientation call. -->
+        <!-- Where execution starts — saves the agent its first orientation call. -->
         <entry path="[src/main.ts]" role="[application bootstrap]"/>
         <entry path="[src/api/routes/]" role="[HTTP surface]"/>
     </entry_points>
