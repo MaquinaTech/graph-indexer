@@ -11,7 +11,7 @@
  *   built/<fixture>.tasks.md    the 4 archetype tasks for this fixture
  *   built/<fixture>             launcher (sets fixture, trace, retrieval mode)
  *
- * Launcher retrieval mode:  AGENT_MODE=semantic (default, Ollama 11435) | lexical (BM25 only).
+ * Launcher retrieval mode:  AGENT_MODE=semantic (default, Ollama 11434) | lexical (BM25 only).
  * Per-call archetype tag:   AGENT_TASK=symbol|behaviour|keyword|crosscut (recorded in trace).
  *
  * Usage: node test/agent/assemble.mjs
@@ -26,7 +26,7 @@ const REPO = path.resolve(HERE, '../..');
 const PROMPTS = path.join(REPO, 'prompts');
 const BUILT = path.join(HERE, 'built');
 const TRACES = path.join(HERE, 'traces');
-const SEMANTIC_HOST = process.env.OLLAMA_SEMANTIC_HOST || 'http://localhost:11435';
+const SEMANTIC_HOST = process.env.OLLAMA_SEMANTIC_HOST || 'http://localhost:11434';
 
 fs.mkdirSync(BUILT, { recursive: true });
 fs.mkdirSync(TRACES, { recursive: true });

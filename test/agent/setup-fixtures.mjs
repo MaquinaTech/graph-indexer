@@ -8,7 +8,7 @@
  *
  *   node test/agent/setup-fixtures.mjs                 # all fixtures
  *   node test/agent/setup-fixtures.mjs rust react      # selected
- *   OLLAMA_HOST=http://localhost:11435 node test/agent/setup-fixtures.mjs
+ *   OLLAMA_HOST=http://localhost:11434 node test/agent/setup-fixtures.mjs
  *
  * Requires: git, and (for semantic search) a running Ollama with nomic-embed-text.
  * Without Ollama the index still builds (lexical-only); embeddings are skipped.

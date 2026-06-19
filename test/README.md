@@ -43,20 +43,20 @@ node test/evaluate.mjs --verbose  # per-query top-1 + inflation flags
 
 # 7. Strict accuracy on the HYBRID channel (lexical + nomic-embed-text vectors)
 #    Requires fixtures indexed with INDEXER_EMBEDDINGS=on and a running Ollama.
-OLLAMA_HOST=http://localhost:11435 node test/evaluate.mjs --embeddings
+OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings
 
 # 8. Full pipeline incl. LLM enrichment (summaries/tags cached per fixture in
 #    code-index.enrichment.json — the first run is slow, re-runs are cache hits)
 for f in axios express-js nestjs fastapi gin; do
-  INDEXER_EMBEDDINGS=on OLLAMA_HOST=http://localhost:11435 \
+  INDEXER_EMBEDDINGS=on OLLAMA_HOST=http://localhost:11434 \
     node indexer.mjs --repo test/fixtures/$f --llm-enrichment --enrich-max 4000
 done
-OLLAMA_HOST=http://localhost:11435 node test/evaluate.mjs --embeddings              # memory
-OLLAMA_HOST=http://localhost:11435 node test/evaluate.mjs --embeddings --use-sqlite # parity
+OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings              # memory
+OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings --use-sqlite # parity
 
 # 9. LLM-judge reranking on top (natural-language queries only; RERANK_MODEL
 #    defaults to qwen2.5-coder:1.5b — use the 7B for the measured quality gain)
-OLLAMA_HOST=http://localhost:11435 RERANK_MODEL=qwen2.5-coder:7b \
+OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b \
   node test/evaluate.mjs --embeddings --rerank
 ```
 

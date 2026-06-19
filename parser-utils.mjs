@@ -33,7 +33,7 @@ export const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
 // installed as a dependency, the user's config lives in their project root) →
 // default. Mirrors config.mjs precedence so every entry point agrees.
 //
-// Note: OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11435"), not an
+// Note: OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11434"), not an
 // HTTP client URL. We normalise bare "host:port" strings by adding http:// and translating
 // 0.0.0.0 → localhost so fetches work in both formats.
 let _cachedHost = null;
@@ -97,41 +97,41 @@ const [
 ] = await Promise.all([
     _tryLang('tree-sitter-typescript', _enabled, 'typescript'),
     _tryLang('tree-sitter-javascript', _enabled, 'javascript'),
-    _tryLang('tree-sitter-css',        _enabled, 'css'),
+    _tryLang('tree-sitter-css', _enabled, 'css'),
     // SCSS shares the 'css' enable-key — init records .css and .scss under one
     // 'css' language, so the SCSS grammar must load whenever CSS is enabled.
-    _tryLang('tree-sitter-scss',       _enabled, (_enabled && _enabled.includes('css')) ? 'css' : 'scss'),
-    _tryLang('tree-sitter-python',     _enabled, 'python'),
-    _tryLang('tree-sitter-rust',       _enabled, 'rust'),
-    _tryLang('tree-sitter-go',         _enabled, 'go'),
-    _tryLang('tree-sitter-php',        _enabled, 'php'),
-    _tryLang('tree-sitter-java',       _enabled, 'java'),
-    _tryLang('tree-sitter-kotlin',     _enabled, 'kotlin'),
-    _tryLang('tree-sitter-c-sharp',    _enabled, 'csharp'),
-    _tryLang('tree-sitter-ruby',       _enabled, 'ruby'),
-    _tryLang('tree-sitter-c',          _enabled, 'c'),
-    _tryLang('tree-sitter-bash',       _enabled, 'bash'),
-    _tryLang('tree-sitter-swift',      _enabled, 'swift'),
+    _tryLang('tree-sitter-scss', _enabled, (_enabled && _enabled.includes('css')) ? 'css' : 'scss'),
+    _tryLang('tree-sitter-python', _enabled, 'python'),
+    _tryLang('tree-sitter-rust', _enabled, 'rust'),
+    _tryLang('tree-sitter-go', _enabled, 'go'),
+    _tryLang('tree-sitter-php', _enabled, 'php'),
+    _tryLang('tree-sitter-java', _enabled, 'java'),
+    _tryLang('tree-sitter-kotlin', _enabled, 'kotlin'),
+    _tryLang('tree-sitter-c-sharp', _enabled, 'csharp'),
+    _tryLang('tree-sitter-ruby', _enabled, 'ruby'),
+    _tryLang('tree-sitter-c', _enabled, 'c'),
+    _tryLang('tree-sitter-bash', _enabled, 'bash'),
+    _tryLang('tree-sitter-swift', _enabled, 'swift'),
 ]);
 
 const LANGUAGE_MAP = {
     ...(TypeScript ? { '.ts': TypeScript.typescript, '.tsx': TypeScript.tsx } : {}),
     ...(JavaScript ? { '.js': JavaScript, '.jsx': JavaScript, '.mjs': JavaScript, '.cjs': JavaScript } : {}),
-    ...(CSS        ? { '.css': CSS } : {}),
-    ...(SCSS       ? { '.scss': SCSS } : (CSS ? { '.scss': CSS } : {})),
-    ...(Python     ? { '.py': Python }  : {}),
-    ...(Rust       ? { '.rs': Rust }    : {}),
-    ...(Go         ? { '.go': Go }      : {}),
-    ...(PHP        ? { '.php': PHP.php } : {}),
-    ...(Java       ? { '.java': Java }  : {}),
-    ...(Kotlin     ? { '.kt': Kotlin, '.kts': Kotlin } : {}),
-    ...(CSharp     ? { '.cs': CSharp }  : {}),
-    ...(Ruby       ? { '.rb': Ruby }    : {}),
+    ...(CSS ? { '.css': CSS } : {}),
+    ...(SCSS ? { '.scss': SCSS } : (CSS ? { '.scss': CSS } : {})),
+    ...(Python ? { '.py': Python } : {}),
+    ...(Rust ? { '.rs': Rust } : {}),
+    ...(Go ? { '.go': Go } : {}),
+    ...(PHP ? { '.php': PHP.php } : {}),
+    ...(Java ? { '.java': Java } : {}),
+    ...(Kotlin ? { '.kt': Kotlin, '.kts': Kotlin } : {}),
+    ...(CSharp ? { '.cs': CSharp } : {}),
+    ...(Ruby ? { '.rb': Ruby } : {}),
     // C maps .c sources and .h headers (structs/typedefs/macros live in headers).
-    ...(C          ? { '.c': C, '.h': C } : {}),
+    ...(C ? { '.c': C, '.h': C } : {}),
     // Bash maps .sh and .bash; shebang-only extensionless scripts are not keyed.
-    ...(Bash       ? { '.sh': Bash, '.bash': Bash } : {}),
-    ...(Swift      ? { '.swift': Swift } : {}),
+    ...(Bash ? { '.sh': Bash, '.bash': Bash } : {}),
+    ...(Swift ? { '.swift': Swift } : {}),
 };
 
 // 🥇 ULTRA-GENERIC QUERIES: Immune to grammar changes between TS/JS/TSX
@@ -633,7 +633,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                     || spec?.children?.find(c => c.type === "type_identifier")?.text
                     || "anonymous";
             } else if (chunkNode.type === "function_definition" || chunkNode.type === "type_definition"
-                       || chunkNode.type === "preproc_function_def") {
+                || chunkNode.type === "preproc_function_def") {
                 // C: the name is not a direct `name` field. For a function it is buried in
                 // declarator → … → identifier (e.g. `int *make()` nests through a
                 // pointer_declarator); for a typedef the `declarator` field is the new type
@@ -1240,12 +1240,12 @@ export function extractHeritage(chunkNode, ext) {
 // Per-grammar node types whose subtree holds base/interface/supertrait names.
 const HERITAGE_CLAUSES = {
     '.java': new Set(['superclass', 'super_interfaces']),
-    '.cs':   new Set(['base_list']),
-    '.php':  new Set(['base_clause', 'class_interface_clause']),
-    '.kt':   new Set(['delegation_specifier']),
+    '.cs': new Set(['base_list']),
+    '.php': new Set(['base_clause', 'class_interface_clause']),
+    '.kt': new Set(['delegation_specifier']),
     '.swift': new Set(['inheritance_specifier']),
-    '.rb':   new Set(['superclass']),
-    '.rs':   new Set(['trait_bounds']), // supertrait bounds on a trait_item
+    '.rb': new Set(['superclass']),
+    '.rs': new Set(['trait_bounds']), // supertrait bounds on a trait_item
 };
 // Member-body nodes the heritage walk must not descend into (base types precede them).
 const HERITAGE_BODY_TYPES = new Set([
@@ -1353,7 +1353,7 @@ export function extractTypeAnnotations(chunkNode, ext) {
         if (node.type === 'type_annotation') {
             const typeText = node.text.replace(/^:\s*/, '').trim();
             // Extract simple identifiers from the type (skip primitives)
-            const PRIMITIVES = new Set(['string','number','boolean','void','any','unknown','never','null','undefined','object','symbol','bigint']);
+            const PRIMITIVES = new Set(['string', 'number', 'boolean', 'void', 'any', 'unknown', 'never', 'null', 'undefined', 'object', 'symbol', 'bigint']);
             for (const match of typeText.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g)) {
                 if (!PRIMITIVES.has(match[1].toLowerCase())) types.add(match[1]);
             }

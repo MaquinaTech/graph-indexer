@@ -15,7 +15,7 @@
  *   node test/run-embeddings.mjs --help
  *
  * Requirements:
- *   • Ollama running at $OLLAMA_HOST (default: http://localhost:11435)
+ *   • Ollama running at $OLLAMA_HOST (default: http://localhost:11434)
  *   • nomic-embed-text model pulled: `ollama pull nomic-embed-text`
  */
 
@@ -52,7 +52,7 @@ Usage: node test/run-embeddings.mjs [options]
   --suite <id>       Run only one suite (axios|express-js|nestjs|fastapi|gin)
   --skip-indexing    Reuse existing code-index.json + code-index.embeddings.bin
   --json             Write JSON report to test/reports/
-  --ollama-host <u>  Override Ollama URL (default: http://localhost:11435)
+  --ollama-host <u>  Override Ollama URL (default: http://localhost:11434)
   --help             Show this message
 `);
     process.exit(0);
@@ -63,7 +63,7 @@ const skipIndexing = args.includes('--skip-indexing');
 const writeJson = args.includes('--json');
 const ollamaHost = args.includes('--ollama-host')
     ? args[args.indexOf('--ollama-host') + 1]
-    : (process.env.OLLAMA_HOST || 'http://localhost:11435');
+    : (process.env.OLLAMA_HOST || 'http://localhost:11434');
 const EMBED_MODEL = 'nomic-embed-text';
 
 // ── Colour helpers ────────────────────────────────────────────────────────────

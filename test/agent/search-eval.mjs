@@ -21,7 +21,7 @@
 import { createBridge } from './tool-bridge.mjs';
 import { SEARCH_CASES } from './search-cases.mjs';
 
-const SEMANTIC_HOST = process.env.OLLAMA_SEMANTIC_HOST || 'http://localhost:11435';
+const SEMANTIC_HOST = process.env.OLLAMA_SEMANTIC_HOST || 'http://localhost:11434';
 const DEAD_HOST = 'http://127.0.0.1:1';          // guaranteed connection-refused → lexical
 const TOP_K = 12;
 
@@ -108,12 +108,12 @@ for (const { fixture, lex, sem } of report) {
         const L = lex[i], S = sem[i];
         const fmt = (r) => (r > 0 ? `@${r}`.padEnd(6) : 'MISS  ');
         const flag = (S.rank && (!L.rank || S.rank < L.rank)) ? ' ◀ sem wins'
-                   : (L.rank && (!S.rank || L.rank < S.rank)) ? ' ◀ lex wins' : '';
-        console.log(`  ${L.id.padEnd(18)} ${(L.kind||'').padEnd(5)}  ${fmt(L.rank)}    ${fmt(S.rank)}${flag}`);
+            : (L.rank && (!S.rank || L.rank < S.rank)) ? ' ◀ lex wins' : '';
+        console.log(`  ${L.id.padEnd(18)} ${(L.kind || '').padEnd(5)}  ${fmt(L.rank)}    ${fmt(S.rank)}${flag}`);
         allLex.push(L.rank); allSem.push(S.rank);
     }
 }
 console.log(`\n${'═'.repeat(58)}`);
 console.log(`OVERALL (${allLex.length} cases):`);
-console.log(`  LEXICAL   hit@1=${hitAt(allLex,1)} hit@3=${hitAt(allLex,3)} hit@12=${hitAt(allLex,12)}  MRR=${mrr(allLex).toFixed(3)}`);
-console.log(`  SEMANTIC  hit@1=${hitAt(allSem,1)} hit@3=${hitAt(allSem,3)} hit@12=${hitAt(allSem,12)}  MRR=${mrr(allSem).toFixed(3)}`);
+console.log(`  LEXICAL   hit@1=${hitAt(allLex, 1)} hit@3=${hitAt(allLex, 3)} hit@12=${hitAt(allLex, 12)}  MRR=${mrr(allLex).toFixed(3)}`);
+console.log(`  SEMANTIC  hit@1=${hitAt(allSem, 1)} hit@3=${hitAt(allSem, 3)} hit@12=${hitAt(allSem, 12)}  MRR=${mrr(allSem).toFixed(3)}`);
