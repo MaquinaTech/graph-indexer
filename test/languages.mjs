@@ -302,6 +302,34 @@ langTest('C#: heritage (base list)', '.cs', () => {
     const h = extractHeritage(cls, '.cs');
     assert.ok(has(h, 'Animal') && has(h, 'IPet'), `C# base list → ${JSON.stringify(h)}`);
 });
+langTest('C#: type refs (params, fields, generics, return, base)', '.cs', () => {
+    const src = [
+        'public class OrderService : IOrderService {',
+        '    private readonly IRepository<Order> _repo;',
+        '    public OrderService(IRepository<Order> repo, IEmailSender emailSender) {',
+        '        _repo = repo;',
+        '    }',
+        '    public async Task<Order> CreateOrderAsync(string userId, Address address) { }',
+        '}',
+    ].join('\n');
+    const cls = firstNodeOfType('.cs', src, /class_declaration/);
+    const tr = extractTypeAnnotations(cls, '.cs');
+    for (const want of ['IOrderService', 'IRepository', 'IEmailSender', 'Address', 'Order', 'Task']) {
+        assert.ok(has(tr, want), `C# type refs missing ${want} → ${JSON.stringify(tr)}`);
+    }
+    // Primitives / built-ins must NOT leak into type_refs.
+    for (const prim of ['int', 'void', 'string', 'bool']) {
+        assert.ok(!has(tr, prim), `C# type refs should exclude primitive ${prim} → ${JSON.stringify(tr)}`);
+    }
+});
+langTest('C#: fully-qualified generic type yields clean inner names, no malformed token', '.cs', () => {
+    const cls = firstNodeOfType('.cs', 'class C { private System.Collections.Generic.List<Order> items; }', /class_declaration/);
+    const tr = extractTypeAnnotations(cls, '.cs');
+    assert.ok(has(tr, 'List') && has(tr, 'Order'), `qualified generic → ${JSON.stringify(tr)}`);
+    // The combined "List<Order>" token (and bare namespace segments) must not leak.
+    assert.ok(tr.every(t => !t.includes('<') && !t.includes('>')), `malformed generic token leaked → ${JSON.stringify(tr)}`);
+    assert.ok(!has(tr, 'System') && !has(tr, 'Collections') && !has(tr, 'Generic'), `namespace leaked → ${JSON.stringify(tr)}`);
+});
 langTest('Kotlin: heritage (delegation specifiers)', '.kt', () => {
     const cls = firstNodeOfType('.kt', 'class Dog(n: String) : Animal(n), Pet { fun walk(o: Owner): Leash { return Leash() } }', /class_declaration/);
     const h = extractHeritage(cls, '.kt');
@@ -330,6 +358,18 @@ langTest('Rust: supertrait bound', '.rs', () => {
     const tr = firstNodeOfType('.rs', 'trait Pet: Animal {}', /trait_item/);
     const h = extractHeritage(tr, '.rs');
     assert.ok(has(h, 'Animal'), `Rust supertrait bound → ${JSON.stringify(h)}`);
+});
+langTest('Rust: type refs (params, refs, generics, return)', '.rs', () => {
+    // Rust spells types as `type_identifier`, already captured by the shared
+    // cross-language branch — this asserts that contract holds (no regression).
+    const fn = firstNodeOfType('.rs', 'fn process(config: Config, store: &Store) -> Result<Output> { let x: u32 = 0; }', /function_item/);
+    const tr = extractTypeAnnotations(fn, '.rs');
+    for (const want of ['Config', 'Store', 'Output', 'Result']) {
+        assert.ok(has(tr, want), `Rust type refs missing ${want} → ${JSON.stringify(tr)}`);
+    }
+    for (const prim of ['u32', 'str', 'bool']) {
+        assert.ok(!has(tr, prim), `Rust type refs should exclude primitive ${prim} → ${JSON.stringify(tr)}`);
+    }
 });
 langTest('Go: type refs (no inheritance keyword)', '.go', () => {
     const fn = firstNodeOfType('.go', 'func Walk(o Owner) Leash { return Leash{} }', /function_declaration|method_declaration/);

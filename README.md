@@ -87,6 +87,7 @@ The agent can then call `get_call_graph("rateLimiter")` to see what calls it (th
 | `get_file_skeleton` | The top-level structure (symbols + signatures) of a file. |
 | `get_call_graph` | Callers and callees of a symbol — the blast radius. |
 | `find_references` | Where a symbol is used: callers, subclasses, and type references. |
+| `find_routes` | HTTP routes mapped to their handler chunks (NestJS, FastAPI/Flask, Spring, Express/Koa). |
 | `get_subgraph` | The dependency/import neighbourhood around a file. |
 | `get_repo_map` | A high-level map of the repository's modules and topology. |
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
@@ -183,7 +184,7 @@ The honest conclusion from that run: **embeddings are a recall lever (they get t
 - Semantic rank-1 on the default path is **0.40 (held-out)**. Closing the remaining gap is bounded by the embedding/reranker channel, not lexical reweighting (see the table above).
 - The reranker is inconsistent across languages — it helps Go/Python and regresses JavaScript.
 - Enrichment only pays off paired with the reranker; alone it regresses semantic precision.
-- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/C#/PHP/Kotlin/Swift/Rust/Go/C**, and are **empty for C# and Ruby** (no cheap static type signal). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
+- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/PHP/Kotlin/Swift/Rust/Go/C**, use a dedicated field-precise branch for **C#** (params/fields/properties/returns/base list — ~83% of C# chunks on the aspnet fixture), and are **empty for Ruby** (dynamically typed — no cheap static type signal). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
 - Call-graph callers reached through a dynamically-typed or unresolved receiver (e.g. `const s = getStore(); s.save()`) are reported in the lower-confidence **name-only** bucket — they are not statically disambiguated by class.
 
 ## Contributing / reproducing the benchmarks

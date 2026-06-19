@@ -17,6 +17,7 @@ import {
     extractDecorators,
     extractHeritage,
     extractSemanticChunks,
+    extractRoutes,
     EXTENSIONS,
 } from '../parser-utils.mjs';
 import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp-tools.mjs';
@@ -103,6 +104,160 @@ test('extractDecorators strips call arguments to the bare callee name', () => {
     const tree = parser.parse(src);
     const decos = extractDecorators(tree.rootNode.namedChild(0));
     assert.deepEqual(decos, ['Injectable']);
+});
+
+// ─── extractRoutes (HTTP route → handler) ────────────────────────────────────
+// Detection is by AST node type per framework; assert method/path/handler_name.
+const routeBy = (routes, method, pathIncludes) =>
+    routes.find(r => r.method === method && r.path.includes(pathIncludes));
+
+test('extractRoutes: Express router.<verb>(path, handler) call sites (JS)', () => {
+    const parser = getParserForFile('.js');
+    if (!parser) { console.log('      (skipped — tree-sitter-javascript not installed)'); return; }
+    const src = [
+        'const router = express.Router();',
+        "router.get('/api/users', getUserHandler);",
+        "router.post('/api/users', (req, res) => { res.send('ok'); });",
+        "app.delete('/api/users/:id', deleteHandler);",
+        "const m = new Map(); m.get('k');",  // must NOT be treated as a route (1 arg, not a path+handler)
+    ].join('\n');
+    const tree = parser.parse(src);
+    const routes = extractRoutes(tree.rootNode, 'routes.js', [], '.js');
+    assert.equal(routes.length, 3, `expected 3 routes, got ${routes.length}: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
+    const get = routeBy(routes, 'GET', '/api/users');
+    assert.ok(get && get.handler_name === 'getUserHandler', `GET handler → ${JSON.stringify(get)}`);
+    const post = routeBy(routes, 'POST', '/api/users');
+    assert.ok(post && post.handler_name === 'anonymous', `POST arrow handler → anonymous, got ${JSON.stringify(post)}`);
+    const del = routeBy(routes, 'DELETE', '/api/users/:id');
+    assert.ok(del && del.handler_name === 'deleteHandler', `DELETE handler → ${JSON.stringify(del)}`);
+    assert.equal(del.framework, 'express');
+});
+
+test('extractRoutes: NestJS @Get/@Post on methods, @Controller prefix prepended (TS)', () => {
+    const parser = getParserForFile('.ts');
+    if (!parser) { console.log('      (skipped — tree-sitter-typescript not installed)'); return; }
+    const src = [
+        "@Controller('users')",
+        'export class UsersController {',
+        "  @Get(':id')",
+        '  getUser(id) { return this.svc.find(id); }',
+        '  @Post()',
+        '  create(dto) { return this.svc.create(dto); }',
+        '}',
+    ].join('\n');
+    const tree = parser.parse(src);
+    const routes = extractRoutes(tree.rootNode, 'users.controller.ts', [], '.ts');
+    const get = routeBy(routes, 'GET', ':id');
+    assert.ok(get, `expected a GET route, got ${JSON.stringify(routes)}`);
+    assert.equal(get.path, '/users/:id', `controller prefix prepended + rooted: ${get.path}`);
+    assert.equal(get.handler_name, 'getUser');
+    assert.equal(get.framework, 'nestjs');
+    const post = routeBy(routes, 'POST', 'users');
+    assert.ok(post && post.path === '/users' && post.handler_name === 'create', `POST → ${JSON.stringify(post)}`);
+});
+
+test('extractRoutes: Express handler as member-expression / .bind() / after middleware (JS)', () => {
+    const parser = getParserForFile('.js');
+    if (!parser) return;
+    const src = [
+        "router.get('/a', ctrl.getThing);",            // member_expression → 'getThing'
+        "router.post('/b', this.handler);",            // this-member → 'handler'
+        "router.put('/c', handler.bind(this));",       // .bind() → 'handler'
+        "router.delete('/d', auth, ctrl.remove);",     // middleware + member → last arg wins
+        "cache.get('userKey', fallbackValue);",        // NOT a route (path not rooted)
+        "store.delete('id', opts);",                   // NOT a route (path not rooted)
+    ].join('\n');
+    const tree = parser.parse(src);
+    const routes = extractRoutes(tree.rootNode, 'r.js', [], '.js');
+    assert.equal(routeBy(routes, 'GET', '/a')?.handler_name, 'getThing', `member handler → ${JSON.stringify(routes)}`);
+    assert.equal(routeBy(routes, 'POST', '/b')?.handler_name, 'handler');
+    assert.equal(routeBy(routes, 'PUT', '/c')?.handler_name, 'handler', '.bind() handler');
+    assert.equal(routeBy(routes, 'DELETE', '/d')?.handler_name, 'remove', 'handler is last arg, not the middleware');
+    // Look-alike, non-rooted member calls must NOT produce routes.
+    assert.ok(!routes.some(r => r.path.includes('userKey') || r.path.includes('id') && r.handler_name === 'opts'),
+        `phantom route leaked: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
+    assert.equal(routes.length, 4, `expected exactly 4 real routes: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
+});
+
+test('extractRoutes: NestJS prefix for non-exported + abstract controllers (TS)', () => {
+    const parser = getParserForFile('.ts');
+    if (!parser) return;
+    const nonExported = "@Controller('p')\nclass C {\n  @Get('a')\n  f() { return 1; }\n}";
+    let routes = extractRoutes(parser.parse(nonExported).rootNode, 'c.ts', [], '.ts');
+    assert.equal(routeBy(routes, 'GET', 'a')?.path, '/p/a', `non-exported controller prefix lost: ${JSON.stringify(routes)}`);
+    const abstractCtrl = "@Controller('base')\nabstract class B {\n  @Get(':id')\n  find(id) { return 1; }\n}";
+    routes = extractRoutes(parser.parse(abstractCtrl).rootNode, 'b.ts', [], '.ts');
+    assert.equal(routeBy(routes, 'GET', ':id')?.path, '/base/:id', `abstract controller routes missing: ${JSON.stringify(routes)}`);
+});
+
+test('extractRoutes: Spring @RequestMapping with a method array yields one route per verb (Java)', () => {
+    const parser = getParserForFile('.java');
+    if (!parser) { console.log('      (skipped — tree-sitter-java not installed)'); return; }
+    const src = [
+        'class X {',
+        '    @RequestMapping(value = "/legacy", method = {RequestMethod.GET, RequestMethod.POST})',
+        '    public void legacy() {}',
+        '}',
+    ].join('\n');
+    const routes = extractRoutes(parser.parse(src).rootNode, 'X.java', [], '.java');
+    const get = routeBy(routes, 'GET', '/legacy');
+    const post = routeBy(routes, 'POST', '/legacy');
+    assert.ok(get && post, `array method should expand to GET+POST: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
+    // No garbage verb (e.g. 'POST}') from a naive split.
+    assert.ok(routes.every(r => /^[A-Z]+$/.test(r.method)), `garbage verb leaked: ${JSON.stringify(routes.map(r => r.method))}`);
+});
+
+test('extractRoutes: FastAPI/Flask decorators (Python)', () => {
+    const parser = getParserForFile('.py');
+    if (!parser) { console.log('      (skipped — tree-sitter-python not installed)'); return; }
+    const src = [
+        '@app.get("/items/{item_id}")',
+        'def read_item(item_id):',
+        '    return item_id',
+        '',
+        '@router.post("/items")',
+        'async def create_item(item):',
+        '    return item',
+        '',
+        '@app.route("/legacy", methods=["GET", "POST"])',
+        'def legacy():',
+        '    return "ok"',
+    ].join('\n');
+    const tree = parser.parse(src);
+    const routes = extractRoutes(tree.rootNode, 'api.py', [], '.py');
+    const get = routeBy(routes, 'GET', '/items/{item_id}');
+    assert.ok(get && get.handler_name === 'read_item', `FastAPI GET → ${JSON.stringify(get)}`);
+    const post = routeBy(routes, 'POST', '/items');
+    assert.ok(post && post.handler_name === 'create_item', `FastAPI POST → ${JSON.stringify(post)}`);
+    // @app.route(..., methods=["GET","POST"]) → one route per declared method.
+    assert.ok(routeBy(routes, 'GET', '/legacy') && routeBy(routes, 'POST', '/legacy'),
+        `@app.route should expand to GET+POST /legacy: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
+});
+
+test('extractRoutes: resolves handler_chunk_id by name and is empty for non-web languages', () => {
+    const parser = getParserForFile('.js');
+    if (!parser) return;
+    // Multi-line handler so it becomes its own chunk, then resolves by name.
+    const src = [
+        'function listUsers(req, res) {',
+        '  const users = db.all();',
+        '  res.json(users);',
+        '}',
+        "router.get('/api/users', listUsers);",
+    ].join('\n');
+    const tree = parser.parse(src);
+    const chunks = extractSemanticChunks(tree.rootNode, 'r.js', src, '.js');
+    const routes = extractRoutes(tree.rootNode, 'r.js', chunks, '.js');
+    const r = routes[0];
+    assert.ok(r && r.handler_name === 'listUsers', `route handler → ${JSON.stringify(r)}`);
+    const handlerChunk = chunks.find(c => c.name === 'listUsers');
+    assert.ok(handlerChunk, 'listUsers should be a chunk');
+    assert.equal(r.handler_chunk_id, handlerChunk.id, 'handler_chunk_id must resolve to the chunk');
+    // A non-web language yields no routes.
+    if (getParserForFile('.go')) {
+        const goTree = getParserForFile('.go').parse('func Add(a int, b int) int {\n  return a + b\n}');
+        assert.deepEqual(extractRoutes(goTree.rootNode, 'm.go', [], '.go'), []);
+    }
 });
 
 // ─── extractHeritage (concept → implementation edge) ─────────────────────────

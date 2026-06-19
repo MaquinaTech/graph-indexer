@@ -14,7 +14,7 @@ import fs from 'fs';
 import path from 'path';
 import {
     MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter,
-    extractImportsFromAST, extractSemanticChunks, resolveLocalImports, buildEmbeddingPayload,
+    extractImportsFromAST, extractSemanticChunks, extractRoutes, resolveLocalImports, buildEmbeddingPayload,
 } from './parser-utils.mjs';
 import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
@@ -85,7 +85,7 @@ async function main() {
     }
     console.log(`📦 Loaded ${existingCache.size} cached embeddings from previous runs.\n`);
 
-    const indexData = { chunks: [], graph: { dependencies: {}, importedBy: {} }, embeddingCache: {} };
+    const indexData = { chunks: [], graph: { dependencies: {}, importedBy: {}, routes: [] }, embeddingCache: {} };
     const pendingChunks = [];
     let totalCheckedFiles = 0;
 
@@ -114,8 +114,14 @@ async function main() {
 
             // Chunks are collected first; embedding/enrichment happen in batch below so
             // we can route the high-value subset through the LLM before vectorising.
-            for (const chunk of extractSemanticChunks(tree.rootNode, relPath, content, ext)) {
-                pendingChunks.push(chunk);
+            const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
+            for (const chunk of fileChunks) pendingChunks.push(chunk);
+
+            // HTTP routes → handler chunks. Accumulated into the global graph.routes
+            // array (each route is self-describing with file_path/line/handler_chunk_id),
+            // mirroring the per-file dependencies assignment above.
+            for (const route of extractRoutes(tree.rootNode, relPath, fileChunks, ext)) {
+                indexData.graph.routes.push(route);
             }
         } catch (err) {
             console.error(`\n💥 Error in ${relPath}: ${err.message}`);

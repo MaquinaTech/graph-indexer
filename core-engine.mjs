@@ -1102,6 +1102,29 @@ export class MemoryGraphIndex {
         return out;
     }
 
+    /**
+     * HTTP routes filtered by method and/or path prefix, each augmented with its
+     * resolved handler chunk (`chunk`, looked up by handler_chunk_id, or null).
+     * `graph.routes` round-trips verbatim through load(); a route-less index yields
+     * []. Method is matched case-insensitively (HTTP verbs are upper-cased); the
+     * path prefix match is case-insensitive. Mirrors SqliteGraphStore.findRoutes so
+     * both backends return identical records.
+     * @returns {object[]}
+     */
+    findRoutes({ method = null, pathPrefix = null } = {}) {
+        const routes = (this.graph && this.graph.routes) || [];
+        const m = method ? String(method).toUpperCase().trim() : null;
+        const p = pathPrefix ? String(pathPrefix).toLowerCase() : null;
+        const out = [];
+        for (const r of routes) {
+            if (m && String(r.method || '').toUpperCase() !== m) continue;
+            if (p && !String(r.path || '').toLowerCase().startsWith(p)) continue;
+            const chunk = r.handler_chunk_id ? (this.chunks.get(r.handler_chunk_id) || null) : null;
+            out.push({ ...r, chunk });
+        }
+        return out;
+    }
+
     /** Lazily iterate every chunk (cursor-friendly parity with the SQLite store). */
     *iterateChunks() { yield* this.chunks.values(); }
 

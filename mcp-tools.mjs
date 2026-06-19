@@ -348,6 +348,49 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
     return { symbol, targetDefs, ambiguous, calls, inherits, types };
 }
 
+// ─── HTTP route → handler resolution ──────────────────────────────────────────────
+
+/**
+ * HTTP routes mapped to their handler chunks. Pure helper over the store contract
+ * (`db.findRoutes`), so it is backend-agnostic and importable by tests/agent-trace.
+ *
+ * Filtering:
+ *   • method — optional HTTP verb, case-insensitive (GET/POST/…); omitted = all.
+ *   • path   — a query starting with '/' is a PREFIX match (uses the backend's
+ *              indexed prefix filter); one containing '{' or ':' (a route-pattern
+ *              hint) — or any other non-'/' query — is a CONTAINS match.
+ *
+ * Each result inlines the handler chunk's id/name/node_type/start_line/end_line
+ * (null when the handler isn't a chunk). Deterministically sorted (file_path, line,
+ * method, path) so the in-memory and SQLite backends return byte-identical output.
+ *
+ * @returns {Array<{method,path,handler_name,handler_chunk_id,file_path,line,framework,
+ *                  name,node_type,start_line,end_line,id}>}
+ */
+export function findRoutes(db, { method = null, path: pathQuery = null } = {}) {
+    const isPrefix = typeof pathQuery === 'string' && pathQuery.startsWith('/');
+    const base = db.findRoutes({ method: method || null, pathPrefix: isPrefix ? pathQuery : null });
+    const needle = (typeof pathQuery === 'string' && pathQuery && !isPrefix) ? pathQuery.toLowerCase() : null;
+    const rows = (needle ? base.filter(r => String(r.path || '').toLowerCase().includes(needle)) : base)
+        .map(r => {
+            const c = r.chunk || null;
+            return {
+                method: r.method, path: r.path, handler_name: r.handler_name,
+                handler_chunk_id: r.handler_chunk_id, file_path: r.file_path,
+                line: r.line, framework: r.framework,
+                name: c?.name ?? null, node_type: c?.node_type ?? null,
+                start_line: c?.start_line ?? null, end_line: c?.end_line ?? null,
+                id: c?.id ?? null,
+            };
+        });
+    rows.sort((a, b) =>
+        (a.file_path < b.file_path ? -1 : a.file_path > b.file_path ? 1 : 0)
+        || ((a.line || 0) - (b.line || 0))
+        || (a.method < b.method ? -1 : a.method > b.method ? 1 : 0)
+        || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return rows;
+}
+
 // ─── Bounded connected-subgraph traversal (multi-hop in one call) ─────────────────
 
 /** ~tokens for a node card (1 token ≈ 4 chars). */
@@ -1164,6 +1207,62 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     for (const it of types) lines.push(fmt(it));
                 }
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (note) lines.push('', note);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── find_routes ──────────────────────────────────────────────────────────────
+    server.tool(
+        'find_routes',
+        'Map HTTP routes to their handler functions. Returns the handler chunk ID so '
+        + 'you can call get_chunk or get_call_graph on the handler directly. Covers '
+        + 'NestJS/Angular decorators, FastAPI/Flask, Spring annotations, and Express/Koa '
+        + 'registration. Filter by method and/or path.',
+        {
+            method: z.string().optional().describe(
+                "Optional HTTP method filter (GET, POST, PUT, DELETE, PATCH). Case-insensitive; omit for all methods."
+            ),
+            path: z.string().optional().describe(
+                "Optional path filter. Starts with '/' → prefix match; otherwise (incl. pattern hints with '{' or ':') → substring contains-match."
+            ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { routes: [...] })."
+            ),
+        },
+        async ({ method, path: pathArg, response_format }) => {
+            try {
+                const routes = findRoutes(db, { method: method || null, path: pathArg || null });
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        method: method || null,
+                        path: pathArg || null,
+                        route_count: routes.length,
+                        routes,
+                        index: fresh,
+                    });
+                }
+
+                if (routes.length === 0) {
+                    const filt = [method ? method.toUpperCase() : null, pathArg].filter(Boolean).join(' ');
+                    const parts = [`✅ No HTTP routes${filt ? ` matching \`${filt}\`` : ''} found in the index.`];
+                    if (note) parts.push(note);
+                    return { content: [{ type: 'text', text: parts.join('\n') }] };
+                }
+
+                const lines = [`# 🌐 HTTP routes — ${routes.length} total`];
+                for (const r of routes) {
+                    const handler = r.id
+                        ? `\`${r.handler_name}\` [${r.node_type}] in \`${r.file_path}\` (lines ${r.start_line}–${r.end_line}) · id \`${r.id}\``
+                        : `\`${r.handler_name}\` in \`${r.file_path}\`${r.line ? ` (line ${r.line})` : ''}`;
+                    lines.push(`- **${r.method}** \`${r.path}\` → ${handler}`);
+                }
                 if (note) lines.push('', note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {

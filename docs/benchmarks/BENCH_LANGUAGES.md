@@ -22,7 +22,7 @@ One row per fixture; **the single source of truth for structural gaps**. Every `
 | Rust | rust | yes | populated (86%) | name-only (0%) | yes (26.1%) |
 | Java/Spring | spring | degraded (class-granular)† | populated (3.6%) | receiver-aware (87.7%)† | yes (1.1%) |
 | Kotlin/Android | android | yes | populated (100%) | name-only (0%) | yes (18.1%) |
-| C#/ASP.NET | aspnet | none | **empty** | none | yes (32.2%) |
+| C#/ASP.NET | aspnet | none | populated (82.6%) | none | yes (32.2%) |
 | Ruby/Rails | rails | yes | **empty** | name-only (0%) | yes (11.9%) |
 | PHP/Laravel | laravel | none | populated (72.2%) | none | yes (81.1%) |
 | PHP/Symfony | symfony | none | populated (58.7%) | none | yes (75.4%) |
@@ -252,7 +252,11 @@ Index: 373 chunks · 224 files · 10 scored queries (**sem n=2**) + held-out spl
 | R1 | not run (costly — subset only) | | | | | | | | | | |
 | R2 | not run (costly — subset only) | | | | | | | | | | |
 
-**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0% of chunks carry call edges (0/chunk) — **call-graph empty (0 edges, verified by invocation)**; `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 32.2%; call_sites: none.
+**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0% of chunks carry call edges (0/chunk) — **call-graph empty (0 edges, verified by invocation)**; `find_references`: type_refs **82.6%** (200/242 C# chunks carry ≥1 type ref, avg 2.89/chunk — measured on the re-indexed fixture), extends 32.2%; call_sites: none.
+
+> **C# type_refs — before/after.** C# spells type names as bare `identifier`/`generic_name`, so the shared cross-language `type_identifier` walk yielded **0% (empty)** for C#. `extractTypeAnnotations` now has a `.cs`-gated branch that reads types from the field-precise positions where an identifier IS a type — a `parameter`/`field`/`property`/local's `type`, a method's `returns`, and the class `base_list` — skipping `predefined_type`/`var` primitives and keeping PascalCase names. Result on aspnet: **type_refs 0% → 82.6%** of C# chunks (over the full 373-chunk index incl. 131 css/scss chunks that carry no types: 53.6%). `extends` is unchanged at 32.2% (heritage extraction untouched) and all non-C# fixtures are byte-identical (the branch never fires off `.cs`). The change is additive: `find_references` on a C# class now surfaces type users (params, fields, properties, returns, generics, implemented interfaces), not just inheritance.
+
+> **HTTP routes (`find_routes`).** aspnet reports **0 routes** — eShopOnWeb is ASP.NET MVC/Razor and routes via C# `[HttpGet]`/`[Route]` attributes, which are outside the `find_routes` scope (NestJS/Angular, FastAPI/Flask, Spring, Express/Koa). Route detection is exercised on the nestjs/fastapi/spring/express fixtures and in `test/routes.mjs`.
 
 **Backend parity (P):** ✓ memory vs SQLite top-5 byte-identical across all 13 queries.
 

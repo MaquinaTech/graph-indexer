@@ -18,6 +18,7 @@
  *   resolveSymbol(name)                      → chunk[]   (exact, case-insensitive)
  *   findCallers(funcName)                    → chunk[]
  *   findReferers(symbol)                     → chunk[]   (type_refs / extends matches)
+ *   findRoutes({method, pathPrefix})         → route[]   (HTTP route → handler chunk)
  *   iterateChunks()                          → Iterable<chunk>  (cursor on SQLite)
  *   getDependencies(path) / getImportedBy(path) → string[]
  *   chunkCount() / fileCount() / symbolCount() / vectorCount() → number

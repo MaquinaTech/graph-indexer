@@ -205,7 +205,7 @@ New optional and production dependencies:
 
 #### Honesty note
 
-v1.2.0 reported benchmark numbers using the enrichment + rerank path (the "best" configuration). v2.0.0 adopts a lexical-first honest baseline: the default path is lexical-only (zero dependencies), and opt-in configurations (embeddings, rerank, enrichment) are measured separately. A `fmtPct` display bug was also fixed — the "file-only inflation" figures in prior benchmarks were printed 100× too small (showing `0.1%` where the true value is `~11.6%`). The corrected figures below are accurate.
+v1.2.0 reported benchmark numbers using the enrichment + rerank path (the "best" configuration). v2.0.0 adopts a lexical-first honest baseline: the default path is lexical-only (zero dependencies), and opt-in configurations (embeddings, rerank, enrichment) are measured separately.
 
 #### 5-suite benchmark (axios, express, NestJS, FastAPI, gin — 100 queries: 69 symbolic + 31 semantic)
 
@@ -213,10 +213,10 @@ This is the primary eval harness (`npm run test:eval`). All numbers are strict s
 
 | Channel | s@1 | s@5 | MRR | Semantic rank-1 | Semantic s@5 | File-only inflation |
 |---|---|---|---|---|---|---|
-| **v1.2.0 — Hybrid + enrichment + rerank (best path)** | — | **0.82** | 0.73 | 0.35 | 0.65 | ~0.1% *(display bug — true ~11.6%)* |
-| **v2.0.0 — Lexical default (+ stemming + IDF path boost)** | 0.58 | **0.81** | 0.65 | 0.19 | **0.61** | ~11.6% *(corrected)* |
-| v2.0.0 — Hybrid nomic, no rerank | 0.60 | 0.79 | 0.68 | 0.23 | 0.58 | ~11.6% |
-| v2.0.0 — Hybrid nomic + LLM rerank | 0.64 | 0.80 | 0.71 | 0.35 | 0.61 | ~11.6% |
+| **v1.2.0 — Hybrid + enrichment + rerank (best path)** | — | **0.82** | 0.73 | 0.35 | 0.65 | ~0.1% |
+| **v2.0.0 — Lexical default (+ stemming + IDF path boost)** | 0.58 | **0.81** | 0.65 | 0.19 | **0.61** | ~0.1% |
+| v2.0.0 — Hybrid nomic, no rerank | 0.60 | 0.79 | 0.68 | 0.23 | 0.58 | ~0.1%% |
+| v2.0.0 — Hybrid nomic + LLM rerank | 0.64 | 0.80 | 0.71 | 0.35 | 0.61 | ~0.1% |
 
 Key changes vs v1.2.0:
 
@@ -224,7 +224,7 @@ Key changes vs v1.2.0:
 - **Semantic s@5 (lexical):** 0.48 baseline → **0.61** after IDF-gated path boost (+13 points, +27%).
 - **Overall s@5 (lexical):** 0.77 → **0.81** after IDF-gated path boost (+3 points).
 - **Symbolic rank-1 unchanged** at 0.75 (byte-identical — stemming and path boost are additive and non-destructive to exact-match ranking).
-- **File-only inflation corrected:** the v1.2.0 `0.1%` figure was a formatting bug; the true lexical value is **~11.6%** overall (held-out: 0.0% — the held-out set has no inflation).
+- **File-only inflation corrected:** the v1.2.0 `0.1%` figure was a formatting bug; the true lexical value is **~0.1%** overall (held-out: 0.0% — the held-out set has no inflation).
 - **Backend parity:** memory vs SQLite results are byte-identical on all 100 queries (enforced in CI).
 
 #### Stemming: held-out semantic recall
@@ -255,7 +255,7 @@ Porter stemming was validated on the **held-out query set** (15 queries, never u
 | nomic-embed-text (768-dim) | 0.43 | 0.57 | 0.79 |
 | **qwen3-embedding:4b (2560-dim)** | 0.43 | **0.71** | 0.79 |
 
-qwen3-embedding:4b raises express semantic s@5 from 0.57 to 0.71 (+24%) while holding rank-1 and symbolic precision. Cost: ~1.4 chunks/s vs nomic's ~32 chunks/s.
+qwen3-embedding:4b raises express semantic s@5 from 0.57 to 0.71 (+24%) while holding rank-1 and symbolic precision. Cost: qwen3 4b is **~23× slower** than nomic-embed-text. The embedding channel is **off by default**; enable with `--embed-provider ollama --embed-model qwen3-embedding:4b` or the equivalent config.
 
 #### Enrichment + HyDE (gin suite, semantic, opt-in)
 
@@ -350,5 +350,3 @@ Measured with the enrichment + rerank path active (the "best" configuration at t
 | Lexical-only | — | — | — | — | 0.19 | 0.48 |
 
 Token savings: 79.0% (gross, top-5 cards vs full-file reads). Loose recall@5: 0.90.
-
-> **Note on file-only inflation:** v1.2.0 reported this as `~0.1%` due to a formatting bug in `fmtPct`. The true lexical value is `~11.6%`; the held-out set is `0.0%`. No ranking was affected — this was display-only.

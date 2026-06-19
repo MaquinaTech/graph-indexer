@@ -61,6 +61,16 @@ CREATE TABLE IF NOT EXISTS postings (term TEXT, chunk_id TEXT, tf INTEGER);
 CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, df INTEGER);
 CREATE TABLE IF NOT EXISTS call_edges (callee TEXT, chunk_id TEXT);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
+CREATE TABLE IF NOT EXISTS routes (
+  id INTEGER PRIMARY KEY,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  handler_name TEXT,
+  handler_chunk_id TEXT,
+  file_path TEXT NOT NULL,
+  line INTEGER,
+  framework TEXT
+);
 `;
 
 const SCHEMA_INDEXES = `
@@ -73,6 +83,9 @@ CREATE INDEX IF NOT EXISTS idx_postings_chunk ON postings(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_calledges_callee ON call_edges(callee);
 CREATE INDEX IF NOT EXISTS idx_deps_file ON deps(file);
 CREATE INDEX IF NOT EXISTS idx_deps_dep ON deps(dep);
+CREATE INDEX IF NOT EXISTS idx_routes_method ON routes(method);
+CREATE INDEX IF NOT EXISTS idx_routes_path ON routes(path);
+CREATE INDEX IF NOT EXISTS idx_routes_handler ON routes(handler_chunk_id);
 `;
 
 const CHUNK_COLS = [
@@ -287,6 +300,12 @@ export class SqliteGraphStore {
         // ids in a deterministic order keeps both backends rank-identical on ties.
         this._stmtIdsByKey  = this.db.prepare('SELECT id FROM chunks WHERE vec_key = ? ORDER BY id');
         this._stmtIdsByHash = this.db.prepare('SELECT id FROM chunks WHERE content_hash = ? ORDER BY id');
+        // ORDER BY id (rowid = insertion order) keeps routes in index-build order,
+        // matching the in-memory graph.routes array order for cross-backend parity.
+        this._stmtRoutes    = this.db.prepare(
+            'SELECT method, path, handler_name, handler_chunk_id, file_path, line, framework '
+            + 'FROM routes ORDER BY id'
+        );
     }
 
     _prepareWrite() {
@@ -364,6 +383,32 @@ export class SqliteGraphStore {
             const hit = c.type_refs.some(t => t.toLowerCase() === key)
                 || c.extends.some(t => t.toLowerCase() === key);
             if (hit) out.push(c);
+        }
+        return out;
+    }
+
+    /**
+     * HTTP routes filtered by method and/or path prefix, each augmented with its
+     * resolved handler chunk (`chunk`, or null). Filtering logic is byte-identical
+     * to MemoryGraphIndex.findRoutes; rows arrive in index-build order (ORDER BY id)
+     * so both backends return identical records. An index built before this feature
+     * (empty routes table) yields [].
+     * @returns {object[]}
+     */
+    findRoutes({ method = null, pathPrefix = null } = {}) {
+        this._maybeRefresh();
+        const m = method ? String(method).toUpperCase().trim() : null;
+        const p = pathPrefix ? String(pathPrefix).toLowerCase() : null;
+        const out = [];
+        for (const r of this._stmtRoutes.all()) {
+            if (m && String(r.method || '').toUpperCase() !== m) continue;
+            if (p && !String(r.path || '').toLowerCase().startsWith(p)) continue;
+            const chunk = r.handler_chunk_id ? this.getChunk(r.handler_chunk_id) : null;
+            out.push({
+                method: r.method, path: r.path, handler_name: r.handler_name,
+                handler_chunk_id: r.handler_chunk_id, file_path: r.file_path,
+                line: r.line, framework: r.framework, chunk,
+            });
         }
         return out;
     }
@@ -746,6 +791,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS postings;
             DROP TABLE IF EXISTS terms;  DROP TABLE IF EXISTS call_edges;
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
+            DROP TABLE IF EXISTS routes;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -796,6 +842,20 @@ export class SqliteGraphStore {
         for (const [file, list] of Object.entries(graph?.dependencies || {})) {
             if (!list || list.length === 0) insDep.run(file, null);
             else for (const d of list) insDep.run(file, d);
+        }
+
+        // HTTP routes (global array; each row is self-describing). Inserted in array
+        // order so the autoincrement id mirrors the in-memory graph.routes order.
+        const insRoute = this.db.prepare(
+            'INSERT INTO routes (method, path, handler_name, handler_chunk_id, file_path, line, framework) '
+            + 'VALUES (?, ?, ?, ?, ?, ?, ?)'
+        );
+        for (const r of (graph?.routes || [])) {
+            insRoute.run(
+                String(r.method || ''), String(r.path ?? ''), r.handler_name ?? null,
+                r.handler_chunk_id ?? null, String(r.file_path || ''),
+                r.line ?? null, r.framework ?? null
+            );
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
