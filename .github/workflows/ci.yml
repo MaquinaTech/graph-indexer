@@ -12,7 +12,10 @@ jobs:
 
     strategy:
       matrix:
-        node-version: ["18", "20"]
+        # 22 is required for the SQLite parity gate: the disk-backed store uses
+        # node:sqlite (DatabaseSync), which only exists on Node 22+. 18/20 still
+        # cover the default in-memory path.
+        node-version: ["18", "20", "22"]
 
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +82,21 @@ jobs:
       - name: Lexical-only tests (no Ollama)
         run: |
           INDEXER_EMBEDDINGS=off npm test
+        env:
+          INDEXER_EMBEDDINGS: "off"
+
+      # The memory↔SQLite byte-identical-top-5 parity guarantee is a headline
+      # feature, but it can only be exercised where node:sqlite exists (Node 22+),
+      # so it is gated to the 22 job. On the 22.x line node:sqlite is still behind
+      # --experimental-sqlite; we pass the flag AND assert DatabaseSync actually
+      # loads first, so the gate fails loudly if the backend is missing instead of
+      # passing as a no-op. Runs after the lexical tests so the fixtures are indexed
+      # and the gate covers the full real-corpus query set, not just the synthetic one.
+      - name: SQLite parity gate (Node 22)
+        if: matrix.node-version == '22'
+        run: |
+          node --experimental-sqlite -e "const { DatabaseSync } = require('node:sqlite'); if (!DatabaseSync) { console.error('✗ node:sqlite unavailable — parity gate would be a no-op'); process.exit(1); } console.log('✓ node:sqlite (DatabaseSync) available');"
+          INDEXER_EMBEDDINGS=off node --experimental-sqlite test/sqlite.mjs
         env:
           INDEXER_EMBEDDINGS: "off"
 

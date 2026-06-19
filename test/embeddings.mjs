@@ -20,6 +20,12 @@ import {
     readEmbedMeta, writeEmbedMeta, embedMetaPath, describeEmbedder,
     LOCAL_EMBED_DIM, _resetLocalPipeline,
 } from '../embeddings.mjs';
+import {
+    embeddingWindows, baseEmbeddingKey, EMBEDDING_CONTEXT_LIMIT, EMBEDDING_MAX_WINDOWS,
+    WINDOW_VEC_SUFFIX,
+} from '../search-core.mjs';
+import { MemoryGraphIndex, writeEmbeddingBinary } from '../core-engine.mjs';
+import { buildEmbeddingPayload, fullBodyForEmbedding } from '../parser-utils.mjs';
 
 const baseConfig = {
     embeddingsEnabled: true,
@@ -103,6 +109,115 @@ test('describeEmbedder labels each provider', () => {
     assert.match(describeEmbedder({ provider: 'ollama', model: 'nomic-embed-text' }), /Ollama/);
     assert.match(describeEmbedder({ provider: 'local', model: 'x' }), /Local/);
     assert.match(describeEmbedder({ provider: 'off' }), /Lexical/);
+});
+
+// ── Window-and-pool sub-chunking for the dense channel ───────────────────────
+
+test('embeddingWindows: small payloads keep one vector; oversized split with bounded, overlapping windows', () => {
+    // Fits in a single window → no extra vectors (default path, byte-identical).
+    assert.deepEqual(embeddingWindows('short payload'), []);
+    assert.deepEqual(embeddingWindows('x'.repeat(EMBEDDING_CONTEXT_LIMIT)), []);
+
+    // Just over the limit → splits, window 0 is the same first-limit slice as before.
+    const payload = 'HEAD_' + 'a'.repeat(EMBEDDING_CONTEXT_LIMIT) + '_TAIL';
+    const w = embeddingWindows(payload);
+    assert.ok(w.length >= 2, 'oversized payload splits');
+    assert.equal(w[0], payload.slice(0, EMBEDDING_CONTEXT_LIMIT), 'window 0 == the old truncated head');
+    assert.ok(w.every(s => s.length <= EMBEDDING_CONTEXT_LIMIT), 'every window respects the context limit');
+    assert.ok(w[1].endsWith('_TAIL'), 'a later window reaches the tail the single vector dropped');
+
+    // Growth is hard-capped regardless of size → bounded .bin growth.
+    const huge = embeddingWindows('z'.repeat(EMBEDDING_CONTEXT_LIMIT * 50));
+    assert.equal(huge.length, EMBEDDING_MAX_WINDOWS, 'window count is capped');
+
+    // baseEmbeddingKey folds both summary and window suffixes back to the base.
+    assert.equal(baseEmbeddingKey('h1' + WINDOW_VEC_SUFFIX + 2), 'h1');
+    assert.equal(baseEmbeddingKey('h1|s'), 'h1');
+    assert.equal(baseEmbeddingKey('h1'), 'h1');
+});
+
+test('fullBodyForEmbedding: returns the full body only for truncated, non-skeleton chunks', () => {
+    const lines = [];
+    for (let i = 0; i < 200; i++) lines.push(`  doThing_${i}(); // line ${i} of a large function body well past the snippet cap`);
+    const content = `function big() {\n${lines.join('\n')}\n}\n`;
+    const end = content.split('\n').length;
+
+    // Truncated (snippet hit the 3000 cap) → returns the whole, larger body.
+    const body = fullBodyForEmbedding({ code_snippet: 'x'.repeat(3000), start_line: 1, end_line: end }, content);
+    assert.ok(body && body.length > 3000, 'truncated chunk yields its full body for windowing');
+
+    // Body that fits the cap → no override (the dense path stays byte-identical).
+    assert.equal(fullBodyForEmbedding({ code_snippet: 'short body', start_line: 1, end_line: 3 }, content), null);
+    // God-class skeleton → no override (its methods are already their own chunks).
+    assert.equal(
+        fullBodyForEmbedding({ code_snippet: 'x'.repeat(3000) + ' // Large class: 999 lines', start_line: 1, end_line: end }, content),
+        null, 'god-class skeleton is not windowed over the whole class');
+});
+
+// A large free function: only its tail matches the query. Without windowing the tail
+// is past EMBEDDING_CONTEXT_LIMIT and invisible to the dense channel; with windowing
+// the chunk is retrieved by the MAX cosine over its windows. Deterministic vectors,
+// no network — exercises the real eager-load fold (core-engine load path).
+function buildWindowedIndex(includeWindowVector) {
+    const HEAD = 'HEADNEEDLE';
+    const TAIL = 'TAILNEEDLE';
+    // Snippet sized so buildEmbeddingPayload spans exactly two windows, with the tail
+    // marker only in window 1 (past the 8000-char boundary).
+    const bigSnippet = HEAD + 'x'.repeat(9000) + TAIL + 'y'.repeat(2000);
+    const bigChunk = {
+        id: 'big1', file_path: 'src/big.ts', node_type: 'function_declaration',
+        name: 'processEverything', docstring: '', code_snippet: bigSnippet, content_hash: 'big',
+        start_line: 1, end_line: 400, calls: [], params: [], return_type: '',
+        class_context: '', type_refs: [], decorators: [], extends: [], call_sites: [],
+    };
+    const distractor = {
+        id: 'small1', file_path: 'src/other.ts', node_type: 'function_declaration',
+        name: 'helper', docstring: '', code_snippet: 'function helper(){ return 1; }', content_hash: 'small',
+        start_line: 1, end_line: 3, calls: [], params: [], return_type: '',
+        class_context: '', type_refs: [], decorators: [], extends: [], call_sites: [],
+    };
+
+    const payload = buildEmbeddingPayload(bigChunk, []);
+    const windows = embeddingWindows(payload);
+    assert.equal(windows.length, 2, 'fixture payload is exactly two windows');
+    assert.ok(!windows[0].includes('TAILNEEDLE'), 'tail marker is past window 0');
+    assert.ok(windows[1].includes('TAILNEEDLE'), 'window 1 covers the tail');
+
+    // head vector ⟂ query; tail (window 1) vector == query.
+    const headVec = new Float32Array([1, 0, 0, 0]);
+    const tailVec = new Float32Array([0, 1, 0, 0]);
+    const distVec = new Float32Array([0, 0, 1, 0]);
+    const cache = new Map([['big', headVec], ['small', distVec]]);
+    if (includeWindowVector) cache.set('big' + WINDOW_VEC_SUFFIX + 1, tailVec);
+
+    const memJson = path.join(os.tmpdir(), `winemb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    const memBin = memJson.replace(/\.json$/, '.embeddings.bin');
+    fs.writeFileSync(memJson, JSON.stringify({
+        chunks: [bigChunk, distractor],
+        graph: { dependencies: { 'src/big.ts': [], 'src/other.ts': [] }, importedBy: {} },
+    }));
+    fs.writeFileSync(memBin, writeEmbeddingBinary(cache));
+    const mem = new MemoryGraphIndex(memJson);
+    mem.load();
+    return { mem, cleanup: () => { for (const f of [memJson, memBin]) try { fs.unlinkSync(f); } catch {} } };
+}
+
+test('oversized definition: a tail-only query retrieves it via a window vector (max-sim)', () => {
+    const queryVec = new Float32Array([0, 1, 0, 0]); // == the tail-window vector
+    // With windowing: the tail window matches → the big function is retrieved.
+    const win = buildWindowedIndex(true);
+    try {
+        const hits = win.mem.searchHybrid('completely unrelated query text', queryVec, 5, 0.0).map(r => r.chunk.id);
+        assert.ok(hits.includes('big1'), 'windowed: tail-only query reaches the oversized function');
+    } finally { win.cleanup(); }
+
+    // Without the window vector (old behaviour): only the head vector exists, which is
+    // orthogonal to the query → the function is invisible to the dense channel.
+    const base = buildWindowedIndex(false);
+    try {
+        const hits = base.mem.searchHybrid('completely unrelated query text', queryVec, 5, 0.0).map(r => r.chunk.id);
+        assert.ok(!hits.includes('big1'), 'baseline: the tail is invisible without windowing');
+    } finally { base.cleanup(); }
 });
 
 // ── Real local model (gated on the optional dependency) ──────────────────────

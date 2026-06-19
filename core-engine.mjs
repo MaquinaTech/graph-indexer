@@ -10,7 +10,7 @@ import {
     EMBEDDING_CONTEXT_LIMIT, truncateForEmbedding, cosineSimilarity, tokenize,
     okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     SUMMARY_VEC_SUFFIX, LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
-    isNaturalLanguageQuery,
+    isNaturalLanguageQuery, WINDOW_VEC_SUFFIX, EMBEDDING_MAX_WINDOWS, baseEmbeddingKey,
 } from './search-core.mjs';
 
 // Re-exported for backward compatibility — callers historically imported these
@@ -515,10 +515,16 @@ export class MemoryGraphIndex {
                 const vecKey = embeddingKeyFor(chunk);
                 if (chunk.content_hash && this.embeddingCache.has(vecKey)) {
                     this.vectors.set(chunk.id, this.embeddingCache.get(vecKey));
-                    // Summary-only second vector (enriched chunks): stored under a
-                    // pseudo row id; searchHybrid folds hits back onto the chunk id.
+                    // Summary-only and per-window vectors (enriched / oversized chunks):
+                    // stored under pseudo row ids; searchHybrid folds hits back onto the
+                    // chunk id (max-sim across all of the chunk's vectors).
                     const sVec = this.embeddingCache.get(vecKey + SUMMARY_VEC_SUFFIX);
                     if (sVec) this.vectors.set(chunk.id + SUMMARY_VEC_SUFFIX, sVec);
+                    for (let i = 1; i < EMBEDDING_MAX_WINDOWS; i++) {
+                        const wVec = this.embeddingCache.get(vecKey + WINDOW_VEC_SUFFIX + i);
+                        if (!wVec) break;
+                        this.vectors.set(chunk.id + WINDOW_VEC_SUFFIX + i, wVec);
+                    }
                 } else if (chunk.content_hash && this.embeddingCache.has(chunk.content_hash)) {
                     this.vectors.set(chunk.id, this.embeddingCache.get(chunk.content_hash));
                 } else if (chunk.embedding) {
@@ -848,6 +854,7 @@ export class MemoryGraphIndex {
                 const key = embeddingKeyFor(c);
                 put(key, c.id);
                 put(key + SUMMARY_VEC_SUFFIX, c.id);     // summary-only vector → same chunk
+                for (let i = 1; i < EMBEDDING_MAX_WINDOWS; i++) put(key + WINDOW_VEC_SUFFIX + i, c.id); // window vectors → same chunk
                 if (key !== c.content_hash) put(c.content_hash, c.id); // legacy bins
             }
             this._keyToIds = map;
@@ -872,12 +879,12 @@ export class MemoryGraphIndex {
                 // zero lexical overlap, which the old TF-IDF prefilter never could.
                 vectorResults = this._scanVectorsLazy(queryVector, minScore);
             } else {
-                // Eager rows include summary-only pseudo ids (`<id>|s`) — fold each
-                // back onto its chunk via the shared finalizer (best score per
-                // chunk, deterministic order, same cap as the disk-backed paths).
+                // Eager rows include summary-only and per-window pseudo ids
+                // (`<id>|s`, `<id>|wN`) — fold each back onto its chunk via the shared
+                // finalizer (best/max-sim score per chunk, deterministic order, same
+                // cap as the disk-backed paths).
                 const entries = this._searchVector(queryVector, minScore).map(r => ({
-                    id: r.id.endsWith(SUMMARY_VEC_SUFFIX)
-                        ? r.id.slice(0, -SUMMARY_VEC_SUFFIX.length) : r.id,
+                    id: baseEmbeddingKey(r.id),
                     score: r.score,
                 }));
                 vectorResults = finalizeVectorCandidates(entries);
@@ -976,6 +983,7 @@ export class MemoryGraphIndex {
             this._removeLexical(id);
             this.removeVector(id);
             this.removeVector(id + SUMMARY_VEC_SUFFIX);
+            for (let i = 1; i < EMBEDDING_MAX_WINDOWS; i++) this.removeVector(id + WINDOW_VEC_SUFFIX + i);
             this._removeSymbol(chunk);
             this.chunks.delete(id);
         }
@@ -992,6 +1000,10 @@ export class MemoryGraphIndex {
             if (vec) this.addVector(chunk.id, vec);
             const sVec = this.embeddingCache.get(vecKey + SUMMARY_VEC_SUFFIX);
             if (sVec) this.addVector(chunk.id + SUMMARY_VEC_SUFFIX, sVec);
+            for (let i = 1; i < EMBEDDING_MAX_WINDOWS; i++) {
+                const wVec = this.embeddingCache.get(vecKey + WINDOW_VEC_SUFFIX + i);
+                if (wVec) this.addVector(chunk.id + WINDOW_VEC_SUFFIX + i, wVec);
+            }
             this._indexLexical(chunk.id, buildLexicalDocument(chunk, imports), chunk.file_path);
             this.chunks.set(chunk.id, chunk);
             if (chunk.name && chunk.name !== 'anonymous') {
@@ -1136,13 +1148,15 @@ export class MemoryGraphIndex {
         return files.size;
     }
     vectorCount() {
+        // Count one vector per chunk: exclude the summary (`|s`) and window (`|wN`)
+        // pseudo-entries, which all fold onto a base key / chunk id.
         if (this._lazyMode) {
             let n = 0;
-            for (const k of this._vecOffsets.keys()) if (!k.endsWith(SUMMARY_VEC_SUFFIX)) n++;
+            for (const k of this._vecOffsets.keys()) if (baseEmbeddingKey(k) === k) n++;
             return n;
         }
         let n = 0;
-        for (const k of this.vectors.keys()) if (!k.endsWith(SUMMARY_VEC_SUFFIX)) n++;
+        for (const k of this.vectors.keys()) if (baseEmbeddingKey(k) === k) n++;
         return n;
     }
 

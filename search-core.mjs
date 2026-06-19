@@ -13,6 +13,10 @@
 
 import { createHash } from 'crypto';
 
+// Max embedding-input length in chars. ~8000 chars ≈ the usable context of the
+// default embedders (nomic-embed-text / MiniLM) once a query/document prefix is
+// added; longer inputs are silently truncated by the backend, so this is also the
+// per-window size for oversized definitions (see embeddingWindows).
 export const EMBEDDING_CONTEXT_LIMIT = 8000;
 
 /**
@@ -41,6 +45,57 @@ export function embeddingKeyFor(chunk) {
 
 export function truncateForEmbedding(text) {
     return text.length > EMBEDDING_CONTEXT_LIMIT ? text.slice(0, EMBEDDING_CONTEXT_LIMIT) : text;
+}
+
+// Window-and-pool sub-chunking for the dense channel. A large definition (e.g. a
+// ~600-line free function) used to be embedded as a single vector over only its
+// first EMBEDDING_CONTEXT_LIMIT chars — its tail was invisible to semantic search
+// (BM25 still indexed the whole text, so this gap is dense-only). Instead we embed
+// a few overlapping windows and retrieve the chunk by the MAX cosine over its
+// windows (max-sim), which preserves tail recall where mean-pooling would dilute it.
+//
+// 12% overlap: a definition that straddles a boundary still lands wholly inside an
+// adjacent window (EMBEDDING_CONTEXT_LIMIT*0.12 ≈ 960 chars of shared context).
+export const EMBEDDING_WINDOW_OVERLAP = 0.12;
+// Hard cap on windows per chunk. Bounds embed cost and .bin growth at ~MAX× a
+// single vector. 4 windows at the 7040-char stride cover ~29k chars (~700 lines);
+// beyond that the god-class split already shards classes into method chunks, and a
+// non-class definition that large is rare enough to accept head-only coverage.
+export const EMBEDDING_MAX_WINDOWS = 4;
+// Suffix for a chunk's window vectors past the first: <key>|w1, <key>|w2, … Window 0
+// is the base key itself (identical to the single-vector path), so small chunks and
+// the head of large chunks are byte-identical to before windowing existed.
+export const WINDOW_VEC_SUFFIX = '|w';
+
+const _VEC_SUFFIX_RE = /\|(?:s|w\d+)$/;
+/** Strip a vector-key suffix (summary `|s` or window `|wN`) back to the base key, so
+ *  every per-chunk vector folds onto one fusion candidate. Both backends use this. */
+export function baseEmbeddingKey(key) {
+    return key.replace(_VEC_SUFFIX_RE, '');
+}
+
+/**
+ * Split an oversized embedding payload into overlapping windows of
+ * ≤EMBEDDING_CONTEXT_LIMIT chars, capped at EMBEDDING_MAX_WINDOWS. Returns [] when
+ * the payload fits in a single window (the default path — the caller embeds it under
+ * the base key unchanged). Window 0 is the same first-EMBEDDING_CONTEXT_LIMIT slice
+ * the single-vector path produced, so the base vector is unchanged; windows 1..N
+ * cover the tail and are stored under WINDOW_VEC_SUFFIX keys.
+ *
+ * @param {string} payload
+ * @returns {string[]}  [] or [window0, window1, …] (length ≥ 2 when it splits).
+ */
+export function embeddingWindows(payload) {
+    if (!payload || payload.length <= EMBEDDING_CONTEXT_LIMIT) return [];
+    const stride = Math.max(1, Math.round(EMBEDDING_CONTEXT_LIMIT * (1 - EMBEDDING_WINDOW_OVERLAP)));
+    const windows = [];
+    for (let i = 0; i < EMBEDDING_MAX_WINDOWS; i++) {
+        const start = i * stride;
+        if (start >= payload.length) break;
+        windows.push(payload.slice(start, start + EMBEDDING_CONTEXT_LIMIT));
+        if (start + EMBEDDING_CONTEXT_LIMIT >= payload.length) break; // tail covered
+    }
+    return windows;
 }
 
 export function cosineSimilarity(vecA, vecB) {

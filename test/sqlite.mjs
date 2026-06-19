@@ -179,6 +179,64 @@ test('memory ↔ sqlite: identical ORDERED top-5 ids WITH a query vector (synthe
     console.log(`      (verified ${checked} vector queries on a ${N}-chunk synthetic corpus)`);
 });
 
+test('memory ↔ sqlite: identical top-5 WITH per-window vectors (max-sim fold, no Ollama)', () => {
+    // Oversized chunks carry extra window vectors keyed `<key>|w1`. Both backends must
+    // fold those onto the base chunk by MAX cosine and rank identically — otherwise the
+    // window feature silently breaks parity. Deterministic vectors, no embeddings model.
+    const DIM = 16;
+    const detVec = (seed) => {
+        const v = new Float32Array(DIM);
+        let x = (seed * 2654435761) >>> 0;
+        for (let d = 0; d < DIM; d++) { x = (x * 1103515245 + 12345) >>> 0; v[d] = ((x % 2000) / 1000) - 1; }
+        return v;
+    };
+    const N = 30;
+    const chunks = [];
+    const cache = new Map();
+    for (let i = 0; i < N; i++) {
+        const hash = `wh${i}`;
+        chunks.push({
+            id: `wc${i}`, file_path: `src/w${i % 5}.ts`, node_type: 'function_declaration',
+            name: `proc${i}`, docstring: '', code_snippet: `function proc${i}(x){ return step${i % 4}(x); }`,
+            content_hash: hash, start_line: 1, end_line: 6, calls: [`step${i % 4}`],
+            params: ['x'], return_type: '', class_context: '', type_refs: [], decorators: [], extends: [], call_sites: [],
+        });
+        cache.set(hash, detVec(i + 1));
+        // Every third chunk is "oversized": give it a tail-window vector seeded far from
+        // its base so max-sim genuinely changes which query each chunk best matches.
+        if (i % 3 === 0) cache.set(`${hash}|w1`, detVec(1000 + i));
+    }
+    const graph = { dependencies: Object.fromEntries(chunks.map(c => [c.file_path, []])), importedBy: {} };
+
+    const memJson = path.join(os.tmpdir(), `gi-winpar-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    const memBin = memJson.replace(/\.json$/, '.embeddings.bin');
+    tmpFiles.push(memJson, memBin);
+    fs.writeFileSync(memJson, JSON.stringify({ chunks, graph }));
+    fs.writeFileSync(memBin, writeEmbeddingBinary(cache));
+    const mem = new MemoryGraphIndex(memJson);
+    mem.load();
+
+    const sq = buildAndReopen(chunks, graph, cache);
+
+    let checked = 0, windowWins = 0;
+    for (let s = 1; s <= 14; s++) {
+        // Aim some queries straight at a window vector so the fold is actually exercised.
+        const qv = s % 2 === 0 ? detVec(1000 + ((s * 3) % N)) : detVec(s * 53 + 7);
+        const m = mem.searchHybrid(`proc step ${s}`, qv, 5, 0.0).map(r => r.chunk.id);
+        const r = sq.searchHybrid(`proc step ${s}`, qv, 5, 0.0).map(r => r.chunk.id);
+        assert.deepEqual(r, m,
+            `window-fold top-5 id ORDER mismatch for query-seed ${s}`
+            + `\n      memory=${JSON.stringify(m)}\n      sqlite=${JSON.stringify(r)}`);
+        // Sanity: query-seed 2 == detVec(1006), exactly wc6's window vector (6 % 3 === 0),
+        // so wc6 must rank first — proving the window vector (not the base) drives it.
+        if (s === 2 && m[0] === 'wc6') windowWins++;
+        checked++;
+    }
+    mem.close(); sq.close();
+    assert.ok(windowWins > 0, 'a window-targeted query retrieved the chunk via its window vector');
+    console.log(`      (verified ${checked} window-fold queries on a ${N}-chunk corpus)`);
+});
+
 // ─── 3. Incremental updates (watch-daemon write path) ───────────────────────────
 
 function syntheticCorpus() {

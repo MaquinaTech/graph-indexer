@@ -231,6 +231,19 @@ function refCard({ chunk, recvHint, reason, confidence }) {
     };
 }
 
+/** Lowercased capitalized type tokens from a type / return-type string —
+ *  "Promise<OrderRepo>" → ["promise","orderrepo"]. Lets an inferred receiver type
+ *  (parser-utils attaches recv_type / recv_via_call to call sites) be matched
+ *  against a target method's defining class without parsing the type grammar. */
+function _typeMatchTokens(str) {
+    const out = [];
+    if (!str) return out;
+    for (const m of String(str).match(/[A-Za-z_$][A-Za-z0-9_$]*/g) || []) {
+        if (/^[A-Z]/.test(m)) out.push(m.toLowerCase());
+    }
+    return out;
+}
+
 // ─── Call-graph confidence (precise blast radius) ────────────────────────────────
 
 /**
@@ -270,6 +283,26 @@ export function classifyCallers(db, targetFunction, { targetClass = null } = {})
     const ambiguous = allDefs.length > 1;
     const tcl = targetClass ? String(targetClass).toLowerCase() : null;
 
+    // Receiver-type promotion: a caller through a typed/inferred receiver whose type is
+    // the class that defines the target method is a real caller, even though its raw
+    // receiver hint is a variable name (`const s = getStore(); s.save()`). Match the
+    // inferred type against the target's defining class(es) — or an explicit target
+    // class. recv_via_call factories are resolved to their recorded return type here,
+    // at query time, so no extra index state is needed (memoised per call).
+    const typeMatchSet = new Set(targetClasses);
+    if (tcl) typeMatchSet.add(tcl);
+    const classDisplay = new Map();
+    for (const d of targetDefs) { const c = d.class_context; if (c) classDisplay.set(c.toLowerCase(), c); }
+    if (targetClass) classDisplay.set(String(targetClass).toLowerCase(), String(targetClass));
+    const returnTokenCache = new Map();
+    const calleeReturnTokens = (callee) => {
+        if (returnTokenCache.has(callee)) return returnTokenCache.get(callee);
+        const toks = new Set();
+        for (const def of db.resolveSymbol(callee) || []) for (const t of _typeMatchTokens(def.return_type)) toks.add(t);
+        returnTokenCache.set(callee, toks);
+        return toks;
+    };
+
     let hasSiteData = false;
     const high = [], nameOnly = [];
 
@@ -280,10 +313,22 @@ export function classifyCallers(db, targetFunction, { targetClass = null } = {})
         const callerClass = (caller.class_context || '').toLowerCase();
         const deps = db.getDependencies(caller.file_path) || [];
 
+        // First site whose inferred receiver type names a target class (lowercased token).
+        let typeMatch = null;
+        if (typeMatchSet.size) {
+            for (const s of sites) {
+                const toks = s.recv_type ? _typeMatchTokens(s.recv_type)
+                    : s.recv_via_call ? [...calleeReturnTokens(s.recv_via_call)] : null;
+                const m = toks && toks.find(t => typeMatchSet.has(t));
+                if (m) { typeMatch = m; break; }
+            }
+        }
+
         let reason = '';
         if (uniqueTarget && !classFiltered) reason = 'sole definition';
         else if (recvs.has('this') && callerClass && targetClasses.has(callerClass)) reason = `this.${targetFunction}()`;
         else if (recvs.has('') && targetIsFreeFn) reason = `${targetFunction}()`;
+        else if (typeMatch) reason = `${classDisplay.get(typeMatch) || typeMatch}.${targetFunction}()`;
         else if (deps.some(d => targetFiles.has(d))) reason = 'imports definition';
         else if (targetFiles.has(caller.file_path)) reason = 'same file';
         else if (tcl && [...recvs].some(r => r && r.toLowerCase() === tcl)) reason = `${targetClass}.${targetFunction}()`;

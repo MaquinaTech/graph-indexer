@@ -28,8 +28,8 @@
 import fs from 'fs';
 import {
     tokenize, okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
-    SUMMARY_VEC_SUFFIX, LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
-    isNaturalLanguageQuery,
+    LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
+    isNaturalLanguageQuery, baseEmbeddingKey,
 } from './search-core.mjs';
 import {
     writeEmbeddingBinary, appendEmbeddingBinary, scanEmbeddingBinary,
@@ -531,9 +531,9 @@ export class SqliteGraphStore {
                 });
             const entries = [];
             for (const { key, score } of hits) {
-                // Summary-only vectors live under `<key>|s` — fold onto the chunk.
-                const baseKey = key.endsWith(SUMMARY_VEC_SUFFIX)
-                    ? key.slice(0, -SUMMARY_VEC_SUFFIX.length) : key;
+                // Summary-only (`<key>|s`) and per-window (`<key>|wN`) vectors fold onto
+                // the chunk; finalizeVectorCandidates keeps the max-sim score per chunk.
+                const baseKey = baseEmbeddingKey(key);
                 let rows = this._stmtIdsByKey.all(baseKey);
                 if (rows.length === 0) rows = this._stmtIdsByHash.all(baseKey); // legacy bins
                 for (const { id } of rows) entries.push({ id, score });

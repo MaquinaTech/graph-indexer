@@ -32,12 +32,12 @@ import { acquireLock, releaseLock, readPid } from './daemon-lock.mjs';
 import { createStore, resolveBackend } from './storage.mjs';
 import {
     embeddingKeyFor, computePageRank, TEST_FILE_RE, EXAMPLE_DIR_RE,
-    summaryEmbeddingText, SUMMARY_VEC_SUFFIX,
+    summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows,
 } from './search-core.mjs';
 import {
     MAX_FILE_SIZE_BYTES, getParserForFile, buildIgnoreFilter,
     extractImportsFromAST, extractSemanticChunks, resolveLocalImports,
-    buildEmbeddingPayload,
+    buildEmbeddingPayload, fullBodyForEmbedding,
 } from './parser-utils.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import {
@@ -212,9 +212,15 @@ async function processFileChange(absolutePath) {
         if (chunksToEmbed.length > 0) {
             const entries = [];
             for (const c of chunksToEmbed) {
-                entries.push({ key: embeddingKeyFor(c), text: buildEmbeddingPayload(c, imports) });
+                const baseKey = embeddingKeyFor(c);
+                // Oversized definitions embed their full body (windowed); the lexical path
+                // keeps the 3000-char snippet. `content` is the file we just re-read.
+                const payload = buildEmbeddingPayload(c, imports, fullBodyForEmbedding(c, content));
+                entries.push({ key: baseKey, text: payload });
+                const windows = embeddingWindows(payload); // tail windows for oversized chunks
+                for (let i = 1; i < windows.length; i++) entries.push({ key: baseKey + WINDOW_VEC_SUFFIX + i, text: windows[i] });
                 const sText = summaryEmbeddingText(c);
-                if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
+                if (sText) entries.push({ key: baseKey + SUMMARY_VEC_SUFFIX, text: sText });
             }
             const embedder = await getEmbedder();
             const embeddingsMatrix = await embedder.embedDocuments(entries.map(e => e.text));

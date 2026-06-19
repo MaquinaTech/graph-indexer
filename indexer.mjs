@@ -15,9 +15,10 @@ import path from 'path';
 import {
     MAX_FILE_SIZE_BYTES, EXTENSIONS, getParserForFile, buildIgnoreFilter,
     extractImportsFromAST, extractSemanticChunks, extractRoutes, resolveLocalImports, buildEmbeddingPayload,
+    fullBodyForEmbedding,
 } from './parser-utils.mjs';
 import { readEmbeddingBinary, writeEmbeddingBinary } from './core-engine.mjs';
-import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX } from './search-core.mjs';
+import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows } from './search-core.mjs';
 import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta } from './embeddings.mjs';
 import { resolveConfig, describeConfig, configNotices } from './config.mjs';
 import { AUTO_SQLITE_CHUNK_THRESHOLD } from './storage.mjs';
@@ -87,6 +88,10 @@ async function main() {
 
     const indexData = { chunks: [], graph: { dependencies: {}, importedBy: {}, routes: [] }, embeddingCache: {} };
     const pendingChunks = [];
+    // Full bodies of oversized chunks (snippet was truncated by the 3000-char cap),
+    // captured here while we still hold the source so the dense channel can window the
+    // WHOLE definition. Kept out of the chunk/JSON — transient, dropped after embedding.
+    const fullBodies = new Map();
     let totalCheckedFiles = 0;
 
     for (const absolutePath of files) {
@@ -115,7 +120,11 @@ async function main() {
             // Chunks are collected first; embedding/enrichment happen in batch below so
             // we can route the high-value subset through the LLM before vectorising.
             const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
-            for (const chunk of fileChunks) pendingChunks.push(chunk);
+            for (const chunk of fileChunks) {
+                const fullBody = fullBodyForEmbedding(chunk, content);
+                if (fullBody) fullBodies.set(chunk.id, fullBody);
+                pendingChunks.push(chunk);
+            }
 
             // HTTP routes → handler chunks. Accumulated into the global graph.routes
             // array (each route is self-describing with file_path/line/handler_chunk_id),
@@ -144,15 +153,27 @@ async function main() {
     for (const chunk of pendingChunks) {
         const vecKey = embeddingKeyFor(chunk);
         const sKey = vecKey + SUMMARY_VEC_SUFFIX;
-        // An enriched chunk needs BOTH vectors cached (code payload + summary) to
-        // skip embedding — e.g. indexes built before dual vectors only have the base.
+        // Compute the payload once here and reuse it in the worker (avoids a second
+        // build) — it also tells us how many window vectors an oversized chunk needs.
+        // Oversized definitions embed their full body (windowed); others use the snippet.
+        const payload = buildEmbeddingPayload(chunk, indexData.graph.dependencies[chunk.file_path] || [], fullBodies.get(chunk.id) || null);
+        const windows = embeddingWindows(payload); // [] unless the payload is oversized
+        // An enriched chunk needs its summary vector cached, and an oversized chunk
+        // needs all its window vectors, to skip embedding — e.g. indexes built before
+        // dual/window vectors only have the base.
         const summaryMissing = summaryEmbeddingText(chunk) && !existingCache.has(sKey);
-        if (existingCache.has(vecKey) && !summaryMissing) {
+        let windowsMissing = false;
+        for (let i = 1; i < windows.length; i++) if (!existingCache.has(vecKey + WINDOW_VEC_SUFFIX + i)) { windowsMissing = true; break; }
+        if (existingCache.has(vecKey) && !summaryMissing && !windowsMissing) {
             indexData.embeddingCache[vecKey] = Array.from(existingCache.get(vecKey));
             if (existingCache.has(sKey)) indexData.embeddingCache[sKey] = Array.from(existingCache.get(sKey));
+            for (let i = 1; i < windows.length; i++) {
+                const wk = vecKey + WINDOW_VEC_SUFFIX + i;
+                if (existingCache.has(wk)) indexData.embeddingCache[wk] = Array.from(existingCache.get(wk));
+            }
             indexData.chunks.push(chunk);
         } else {
-            toEmbed.push(chunk);
+            toEmbed.push({ chunk, payload, windows });
         }
     }
 
@@ -176,14 +197,19 @@ async function main() {
         let completed = 0, vectorBatches = 0, failedBatches = 0;
         console.time('Embedding Generation Duration');
         const worker = async (batch) => {
-            // Enriched chunks get TWO vectors: the full code payload (base key)
-            // and a compact summary-only text (`key|s`) that matches the vocabulary
-            // of natural-language queries (see search-core.summaryEmbeddingText).
+            // Each chunk yields: the base code-payload vector; one vector per tail
+            // window (`key|wN`) when the payload is oversized so semantic search can
+            // reach the tail (the base text is the full payload — the embedder
+            // truncates it to window 0, byte-identical to the single-vector path); and
+            // a compact summary-only vector (`key|s`) for enriched chunks, which
+            // matches the vocabulary of natural-language queries.
             const entries = [];
-            for (const c of batch) {
-                entries.push({ key: embeddingKeyFor(c), text: buildEmbeddingPayload(c, indexData.graph.dependencies[c.file_path] || []) });
+            for (const { chunk: c, payload, windows } of batch) {
+                const baseKey = embeddingKeyFor(c);
+                entries.push({ key: baseKey, text: payload });
+                for (let i = 1; i < windows.length; i++) entries.push({ key: baseKey + WINDOW_VEC_SUFFIX + i, text: windows[i] });
                 const sText = summaryEmbeddingText(c);
-                if (sText) entries.push({ key: embeddingKeyFor(c) + SUMMARY_VEC_SUFFIX, text: sText });
+                if (sText) entries.push({ key: baseKey + SUMMARY_VEC_SUFFIX, text: sText });
             }
             // Per-batch graceful degradation: a slow/failed embedding batch (e.g. a
             // timeout on a big model) must NOT abort the whole index. Those chunks
@@ -198,7 +224,7 @@ async function main() {
                 }
                 vectorBatches++;
             }
-            for (const chunk of batch) indexData.chunks.push(chunk);
+            for (const { chunk } of batch) indexData.chunks.push(chunk);
             completed += batch.length;
             process.stdout.write(`\r🤖 Embedding Progress: [${completed}/${toEmbed.length}] Chunks processed...`);
         };

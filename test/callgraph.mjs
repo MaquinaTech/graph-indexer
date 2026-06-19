@@ -199,3 +199,116 @@ test('buildSubgraph returns a bounded, deterministic connected subgraph', () => 
     // A missing seed is handled, not thrown.
     assert.equal(buildSubgraph(idx, 'doesNotExistXYZ', {}).found, false, 'missing seed → found:false');
 });
+
+// ── Fixture 2: scope-aware receiver TYPE inference. The dynamically-typed receiver
+//    `const s = getStore(); s.save()` (and `new Repo()`, typed params) used to land in
+//    the name-only bucket because the receiver hint is a *variable*, not a type. We now
+//    resolve the local binding to a type and promote the caller when that type is the
+//    class defining the target method. `OrderRepo` is padded past the 200-line god-class
+//    threshold so its `save` method becomes its own chunk with class_context='OrderRepo'
+//    (the only way a method is a resolvable symbol); a second free `save` keeps the name
+//    ambiguous so promotion is meaningful (a unique name is trivially credited). ───────
+const GOD_PADDING = Array.from({ length: 210 }, (_, i) => `  // padding ${i} to exceed the 200-line god-class threshold`).join('\n');
+const TYPE_FILES = {
+    // God-class: OrderRepo.save() is a real, resolvable symbol (class_context set).
+    'orderRepo.ts': `
+export class OrderRepo {
+  save(order) {
+    writeRow(order);
+    return order;
+  }
+${GOD_PADDING}
+}
+`,
+    // A second, free `save` → the name is ambiguous (otherwise every caller is the
+    // trivially-credited "sole definition").
+    'freeStore.ts': `
+export function save(thing) {
+  writeRow(thing);
+  return thing;
+}
+`,
+    // A factory whose recorded return_type is OrderRepo (non-exported so the chunk is the
+    // function_declaration that carries the return_type field).
+    'factory.ts': `
+function makeRepo(): OrderRepo {
+  const r = new OrderRepo();
+  return r;
+}
+`,
+    // Four callers of `.save()`. None imports a definition, so ONLY receiver-type
+    // inference can promote them — isolating the new signal from the import-graph one.
+    'callers.ts': `
+export function withNew(o) {
+  const r = new OrderRepo();
+  r.save(o);
+  return r;
+}
+export function withParam(repo: OrderRepo) {
+  repo.save(repo);
+  return repo;
+}
+export function withFactory(o) {
+  const m = makeRepo();
+  m.save(o);
+  return m;
+}
+export function withUnknown(o) {
+  const x = getUnknown();
+  x.save(o);
+  return x;
+}
+`,
+};
+
+// withNew (new OrderRepo), withParam (typed param), withFactory (makeRepo(): OrderRepo)
+// all dispatch on an OrderRepo. withUnknown hits a save on an unresolvable receiver.
+const TRUE_TYPED_CALLERS = new Set(['withNew', 'withParam', 'withFactory']);
+
+function parseTypeFixture() {
+    const parser = getParserForFile('.ts');
+    if (!parser) return null;
+    const idx = new MemoryGraphIndex(path.join(os.tmpdir(), `cgt-${process.pid}.json`), { cacheEmbeddings: false });
+    for (const [file, src] of Object.entries(TYPE_FILES)) {
+        const tree = parser.parse((offset) => (offset < src.length ? src.slice(offset, offset + 4096) : null));
+        const chunks = extractSemanticChunks(tree.rootNode, file, src, '.ts');
+        idx.applyFileUpdate(file, { chunks, imports: [] }); // no import edges — type inference only
+        if (idx._saveTimer) { clearTimeout(idx._saveTimer); idx._saveTimer = null; }
+    }
+    return idx;
+}
+
+test('scope-aware receiver types promote dynamic-receiver callers (new / factory / typed param)', () => {
+    const idx = parseTypeFixture();
+    if (!idx) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+
+    // Precondition: the god-class split made OrderRepo.save its own chunk, and the
+    // factory recorded its return type. Without these the test would be vacuous.
+    const saveDefs = idx.resolveSymbol('save');
+    const orderRepoSave = saveDefs.find(d => (d.class_context || '').toLowerCase() === 'orderrepo');
+    assert.ok(orderRepoSave, 'OrderRepo.save() is a resolvable method symbol (god-class split fired)');
+    assert.equal(saveDefs.length, 2, 'save is ambiguous: OrderRepo.save + a free save');
+    assert.equal(idx.resolveSymbol('makeRepo')[0]?.return_type, 'OrderRepo', 'factory return type recorded');
+
+    const baseline = idx.findCallers('save');               // name-only: every `save` caller
+    const base = pr(baseline, TRUE_TYPED_CALLERS);
+    const { high, nameOnly, ambiguous } = classifyCallers(idx, 'save');
+    const hi = pr(high, TRUE_TYPED_CALLERS);
+
+    console.log(`\n  call-graph precision (callers reached through a typed/inferred receiver)`);
+    console.log(`    name-only baseline : P=${base.precision.toFixed(2)} R=${base.recall.toFixed(2)}  [${base.names.join(', ')}]`);
+    console.log(`    receiver-type aware: P=${hi.precision.toFixed(2)} R=${hi.recall.toFixed(2)}  [${hi.names.join(', ')}]`);
+    console.log(`    name-only bucket   : [${nameOnly.map(n => n.chunk.name).join(', ')}]`);
+
+    assert.equal(ambiguous, true, 'save is ambiguous (a god-class method + a free function)');
+    assert.equal(hi.recall, 1, 'receiver-type inference keeps full recall');
+    assert.equal(hi.precision, 1, 'receiver-type inference is fully precise');
+    assert.ok(hi.precision > base.precision, 'precision strictly improves over name-only');
+    assert.deepEqual(high.map(h => h.chunk.name).sort(), ['withFactory', 'withNew', 'withParam'],
+        'new / factory-return / typed-param receivers are all high-confidence');
+    // Every promotion is justified by the resolved type, naming the right class.
+    for (const h of high) assert.equal(h.reason, 'OrderRepo.save()', `${h.chunk.name} promoted via the resolved receiver type`);
+    // The genuinely ambiguous receiver (unresolvable factory) stays name-only.
+    assert.deepEqual(nameOnly.map(n => n.chunk.name), ['withUnknown'],
+        'an unresolvable receiver type is NOT fabricated into confidence');
+});

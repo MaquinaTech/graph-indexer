@@ -689,7 +689,13 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                     return chunkNode;
                 })())
                 : chunkNode.text.slice(0, 3000);
-            const hash = generateChunkHash(docstring + snippet);
+            // Hash the FULL node text (not the 3000-char snippet) so the content key
+            // reflects a definition's whole body. This keeps the dense channel's window
+            // vectors (which embed the full body — see buildEmbeddingPayload/embeddingWindows)
+            // correctly invalidated when a tail-only edit changes code past the snippet
+            // cap. For chunks whose body fits the cap, node text == snippet, so the hash
+            // is unchanged (no needless re-embed); BM25 and code_snippet are untouched.
+            const hash = generateChunkHash(docstring + chunkNode.text);
             // Receiver-aware call sites (bounded for index size); the legacy
             // name-only `calls` list is derived from them so they never diverge.
             const callSites = extractCallSites(chunkNode).slice(0, 256);
@@ -969,7 +975,7 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
  * @param {string[]} depRelPaths  Resolved local imports of the chunk's file (project-relative paths).
  * @returns {string}
  */
-export function buildEmbeddingPayload(chunk, depRelPaths = []) {
+export function buildEmbeddingPayload(chunk, depRelPaths = [], bodyOverride = null) {
     const neighbors = depRelPaths
         .map(d => path.basename(d, path.extname(d)))
         .filter(Boolean);
@@ -992,8 +998,31 @@ export function buildEmbeddingPayload(chunk, depRelPaths = []) {
         chunk.type_refs?.length ? `Type References: ${chunk.type_refs.join(', ')}` : '',
         topologicalContext,
         `--- Source Code ---`,
-        chunk.code_snippet,
+        // The dense channel embeds the FULL body for oversized definitions (bodyOverride,
+        // windowed by embeddingWindows); BM25 keeps using the 3000-char code_snippet.
+        bodyOverride || chunk.code_snippet,
     ].filter(Boolean).join('\n');
+}
+
+/**
+ * The full source body of a chunk whose code_snippet was truncated by the 3000-char
+ * cap — sliced from the file content by line range — so the dense channel can window
+ * the WHOLE definition (the lexical/BM25 path stays capped, byte-identical). Returns
+ * null when the chunk is not truncated (snippet == body) or is a god-class skeleton
+ * (its methods are already their own chunks). Used at embed time by the indexer and
+ * the watch daemon, both of which hold the source content.
+ *
+ * @param {object} chunk        A semantic chunk (needs code_snippet, start_line, end_line).
+ * @param {string} fileContent  The chunk's full file source.
+ * @returns {string|null}
+ */
+export function fullBodyForEmbedding(chunk, fileContent) {
+    if (!chunk || !fileContent) return null;
+    if ((chunk.code_snippet?.length || 0) < 3000) return null;          // not truncated
+    if (chunk.code_snippet.includes('Large class:')) return null;       // god-class skeleton
+    if (!chunk.start_line || !chunk.end_line) return null;
+    const body = fileContent.split('\n').slice(chunk.start_line - 1, chunk.end_line).join('\n');
+    return body.length > chunk.code_snippet.length ? body : null;
 }
 
 export async function getLocalEmbedding(text, graceful = true, { ollamaHost, model } = {}) {
@@ -1442,23 +1471,171 @@ function _csInvokedName(node) {
     return id ? id.text : (node.text || '').split('<')[0];
 }
 
+// ─── Scope-aware receiver type inference (intra-procedural, best-effort) ──────────
+// `db.s.save()` and `const s = getStore(); s.save()` both record a receiver hint of
+// `s` (a variable, not a type), so classifyCallers can only name-match them and they
+// leak into every `save()` in the repo. A cheap pass over the SAME chunk subtree
+// resolves the simple local bindings the AST already makes explicit — `new Repo()`,
+// a constructor/factory call, and TS/Python type annotations — and tags the call
+// site with `recv_type` (resolved here) or `recv_via_call` (a factory whose return
+// type is resolved at query time from the index). This is strictly additive: a call
+// site that cannot be resolved keeps exactly its old `{ name, recv }` shape and stays
+// name-only. Only languages whose type is recoverable from the AST participate
+// (TS/JS via `new`/annotations, Python via annotations/obvious constructors, plus the
+// trivially-safe Java/C# `new Foo()`); receiver-less languages are untouched.
+
+/** Clean a type-position node's text to a type string, or null if it carries no
+ *  capitalized identifier (drops primitives like `string`/`number[]`). Generics and
+ *  namespaces are preserved verbatim — classifyCallers token-matches against them. */
+function _bindingTypeName(typeText) {
+    if (!typeText) return null;
+    const cleaned = typeText.replace(/^->\s*/, '').replace(/^[:\s]+/, '').trim().slice(0, 64);
+    return /[A-Z]/.test(cleaned) ? cleaned : null;
+}
+
+/** Peel await/parenthesized wrappers off a value expression (TS `await getStore()`,
+ *  Python `await get_store()`). Bounded to avoid pathological nesting. */
+function _unwrapValueNode(node) {
+    let n = node, guard = 0;
+    while (n && guard++ < 6) {
+        if (n.type === 'await_expression' || n.type === 'await') { n = n.namedChildren?.[0]; continue; }
+        if (n.type === 'parenthesized_expression') { n = n.namedChildren?.[0]; continue; }
+        break;
+    }
+    return n;
+}
+
 /**
- * Walk a subtree and collect every call site as { name, recv } (receiver hint).
- * Deduplicated by (name, recv). Cross-language: call_expression (JS/TS/Go/Rust/C and
- * Swift via simple_identifier/navigation_expression), call (Python), macro_invocation
- * (Rust), method_invocation (Java/C#), method_call (Ruby), command (Bash). The receiver
- * is the precision half of the call graph — extractCalls() derives the legacy name-only
- * list from these sites.
+ * Classify a right-hand-side value into the type of the binding it produces:
+ *   • { type }     — directly recoverable now (`new Repo()`, `(x as Repo)`,
+ *                    a Python `Repo()` constructor, Java/C# `new Repo()`).
+ *   • { viaCall }  — a factory call whose return type is resolved later from the
+ *                    callee's recorded return_type (`getStore()`).
+ *   • null         — nothing safe to infer.
+ */
+function _classifyValueNode(node) {
+    node = _unwrapValueNode(node);
+    if (!node) return null;
+    const t = node.type;
+    if (t === 'new_expression') { // TS/JS: new Repo()
+        const ctor = node.childForFieldName?.('constructor') || node.namedChildren?.[0];
+        const tn = _bindingTypeName(ctor?.text);
+        return tn ? { type: tn } : null;
+    }
+    if (t === 'object_creation_expression') { // Java / C#: new Repo() (trivially safe)
+        const ty = node.childForFieldName?.('type') || node.namedChildren?.find(c => /type|name|identifier/.test(c.type));
+        const tn = _bindingTypeName(ty?.text);
+        return tn ? { type: tn } : null;
+    }
+    if (t === 'as_expression' || t === 'satisfies_expression') { // TS: const s = x as Repo
+        const ty = node.childForFieldName?.('type') || node.namedChildren?.[node.namedChildren.length - 1];
+        const tn = _bindingTypeName(ty?.text);
+        if (tn) return { type: tn };
+        return _classifyValueNode(node.childForFieldName?.('expression') || node.namedChildren?.[0]);
+    }
+    if (t === 'call') { // Python: Repo() is a constructor by convention; get_store() is a factory
+        const fn = node.childForFieldName?.('function') || node.children?.[0];
+        if (fn?.type === 'identifier') {
+            return /^[A-Z]/.test(fn.text) ? { type: fn.text } : (_validCallName(fn.text) ? { viaCall: fn.text } : null);
+        }
+        if (fn?.type === 'attribute') {
+            const last = fn.childForFieldName?.('attribute')?.text; // mod.Repo()
+            if (last && /^[A-Z]/.test(last)) return { type: last };
+        }
+        return null;
+    }
+    if (t === 'call_expression') { // TS/JS/Swift/Go/Rust/C: factory call — defer to return_type
+        const fn = node.childForFieldName?.('function') || node.children?.[0];
+        if (fn && (fn.type === 'identifier' || fn.type === 'simple_identifier') && _validCallName(fn.text)) return { viaCall: fn.text };
+        return null;
+    }
+    return null;
+}
+
+/**
+ * Collect simple local variable → binding-type for one chunk subtree. Handles the
+ * common, unambiguous forms only; a variable bound to two different things is dropped
+ * (conflict) rather than guessed. `this`/`self` are excluded (handled by the `this`
+ * receiver bucket). One extra subtree pass per chunk — O(chunk size), no whole-program
+ * analysis — justified by the precision win on dynamically-typed receivers.
+ */
+function _inferLocalBindings(rootNode) {
+    const bindings = new Map();
+    const set = (name, val) => {
+        if (!name || name === 'this' || name === 'self' || !val) return;
+        const prev = bindings.get(name);
+        if (prev === undefined) { bindings.set(name, val); return; }
+        if (prev.conflict) return;
+        if (prev.type !== val.type || prev.viaCall !== val.viaCall) bindings.set(name, { conflict: true });
+    };
+    function walk(node) {
+        const t = node.type;
+        if (t === 'variable_declarator') { // TS/JS: const s = new Repo() / getStore()
+            const nameNode = node.childForFieldName?.('name');
+            if (nameNode && nameNode.type === 'identifier') {
+                const val = _classifyValueNode(node.childForFieldName?.('value'));
+                if (val) set(nameNode.text, val);
+            }
+        } else if (t === 'required_parameter' || t === 'optional_parameter') { // TS typed param: (s: Repo)
+            const id = node.childForFieldName?.('pattern');
+            const ty = node.childForFieldName?.('type');
+            if (id && id.type === 'identifier' && ty) { const tn = _bindingTypeName(ty.text); if (tn) set(id.text, { type: tn }); }
+        } else if (t === 'assignment') { // Python: s = Repo() / s: Repo = ...
+            const left = node.childForFieldName?.('left');
+            const ty = node.childForFieldName?.('type');
+            if (left && left.type === 'identifier') {
+                if (ty) { const tn = _bindingTypeName(ty.text); if (tn) set(left.text, { type: tn }); }
+                else { const val = _classifyValueNode(node.childForFieldName?.('right')); if (val) set(left.text, val); }
+            }
+        } else if (t === 'typed_parameter' || t === 'typed_default_parameter') { // Python typed param: (s: Repo)
+            const id = node.childForFieldName?.('name') || node.children?.find(c => c.type === 'identifier');
+            const ty = node.childForFieldName?.('type');
+            if (id && ty) { const tn = _bindingTypeName(ty.text); if (tn) set(id.text, { type: tn }); }
+        }
+        node.children.forEach(walk);
+    }
+    walk(rootNode);
+    return bindings;
+}
+
+/** Resolve a call site's receiver object node to a binding ({type}|{viaCall}|null):
+ *  a simple variable via the binding map, or an inline `new Repo()`/`getStore()`. */
+function _inferReceiverType(objNode, bindings) {
+    if (!objNode) return null;
+    if (objNode.type === 'identifier' || objNode.type === 'simple_identifier') {
+        const v = objNode.text;
+        if (v === 'this' || v === 'self') return null;
+        const b = bindings.get(v);
+        return (b && !b.conflict) ? b : null;
+    }
+    return _classifyValueNode(objNode); // inline: new Repo().save(), getStore().save()
+}
+
+/**
+ * Walk a subtree and collect every call site as { name, recv } (receiver hint), plus
+ * an optional `recv_type` / `recv_via_call` when the receiver's type is recoverable
+ * intra-procedurally (see the inference helpers above). Deduplicated by (name, recv).
+ * Cross-language: call_expression (JS/TS/Go/Rust/C and Swift via simple_identifier/
+ * navigation_expression), call (Python), macro_invocation (Rust), method_invocation
+ * (Java/C#), method_call (Ruby), command (Bash). The receiver is the precision half of
+ * the call graph — extractCalls() derives the legacy name-only list from these sites.
  */
 export function extractCallSites(rootNode) {
     const sites = [];
+    const bindings = _inferLocalBindings(rootNode);
     const seen = new Set();
-    const add = (name, recv) => {
+    // `objNode` is the receiver expression node (when the call is a method call), used
+    // to recover a static type for the receiver. Free calls pass none.
+    const add = (name, recv, objNode = null) => {
         if (!name) return;
         const key = name + ' ' + recv;
         if (seen.has(key)) return;
         seen.add(key);
-        sites.push({ name, recv });
+        const site = { name, recv };
+        const inferred = objNode ? _inferReceiverType(objNode, bindings) : null;
+        if (inferred?.type) site.recv_type = inferred.type;
+        else if (inferred?.viaCall) site.recv_via_call = inferred.viaCall;
+        sites.push(site);
     };
     function walk(node) {
         const t = node.type;
@@ -1469,13 +1646,15 @@ export function extractCallSites(rootNode) {
                 else if (funcNode.type === 'simple_identifier') add(funcNode.text, ''); // Swift free call
                 else if (funcNode.type === 'member_expression' || funcNode.type === 'property_identifier') {
                     const prop = funcNode.childForFieldName?.('property');
-                    if (prop) add(prop.text, _receiverHint(funcNode.childForFieldName?.('object')));
+                    const obj = funcNode.childForFieldName?.('object');
+                    if (prop) add(prop.text, _receiverHint(obj), obj);
                     else add(funcNode.text.split('.').pop(), '');
                 } else if (funcNode.type === 'navigation_expression') { // Swift obj.method / self.method
                     const suffix = funcNode.childForFieldName?.('suffix');
                     const m = suffix?.namedChildren?.find(c => c.type === 'simple_identifier')?.text
                         || suffix?.text?.replace(/^\./, '');
-                    if (m) add(m, _receiverHint(funcNode.childForFieldName?.('target')));
+                    const target = funcNode.childForFieldName?.('target');
+                    if (m) add(m, _receiverHint(target), target);
                 }
             }
         } else if (t === 'command') { // Bash: a command is a function/program invocation
@@ -1488,7 +1667,8 @@ export function extractCallSites(rootNode) {
                 if (funcNode.type === 'identifier') add(funcNode.text, '');
                 else if (funcNode.type === 'attribute') {
                     const attr = funcNode.childForFieldName?.('attribute');
-                    if (attr) add(attr.text, _receiverHint(funcNode.childForFieldName?.('object')));
+                    const obj = funcNode.childForFieldName?.('object');
+                    if (attr) add(attr.text, _receiverHint(obj), obj);
                 }
             }
         } else if (t === 'macro_invocation') { // Rust
@@ -1496,7 +1676,8 @@ export function extractCallSites(rootNode) {
             if (macroNode && macroNode.type === 'identifier') add(macroNode.text + '!', '');
         } else if (t === 'method_invocation') { // Java
             const nameNode = node.childForFieldName?.('name') || node.children.find(c => c.type === 'identifier');
-            if (nameNode) add(nameNode.text, _receiverHint(node.childForFieldName?.('object')));
+            const obj = node.childForFieldName?.('object');
+            if (nameNode) add(nameNode.text, _receiverHint(obj), obj);
         } else if (t === 'invocation_expression') { // C# — the grammar has NO method_invocation; a call is
             // invocation_expression(function, arguments). The function is a bare identifier (same-class /
             // using-static call) or a member_access_expression (obj.Method() / this.Method()).
@@ -1504,7 +1685,8 @@ export function extractCallSites(rootNode) {
             if (fn) {
                 if (fn.type === 'member_access_expression') {
                     const nm = _csInvokedName(fn.childForFieldName?.('name'));
-                    if (nm) add(nm, _receiverHint(fn.childForFieldName?.('expression')));
+                    const expr = fn.childForFieldName?.('expression');
+                    if (nm) add(nm, _receiverHint(expr), expr);
                 } else if (fn.type === 'identifier') {
                     add(fn.text, '');
                 } else if (fn.type === 'generic_name') {
@@ -1514,7 +1696,8 @@ export function extractCallSites(rootNode) {
             }
         } else if (t === 'method_call') { // Ruby
             const method = node.childForFieldName?.('method') || node.children.find(c => c.type === 'identifier');
-            if (method && method.type === 'identifier') add(method.text, _receiverHint(node.childForFieldName?.('receiver')));
+            const receiver = node.childForFieldName?.('receiver');
+            if (method && method.type === 'identifier') add(method.text, _receiverHint(receiver), receiver);
         } else if (t === 'function_call_expression') { // PHP: foo() / \App\Helpers\bar()
             const fn = node.childForFieldName?.('function');
             if (fn && (fn.type === 'name' || fn.type === 'qualified_name')) {
@@ -1523,10 +1706,12 @@ export function extractCallSites(rootNode) {
             }
         } else if (t === 'member_call_expression' || t === 'nullsafe_member_call_expression') { // PHP: $obj->method()
             const nameNode = node.childForFieldName?.('name');
-            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(node.childForFieldName?.('object')));
+            const obj = node.childForFieldName?.('object');
+            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(obj), obj);
         } else if (t === 'scoped_call_expression') { // PHP: Class::method() / self::method() / parent::method()
             const nameNode = node.childForFieldName?.('name');
-            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(node.childForFieldName?.('scope')));
+            const scope = node.childForFieldName?.('scope');
+            if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(scope), scope);
         }
         node.children.forEach(walk);
     }
