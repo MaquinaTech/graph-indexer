@@ -56,6 +56,8 @@ function derive(c) {
         semN: sem.length, symN: sym.length,
         symR1: mean(sym, r => r.rank1Strict), symMRR: mean(sym, r => r.mrrStrict),
         foPct: a.fileOnlyHitRate * 100, qCount: a.queryCount,
+        fileHit1: a.fileHitRate?.[1] ?? null, fileHit5: a.fileHitRate?.[5] ?? null,
+        fileHitN: a.fileHitQueryCount ?? null,
         heldR1: h ? h.rank1Strict : null, heldS5: h ? h.strictSuccess[5] : null,
         heldSemR1: hSem.length ? mean(hSem, r => r.rank1Strict) : null,
         buildMs: c.build?.wallMs, reused: c.build?.reused, thr: c.throughputChunksPerSec,
@@ -154,17 +156,17 @@ function languagesDoc() {
         L.push(`Index: ${chunks ?? '?'} chunks · ${files ?? '?'} files · ${qn} scored queries (**sem n=${semN}**) + held-out split.\n`);
 
         // config table
-        L.push('| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |');
-        L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+        L.push('| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |');
+        L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
         for (const cfg of CONFIG_ORDER) {
             const c = cell(fx, cfg), d = derive(c);
             if (!d.present) {
                 const reason = CONFIGS[cfg]?.blocked ? 'not run (jina q8 not shipped)' : (cfg === 'O2' || cfg.startsWith('R')) ? 'not run (costly — subset only)' : 'not run';
-                L.push(`| ${cfg} | ${reason} | | | | | | | | | | |`);
+                L.push(`| ${cfg} | ${reason} | | | | | | | | | | | | |`);
                 continue;
             }
-            if (!d.ok) { L.push(`| ${cfg} | not run — ${d.reason} | | | | | | | | | | |`); continue; }
-            L.push(`| ${cfg} | ${pc(d.s5)} | ${pc(d.r1)} | ${f2(d.mrr)} | ${pc(d.semR1)} | ${pc(d.semS5)} | ${pc(d.heldR1)} | ${pc1(d.foPct)} | ${secs(d.buildMs)} | ${d.thr ?? '—'} | ${mb(d.sizeBytes)} | ${d.dim ?? '—'} | ${d.latMed != null ? d.latMed.toFixed(2) + 'ms' : '—'} |`);
+            if (!d.ok) { L.push(`| ${cfg} | not run — ${d.reason} | | | | | | | | | | | | |`); continue; }
+            L.push(`| ${cfg} | ${pc(d.s5)} | ${pc(d.r1)} | ${f2(d.mrr)} | ${pc(d.semR1)} | ${pc(d.semS5)} | ${pc(d.heldR1)} | ${d.fileHit1 != null ? pc(d.fileHit1) : '—'} | ${d.fileHit5 != null ? pc(d.fileHit5) : '—'} | ${pc1(d.foPct)} | ${secs(d.buildMs)} | ${d.thr ?? '—'} | ${mb(d.sizeBytes)} | ${d.dim ?? '—'} | ${d.latMed != null ? d.latMed.toFixed(2) + 'ms' : '—'} |`);
         }
 
         // structural channel
@@ -216,8 +218,8 @@ function summaryDoc() {
     // master table: default-path L1 + best-achievable
     S.push('## Per-language: default path (L1) vs best-achievable\n');
     S.push('`sem n` = number of scored semantic queries for that language (the denominator behind every `sem` figure). `sym n` is correspondingly the larger symbolic denominator. Semantic columns are directional at these n; symbolic is the reliable channel.\n');
-    S.push('| Language | fixture | sym n | L1 sym r1 | sem n | L1 sem r1 | L1 sem s@5 | best sem r1 (config) | best sem s@5 (config) |');
-    S.push('|---|---|---|---|---|---|---|---|---|');
+    S.push('| Language | fixture | sym n | L1 sym r1 | sem n | L1 sem r1 | L1 sem s@5 | L1 file@5 | best sem r1 (config) | best sem s@5 (config) |');
+    S.push('|---|---|---|---|---|---|---|---|---|---|');
     const rowsForAvg = [];
     for (const fx of FIX_ORDER) {
         const p = prov[fx]; if (!p) continue;
@@ -230,7 +232,8 @@ function summaryDoc() {
             if (d.semS5 != null && (bestS5.v == null || d.semS5 > bestS5.v)) bestS5 = { v: d.semS5, cfg };
         }
         rowsForAvg.push({ fx, l1, bestR1, bestS5 });
-        S.push(`| ${p.language} | ${fx} | ${l1.symN} | ${pc(l1.symR1)} | ${l1.semN} | ${pc(l1.semR1)} | ${pc(l1.semS5)} | ${pc(bestR1.v)} (${bestR1.cfg}) | ${pc(bestS5.v)} (${bestS5.cfg}) |`);
+        const fh5 = l1.fileHit5 != null ? pc(l1.fileHit5) : '—';
+        S.push(`| ${p.language} | ${fx} | ${l1.symN} | ${pc(l1.symR1)} | ${l1.semN} | ${pc(l1.semR1)} | ${pc(l1.semS5)} | ${fh5} | ${pc(bestR1.v)} (${bestR1.cfg}) | ${pc(bestS5.v)} (${bestS5.cfg}) |`);
     }
 
     // cross-language spread

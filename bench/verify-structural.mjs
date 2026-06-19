@@ -37,7 +37,8 @@ function loadDb(fx) {
     return db;
 }
 
-const out = {};
+// Merge with existing results so running for a subset doesn't wipe other fixtures.
+const out = fs.existsSync(RESULTS) ? JSON.parse(fs.readFileSync(RESULTS, 'utf8')) : {};
 for (const fx of fixtures) {
     const db = loadDb(fx);
     if (!db) { console.log(`${fx}: no index — skip`); continue; }

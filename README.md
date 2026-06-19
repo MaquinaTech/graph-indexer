@@ -144,48 +144,105 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 
 When embeddings are enabled, the provider is selected in this order, and every fallback is logged (never silent): Ollama with `EMBED_MODEL` if set and reachable → Ollama with `nomic-embed-text` → the in-process MiniLM model (optional `@huggingface/transformers`) → lexical-only with a warning.
 
-## Benchmark results
-
-These benchmarks were run on 5 OSS repositories (axios, express, NestJS, FastAPI, gin) totalling **8,296 chunks**, with **100 ground-truth queries** (15 held-out, never used for tuning). Scoring is strict and symbol-level — a hit must be the correct *symbol*, not just the correct file. The **held-out set is the gold standard**: it was authored fresh and never used to tune ranking.
-
-### Default path (lexical + stemming) — 5 suites, no model required
-
-| Metric | Before stemming | Default (lexical + stemming) |
-|--------|-----------------|------------------------------|
-| Held-out rank-1 | 0.733 | **0.800** |
-| Held-out semantic rank-1 | 0.200 | **0.400** |
-| Held-out MRR | 0.789 | **0.833** |
-| Overall rank-1 (strict) | 0.582 | 0.582 |
-| Overall success@5 (strict) | 0.764 | 0.807 |
-| Overall semantic s@5 | 0.497 | 0.613 |
-| Symbolic rank-1 / MRR | 0.755 / 0.807 | **0.755 / 0.807** (byte-identical) |
-
-The morphological stemming bridge (added in this line of work) closes the inflection gap between behavioural queries and code identifiers — "validating" → `Validator`, "serializing" → `Serialize` — and **doubles held-out semantic rank-1 (0.20 → 0.40) while leaving symbolic ranking byte-identical.** It needs no model and applies to every supported language. See [IMPROVEMENT_STEMMING.md](IMPROVEMENT_STEMMING.md).
-
-> The **Default** column is the current default path = lexical + stemming **and** the NL-gated IDF path boost shipped after the stemming work. Stemming produced the held-out semantic rank-1 doubling (0.20 → 0.40); the path boost added the overall success@5 (0.7749 → 0.8065) and overall semantic s@5 (0.5161 → 0.6129) lift, with held-out rank-1 unchanged. See [BENCH_BASELINE.md](BENCH_BASELINE.md).
-
-### Embeddings & reranker — gin + express subset (requires Ollama)
-
-A separate run measured the full embeddings/enrichment/reranker stack on a 2-suite subset — **gin** (Go, the hardest semantic suite) and **express** (JS) — to decide whether to commission a full 5-suite re-embed. These numbers are from that subset, **not** the 5-suite held-out set above. See [BENCH_FULL_SUITE.md](BENCH_FULL_SUITE.md).
-
-| Configuration | gin semantic rank-1 / MRR / s@5 | gin symbolic rank-1 | Notes |
-|---------------|----------------------------------|---------------------|-------|
-| Lexical (default) | 0.20 / 0.30 / 0.60 | 0.85 | no model |
-| + nomic embeddings | 0.20 / 0.30 / 0.60 | 0.85 | embeddings alone don't move rank-1 |
-| + qwen3-embedding:4b | 0.20 / 0.48 / **0.80** | **0.92** | recall + symbolic lift; slow indexing |
-| + qwen3:4b & reranker | **0.40** / 0.63 / 0.80 | 0.92 | best on gin; **regressed express** (sem rank-1 0.43 → 0.29) |
-
-The honest conclusion from that run: **embeddings are a recall lever (they get the answer into the top-5), the reranker is the rank-1 lever (it reorders the top), and they are complementary but inconsistent across languages.** qwen3 also *inverts* the enrichment verdict — enrichment helped a weak embedder but regresses a strong one (gin semantic MRR 0.48 → 0.39). The gate to justify a full 5-suite re-embed was gin semantic rank-1 > 0.65; the best achieved was **0.40**, so the full re-embed was not commissioned.
-
-> Your results will vary by repository and language. To reproduce: `npm run test:setup && npm run test:eval`.
-
 ## Known limitations
 
 - Semantic rank-1 on the default path is **0.40 (held-out)**. Closing the remaining gap is bounded by the embedding/reranker channel, not lexical reweighting (see the table above).
 - The reranker is inconsistent across languages — it helps Go/Python and regresses JavaScript.
 - Enrichment only pays off paired with the reranker; alone it regresses semantic precision.
-- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/PHP/Kotlin/Swift/Rust/Go/C**, use a dedicated field-precise branch for **C#** (params/fields/properties/returns/base list — ~83% of C# chunks on the aspnet fixture), and are **empty for Ruby** (dynamically typed — no cheap static type signal). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
+- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/PHP/Kotlin/Swift/Rust/Go/C**, use a dedicated field-precise branch for **C#** (params/fields/properties/returns/base list — ~54% of C# chunks on the aspnet fixture), and are **empty for Ruby, Express.js, Django, Bash, SCSS** (dynamic types or no type annotations in scope). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
 - Call-graph callers reached through a dynamically-typed or unresolved receiver (e.g. `const s = getStore(); s.save()`) are reported in the lower-confidence **name-only** bucket — they are not statically disambiguated by class.
+- Java (Spring) is chunked at *class* granularity (god-class split only fires ≥200 lines), so `get_call_graph` attributes at class level, not method level. SCSS has 6 trivial `@include` edges that resolve to no indexed definition — effectively no call graph.
+
+## Benchmark results
+
+All numbers are generated by the eval harness on cold, isolated builds — not hand-edited. Scoring is strict (exact symbol match, no file-path fallback). Each language has a held-out validation split (~20–25%) that was never used to tune.
+
+**Configs:** **L1** = lexical + stemming (shipped default) · **E0** = in-process MiniLM embeddings · **O0** = Ollama nomic-embed-text · **O2** = Ollama qwen3-embedding:4b · **R0** = O2 + LLM rerank.
+
+### Retrieval accuracy — default lexical path (L1) vs best achievable
+
+`sym r1` = strict rank-1 on symbolic/exact queries (larger n, reliable). `sem r1` / `sem s@5` = strict rank-1 / success@5 on behavioural queries (small per-language n=2–7 — directional, not precise; a single query shifts the number by 14–50 points).
+
+| Language | Fixture | sym n | sym r1 | sem n | sem r1 | sem s@5 | best sem r1 | best sem s@5 |
+|---|---|---|---|---|---|---|---|---|
+| JavaScript | axios | 14 | 79% | 5 | 0% | 80% | 20% (E0) | 80% (L1) |
+| JavaScript | express-js | 14 | 79% | 7 | 43% | 57% | 43% (L1) | 86% (R0) |
+| TypeScript | nestjs | 14 | 57% | 7 | 14% | 43% | 14% (L1) | 57% (O0) |
+| TS/React | react | 7 | 57% | 3 | 0% | 33% | 0% (L1) | 33% (L1) |
+| Python | fastapi | 14 | 79% | 7 | 14% | 43% | 43% (E0) | 57% (O0) |
+| Python/Django | django | 6 | 83% | 3 | 33% | 67% | 67% (R0) | 100% (O2) |
+| Go | gin | 13 | 85% | 5 | 20% | 100% | 80% (R0) | 100% (L1) |
+| Rust | rust | 9 | 78% | 3 | 0% | 0% | 33% (R2) | 33% (R2) |
+| Java/Spring | spring | 7 | 86% | 4 | 25% | 100% | 75% (R0) | 100% (L1) |
+| Kotlin/Android | android | 8 | 75% | 3 | 33% | 100% | 33% (L1) | 100% (L1) |
+| C#/ASP.NET | aspnet | 8 | 63% | 2 | 0% | 100% | 50% (E0) | 100% (L1) |
+| Ruby/Rails | rails | 7 | 71% | 5 | 0% | 20% | 0% (L1) | 20% (L1) |
+| PHP/Laravel | laravel | 8 | 63% | 3 | 33% | 33% | 33% (L1) | 33% (L1) |
+| PHP/Symfony | symfony | 9 | 78% | 3 | 33% | 67% | 67% (E0) | 67% (L1) |
+| SCSS | css | 7 | 43% | 4 | 25% | 50% | 50% (E0) | 50% (L1) |
+| C | cjson | 8 | 63% | 4 | 25% | 25% | 25% (L1) | 50% (E0) |
+| Bash | nvm | 9 | 44% | 3 | 33% | 67% | 67% (E0) | 67% (L1) |
+| Swift | alamofire | 9 | 78% | 3 | 67% | 100% | 100% (R0) | 100% (L1) |
+| **Mean (18 langs)** | | | **70%** | | **23%** | **60%** | | |
+
+The 70% symbolic mean covers exact/near-exact symbol queries where the lexical+stemming path is the primary signal. The 23% semantic mean covers behavioural ("rate limiting middleware") queries where the embedding channel is the primary lever — the gap is real and bounded by the embedding/reranker channel, not lexical reweighting.
+
+### Structural coverage — call graph and references (invocation-verified)
+
+Every verdict below was confirmed by calling `get_call_graph` and `find_references` on the real index, not by reading a field count.
+
+| Language | Fixture | `get_call_graph` | `type_refs` channel | Callers resolution | Inheritance (`extends`) |
+|---|---|---|---|---|---|
+| JavaScript | axios | yes | populated (26.7%) | receiver-aware (80.2%) | yes (0.2%) |
+| JavaScript | express-js | yes | **empty** | receiver-aware (74.2%) | n/a |
+| TypeScript | nestjs | yes | populated (86%) | receiver-aware (73%) | yes (11%) |
+| TS/React | react | yes | populated (85.8%) | mixed (33.5%) | yes (0.3%) |
+| Python | fastapi | yes | populated (17.8%) | receiver-aware (64.7%) | yes (10.9%) |
+| Python/Django | django | yes | **empty** | receiver-aware (73.9%) | yes (47.7%) |
+| Go | gin | yes | populated (87.9%) | name-only | yes (0.6%) |
+| Rust | rust | yes | populated (86%) | name-only | yes (26.1%) |
+| Java/Spring | spring | **degraded** (class-granular) | populated (3.6%) | receiver-aware (87.7%) | yes (1.1%) |
+| Kotlin/Android | android | yes | populated (100%) | name-only | yes (18.1%) |
+| C#/ASP.NET | aspnet | yes | populated (53.6%) | receiver-aware (91.1%) | yes (32.2%) |
+| Ruby/Rails | rails | yes | **empty** | name-only | yes (11.9%) |
+| PHP/Laravel | laravel | yes | populated (73.1%) | receiver-aware (83.6%) | yes (65.9%) |
+| PHP/Symfony | symfony | yes | populated (35.2%) | receiver-aware (86%) | yes (23.2%) |
+| SCSS | css | **degraded** (6 trivial edges) | **empty** | none | n/a |
+| C | cjson | yes | populated (9.3%) | name-only | n/a |
+| Bash | nvm | yes | **empty** | name-only | n/a |
+| Swift | alamofire | yes | populated (97.7%) | receiver-aware (53.4%) | yes (23.9%) |
+
+**Legend.** `get_call_graph`: **yes** = callers resolve correctly · **degraded** = edges exist but callee method is not its own chunk (Java class-granular) · **none** = zero call edges, tool returns nothing. `type_refs`: **populated** = ≥1 chunk carries type-usage refs · **empty** = `find_references` degrades to callers + `extends` only. `callers resolution`: **receiver-aware** = high-confidence per-class caller classification · **name-only** = call sites carry no receiver (Go/Rust/Kotlin/Ruby/Bash/C).
+
+**Backend parity: memory vs SQLite top-5 is byte-identical on all 18 fixtures** — enforced by `test/sqlite.mjs`.
+
+### File-hit metric
+
+In addition to strict symbol-level scoring, the eval harness now tracks **file hit@k**: did any result in the top-k land on the correct file, even if the exact symbol wasn't rank-1? This is computed independently of the strict metric — a query with `file hit@1 = 1` and `sym r1 = 0` means the agent landed in the right file but fetched the wrong chunk within it.
+
+```
+npm run test:eval -- --suite aspnet --verbose   # shows fileR (file rank) per query
+npm run test:eval                               # OVERALL section shows file hit@1 / @5
+```
+
+File-hit metrics across 11 fixtures (L1 default path):
+
+| Fixture | sym r1 | file hit@1 | file hit@5 |
+|---|---|---|---|
+| axios | 58% | 68% | 89% |
+| express-js | 67% | 76% | 90% |
+| fastapi | 57% | 62% | 71% |
+| gin | 67% | 61% | 83% |
+| react | 40% | 50% | 80% |
+| rails | 42% | 33% | 67% |
+| django | 67% | 78% | 89% |
+| css | 36% | 55% | 91% |
+| aspnet | 50% | 50% | 90% |
+| laravel | 55% | 55% | 64% |
+| symfony | 67% | 67% | 75% |
+| Mean | 55% | 60% | 81% |
+
+The gap between `sym r1` and `file hit@1` shows how often the agent lands in the right file but on a sibling chunk rather than the exact definition. A wide gap indicates the retrieval granularity is right (file-level) but the within-file ranking needs improvement (typically addressed by `get_file_skeleton` + `get_chunk`). For example, rails has only 33% file hit@1 despite landing in the file half the time at @5 — worth exploring via `--verbose` to diagnose within-file ranking issues.
 
 ## Contributing / reproducing the benchmarks
 
@@ -196,10 +253,13 @@ npm run test:all                  # full unit + integration suite
 npm run test:setup                # index the benchmark fixtures
 npm run test:eval                 # lexical (default-path) eval — matches the table above
 npm run test:eval -- --embeddings # hybrid eval (requires Ollama)
+npm run test:eval -- --verbose    # per-query breakdown including file rank column
 node test/sqlite.mjs              # backend-parity gate (memory ↔ SQLite identical top-5)
+node bench/cell.mjs <fixture> L1  # cold rebuild + score one fixture
+node bench/synth.mjs              # regenerate BENCH_LANGUAGES.md + BENCH_SUMMARY.md
 ```
 
-To verify the default-path numbers: `npm run test:eval` and read the `HELD-OUT` block.
+To verify the default-path numbers: `npm run test:eval` and read the `HELD-OUT` block. The `OVERALL` block now shows `file hit@1 / @5` alongside strict rank-1.
 
 ---
 

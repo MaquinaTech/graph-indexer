@@ -156,6 +156,17 @@ function looseRelevant(result, expectedNames, expectedFiles) {
 }
 
 /**
+ * FILE-HIT: the result's file_path must contain any of the expected_files strings.
+ * Pure file-level check — ignores symbol name entirely. Answers "did we land on
+ * the right file?" even when the wrong chunk within that file ranks first.
+ */
+function fileRelevant(result, expectedFiles) {
+    if (!result?.chunk || !expectedFiles?.length) return false;
+    const filePath = (result.chunk.file_path || '').toLowerCase();
+    return expectedFiles.some(f => filePath.includes(f.toLowerCase()));
+}
+
+/**
  * STRICT: the result's symbol name must EXACTLY equal one of the expected names —
  * matched against the whole name, any dotted/`::`/`#` component of it (so
  * `Layer.prototype.handle` matches expected `Layer` or `handle`), or the chunk's
@@ -278,6 +289,8 @@ async function evaluateSuite(suite) {
 
         const isLoose = (r) => looseRelevant(r, names, files);
         const isStrict = (r) => strictRelevant(r, names);
+        const isFileHit = (r) => fileRelevant(r, files);
+        const hasExpectedFiles = files.length > 0;
 
         const row = {
             id: q.id, query: q.query, difficulty: q.difficulty ?? 'medium',
@@ -285,17 +298,20 @@ async function evaluateSuite(suite) {
             expected_names: names,
             top1: results[0] ? { name: results[0].chunk?.name, file: results[0].chunk?.file_path } : null,
             looseSuccess: {}, strictSuccess: {}, precision: {}, ndcg: {},
+            fileHit: {},
             rank1Strict: results[0] ? (isStrict(results[0]) ? 1 : 0) : 0,
             mrrStrict: reciprocalRank(results, isStrict),
             mrrLoose: reciprocalRank(results, isLoose),
             strictRank: firstRank(results, isStrict),
             looseRank: firstRank(results, isLoose),
+            fileRank: hasExpectedFiles ? firstRank(results, isFileHit) : -1,
         };
         for (const k of KS) {
             row.looseSuccess[k] = successAtK(results, isLoose, k);
             row.strictSuccess[k] = successAtK(results, isStrict, k);
             row.precision[k] = precisionAtK(results, isStrict, k);
             row.ndcg[k] = ndcgAtK(results, isStrict, k);
+            row.fileHit[k] = hasExpectedFiles ? successAtK(results, isFileHit, k) : null;
         }
         // A "file-only hit" = counted as loose hit at k=5 but never strictly correct.
         row.fileOnlyHit = (row.looseSuccess[5] === 1 && row.strictSuccess[5] === 0) ? 1 : 0;
@@ -309,6 +325,12 @@ async function evaluateSuite(suite) {
     const aggOf = (rs) => (sel) => mean(rs.map(sel));
     const buildAgg = (rs) => {
         const a = aggOf(rs);
+        // fileHit is only defined for queries that have expected_files; average over those only.
+        const fileHitRows = (k) => rs.filter(r => r.fileHit[k] !== null);
+        const fileHitMean = (k) => {
+            const eligible = fileHitRows(k);
+            return eligible.length ? mean(eligible.map(r => r.fileHit[k])) : null;
+        };
         return {
             queryCount: rs.length,
             looseSuccess: Object.fromEntries(KS.map(k => [k, a(r => r.looseSuccess[k])])),
@@ -319,6 +341,8 @@ async function evaluateSuite(suite) {
             mrrStrict: a(r => r.mrrStrict),
             mrrLoose: a(r => r.mrrLoose),
             fileOnlyHitRate: a(r => r.fileOnlyHit),
+            fileHitRate: Object.fromEntries(KS.map(k => [k, fileHitMean(k)])),
+            fileHitQueryCount: fileHitRows(5).length,
         };
     };
     const aggregate = buildAgg(tuningRows);
@@ -354,6 +378,10 @@ function render(result) {
     console.log(`  ${pad('MRR strict', 30)} ${scoreColour(a.mrrStrict)}  ${c.dim('(loose ' + fmt(a.mrrLoose) + ')')}`);
     console.log(`  ${pad('nDCG@5 strict', 30)} ${scoreColour(a.ndcg[5])}`);
     console.log(`  ${pad('file-only inflated hits', 30)} ${a.fileOnlyHitRate > 0 ? c.red(fmtPct(a.fileOnlyHitRate * 100)) : c.green('0.0%')}`);
+    if (a.fileHitRate[5] !== null) {
+        const fhNote = a.fileHitQueryCount < a.queryCount ? c.dim(` (${a.fileHitQueryCount}/${a.queryCount} queries have expected_files)`) : '';
+        console.log(`  ${pad('file hit@1 / @5', 30)} ${scoreColour(a.fileHitRate[1])} / ${scoreColour(a.fileHitRate[5])}${fhNote}`);
+    }
 
     // Semantic channel breakdown — highlights the benchmark mismatch the agent prompt (prompts/CORE.md) revealed:
     // symbolic queries test name-lookup (what agents use resolve_symbol for), while semantic
@@ -375,13 +403,15 @@ function render(result) {
 
     if (verbose) {
         console.log('  ' + c.dim('·'.repeat(70)));
-        console.log('  ' + c.dim(pad('ID', 7) + pad('Diff', 10) + pad('strictR1', 9) + pad('looseR', 8) + pad('strictR', 8) + 'top-1 (name @ file)'));
+        console.log('  ' + c.dim(pad('ID', 7) + pad('Diff', 10) + pad('strictR1', 9) + pad('fileR', 7) + pad('looseR', 8) + pad('strictR', 8) + 'top-1 (name @ file)'));
         for (const r of result.rows) {
             const flag = r.fileOnlyHit ? c.red('⚠ file-only') : '';
             const t1 = r.top1 ? `${r.top1.name} @ ${r.top1.file}` : '∅';
             const diffColour = r.difficulty === 'semantic' ? c.cyan(pad(r.difficulty, 10)) : c.dim(pad(r.difficulty, 10));
+            const fileRankStr = r.fileRank < 0 ? '—' : String(r.fileRank);
             console.log('  ' + pad(r.id, 7) + diffColour
                 + pad(r.rank1Strict ? '✓' : '✗', 9)
+                + pad(fileRankStr, 7)
                 + pad(r.looseRank < 0 ? '—' : String(r.looseRank), 8)
                 + pad(r.strictRank < 0 ? '—' : String(r.strictRank), 8)
                 + c.dim(t1) + (flag ? '  ' + flag : ''));
@@ -434,6 +464,13 @@ if (ok.length > 0) {
     console.log(`  ${pad('MRR', 22)} ${pad(fmt(m(r => r.aggregate.mrrLoose)), 9)} ${scoreColour(m(r => r.aggregate.mrrStrict))}`);
     console.log(`  ${pad('nDCG@5', 22)} ${pad('—', 9)} ${scoreColour(m(r => r.aggregate.ndcg[5]))}`);
     console.log(`  ${pad('file-only inflation', 22)} ${pad('—', 9)} ${m(r => r.aggregate.fileOnlyHitRate) > 0 ? c.red(fmtPct(m(r => r.aggregate.fileOnlyHitRate) * 100)) : c.green('0.0%')}`);
+    const allFileHit1 = ok.filter(r => r.aggregate.fileHitRate[1] !== null);
+    const allFileHit5 = ok.filter(r => r.aggregate.fileHitRate[5] !== null);
+    if (allFileHit5.length > 0) {
+        const fh1 = mean(allFileHit1.map(r => r.aggregate.fileHitRate[1]));
+        const fh5 = mean(allFileHit5.map(r => r.aggregate.fileHitRate[5]));
+        console.log(`  ${pad('file hit@1 / @5', 22)} ${pad('—', 9)} ${scoreColour(fh1)} / ${scoreColour(fh5)}`);
+    }
 
     // Semantic vs symbolic cross-suite summary
     const allRows = ok.flatMap(r => r.rows || []);
