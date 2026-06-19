@@ -4,6 +4,24 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Onboarding (`graph-indexer init`) — environment-agnostic setup
+
+The first-run setup now produces a working configuration in **any** repository, not just a Node repo that already has graph-indexer installed.
+
+- **Self-contained MCP launch command.** The wired command is now decided per-project. When graph-indexer is resolvable as a local dependency, the wiring keeps using `npm run mcp:start`. Otherwise — **non-Node repos** (Python, Go, Rust, …) and **npx-only Node repos** — it wires a self-contained `npx -y -p graph-indexer idx-mcp --repo <abs path>` that launches the real server regardless of ecosystem. The same decision drives the npm scripts (wrapped in `npx -p` when not a local dep, so they aren't broken) and the global Claude Desktop config.
+- **Subcommand dispatch.** `graph-indexer <idx-mcp|idx-index|idx-watch|idx-daemon> …` now delegates to the real bin (previously these tokens were swallowed by the init wizard, because `npx <pkg> <x>` runs the package's same-named bin, not the `<x>` bin). This makes the documented `npx -y graph-indexer idx-mcp` form work too.
+- **Target a repo + CI flags.** `init` now honors a positional path and `--repo <path>` (resolved to an absolute root used everywhere), adds `--help`, and adds `--yes` / `--non-interactive` (a non-TTY stdin already implied this) for scripted/CI runs.
+- **Claude Code MCP target.** Project-scoped servers are now written to `.mcp.json` (the file Claude Code reads for project MCP servers) instead of `.claude/settings.json`.
+- **Claude Desktop on Linux.** Added the `~/.config/Claude` path (honoring `$XDG_CONFIG_HOME`); Linux users with Claude Desktop installed now get wired instead of reported "not installed".
+- **Node version guard.** Selecting (or auto-resolving on a large repo to) the SQLite backend on Node < 22 now surfaces a clear warning in the summary instead of failing later at runtime.
+- **Faster default path + ready to use.** The engine step opens with a single "Use recommended defaults?" confirm that skips the ~10 follow-up prompts, and the run ends by offering to build the index so the flow finishes genuinely ready to use. Editor wiring now distinguishes "detected" from "ready if you use it" in the summary.
+
+Idempotency, merge-safe config writes, air-gapped defaults, and `--dry-run` are all preserved.
+
+---
+
 ## [2.0.0] — 2026-06-18
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible.

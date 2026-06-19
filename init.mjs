@@ -24,6 +24,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
+import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { c, glyph, log, rule, box } from './cli-ui.mjs';
 import {
@@ -33,11 +34,93 @@ import {
 import { readPid, isAlive } from './daemon-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isDryRun = process.argv.includes('--dry-run');
-const isAllLanguages = process.argv.includes('--all-languages');
-const isInteractive = !isAllLanguages && process.stdin.isTTY;
-const PROJECT_ROOT = process.cwd();
+
+// ─── Subcommand dispatch ─────────────────────────────────────────────────────
+// package.json maps the `graph-indexer` bin to THIS file, so `npx graph-indexer
+// idx-mcp …` runs init.mjs with `idx-mcp` as argv[2] — npx resolves the package's
+// same-named bin, never the `idx-mcp` bin. Delegate those tokens to the real bins
+// (re-exec with inherited stdio, so a delegated MCP server talks straight over
+// stdin/stdout) so `graph-indexer <subcommand> …` works everywhere. A bare `init`
+// token, or none, falls through to the setup wizard below.
+const SUBCOMMAND_BINS = {
+    'idx-mcp': 'mcp-server.mjs',
+    'idx-index': 'indexer.mjs',
+    'idx-watch': 'watch-daemon.mjs',
+    'idx-daemon': 'daemon-ctl.mjs',
+};
+if (SUBCOMMAND_BINS[process.argv[2]]) {
+    const target = path.join(__dirname, SUBCOMMAND_BINS[process.argv[2]]);
+    const res = spawnSync(process.execPath, [target, ...process.argv.slice(3)], { stdio: 'inherit' });
+    if (res.error) { console.error(res.error.message); process.exit(1); }
+    process.exit(res.status == null ? 1 : res.status);
+}
+
+// ─── CLI parsing (target repo + flags) ───────────────────────────────────────
+/** Split argv into a flag set, a `--repo` value, and the first positional path. */
+function parseCli(argv) {
+    const flags = new Set();
+    let repo = null, positional = null;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--repo') { repo = argv[++i] ?? null; continue; }
+        if (a === 'init') continue;             // explicit "run the wizard" token
+        if (a.startsWith('-')) { flags.add(a); continue; }
+        if (positional == null) positional = a; // first bare token = target repo
+    }
+    return { flags, repo, positional };
+}
+const cli = parseCli(process.argv.slice(2));
+
+const HELP = `graph-indexer — AST-precise, air-gapped code search for AI agents
+
+Usage:
+  graph-indexer [init] [path] [options]      Guided project setup (default)
+  graph-indexer idx-mcp    [--repo <path>]   Start the MCP server (stdio)
+  graph-indexer idx-index  [--repo <path>]   Build / refresh the index
+  graph-indexer idx-daemon <start|stop|restart|status|logs> [--repo <path>]
+  graph-indexer idx-watch  [--repo <path>]   Run the watch daemon in the foreground
+
+Setup options:
+  path, --repo <path>   Target repository (default: current directory)
+  --yes, -y             Non-interactive: accept detected/default selections (CI)
+  --non-interactive     Alias for --yes
+  --all-languages       Index every supported language (implies --yes)
+  --dry-run             Show the file actions without writing anything
+  --help, -h            Show this help
+
+Docs: https://github.com/MaquinaTech/graph-indexer
+`;
+if (cli.flags.has('--help') || cli.flags.has('-h')) { process.stdout.write(HELP); process.exit(0); }
+
+const isDryRun = cli.flags.has('--dry-run');
+const isAllLanguages = cli.flags.has('--all-languages');
+// CI / scripted runs: an explicit switch — or a non-TTY stdin — both mean "no prompts".
+const forceNonInteractive = isAllLanguages
+    || cli.flags.has('--yes') || cli.flags.has('-y')
+    || cli.flags.has('--non-interactive') || cli.flags.has('--ci');
+const isInteractive = !forceNonInteractive && Boolean(process.stdin.isTTY);
+
+// Target repo: --repo wins, then a positional path, then the current directory.
+// Everything (artifacts, configs, wired commands, env) anchors to this absolute path.
+const PROJECT_ROOT = path.resolve(cli.repo || cli.positional || process.cwd());
 const PATHS = artifactPaths(PROJECT_ROOT);
+const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
+
+// Is graph-indexer resolvable as a local dependency of the TARGET repo? When it is
+// (and a package.json exists), the npm scripts / bare bins resolve, so we wire
+// `npm run mcp:start`. Otherwise — non-Node repos, or Node repos where the user only
+// ran `npx graph-indexer` — we wire a self-contained `npx -p graph-indexer …`
+// command (and npx-form scripts) so the server still launches.
+function graphIndexerIsLocalDep(root) {
+    if (fs.existsSync(path.join(root, 'node_modules', 'graph-indexer', 'package.json'))) return true;
+    const pkg = readJsonSafe(path.join(root, 'package.json'));
+    if (pkg) {
+        const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+        if (deps['graph-indexer']) return true;
+    }
+    return false;
+}
+const localDep = graphIndexerIsLocalDep(PROJECT_ROOT);
 
 const TOTAL_STEPS = 6;
 
@@ -112,18 +195,30 @@ const LANGUAGE_PROMPTS = {
     swift: 'languages/SWIFT.md',
 };
 
-// ─── MCP Server config blocks ─────────────────────────────────────────────────
+// ─── MCP Server config blocks (self-contained when not a local dependency) ────
+// `npx -p graph-indexer idx-mcp` runs the real idx-mcp bin regardless of language
+// or whether graph-indexer is installed, and `--repo` carries the absolute root.
+// The `-p` form is required: `npx graph-indexer idx-mcp` would run the package's
+// same-named (init) bin instead. MCP_PROJECT_ROOT is kept as a belt-and-suspenders
+// fallback for the npm form (which has no --repo).
+const NPX_MCP_ARGS = ['-y', '-p', 'graph-indexer', 'idx-mcp', '--repo', PROJECT_ROOT];
 
-const SERVER_CONFIG = {
-    command: 'npm',
-    args: ['run', 'mcp:start'],
-    env: { MCP_PROJECT_ROOT: PROJECT_ROOT },
-};
+const SERVER_CONFIG = localDep
+    ? { command: 'npm', args: ['run', 'mcp:start'], env: { MCP_PROJECT_ROOT: PROJECT_ROOT } }
+    : { command: 'npx', args: NPX_MCP_ARGS, env: { MCP_PROJECT_ROOT: PROJECT_ROOT } };
 
-const SERVER_CONFIG_GLOBAL = {
-    command: 'npm',
-    args: ['run', '--prefix', PROJECT_ROOT, 'mcp:start'],
-    env: { MCP_PROJECT_ROOT: PROJECT_ROOT },
+// Global clients (Claude Desktop) launch from outside the project. With a local
+// dep, `npm run --prefix <root>` resolves the bin from the project; otherwise the
+// npx form already carries the absolute --repo, so it doubles as the global form.
+const SERVER_CONFIG_GLOBAL = localDep
+    ? { command: 'npm', args: ['run', '--prefix', PROJECT_ROOT, 'mcp:start'], env: { MCP_PROJECT_ROOT: PROJECT_ROOT } }
+    : { command: 'npx', args: NPX_MCP_ARGS, env: { MCP_PROJECT_ROOT: PROJECT_ROOT } };
+
+// Display commands for "Next steps" — adapt to the same local-dep vs npx decision.
+const q = (p) => (/\s/.test(p) ? `"${p}"` : p);
+const CMD = {
+    index: localDep ? 'npm run mcp:index' : `npx -y -p graph-indexer idx-index --repo ${q(PROJECT_ROOT)}`,
+    daemonStatus: localDep ? 'npm run mcp:daemon:status' : `npx -y -p graph-indexer idx-daemon status --repo ${q(PROJECT_ROOT)}`,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -182,6 +277,7 @@ function detectLanguages(root) {
     const counts = {};
     let visited = 0;
     let totalSourceFiles = 0;
+    let truncated = false; // hit the scan cap → repo is large (used for the Node 22 hint)
     const queue = [{ dir: root, depth: 0 }];
 
     while (queue.length > 0 && visited < 4000) {
@@ -189,7 +285,7 @@ function detectLanguages(root) {
         let entries;
         try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
         for (const entry of entries) {
-            if (++visited >= 4000) break;
+            if (++visited >= 4000) { truncated = true; break; }
             if (entry.isDirectory()) {
                 if (depth < 5 && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
                     queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
@@ -203,7 +299,8 @@ function detectLanguages(root) {
 
     // ≥3 files of a language counts as "present"; tiny repos get a lower bar.
     const threshold = totalSourceFiles < 15 ? 1 : 3;
-    return new Set(Object.keys(counts).filter(k => counts[k] >= threshold));
+    const langs = new Set(Object.keys(counts).filter(k => counts[k] >= threshold));
+    return { langs, fileCount: totalSourceFiles, truncated };
 }
 
 /** Best-effort framework detection from dependency manifests. */
@@ -529,35 +626,54 @@ function upsertMcpServer(configPath, containerKey, serverConfig) {
 }
 
 function configureVSCode() {
-    return upsertMcpServer(path.join(PROJECT_ROOT, '.vscode', 'mcp.json'), 'servers', SERVER_CONFIG);
+    const detected = fs.existsSync(path.join(PROJECT_ROOT, '.vscode'));
+    return { ...upsertMcpServer(path.join(PROJECT_ROOT, '.vscode', 'mcp.json'), 'servers', SERVER_CONFIG), detected };
 }
 
 function configureCursor() {
-    return upsertMcpServer(path.join(PROJECT_ROOT, '.cursor', 'mcp.json'), 'mcpServers', SERVER_CONFIG);
+    const detected = fs.existsSync(path.join(PROJECT_ROOT, '.cursor'));
+    return { ...upsertMcpServer(path.join(PROJECT_ROOT, '.cursor', 'mcp.json'), 'mcpServers', SERVER_CONFIG), detected };
+}
+
+/** Per-platform Claude Desktop config path (Windows / macOS / Linux+XDG). */
+function claudeDesktopConfigPath() {
+    if (process.platform === 'win32') {
+        return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+            'Claude', 'claude_desktop_config.json');
+    }
+    if (process.platform === 'darwin') {
+        return path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+    }
+    // Linux & other XDG platforms: ~/.config/Claude (honouring $XDG_CONFIG_HOME).
+    const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    return path.join(xdg, 'Claude', 'claude_desktop_config.json');
 }
 
 function configureClaudeDesktop() {
-    const configPath = process.platform === 'win32'
-        ? path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json')
-        : path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+    const configPath = claudeDesktopConfigPath();
     if (!fs.existsSync(path.dirname(configPath))) return false; // Claude Desktop not installed
     const res = upsertMcpServer(configPath, 'mcpServers', SERVER_CONFIG_GLOBAL);
-    return { ...res, rel: 'claude_desktop_config.json' };
+    return { ...res, rel: 'claude_desktop_config.json', detected: true };
 }
 
 function configureClaudeCode() {
-    const hasClaudeDir = fs.existsSync(path.join(PROJECT_ROOT, '.claude'));
-    const configPath = hasClaudeDir
-        ? path.join(PROJECT_ROOT, '.claude', 'settings.json')
-        : path.join(PROJECT_ROOT, '.mcp.json');
-    return upsertMcpServer(configPath, 'mcpServers', SERVER_CONFIG);
+    // Project-scoped MCP servers for Claude Code live in `.mcp.json` at the repo
+    // root — NOT `.claude/settings.json` (that file holds settings/permissions and
+    // is not read as an MCP server source). A .claude dir or CLAUDE.md is only a
+    // "detected" hint; the write target is always .mcp.json.
+    const detected = fs.existsSync(path.join(PROJECT_ROOT, '.claude'))
+        || fs.existsSync(path.join(PROJECT_ROOT, 'CLAUDE.md'))
+        || fs.existsSync(path.join(PROJECT_ROOT, '.mcp.json'));
+    return { ...upsertMcpServer(path.join(PROJECT_ROOT, '.mcp.json'), 'mcpServers', SERVER_CONFIG), detected };
 }
 
 // ─── package.json scripts (index + daemon control) ───────────────────────────
 
-// Canonical script values graph-indexer manages. These call the package bins, so
-// they work when graph-indexer is installed as a dependency of the user's project.
-const CANON_SCRIPTS = {
+// Script values graph-indexer manages. When it's a local dependency the bare bins
+// resolve from node_modules/.bin; otherwise wrap them in `npx -p graph-indexer …`
+// so the scripts still run in npx-only Node repos. (The MCP wiring stays
+// self-contained regardless — these scripts are a convenience, not the launch path.)
+const SCRIPTS_LOCAL = {
     'mcp:index': 'idx-index --repo .',
     'mcp:start': 'idx-mcp',
     'mcp:daemon:start': 'idx-daemon start',
@@ -566,12 +682,18 @@ const CANON_SCRIPTS = {
     'mcp:daemon:status': 'idx-daemon status',
     'mcp:daemon:logs': 'idx-daemon logs',
 };
-// Values previous graph-indexer versions wrote — safe to overwrite on upgrade.
-// Anything else under these keys is treated as a user customisation and kept.
-const OLD_SCRIPT_VALUES = {
-    'mcp:index': new Set(['idx-index --repo .', 'node indexer.mjs --repo .', 'idx-index']),
-    'mcp:start': new Set(['idx-mcp', 'node mcp-server.mjs']),
-};
+const SCRIPTS_NPX = Object.fromEntries(
+    Object.entries(SCRIPTS_LOCAL).map(([k, v]) => [k, `npx -y -p graph-indexer ${v}`]),
+);
+const CANON_SCRIPTS = localDep ? SCRIPTS_LOCAL : SCRIPTS_NPX;
+
+// Values any graph-indexer init has written (either form) — safe to refresh on
+// upgrade or when the local-dep decision flips. Anything else under these keys is
+// a user customisation we must not touch.
+const OLD_SCRIPT_VALUES = {};
+for (const k of Object.keys(SCRIPTS_LOCAL)) OLD_SCRIPT_VALUES[k] = new Set([SCRIPTS_LOCAL[k], SCRIPTS_NPX[k]]);
+OLD_SCRIPT_VALUES['mcp:index'].add('node indexer.mjs --repo .').add('idx-index');
+OLD_SCRIPT_VALUES['mcp:start'].add('node mcp-server.mjs');
 
 function addPackageScripts() {
     const pkgPath = path.join(PROJECT_ROOT, 'package.json');
@@ -771,7 +893,8 @@ function runMigration() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 const pkgSelf = readJsonSafe(path.join(__dirname, 'package.json')) || {};
-const detectedLanguages = detectLanguages(PROJECT_ROOT);
+const scan = detectLanguages(PROJECT_ROOT);
+const detectedLanguages = scan.langs;
 const detectedFrameworks = detectFrameworks(PROJECT_ROOT);
 
 log('');
@@ -856,6 +979,22 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
 
     if (!isInteractive) {
         line(glyph.skip, 'Engine', 'using defaults / existing config (non-interactive)');
+    } else if (await confirm({ label: 'Use recommended defaults?  (lexical search · no LLM · no network)', def: true })) {
+        // Fast path: skip the ~10 engine prompts and apply the shipped defaults
+        // (lexical + stemming; no embeddings/enrichment/rerank). Storage stays on
+        // whatever backend the user previously forced, else 'auto'.
+        const keepStorage = existing.storage === 'memory' || existing.storage === 'sqlite' ? existing.storage : 'auto';
+        engineConfig = {
+            storage: keepStorage,
+            embeddings: false,
+            embedProvider: 'off',
+            ollamaHost: existing.ollamaHost || 'http://localhost:11434',
+            embedModel: existing.embedModel || 'nomic-embed-text',
+            localEmbedModel: existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2',
+            enrichment: { enabled: false },
+            rerank: { enabled: false },
+        };
+        line(glyph.ok, 'Engine', 'recommended defaults — lexical search, no LLM, no network');
     } else {
         // Storage backend
         const storage = await interactiveSelect({
@@ -935,6 +1074,20 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
         line(enrichEnabled ? glyph.ok : glyph.skip, 'Enrichment', enrichEnabled ? enrichment.model : 'disabled (default)');
         line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? rerank.model : 'disabled (default)');
     }
+
+    // Node version guard for the SQLite backend (warn, never fail). 'auto' only
+    // switches to SQLite past ~15k chunks, so flag it on repos large enough to
+    // plausibly cross that line; a forced SQLite backend is always flagged.
+    const effStorage = engineConfig ? engineConfig.storage : (existing.storage || 'auto');
+    if (nodeMajor < 22) {
+        if (effStorage === 'sqlite') {
+            act('warn', `SQLite backend needs Node 22+ (Node ${process.versions.node} active)`,
+                'upgrade Node, or force in-memory (INDEXER_STORAGE=memory)');
+        } else if (effStorage === 'auto' && (scan.truncated || scan.fileCount > 2000)) {
+            act('warn', `Large repo on Node ${process.versions.node}`,
+                'auto storage switches to SQLite past ~15k chunks, which needs Node 22+');
+        }
+    }
 }
 
 // ── Step 4 · Editors & MCP wiring ─────────────────────────────────────────────
@@ -952,8 +1105,8 @@ for (const { name, fn } of ides) {
     try {
         const result = fn();
         if (result === false) { act('skipped', name, 'not installed'); continue; }
-        const { action, rel } = result;
-        act(action, name, rel);
+        const { action, rel, detected } = result;
+        act(action, name, detected ? `${rel} · detected` : `${rel} · ready if you use ${name}`);
     } catch (e) {
         act('warn', name, 'error: ' + e.message);
     }
@@ -1028,16 +1181,34 @@ for (const [kind, label] of summaryOrder) {
 if (!anySummary) log(c.dim('  Nothing to do.'));
 if (layersUsed.length > 0) log(`\n  ${c.dim('Prompt layers')}  ${layersUsed.join(' + ')}`);
 
+// ── Build the index now (interactive) ────────────────────────────────────────
+// Finish genuinely ready to use: offer to run the indexer against the resolved
+// repo root. Skipped in --dry-run and non-interactive runs, where "Next steps"
+// shows the command to run instead.
+let indexBuilt = false;
+if (isInteractive && !isDryRun) {
+    log('');
+    if (await confirm({ label: 'Build the index now?', def: true })) {
+        log('\n  ' + c.dim('Running the indexer…') + '\n');
+        const res = spawnSync(process.execPath, [path.join(__dirname, 'indexer.mjs'), '--repo', PROJECT_ROOT], { stdio: 'inherit' });
+        indexBuilt = res.status === 0;
+        log('');
+        if (indexBuilt) log(`  ${glyph.ok} ${c.bold('Index built.')} ${c.dim('graph-indexer is ready to use.')}`);
+        else log(`  ${glyph.warn} ${c.yellow('Index build failed.')} ${c.dim('Re-run ' + CMD.index + ' to see the error.')}`);
+    }
+}
+
 // ── Next steps ──────────────────────────────────────────────────────────────────
 
 log('\n' + c.bold('  Next steps'));
-log(`    ${c.cyan('1.')} Build the index        ${c.dim('→')} ${c.cyan('npm run mcp:index')}`);
-log(`    ${c.cyan('2.')} Restart your editor    ${c.dim('→')} loads the MCP server (auto-starts the daemon)`);
-log(`    ${c.cyan('3.')} Control the daemon     ${c.dim('→')} ${c.cyan('npm run mcp:daemon:status')} ${c.dim('| start | stop | restart | logs')}`);
-log(`    ${c.cyan('4.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
+let nextStep = 1;
+if (!indexBuilt) log(`    ${c.cyan(nextStep++ + '.')} Build the index        ${c.dim('→')} ${c.cyan(CMD.index)}`);
+log(`    ${c.cyan(nextStep++ + '.')} Restart your editor    ${c.dim('→')} loads the MCP server (auto-starts the daemon)`);
+log(`    ${c.cyan(nextStep++ + '.')} Control the daemon     ${c.dim('→')} ${c.cyan(CMD.daemonStatus)} ${c.dim('| start | stop | restart | logs')}`);
+log(`    ${c.cyan(nextStep++ + '.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
 log(c.dim(`       Other agents (.clinerules, .windsurfrules, …): prompts/INTEGRATION.md`));
 if (engineConfig && (engineConfig.enrichment.enabled || engineConfig.rerank.enabled)) {
-    log(c.dim(`       LLM features on — first ${c.cyan('npm run mcp:index')} calls Ollama at ${engineConfig.ollamaHost}`));
+    log(c.dim(`       LLM features on — first index run calls Ollama at ${engineConfig.ollamaHost}`));
 }
 
 log('\n' + rule());

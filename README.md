@@ -21,18 +21,20 @@ Graph Indexer is a local [Model Context Protocol](https://modelcontextprotocol.i
 
 ## Quick start
 
-The default path works with zero external dependencies — just Node.js (18+ for the in-memory index; 22+ if you use the optional SQLite backend).
+The default path works with zero external dependencies — just Node.js (18+ for the in-memory index; 22+ if you use the optional SQLite backend). It works in **any** repository — Python, Go, Rust, Java, and so on — not only Node projects.
 
 ```bash
 npx graph-indexer /path/to/your/repo
 ```
 
-That runs the interactive setup, indexes the repo, and prints the MCP command to connect. Then point your agent at the server:
+That runs the guided setup against that repo: it detects your stack, wires your installed editors to the MCP server (merging into existing configs, never clobbering), assembles the agent prompt suite, and offers to build the index — so it finishes ready to use. Useful flags: `--yes` (non-interactive/CI), `--dry-run` (preview the file actions), `--all-languages`, `--help`.
+
+To point an agent at the server manually (the setup above already wires VS Code, Cursor, and Claude Code), use `idx-mcp` via `npx -p` so the correct bin runs:
 
 **Claude Code**
 
 ```bash
-claude mcp add graph-indexer -- npx -y graph-indexer idx-mcp --repo /path/to/your/repo
+claude mcp add graph-indexer -- npx -y -p graph-indexer idx-mcp --repo /path/to/your/repo
 ```
 
 **Cursor / Cody / any MCP client** — add to the client's MCP config:
@@ -42,11 +44,13 @@ claude mcp add graph-indexer -- npx -y graph-indexer idx-mcp --repo /path/to/you
   "mcpServers": {
     "graph-indexer": {
       "command": "npx",
-      "args": ["-y", "graph-indexer", "idx-mcp", "--repo", "/path/to/your/repo"]
+      "args": ["-y", "-p", "graph-indexer", "idx-mcp", "--repo", "/path/to/your/repo"]
     }
   }
 }
 ```
+
+> The `-p graph-indexer idx-mcp` form is required: `npx graph-indexer idx-mcp` would run the package's same-named (setup) bin, not the MCP server. If graph-indexer is a local dependency of a Node project, `npm run mcp:start` (wired by `init`) works too.
 
 Once connected, the agent can call `search_code`. A query like `search_code("rate limiting middleware")` returns ranked semantic chunks, not whole files:
 
