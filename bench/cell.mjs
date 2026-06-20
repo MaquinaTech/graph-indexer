@@ -176,6 +176,7 @@ function score(fixture, cfg, outPath) {
     const s = cfg.score;
     if (s.embeddings) args.push('--embeddings');
     if (s.embedProvider) args.push('--embed-provider', s.embedProvider);
+    if (s.hyde) args.push('--hyde');
     if (s.rerank) { args.push('--rerank'); if (s.rerankModel) env.RERANK_MODEL = s.rerankModel; }
     const res = spawnSync(process.execPath, args, { env, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
     return { ok: res.status === 0, exitCode: res.status, stderrTail: (res.stderr || '').split('\n').slice(-8).join('\n') };
