@@ -72,6 +72,10 @@ New `mlx` provider uses a dedicated Python virtualenv (`embedders/venv-mlx/`) an
 
 **Bug fix:** `indexer.mjs` (and the eval harness) now calls `_resetSubprocesses()` after encoding completes so the MLX Python subprocess is killed and the Node.js event loop can drain. Previously `npx idx-index --embed-provider mlx` would hang indefinitely after building a correct index.
 
+**Setup & onboarding.** Install the MLX virtualenv with `npm run embed:setup:mlx` (`node embedders/setup-mlx.mjs`), or accept it during `graph-indexer init` when you select the MLX provider (onboarding also lets you choose the MLX embed model, default `mlx-community/all-MiniLM-L6-v2-4bit`, 384-dim). New MLX implementation files: `embedders/setup-mlx.mjs` (venv installer), `embedders/python/mlx_embed_server.py` (persistent MLX subprocess server), `embedders/python/requirements-mlx.txt`, `embedders/python/test_servers.mjs`.
+
+**Graceful per-batch degradation.** Embedding generation no longer aborts the whole index when a batch fails or times out — those chunks are indexed lexical-only and retried on the next run, with a per-batch warning and an end-of-run summary of how many batches were skipped.
+
 ### Git signals (`git-signals.mjs`)
 
 New module that computes three per-file ranking signals from the local git log (no network, no remote):
@@ -111,8 +115,9 @@ New dependency-free shared console styling module for CLI utilities (init, daemo
 ### Lexical search improvements
 
 - **Porter stemming** — language-agnostic Porter stemmer (steps 1–5 plus an agent-noun `-or` rule for code) bridging vocabulary gaps: `"intercepting"` ↔ `Interceptor`, `"managing"` ↔ `Manager`, `"injection"` ↔ `Injectable`. Applied **additively** (raw token always emitted alongside the stem) so exact matches, IDF statistics, and name boosts are byte-for-byte unchanged.
-- **IDF-gated path boost** — NL queries receive a small boost for the path segment of a file path when that term is rare in the corpus. Disabled for symbol queries (no vocabulary gap to bridge).
-- **NL-adaptive vector weight** — the semantic channel weight is `0.4` for plain lexical text and `1.0` for LLM-enriched chunks, so the embedding signal matters most where the index has a rich semantic representation.
+- **IDF-gated path boost** — for NL queries, the path-segment boost is restricted to file-path terms that are rare in the corpus (high IDF). Symbol/keyword queries keep the original path boost unchanged — the IDF gate, not the boost itself, is NL-only.
+- **NL-adaptive vector weight** — the semantic channel weight is `0.4` for plain lexical text and `0.6` for LLM-enriched chunks (the joint optimum across the eval suites), so the embedding signal matters most where the index has a rich semantic representation.
+- **Dense-channel window sub-chunking** — oversized definitions (beyond the single-vector context limit) are embedded as up to 4 overlapping windows and retrieved by the maximum cosine across windows (max-sim), recovering tail recall that single-vector truncation lost. Window 0 is byte-identical to the prior single vector, so existing head vectors are unchanged; extra windows are stored under `<key>|w1..|wN` keys in the embeddings binary.
 
 ### LLM rerank: over-fetch + pool rescue
 
@@ -120,7 +125,7 @@ When `rerank` is enabled, the server now **over-fetches** a deeper candidate poo
 
 ### HyDE (Hypothetical Document Embedding)
 
-New opt-in query-side technique: generate a hypothetical code snippet for the NL query, embed it, and blend with the query vector to bridge vocabulary gaps. Off by default. Enable with `hyde: { enabled: true }` in config or the `hyde` parameter in `search_code`.
+New opt-in query-side technique: generate a hypothetical code snippet for the NL query, embed it, and blend with the query vector to bridge vocabulary gaps. Off by default. Enable with `hyde: { enabled: true }` in config or the `hyde` parameter in `search_code`. The HyDE prompt is **language-aware** — the repo's dominant language (detected from extension counts and chunk metadata) selects a per-language hypothetical-snippet template, with a generic, never-regressing fallback when the language is unknown.
 
 ### Configuration overhaul
 
@@ -129,25 +134,34 @@ Default values changed:
 | Key | Old default | New default | Reason |
 |-----|-------------|-------------|--------|
 | `storage` | `'memory'` | `'auto'` | Auto-selects SQLite above ~15k chunks |
-| `embeddings` | (on when model set) | `false` | Explicit opt-in, lexical-first default |
-| `embedProvider` | `'ollama'` | `'auto'` | Falls back to local model, then lexical |
+| `embeddings` | (on unless `INDEXER_EMBEDDINGS=off`) | `false` | Explicit opt-in, lexical-first default |
+| `embedProvider` | (none — Ollama was the only path) | `'auto'` | Falls back to local model, then lexical |
 | `embedModel` | `'nomic-embed-text'` | `'nomic-embed-text'` | Unchanged |
 | `rerank.topM` | `8` | `12` | Wider rerank pool |
 | `rerank.poolSize` | (none) | `15` | New over-fetch parameter |
 
-CLI flag rename: `--llm-enrichment` → `--enrichment` (old form still accepted).
+CLI flag rename: `--llm-enrichment` (and `--enrich`) → `--enrichment`. The old forms are no longer accepted.
 
 Startup logging now prints the **effective configuration** (storage backend, model names, which optional features are active) and emits a warning for any opt-in feature with a known trade-off.
 
+New embedding/enrichment flags and environment variables:
+
+- `--mlx-embed-model` / `INDEXER_MLX_EMBED_MODEL` — MLX model id (default `mlx-community/all-MiniLM-L6-v2-4bit`).
+- `EMBED_MODEL` — env alias for `--embed-model`.
+- `ENRICH_MODEL` — env that enables enrichment and names its model. Setting `enrichment.model: 'auto'` probes the local Ollama and picks the strongest available code model (preference ladder `qwen2.5-coder:7b → 3b → deepseek-coder-v2 → 1.5b`), falling back to the `qwen2.5-coder:1.5b` floor — best-effort and non-throwing.
+- `INDEXER_EMBED_CONCURRENCY` (parallel embed batches, default `4`), `INDEXER_EMBED_TIMEOUT_MS` (per-batch timeout, default `120000`), `INDEXER_MLX_BATCH_SIZE` (default `32`), `INDEXER_EMBED_STARTUP_TIMEOUT_MS` (default `120000`).
+
+Fixed the Ollama endpoint in the embeddings test scripts from the non-default `:11435` to Ollama's real default `:11434` (`OLLAMA_HOST`).
+
 ### Symbol references (`find_references`)
 
-New `db.findReferers` storage method fuses three reference kinds:
+`find_references` (`findReferences` in `mcp/topology.mjs`) fuses three reference kinds, combining `classifyCallers` (calls) with the new `db.findReferers` storage method (which returns the non-call referers — `extends` and `type_refs` matches):
 
 - **calls** — `findCallers` + high/name-only classification
 - **inherits** — chunks whose `extends` names the target (subclasses / implementers)
 - **types** — chunks whose `type_refs` names the target (params, returns, fields)
 
-Heritage is indexed for TS/JS, Python, Java, C#, Kotlin, Swift, Ruby, PHP, and Rust. Type-annotation users for TS/JS, Python, Java, Kotlin, Swift, PHP, Rust, Go, and C.
+Heritage is indexed for TS/JS, Python, Java, C#, Kotlin, Swift, Ruby, PHP, Rust, and Go (Go via struct/interface embedding rather than an inheritance keyword). Type-annotation users for TS/JS, Python, Java, C#, Kotlin, Swift, PHP, Rust, Go, and C (C# is field-precise: params, fields, properties, returns, base list).
 
 ### Symlink path traversal hardening
 
@@ -159,12 +173,14 @@ New reproducible benchmarking suite:
 
 - `bench/cell.mjs` — cold-build per config, runs one fixture × one config combination
 - `bench/configs.mjs` — config matrix definitions
-- `bench/synth.mjs` — synthetic document generator for held-out query sets
-- `bench/verify-suite.mjs` — fabrication guard: ensures query answers actually exist in the index
+- `bench/synth.mjs` / `bench/synth-agent.mjs` / `bench/synth-best.mjs` — report generators (cross-language, agent-facing, per-fixture best-config)
+- `bench/tokens.mjs` — token-savings measurement (drives the token-savings tables below)
+- `bench/repeat-score.mjs`, `bench/query.mjs`, `bench/dump-chunks.mjs`, `bench/fixtures-doc.mjs`, `bench/_confidence.mjs` — scoring, query, and reporting helpers
+- `bench/verify-suite.mjs` / `bench/verify-ground-truth.mjs` / `bench/verify-structural.mjs` — fabrication guards: ensure query answers actually exist in the index
 - `bench/structural.mjs` — structural fixture verifier
 - `bench/parity.mjs` — byte-identical parity check between backends
 - `bench/provenance.mjs` / `bench/provenance.json` — query provenance tracking
-- Shell runners: `run-all.sh`, `run-costly.sh`, `run-final.sh`, `run-list.sh`
+- Shell runners: `run-all.sh`, `run-costly.sh`, `run-final.sh`, `run-focused.sh`, `run-list.sh` (plus internal `_rerun-v2.sh`)
 
 ### Test suite expansion
 
@@ -174,17 +190,18 @@ New test files:
 |------|----------------|
 | `test/callgraph.mjs` | Receiver-aware call graph, `classifyCallers` |
 | `test/references.mjs` | `find_references` / `findReferers` |
+| `test/routes.mjs` | `find_routes` / HTTP route extraction per framework |
 | `test/json-output.mjs` | `response_format: 'json'` across all tools |
 | `test/git-signals.mjs` | Git churn/recency/co-change sidecar |
 | `test/security.mjs` | Path-traversal / symlink escape guard |
 | `test/embeddings.mjs` | Embedding provider abstraction |
 | `test/languages.mjs` | Per-language parsing (all 14 languages) |
-| `test/unit.mjs` | Core unit tests |
-| `test/metrics.mjs` | Scoring metrics |
 
-New test suites for additional frameworks/languages: `alamofire`, `android`, `aspnet`, `cjson`, `css`, `django`, `fastapi`, `gin`, `laravel`, `nestjs`, `nvm`, `rails`, `react`, `rust`, `spring`, `symfony`.
+(`test/unit.mjs` and `test/metrics.mjs` already existed in v1.2.0 and were extended, not added.)
 
-New npm test scripts: `test:callgraph`, `test:references`, `test:jsonout`, `test:gitsignals`, `test:security`, `test:embed`, `test:languages`.
+New test suites for additional frameworks/languages: `alamofire`, `android`, `aspnet`, `cjson`, `css`, `django`, `laravel`, `nvm`, `rails`, `react`, `rust`, `spring`, `symfony`. (The `axios`, `express-js`, `fastapi`, `gin`, and `nestjs` suites already shipped in v1.2.0 and had their query sets expanded.)
+
+New npm test scripts: `test:callgraph`, `test:references`, `test:routes`, `test:jsonout`, `test:gitsignals`, `test:security`, `test:embed`, `test:languages`.
 
 ### Agent benchmark harness (`test/agent/`)
 
@@ -192,14 +209,17 @@ New end-to-end agent benchmark that drives real MCP tools and traces an agent's 
 
 - `test/agent/agent-cli.mjs` — CLI entry point
 - `test/agent/benchmark.config.mjs` — fixture and config registry
+- `test/agent/fixtures.manifest.mjs` / `test/agent/setup-fixtures.mjs` — fixture manifest and setup
+- `test/agent/search-cases.mjs` — search case definitions
 - `test/agent/search-eval.mjs` — search evaluation with MRR/success@k scoring
+- `test/agent/parse-eval.mjs` / `test/agent/score-answers.mjs` / `test/agent/se-mrr.mjs` — eval parsing and scoring
 - `test/agent/analyze.mjs` / `assemble.mjs` — analysis pipeline
 - `test/agent/tool-bridge.mjs` — bridges the agent to the MCP server under test
 
 ### Documentation
 
 - **README.md** — rewritten to roughly a third its previous length (~700 → ~310 lines). Focused on the quick start, MCP tool reference, configuration trade-offs table, CLI flags, and environment variables. Benchmark numbers verifiable via `npm run test:eval`.
-- **`docs/benchmarks/`** — new directory with detailed benchmark reports: `BENCH_BASELINE.md`, `BENCH_FULL_SUITE.md`, `BENCH_LANGUAGES.md`, `BENCH_SUMMARY.md`, `BENCH_AGENT.md`, `FIXTURES.md`.
+- **`docs/benchmarks/`** — new directory with detailed benchmark reports: `BENCH_BASELINE.md`, `BENCH_FULL_SUITE.md`, `BENCH_LANGUAGES.md`, `BENCH_SUMMARY.md`, `BENCH_AGENT.md`, `BENCH_PER_FIXTURE.md`, `FIXTURES.md`.
 - **`docs/internals/IMPROVEMENT_STEMMING.md`** — internal design note for the Porter stemming bridge.
 - **SECURITY.md** — updated to document the git-signals subprocess, the one-time model-weight download for the local embedding provider, and the strengthened symlink path guard.
 
@@ -219,7 +239,8 @@ New optional and production dependencies:
 | `tree-sitter-swift` | 0.5.0 | optional | Swift language parser |
 | `tree-sitter-scss` | 1.0.0 | optional | SCSS language parser |
 | `@huggingface/transformers` | 3.8.1 | optional | In-process local embedding model |
-| `hnswlib-node` | 3.0.0 | optional | Approximate-nearest-neighbour vector index (large embedded corpora) |
+
+(`hnswlib-node` 3.0.0, the optional approximate-nearest-neighbour vector index, already shipped in v1.2.0 — it is not new in v2.0.0.)
 
 ### Module reorganization (breaking only for deep imports)
 
@@ -232,7 +253,7 @@ Internal source files were grouped into directories. The CLI bins, the MCP serve
 | `mcp-tools.mjs` | `mcp/tools.mjs` |
 | `parser-utils.mjs` | split into `parse/extractor.mjs`, `parse/imports.mjs`, `parse/languages.mjs`, `parse/metadata.mjs`, `parse/routes.mjs` |
 
-New modules added in the reorg: `engine/binary.mjs` (embedding binary codec + vector index), `mcp/format.mjs`, `mcp/topology.mjs`, `embeddings.mjs`, `git-signals.mjs`, `layout.mjs`, `daemon-ctl.mjs`, `daemon-lock.mjs`, `config.mjs`, `cli-ui.mjs`, `storage.mjs`.
+New modules added in the reorg: `engine/binary.mjs` (embedding binary codec + vector index), `mcp/format.mjs`, `mcp/topology.mjs`, `embeddings.mjs`, `git-signals.mjs`, `layout.mjs`, `daemon-ctl.mjs`, `daemon-lock.mjs`, `cli-ui.mjs`. (`config.mjs` and `storage.mjs` already existed in v1.2.0 and were extended, not added.)
 
 ---
 
@@ -248,18 +269,18 @@ This is the primary eval harness (`npm run test:eval`). All numbers are strict s
 
 | Channel | s@1 | s@5 | MRR | Semantic rank-1 | Semantic s@5 | File-only inflation |
 |---|---|---|---|---|---|---|
-| **v1.2.0 — Hybrid + enrichment + rerank (best path)** | — | **0.82** | 0.73 | 0.35 | 0.65 | ~0.1% |
-| **v2.0.0 — Lexical default (+ stemming + IDF path boost)** | 0.58 | **0.81** | 0.65 | 0.19 | **0.61** | ~0.1% |
-| v2.0.0 — Hybrid nomic, no rerank | 0.60 | 0.79 | 0.68 | 0.23 | 0.58 | ~0.1%% |
-| v2.0.0 — Hybrid nomic + LLM rerank | 0.64 | 0.80 | 0.71 | 0.35 | 0.61 | ~0.1% |
+| **v1.2.0 — Hybrid + enrichment + rerank (best path)** | — | **0.82** | 0.73 | 0.35 | 0.65 | ~11.6% |
+| **v2.0.0 — Lexical default (+ stemming + IDF path boost)** | 0.58 | **0.81** | 0.65 | 0.19 | **0.61** | ~11.6% |
+| v2.0.0 — Hybrid nomic, no rerank | 0.60 | 0.79 | 0.68 | 0.23 | 0.58 | ~11.6% |
+| v2.0.0 — Hybrid nomic + LLM rerank | 0.64 | 0.80 | 0.71 | 0.35 | 0.61 | ~11.6% |
 
 Key changes vs v1.2.0:
 
 - **Lexical s@5 reaches 0.81** (within 1 point of v1.2.0's best path of 0.82) with zero external dependencies, driven by Porter stemming and the IDF-gated path boost.
-- **Semantic s@5 (lexical):** 0.48 baseline → **0.61** after IDF-gated path boost (+13 points, +27%).
-- **Overall s@5 (lexical):** 0.77 → **0.81** after IDF-gated path boost (+3 points).
+- **Semantic s@5 (lexical):** 0.48 floor → **0.61** from stemming + the IDF-gated path boost combined (+13 points, +27%); the path boost alone contributes +0.097 (0.516 → 0.613).
+- **Overall s@5 (lexical):** 0.775 → **0.807** after IDF-gated path boost (+0.032, ≈+3 points).
 - **Symbolic rank-1 unchanged** at 0.75 (byte-identical — stemming and path boost are additive and non-destructive to exact-match ranking).
-- **File-only inflation corrected:** the v1.2.0 `0.1%` figure was a formatting bug; the true lexical value is **~0.1%** overall (held-out: 0.0% — the held-out set has no inflation).
+- **File-only inflation corrected:** the v1.2.0 `0.1%` figure was a 100× display-formatting bug (`fmtPct` rendered a 0–1 fraction without the ×100 scale); the true lexical value is **~11.6%** overall, while the held-out validation set has **0.0%** inflation. The hybrid path does not increase inflation over lexical.
 - **Backend parity:** memory vs SQLite results are byte-identical on all 100 queries (enforced in CI).
 
 #### Stemming: held-out semantic recall
@@ -268,10 +289,10 @@ Porter stemming was validated on the **held-out query set** (15 queries, never u
 
 | Metric | Before stemming | After stemming | Δ |
 |---|---|---|---|
-| Held-out semantic rank-1 | 0.20 | **0.40** | **+0.20 (+100%)** |
-| Held-out MRR | 0.37 | ~0.46 | +0.09 |
-| Held-out s@5 | 0.60 | 0.60 | 0 (already saturated) |
-| Symbolic (strict, tuning) | byte-identical | byte-identical | 0 |
+| Held-out rank-1 (overall) | 0.733 | **0.800** | **+0.067** |
+| Held-out semantic rank-1 | 0.200 | **0.400** | **+0.20 (+100%)** |
+| Held-out MRR (overall) | 0.789 | **0.833** | +0.044 |
+| Symbolic rank-1 / MRR (strict, tuning) | 0.755 / 0.807 | 0.755 / 0.807 | 0 (byte-identical) |
 
 #### IDF-gated path boost delta (lexical, tuning channel)
 
@@ -299,7 +320,7 @@ qwen3-embedding:4b raises express semantic s@5 from 0.57 to 0.71 (+24%) while ho
 | Lexical floor | 0.20 | 0.30 | 0.60 |
 | Plain + rerank (7B) | 0.60 | 0.80 | 1.00 |
 | Enriched (7B) + rerank | **0.80** | **0.87** | 1.00 |
-| HyDE (qwen2.5-coder:7B) + lexical | 0.20 | 0.34 | **1.00** |
+| HyDE (qwen2.5-coder:7B), enriched corpus | **0.00** | 0.34 | **1.00** |
 
 Key finding: enrichment **inverts** depending on embedder strength — it helps with weak embedders (MiniLM) but **regresses** with strong ones (qwen3). Enrichment and rerank remain correctly off by default.
 
@@ -310,7 +331,7 @@ A new reproducible 18-language × 8-config matrix (`bench/`), covering all 14 su
 | Metric (default lexical path, 18 languages) | Mean | Min | Max |
 |---|---|---|---|
 | Symbolic rank-1 | **70%** | 43% | 86% |
-| Semantic rank-1 | **23%** | 0% | 67% |
+| Semantic rank-1 | **22%** | 0% | 67% |
 | Semantic s@5 | **60%** | 0% | 100% |
 
 Per-language symbolic rank-1 highlights (default path):
@@ -325,7 +346,7 @@ Per-language symbolic rank-1 highlights (default path):
 | SCSS | css | 43% | 25% | 50% |
 | Bash | nvm | 44% | 33% | 67% |
 
-Known structural gaps (invocation-verified): `get_call_graph` returns no edges for ASP.NET Core, Laravel, and Symfony (C# and PHP — zero call edges). `find_references` type-usage channel is empty for express-js, Django, ASP.NET Core, Rails, SCSS, and Bash.
+Known structural gaps (invocation-verified, per `docs/benchmarks/BENCH_LANGUAGES.md` — the single source of truth): `get_call_graph` is effectively empty for SCSS (only 6 trivial `@include`/`@function` edges) and degraded to class-granularity for Java/Spring (call edges resolve, but methods aren't their own chunks). C#/ASP.NET, PHP/Laravel, and PHP/Symfony all resolve call edges (the Tier-1 C# and PHP call-graph fixes landed in v2.0.0). The `find_references` type-usage (`type_refs`) channel is empty for express-js, Django, Rails, SCSS, and Bash.
 
 #### Token savings (18 languages)
 
@@ -337,14 +358,18 @@ Savings are measured as the token footprint of top-5 compact cards vs reading th
 | C | 91.9% | 96.8% |
 | Rust | 89.2% | 95.0% |
 | Express (JS) | 88.9% | 93.5% |
-| Swift | 83.1% | 94.2% |
-| FastAPI (Python) | 84.0% | 91.4% |
 | Go | 87.9% | 91.0% |
+| FastAPI (Python) | 84.0% | 91.4% |
+| Swift | 83.1% | 94.2% |
 | Django (Python) | 78.1% | 90.9% |
+| axios (JS) | 73.1% | 85.2% |
 | NestJS (TS) | 66.7% | 84.4% |
-| React (TS) | 56.4% | 82.1% |
+| SCSS | 65.4% | 79.4% |
 | Kotlin/Android | 62.7% | 82.3% |
 | Ruby/Rails | 58.6% | 81.3% |
+| PHP/Symfony | 57.6% | 86.1% |
+| React (TS) | 56.4% | 82.1% |
+| Java/Spring | 50.8% | 79.8% |
 | PHP/Laravel | 32.4% | 72.7% |
 | C#/ASP.NET | 19.3% | 65.1% |
 
