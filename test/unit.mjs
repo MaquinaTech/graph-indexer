@@ -80,7 +80,6 @@ test('buildEmbeddingPayload excludes decorators/heritage from the retrieval chan
 });
 
 // ─── extractDecorators ──────────────────────────────────────────────────────
-// Generalises across decorator grammars (TS/JS/Python) by node type alone.
 test('extractDecorators captures class + method decorators (TypeScript)', () => {
     const parser = getParserForFile('.ts');
     if (!parser) { console.log('      (skipped — tree-sitter-typescript not installed)'); return; }
@@ -102,7 +101,6 @@ test('extractDecorators strips call arguments to the bare callee name', () => {
 });
 
 // ─── extractRoutes (HTTP route → handler) ────────────────────────────────────
-// Detection is by AST node type per framework; assert method/path/handler_name.
 const routeBy = (routes, method, pathIncludes) =>
     routes.find(r => r.method === method && r.path.includes(pathIncludes));
 
@@ -114,7 +112,7 @@ test('extractRoutes: Express router.<verb>(path, handler) call sites (JS)', () =
         "router.get('/api/users', getUserHandler);",
         "router.post('/api/users', (req, res) => { res.send('ok'); });",
         "app.delete('/api/users/:id', deleteHandler);",
-        "const m = new Map(); m.get('k');",  // must NOT be treated as a route (1 arg, not a path+handler)
+        "const m = new Map(); m.get('k');",  // 1-arg call without a rooted path — must not be treated as a route
     ].join('\n');
     const tree = parser.parse(src);
     const routes = extractRoutes(tree.rootNode, 'routes.js', [], '.js');
@@ -168,7 +166,6 @@ test('extractRoutes: Express handler as member-expression / .bind() / after midd
     assert.equal(routeBy(routes, 'POST', '/b')?.handler_name, 'handler');
     assert.equal(routeBy(routes, 'PUT', '/c')?.handler_name, 'handler', '.bind() handler');
     assert.equal(routeBy(routes, 'DELETE', '/d')?.handler_name, 'remove', 'handler is last arg, not the middleware');
-    // Look-alike, non-rooted member calls must NOT produce routes.
     assert.ok(!routes.some(r => r.path.includes('userKey') || r.path.includes('id') && r.handler_name === 'opts'),
         `phantom route leaked: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
     assert.equal(routes.length, 4, `expected exactly 4 real routes: ${JSON.stringify(routes.map(r => r.method + ' ' + r.path))}`);
@@ -232,7 +229,6 @@ test('extractRoutes: FastAPI/Flask decorators (Python)', () => {
 test('extractRoutes: resolves handler_chunk_id by name and is empty for non-web languages', () => {
     const parser = getParserForFile('.js');
     if (!parser) return;
-    // Multi-line handler so it becomes its own chunk, then resolves by name.
     const src = [
         'function listUsers(req, res) {',
         '  const users = db.all();',
@@ -248,7 +244,6 @@ test('extractRoutes: resolves handler_chunk_id by name and is empty for non-web 
     const handlerChunk = chunks.find(c => c.name === 'listUsers');
     assert.ok(handlerChunk, 'listUsers should be a chunk');
     assert.equal(r.handler_chunk_id, handlerChunk.id, 'handler_chunk_id must resolve to the chunk');
-    // A non-web language yields no routes.
     if (getParserForFile('.go')) {
         const goTree = getParserForFile('.go').parse('func Add(a int, b int) int {\n  return a + b\n}');
         assert.deepEqual(extractRoutes(goTree.rootNode, 'm.go', [], '.go'), []);
@@ -282,12 +277,10 @@ test('buildEmbeddingPayload is identical for indexer and daemon inputs (payload 
         docstring: 'd', type_refs: ['T'], code_snippet: 'body',
     };
     const deps = ['src/b.ts', 'src/c.ts'];
-    // Both call sites now route through the same helper with the same args.
     assert.equal(buildEmbeddingPayload(chunk, deps), buildEmbeddingPayload(chunk, deps));
 });
 
 // ─── buildIgnoreFilter ──────────────────────────────────────────────────────
-// Regression: the watch daemon must not descend into these directories.
 test('buildIgnoreFilter ignores node_modules / .git / dist', () => {
     const ig = buildIgnoreFilter(process.cwd());
     assert.ok(ig.ignores('node_modules/foo/index.js'), 'node_modules not ignored');
@@ -315,16 +308,12 @@ test('EXTENSIONS is a non-empty set of dotted extensions', () => {
 });
 
 // ─── God-class splitting ─────────────────────────────────────────────────────
-// A Python class with > GOD_CLASS_LINES (200) lines must be split into:
-//   1. One "skeleton" class chunk (truncated, includes ⚠ comment)
-//   2. Multiple method sub-chunks (each method becomes independently searchable)
-// This prevents a single get_chunk() call from blowing the agent's token budget
-// while keeping every method individually reachable via search_code().
+// Classes ≥200 lines are split so a single get_chunk() call cannot blow the
+// agent's token budget while keeping every method reachable via search_code().
 test('extractSemanticChunks splits oversized Python class into skeleton + method chunks', () => {
     const parser = getParserForFile('.py');
     if (!parser) { console.log('      (skipped — tree-sitter-python not installed)'); return; }
 
-    // Build a class with 30 methods × 8 lines = 240 lines (> GOD_CLASS_LINES=200)
     const methods = Array.from({ length: 30 }, (_, i) =>
         `    def method_${i}(self, x):\n` +
         `        """Compute result for method ${i}"""\n` +
@@ -348,7 +337,6 @@ test('extractSemanticChunks splits oversized Python class into skeleton + method
         classChunks[0].code_snippet.includes('⚠'),
         `skeleton should contain ⚠ warning, got: ${classChunks[0].code_snippet.slice(0, 200)}`
     );
-    // Skeleton must be shorter than the full class (which would be ~10k chars)
     assert.ok(
         classChunks[0].code_snippet.length < 2000,
         `skeleton too long: ${classChunks[0].code_snippet.length} chars`
@@ -359,7 +347,6 @@ test('extractSemanticChunks does NOT split a normal-sized Python class', () => {
     const parser = getParserForFile('.py');
     if (!parser) { console.log('      (skipped — tree-sitter-python not installed)'); return; }
 
-    // Small class: 3 methods × 5 lines = 15 lines (well under GOD_CLASS_LINES=200)
     const src = [
         'class SmallService:',
         '    """A small, normal service."""',
@@ -390,7 +377,6 @@ test('extractSemanticChunks splits oversized TypeScript class into skeleton + me
     const parser = getParserForFile('.ts');
     if (!parser) { console.log('      (skipped — tree-sitter-typescript not installed)'); return; }
 
-    // Build a TS class with 30 methods × 8 lines = ~240 lines
     const methods = Array.from({ length: 30 }, (_, i) =>
         `  method${i}(x: number): number {\n` +
         `    const a = x + ${i};\n` +
@@ -468,8 +454,6 @@ const { updateVectorSketch, searchVectorSketch, appendEmbeddingBinary: appendBin
 test('vector sketch matches the exact scan top results and survives appends', () => {
     const p = pathMod.join(osMod.tmpdir(), `gi-sketch-${process.pid}-${Math.random().toString(36).slice(2)}.bin`);
     try {
-        // 3,000 vectors in 8 dims — small dims keep the test fast but exercise the
-        // packing, Hamming pass, rescore and tail-append paths fully.
         const mk = (seed) => {
             const v = new Float32Array(8);
             let n = 0;
@@ -494,8 +478,7 @@ test('vector sketch matches the exact scan top results and survives appends', ()
             assert.equal(approx[0].key, exact[0].key, 'sketch must recover the exact best match');
             assert.ok(Math.abs(approx[0].score - exact[0].score) < 1e-6, 'rescore must be the exact cosine');
 
-            // Append new entries (daemon path) → tail-only update must index them.
-            // Use a vector OUTSIDE the mk() family so it can't tie with an old entry.
+            // Vector outside the mk() family so it cannot tie with an existing entry.
             const fresh = new Float32Array(8).fill(1 / Math.sqrt(8));
             appendBin2(p, new Map([['fresh', fresh]]));
             const extended = updateVectorSketch(sketch, { fd });
@@ -556,23 +539,18 @@ test('assessConfidence fires the handoff only on ambiguous behavioural queries',
     const nlQuery = 'Where is the code that parses an incoming request body into a model object?';
     const symbolQuery = 'parseBody'; // not natural language → never a handoff
 
-    // Flat fused scores spread across files on an NL query → low confidence.
     const flat = [mk(0.10, 'a.ts'), mk(0.095, 'b.ts'), mk(0.09, 'c.ts')];
     const r1 = assessConfidence(flat, nlQuery, false);
     assert.ok(r1.lowConfidence, 'flat NL multi-file result should be low confidence');
     assert.deepEqual(r1.candidateFiles, ['a.ts', 'b.ts', 'c.ts'], 'candidate files are the distinct top files in rank order');
 
-    // A dominant top result (≥2× the #2 score) → confident, no handoff, no candidate bloat.
     const dominant = [mk(0.30, 'a.ts'), mk(0.10, 'b.ts')];
     const r2 = assessConfidence(dominant, nlQuery, false);
     assert.ok(!r2.lowConfidence, 'a dominant top result is confident');
     assert.deepEqual(r2.candidateFiles, [], 'confident queries carry no candidate_files (no token bloat)');
 
-    // Symbol-lookup (non-NL) query → never a handoff, even when flat.
     assert.ok(!assessConfidence(flat, symbolQuery, false).lowConfidence, 'non-NL symbol lookup never hands off');
-    // Pinned exact_tokens → caller already knows the symbol.
     assert.ok(!assessConfidence(flat, nlQuery, true).lowConfidence, 'pinned exact_tokens is confident');
-    // All hits in one file → nothing cross-file to hand off.
     assert.ok(!assessConfidence([mk(0.10, 'a.ts'), mk(0.099, 'a.ts')], nlQuery, false).lowConfidence, 'single-file result needs no handoff');
 });
 
@@ -596,10 +574,8 @@ try {
     const out = await hydeQueryVector('where is the token verified for a request', raw, { embedder: fakeEmbedder, generate });
     assert.ok(out[0] > 0 && out[1] > 0, 'blended vector mixes query + hypothetical directions');
     assert.equal(gens, 1, 'one generation');
-    // Cached: a second call with the same query does not regenerate.
     await hydeQueryVector('where is the token verified for a request', raw, { embedder: fakeEmbedder, generate });
     assert.equal(gens, 1, 'second identical query served from cache');
-    // Graceful: a failing generator yields the raw vector unchanged.
     const safe = await hydeQueryVector('a different behavioural query about caching layers', raw,
         { embedder: fakeEmbedder, generate: async () => { throw new Error('model down'); } });
     assert.deepEqual(Array.from(safe), Array.from(raw), 'generator failure → raw vector, never worse than baseline');
@@ -608,16 +584,12 @@ try {
 
 // ─── Index freshness (WI6) ───────────────────────────────────────────────────
 test('computeFreshness distinguishes fresh / syncing / stale', () => {
-    // Clean tree, daemon up → fresh.
     const a = computeFreshness({ ageSeconds: 30, indexedCommit: 'abc', current: { head: 'abc', dirtyCount: 0 }, daemonRunning: true });
     assert.equal(a.stale, false); assert.equal(a.syncing, false); assert.equal(a.ageLabel, '30s');
-    // Uncommitted source changes, NO daemon → stale.
     const b = computeFreshness({ ageSeconds: 7200, indexedCommit: 'abc', current: { head: 'abc', dirtyCount: 3 }, daemonRunning: false });
     assert.equal(b.stale, true, 'dirty tree with no daemon is stale'); assert.equal(b.ageLabel, '2h');
-    // HEAD moved but a daemon is live → syncing, not stale.
     const c = computeFreshness({ ageSeconds: 60, indexedCommit: 'abc', current: { head: 'def', dirtyCount: 0 }, daemonRunning: true });
     assert.equal(c.commitMoved, true); assert.equal(c.syncing, true); assert.equal(c.stale, false);
-    // No git info at all → never falsely "stale" (age-only, graceful).
     const d = computeFreshness({ ageSeconds: 10, indexedCommit: null, current: null, daemonRunning: false });
     assert.equal(d.stale, false); assert.equal(d.currentCommit, null); assert.equal(d.pendingChanges, null);
 });
@@ -625,14 +597,11 @@ test('computeFreshness distinguishes fresh / syncing / stale', () => {
 // ─── Amortized token savings (WI8) ───────────────────────────────────────────
 test('amortizedTokenSavings is honest: positive but below the gross top-k figure', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-amort-'));
-    // A big file; the returned chunk is a small slice of it.
     fs.writeFileSync(path.join(dir, 'big.js'), 'x'.repeat(8000)); // ~2000 tokens
     const results = [{ chunk: { file_path: 'big.js', code_snippet: 'y'.repeat(400) } }]; // ~100-token body
     const amort = amortizedTokenSavings(results, dir, { expansions: 1, cardTokens: 20 });
     assert.ok(amort.savingsPct > 0 && amort.savingsPct < 100, `expected 0<savings<100, got ${amort.savingsPct}`);
-    // With-tool cost = 1 card (20) + 1 full body (~100) ≪ full file (~2000) → big saving but honest.
     assert.ok(amort.withToolTokens < amort.fileTokens, 'tool spend must be below reading the full file');
-    // More expansions → lower savings (you read more bodies).
     const more = amortizedTokenSavings(
         [{ chunk: { file_path: 'big.js', code_snippet: 'y'.repeat(400) } },
          { chunk: { file_path: 'big.js', code_snippet: 'z'.repeat(400) } }], dir, { expansions: 2 });

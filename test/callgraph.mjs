@@ -90,15 +90,12 @@ export function run(order) {
 `,
 };
 
-// Resolved local import edges (file → files it imports), as the indexer would build.
 const IMPORTS = {
     'checkout.ts': ['orderStore.ts'],
     'signup.ts': ['userStore.ts'],
     'flow.ts': ['checkout.ts'],
 };
 
-// Ground truth: callers that truly invoke an INDEXED `save` (checkout→orderStore,
-// signup→userStore). `audit` calls a `save` on an unknown external object.
 const TRUE_SAVE_CALLERS = new Set(['checkout', 'signup']);
 
 function parseFixture() {
@@ -125,18 +122,15 @@ test('call sites carry receiver hints after parsing', () => {
     const idx = parseFixture();
     if (!idx) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
 
-    // this.save() inside a class chunk → recv 'this'.
     const repo = idx.resolveSymbol('Repo')[0];
     assert.ok(repo, 'Repo class chunk exists');
     const thisSave = (repo.call_sites || []).find(s => s.name === 'save');
     assert.ok(thisSave && thisSave.recv === 'this', 'this.save() captured as a this-receiver');
 
-    // Direct save(order) → recv '' (unqualified).
     const checkout = idx.resolveSymbol('checkout')[0];
     const directSave = (checkout.call_sites || []).find(s => s.name === 'save');
     assert.ok(directSave && directSave.recv === '', 'direct save() captured as unqualified');
 
-    // sink.save() → recv 'sink'.
     const audit = idx.resolveSymbol('audit')[0];
     const recvSave = (audit.call_sites || []).find(s => s.name === 'save');
     assert.ok(recvSave && recvSave.recv === 'sink', 'sink.save() captured with its receiver');
@@ -164,7 +158,6 @@ test('receiver/import-aware classification beats name-only precision', () => {
     assert.equal(hi.precision, 1, 'receiver-aware achieves full precision');
     assert.ok(hi.precision > base.precision, 'precision strictly improves');
     assert.deepEqual(high.map(h => h.chunk.name).sort(), ['checkout', 'signup'], 'only the true callers are high-confidence');
-    // Both false positives (audit's external sink.save, Repo's own this.save) demoted.
     assert.deepEqual(nameOnly.map(n => n.chunk.name).sort(), ['Repo', 'audit'], 'false positives bucketed as name-only');
 });
 
@@ -186,18 +179,13 @@ test('buildSubgraph returns a bounded, deterministic connected subgraph', () => 
     const names = new Set(g.nodes.map(n => n.name));
     assert.ok(names.has('checkout'), 'seed is in the subgraph');
     assert.ok(g.nodes.length <= 12, 'respects max_nodes');
-    // checkout calls save → an outgoing calls-edge from the seed.
     assert.ok(g.edges.some(e => ids.get(e.from) === 'checkout' && e.kind === 'calls'), 'seed has an outgoing calls edge');
-    // run() calls checkout() → run is pulled in as a high-confidence caller.
     assert.ok(names.has('run'), 'high-confidence caller run() is included');
     assert.ok(g.edges.some(e => ids.get(e.from) === 'run' && ids.get(e.to) === 'checkout' && e.kind === 'calls'), 'run → checkout edge present');
-    // Fully deterministic.
     assert.deepEqual(buildSubgraph(idx, 'checkout', { maxNodes: 12, maxDepth: 2 }), g, 'subgraph is reproducible');
-    // Token budget bounds it and flags truncation.
     const tiny = buildSubgraph(idx, 'checkout', { maxNodes: 12, maxDepth: 2, tokenBudget: 15 });
     assert.ok(tiny.nodes.length < g.nodes.length, 'a tiny token budget shrinks the subgraph');
     assert.ok(tiny.truncated, 'truncation is flagged when the budget bites');
-    // A missing seed is handled, not thrown.
     assert.equal(buildSubgraph(idx, 'doesNotExistXYZ', {}).found, false, 'missing seed → found:false');
 });
 
@@ -262,8 +250,6 @@ export function withUnknown(o) {
 `,
 };
 
-// withNew (new OrderRepo), withParam (typed param), withFactory (makeRepo(): OrderRepo)
-// all dispatch on an OrderRepo. withUnknown hits a save on an unresolvable receiver.
 const TRUE_TYPED_CALLERS = new Set(['withNew', 'withParam', 'withFactory']);
 
 function parseTypeFixture() {
@@ -307,9 +293,7 @@ test('scope-aware receiver types promote dynamic-receiver callers (new / factory
     assert.ok(hi.precision > base.precision, 'precision strictly improves over name-only');
     assert.deepEqual(high.map(h => h.chunk.name).sort(), ['withFactory', 'withNew', 'withParam'],
         'new / factory-return / typed-param receivers are all high-confidence');
-    // Every promotion is justified by the resolved type, naming the right class.
     for (const h of high) assert.equal(h.reason, 'OrderRepo.save()', `${h.chunk.name} promoted via the resolved receiver type`);
-    // The genuinely ambiguous receiver (unresolvable factory) stays name-only.
     assert.deepEqual(nameOnly.map(n => n.chunk.name), ['withUnknown'],
         'an unresolvable receiver type is NOT fabricated into confidence');
 });

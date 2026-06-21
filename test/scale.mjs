@@ -158,8 +158,7 @@ async function main() {
         const embeddingCache = genEmbeddings(N);
         const rawBytes = chunks.reduce((s, c) => s + c.code_snippet.length, 0);
 
-        // Build both artifacts on disk (shared embeddings bin next to each stem).
-        const t0 = Date.now();
+            const t0 = Date.now();
         new SqliteGraphStore(dbPath).buildFrom({ chunks, graph, embeddingCache });
         const sqliteBuildMs = Date.now() - t0;
         fs.writeFileSync(jsonPath, JSON.stringify({ chunks, graph }));
@@ -169,7 +168,6 @@ async function main() {
         const binSize = fs.statSync(path.join(tmpDir, 'code-index.embeddings.bin')).size;
         console.log(`  built: sqlite ${(dbSize / MB).toFixed(0)}MB in ${(sqliteBuildMs / 1000).toFixed(1)}s · raw bodies ${(rawBytes / MB).toFixed(0)}MB · vectors ${(binSize / MB).toFixed(0)}MB\n`);
 
-        // Measure each backend in a clean subprocess.
         const mem = runChild('--mem-child', N, jsonPath);
         const sq = runChild('--sqlite-child', N, dbPath);
 
@@ -186,12 +184,10 @@ async function main() {
             assert.ok(mem.rss - sq.rss > 25 * MB, `savings too small: ${(mem.rss - sq.rss) / MB}MB`);
         });
         check('sqlite resident set stays bounded (chunks not held in RAM)', () => {
-            // The whole chunk payload is on disk; the resident set must be a fraction of it.
             assert.ok(sq.rss < 350 * MB, `sqlite RSS ${(sq.rss / MB).toFixed(0)}MB exceeds 350MB budget`);
         });
         check('hybrid query latency stays interactive at scale (binary sketch)', () => {
-            // The exact streaming scan measured ~104ms at this corpus size; the
-            // sketch must keep warm hybrid queries far below that on both backends.
+            // The 60ms budget is well below the ~104ms measured for a full streaming scan at this corpus size, so any regression away from the sketch path is caught.
             assert.ok(sq.lat < 60, `sqlite hybrid query ${sq.lat.toFixed(1)}ms exceeds 60ms budget`);
             assert.ok(mem.lat < 60, `memory(lazy) hybrid query ${mem.lat.toFixed(1)}ms exceeds 60ms budget`);
         });

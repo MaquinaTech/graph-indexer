@@ -98,13 +98,10 @@ test('SqliteGraphStore round-trips chunks, symbols, callers and topology', () =>
 });
 
 // ─── 2. Cross-backend rank parity (the 100/100-query guarantee) ─────────────────
-// The whole reason fuseAndRank + finalizeVectorCandidates live in search-core is so
-// the in-memory engine and the SQLite store rank IDENTICALLY. The README states this
-// as a hard guarantee ("identical top-5 chunk ids for 100/100 benchmark queries").
-// These two tests enforce it: (a) ORDERED chunk-id parity over the FULL benchmark for
-// the lexical channel (opportunistic — needs fixtures indexed), and (b) a
-// self-contained synthetic-vector pass so the VECTOR-fusion path is covered
-// cross-backend with no Ollama (a hard gate that always runs in CI).
+// fuseAndRank + finalizeVectorCandidates live in search-core so both backends rank
+// IDENTICALLY — a hard README guarantee. Test (a) covers the lexical channel over
+// real fixtures (opportunistic); test (b) covers vector-fusion cross-backend with no
+// Ollama (hard CI gate, always runs).
 
 test('memory ↔ sqlite: identical ORDERED top-5 ids on the FULL benchmark (lexical)', () => {
     let totalQ = 0, checkedSuites = 0;
@@ -130,8 +127,7 @@ test('memory ↔ sqlite: identical ORDERED top-5 ids on the FULL benchmark (lexi
 });
 
 test('memory ↔ sqlite: identical ORDERED top-5 ids WITH a query vector (synthetic, no Ollama)', () => {
-    // Deterministic mini-corpus + deterministic vectors → both backends must agree
-    // through the vector-fusion path (scan → finalizeVectorCandidates → fuseAndRank).
+    // Deterministic vectors exercise the vector-fusion path cross-backend with no Ollama.
     const DIM = 16;
     const detVec = (seed) => {
         const v = new Float32Array(DIM);
@@ -154,7 +150,7 @@ test('memory ↔ sqlite: identical ORDERED top-5 ids WITH a query vector (synthe
     }
     const graph = { dependencies: Object.fromEntries(chunks.map(c => [c.file_path, []])), importedBy: {} };
 
-    // Memory backend loads from disk artifacts (json + embeddings bin) — write temps.
+    // MemoryGraphIndex always loads from disk artifacts (json + embeddings bin), so write temps.
     const memJson = path.join(os.tmpdir(), `gi-mempar-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
     const memBin = memJson.replace(/\.json$/, '.embeddings.bin');
     tmpFiles.push(memJson, memBin);
@@ -203,8 +199,8 @@ test('memory ↔ sqlite: identical top-5 WITH per-window vectors (max-sim fold, 
             params: ['x'], return_type: '', class_context: '', type_refs: [], decorators: [], extends: [], call_sites: [],
         });
         cache.set(hash, detVec(i + 1));
-        // Every third chunk is "oversized": give it a tail-window vector seeded far from
-        // its base so max-sim genuinely changes which query each chunk best matches.
+        // Seed window vectors far from their base so max-sim genuinely changes rankings,
+        // exercising the fold rather than leaving it a no-op.
         if (i % 3 === 0) cache.set(`${hash}|w1`, detVec(1000 + i));
     }
     const graph = { dependencies: Object.fromEntries(chunks.map(c => [c.file_path, []])), importedBy: {} };
@@ -221,7 +217,6 @@ test('memory ↔ sqlite: identical top-5 WITH per-window vectors (max-sim fold, 
 
     let checked = 0, windowWins = 0;
     for (let s = 1; s <= 14; s++) {
-        // Aim some queries straight at a window vector so the fold is actually exercised.
         const qv = s % 2 === 0 ? detVec(1000 + ((s * 3) % N)) : detVec(s * 53 + 7);
         const m = mem.searchHybrid(`proc step ${s}`, qv, 5, 0.0).map(r => r.chunk.id);
         const r = sq.searchHybrid(`proc step ${s}`, qv, 5, 0.0).map(r => r.chunk.id);
@@ -263,7 +258,6 @@ test('applyFileUpdate matches a full rebuild (chunks, symbols, BM25 stats, searc
     const vec = (a, b, c, d) => new Float32Array([a, b, c, d]);
     const cache = new Map([['ha1', vec(1, 0, 0, 0)], ['ha2', vec(0, 1, 0, 0)], ['hu1', vec(0, 0, 1, 0)]]);
 
-    // Incremental path: build v1, then change src/user.ts (one chunk modified, one added).
     const incPath = tmpDbPath();
     tmpFiles.push(incPath.replace(/\.db$/, '.embeddings.bin'));
     new SqliteGraphStore(incPath).buildFrom({ chunks, graph, embeddingCache: cache });
@@ -280,7 +274,6 @@ test('applyFileUpdate matches a full rebuild (chunks, symbols, BM25 stats, searc
         embeddings: new Map([['hu1b', vec(0, 0, 1, 1)], ['hu2', vec(0, 0, 0, 1)]]),
     });
 
-    // Rebuild path: the same final corpus built from scratch.
     const rebPath = tmpDbPath();
     tmpFiles.push(rebPath.replace(/\.db$/, '.embeddings.bin'));
     const finalChunks = [chunks[0], chunks[1], ...newUserChunks];
@@ -289,18 +282,15 @@ test('applyFileUpdate matches a full rebuild (chunks, symbols, BM25 stats, searc
     const reb = new SqliteGraphStore(rebPath);
     reb.load();
 
-    // Same corpus statistics (BM25 bookkeeping must not drift).
     assert.equal(inc.chunkCount(), reb.chunkCount());
     assert.equal(inc.symbolCount(), reb.symbolCount());
     assert.equal(inc._docCount, reb._docCount, 'doc_count drift');
     assert.equal(inc._totalDocLen, reb._totalDocLen, 'total_doc_len drift');
 
-    // Same contract answers.
     assert.equal(inc.resolveSymbol('logoutUser')[0]?.id, 'u2');
     assert.equal(inc.resolveSymbol('loginUser')[0]?.content_hash, 'hu1b');
     assert.deepEqual(inc.findCallers('revoke').map(c => c.id), ['u2']);
 
-    // Same hybrid ranking, lexical and with a query vector.
     for (const q of ['login user validate token', 'logout revoke user', 'verify token']) {
         const a = inc.searchHybrid(q, null, 5).map(r => r.chunk.id);
         const b = reb.searchHybrid(q, null, 5).map(r => r.chunk.id);
@@ -348,7 +338,6 @@ test('a reader connection picks up another connection\'s commit (data_version re
     const reader = new SqliteGraphStore(p); reader.load();
     const writer = new SqliteGraphStore(p); writer.load();
 
-    // Reader has answered a query (cached meta/graph) before the writer commits.
     assert.equal(reader.searchHybrid('logout revoke', null, 3).length, 0);
 
     writer.applyFileUpdate('src/session.ts', {
@@ -356,7 +345,6 @@ test('a reader connection picks up another connection\'s commit (data_version re
         imports: ['src/auth.ts'],
     });
 
-    // The reader must see the new chunk + graph edge without reopening.
     const hits = reader.searchHybrid('revoke session purge', null, 3);
     assert.equal(hits[0]?.chunk.name, 'revokeSession', 'reader did not refresh after external commit');
     assert.deepEqual(reader.getDependencies('src/session.ts'), ['src/auth.ts']);

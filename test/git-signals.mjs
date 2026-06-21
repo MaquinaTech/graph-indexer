@@ -5,9 +5,6 @@
  *              blast-radius hint surfaced by get_call_graph + find_references, and
  *              the OPT-IN ranking boost in search_code (default off = ranking
  *              unchanged, which is what keeps the retrieval eval untouched).
- *
- *              Builds a throwaway git repo with a controlled commit history; no
- *              network, no remote. Skips cleanly if git is unavailable.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @license MIT
  */
@@ -28,7 +25,6 @@ function gitAvailable() {
     catch { return false; }
 }
 
-/** Build a temp git repo with a deterministic co-change history. */
 function buildRepo() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-git-'));
     const g = (...args) => execFileSync('git', ['-C', root, ...args], {

@@ -49,7 +49,7 @@ import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery } from '../search-core.mjs';
 import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
 import { artifactPaths } from '../layout.mjs';
-import { createEmbedder, readEmbedMeta, needsNomicPrefix } from '../embeddings.mjs';
+import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL } from '../embeddings.mjs';
 import { hydeQueryVector } from '../mcp/topology.mjs';
 
 import * as axiosSuite from './suites/axios.mjs';
@@ -96,10 +96,7 @@ const KS = [1, 3, 5, 10];
  * test/run-embeddings.mjs). Returns Map<queryId, Float32Array> or null on failure.
  */
 async function embedQueries(model, queries) {
-    // Mirror production: nomic-style models need the search_query: prefix; others
-    // (qwen3-embedding, …) embed raw text. The prefix decision follows the model
-    // name, exactly as the indexer/server do, so query and chunk vectors agree.
-    const pfx = needsNomicPrefix(model) ? 'search_query: ' : '';
+        const pfx = needsNomicPrefix(model) ? 'search_query: ' : '';
     const input = queries.map(q => pfx + q.query);
     const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -120,10 +117,10 @@ async function embedQueries(model, queries) {
  * model that produced the chunk vectors (stamped in the embed-meta sidecar).
  * The transformer pipeline is loaded once and cached across suites.
  */
-async function embedQueriesLocal(model, queries) {
+async function embedQueriesLocal(provider, model, queries) {
     const embedder = await createEmbedder(
         { ollamaHost: OLLAMA_HOST, localEmbedModel: model, embedModel: EMBED_MODEL },
-        { provider: 'local', model },
+        { provider, model },
     );
     const map = new Map();
     for (const q of queries) {
@@ -137,9 +134,12 @@ async function embedQueriesLocal(model, queries) {
 function resolveQueryProvider(fixtureDir) {
     const meta = readEmbedMeta(artifactPaths(fixtureDir).embeddingPath);
     const provider = embedProviderOverride || meta?.provider || 'ollama';
-    const model = provider === 'local'
-        ? (meta?.model || 'Xenova/all-MiniLM-L6-v2')
-        : (meta?.model || EMBED_MODEL);
+    // Per-provider default when the embed-meta sidecar is absent. mlx pins a fixed
+    // model id (the Ollama EMBED_MODEL default would be a wrong, misleading label).
+    const fallbackModel = provider === 'local' ? 'Xenova/all-MiniLM-L6-v2'
+        : provider === 'mlx' ? MLX_EMBED_MODEL
+            : EMBED_MODEL;
+    const model = meta?.model || fallbackModel;
     return { provider, model };
 }
 
@@ -236,9 +236,11 @@ async function evaluateSuite(suite) {
         }
         queryProvider = resolveQueryProvider(fixtureDir);
         try {
-            queryVectors = queryProvider.provider === 'local'
-                ? await embedQueriesLocal(queryProvider.model, suite.QUERIES)
-                : await embedQueries(queryProvider.model, suite.QUERIES);
+            // Only 'ollama' uses the HTTP /api/embed path; local / mlx both embed
+            // in-process through createEmbedder (mlx via its reused subprocess).
+            queryVectors = queryProvider.provider === 'ollama'
+                ? await embedQueries(queryProvider.model, suite.QUERIES)
+                : await embedQueriesLocal(queryProvider.provider, queryProvider.model, suite.QUERIES);
         }
         catch (e) { return { META: suite.META, error: `query embedding failed: ${e.message}` }; }
 
@@ -313,20 +315,16 @@ async function evaluateSuite(suite) {
             row.ndcg[k] = ndcgAtK(results, isStrict, k);
             row.fileHit[k] = hasExpectedFiles ? successAtK(results, isFileHit, k) : null;
         }
-        // A "file-only hit" = counted as loose hit at k=5 but never strictly correct.
-        row.fileOnlyHit = (row.looseSuccess[5] === 1 && row.strictSuccess[5] === 0) ? 1 : 0;
+                row.fileOnlyHit = (row.looseSuccess[5] === 1 && row.strictSuccess[5] === 0) ? 1 : 0;
         rows.push(row);
     }
 
-    // Aggregate over the TUNING rows only (held-out queries are reported
-    // separately) so the headline numbers stay comparable to the pre-WI8 baseline.
     const tuningRows = rows.filter(r => !r.heldOut);
     const heldRows = rows.filter(r => r.heldOut);
     const aggOf = (rs) => (sel) => mean(rs.map(sel));
     const buildAgg = (rs) => {
         const a = aggOf(rs);
-        // fileHit is only defined for queries that have expected_files; average over those only.
-        const fileHitRows = (k) => rs.filter(r => r.fileHit[k] !== null);
+            const fileHitRows = (k) => rs.filter(r => r.fileHit[k] !== null);
         const fileHitMean = (k) => {
             const eligible = fileHitRows(k);
             return eligible.length ? mean(eligible.map(r => r.fileHit[k])) : null;
@@ -363,7 +361,6 @@ function render(result) {
     if (result.error) { console.log(`\n${c.red('✗')} ${result.META.displayName}: ${result.error}`); return; }
     const a = result.aggregate;
 
-    // Partition rows into symbolic (easy/medium/hard) vs semantic (agent-style conceptual queries)
     const symbolicRows = result.rows.filter(r => r.difficulty !== 'semantic');
     const semanticRows = result.rows.filter(r => r.difficulty === 'semantic');
     const symCount = symbolicRows.length;
@@ -383,9 +380,9 @@ function render(result) {
         console.log(`  ${pad('file hit@1 / @5', 30)} ${scoreColour(a.fileHitRate[1])} / ${scoreColour(a.fileHitRate[5])}${fhNote}`);
     }
 
-    // Semantic channel breakdown — highlights the benchmark mismatch the agent prompt (prompts/CORE.md) revealed:
-    // symbolic queries test name-lookup (what agents use resolve_symbol for), while semantic
-    // queries test the actual search_code use case (behavioral descriptions, no symbol names).
+    // Symbolic queries are name-lookups (resolve_symbol territory); semantic queries are
+    // behavioral descriptions (search_code territory) — kept separate so regressions in
+    // one channel don't mask improvements in the other.
     if (semCount > 0) {
         const semR1 = mean(semanticRows.map(r => r.rank1Strict));
         const semMRR = mean(semanticRows.map(r => r.mrrStrict));
@@ -438,9 +435,11 @@ console.log('\n' + c.bold('═'.repeat(72)));
 console.log(c.bold('  EVALUATION  ') + c.dim('— strict symbol-level ground truth (no file-path fallback)'));
 const _embedLabel = embedProviderOverride === 'local'
     ? 'in-process local model (no Ollama)'
-    : embedProviderOverride === 'ollama'
-        ? `${EMBED_MODEL} @ ${OLLAMA_HOST}`
-        : `per-index embed-meta @ ${OLLAMA_HOST}`;
+    : embedProviderOverride === 'mlx'
+        ? 'MLX Apple Metal (no Ollama)'
+        : embedProviderOverride === 'ollama'
+            ? `${EMBED_MODEL} @ ${OLLAMA_HOST}`
+            : `per-index embed-meta @ ${OLLAMA_HOST}`;
 console.log(c.dim(`  channel: ${useEmbeddings ? `hybrid (lexical + ${_embedLabel})` : 'lexical-only'}${useRerank ? ` + LLM rerank (${RERANK_MODEL})` : ''}`));
 console.log(c.bold('═'.repeat(72)));
 
@@ -448,7 +447,6 @@ const results = [];
 for (const s of suites) results.push(await evaluateSuite(s));
 for (const r of results) render(r);
 
-// Overall
 const ok = results.filter(r => !r.error);
 if (ok.length > 0) {
     const m = (sel) => mean(ok.map(sel));
@@ -472,7 +470,6 @@ if (ok.length > 0) {
         console.log(`  ${pad('file hit@1 / @5', 22)} ${pad('—', 9)} ${scoreColour(fh1)} / ${scoreColour(fh5)}`);
     }
 
-    // Semantic vs symbolic cross-suite summary
     const allRows = ok.flatMap(r => r.rows || []);
     const semAllRows = allRows.filter(r => r.difficulty === 'semantic');
     const symAllRows = allRows.filter(r => r.difficulty !== 'semantic');
@@ -514,7 +511,6 @@ if (ok.length > 0) {
 }
 
 if (outPath) {
-    // Exact-path write for the bench harness: one suite's strict result per cell.
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
     console.log(`📄  JSON report saved to: ${path.relative(process.cwd(), outPath)}\n`);

@@ -3,7 +3,7 @@
 Comprehensive quality, performance, and token-savings evaluation using five pinned
 open-source projects across four languages.
 
-> **Not published** — `test/` is in `.gitignore` and excluded from the npm package.
+> **Not published** — `test/` is excluded from the npm package via the package.json `files` allowlist.
 
 ---
 
@@ -49,13 +49,13 @@ OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings
 #    code-index.enrichment.json — the first run is slow, re-runs are cache hits)
 for f in axios express-js nestjs fastapi gin; do
   INDEXER_EMBEDDINGS=on OLLAMA_HOST=http://localhost:11434 \
-    node indexer.mjs --repo test/fixtures/$f --llm-enrichment --enrich-max 4000
+    node indexer.mjs --repo test/fixtures/$f --enrichment --enrich-max 4000
 done
 OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings              # memory
 OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings --use-sqlite # parity
 
 # 9. LLM-judge reranking on top (natural-language queries only; RERANK_MODEL
-#    defaults to qwen2.5-coder:1.5b — use the 7B for the measured quality gain)
+#    defaults to qwen2.5-coder:7b — the 7B is needed for the measured quality gain)
 OLLAMA_HOST=http://localhost:11434 RERANK_MODEL=qwen2.5-coder:7b \
   node test/evaluate.mjs --embeddings --rerank
 ```

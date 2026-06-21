@@ -1,13 +1,8 @@
 /**
  * test/harness.mjs
  *
- * Core evaluation harness.  For each suite it:
- *   1. Runs `node indexer.mjs --repo <fixture>` as a child process (with
- *      INDEXER_EMBEDDINGS=off for speed + reproducibility).
- *   2. Loads the resulting code-index.json into a MemoryGraphIndex.
- *   3. Executes all ground-truth queries via searchHybrid(query, null, topK).
- *   4. Collects per-query and aggregate metrics.
- *   5. Returns a structured SuiteResult object consumed by run.mjs.
+ * Core evaluation harness. INDEXER_EMBEDDINGS=off by default for speed +
+ * reproducibility; pass useEmbeddings=true to opt in.
  */
 
 import { spawnSync } from 'child_process';
@@ -73,7 +68,6 @@ export function runIndexer(fixtureDir, { useEmbeddings = false, useSqlite = fals
 
 export function loadIndex(fixtureDir, { useSqlite = false } = {}) {
     const A = artifactPaths(fixtureDir);
-    // Try to load SQLite backend if available and requested
     if (useSqlite) {
         if (fs.existsSync(A.sqlitePath)) {
             const store = new SqliteGraphStore(A.sqlitePath, { embeddingPath: A.embeddingPath });
@@ -81,7 +75,6 @@ export function loadIndex(fixtureDir, { useSqlite = false } = {}) {
             return store;
         }
     }
-    // Fallback to memory backend
     if (!fs.existsSync(A.indexPath)) return null;
     const db = new MemoryGraphIndex(A.indexPath);
     db.load();
@@ -96,9 +89,6 @@ export function measureIndexSize(fixtureDir) {
     return { jsonSize, dbSize, binSize, totalSize: jsonSize + dbSize + binSize };
 }
 
-/**
- * Computes static statistics about a loaded index that don't require queries.
- */
 export function indexStats(db) {
     if (!db) return null;
 
@@ -154,8 +144,7 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
         const topK = q.topK ?? 10;
         const qVec = queryVectors ? (queryVectors.get(q.id) ?? null) : null;
 
-        // Measure search latency — run each query 3× and take the minimum
-        // to reduce scheduling noise.
+        // Run each query 3× and take the minimum to reduce scheduling noise.
         let bestMs = Infinity;
         let results;
         for (let trial = 0; trial < 3; trial++) {
@@ -177,12 +166,10 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
             ndcgs[k] = ndcgAtK(results, names, files, k);
         }
 
-        // Token savings: compare top-5 chunk tokens vs full source files
         const savings5 = computeTokenSavings(results.slice(0, 5), fixtureDir);
-        // Honest, expansion-aware savings (net of one get_chunk full-body expansion).
+        // Net of one get_chunk full-body expansion.
         const amortized5 = amortizedTokenSavings(results.slice(0, 5), fixtureDir);
 
-        // Surface the best matching chunk for the report
         const firstHitIdx = rank - 1; // -1 if not found
         const firstHit = firstHitIdx >= 0 ? results[firstHitIdx] : null;
 
@@ -206,7 +193,6 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
         });
     }
 
-    // ── Aggregate ────────────────────────────────────────────────────────────────
     const mrr = mean(queryResults.map(r => r.reciprocalRank));
     const aggRecalls = {};
     const aggNdcgs = {};
@@ -218,7 +204,6 @@ export function runQueries(db, queries, fixtureDir, { queryVectors = null } = {}
     const avgTokenSavings = mean(queryResults.map(r => r.tokenSavings.savingsPct));
     const avgAmortizedSavings = mean(queryResults.map(r => r.amortizedSavings.savingsPct));
 
-    // ── By difficulty ─────────────────────────────────────────────────────────
     const byDifficulty = {};
     for (const diff of ['easy', 'medium', 'hard']) {
         const subset = queryResults.filter(r => r.difficulty === diff);
@@ -261,13 +246,11 @@ export async function runSuite(suite, opts = {}) {
     const { META, QUERIES, fixtureDir } = suite;
     const { useEmbeddings = false, useSqlite = false, skipIndexing = false, ollamaHost = null, embedFn = null } = opts;
 
-    // ── 1. Optionally run (or re-run) the indexer ─────────────────────────────
     let indexResult = null;
     const A = artifactPaths(fixtureDir);
     const indexJsonPath = A.indexPath;
     const dbPath = A.sqlitePath;
     const binPath = A.embeddingPath;
-    // When embeddings are requested, require the .bin file too; absence → must re-index
     const indexReady = useSqlite
         ? (fs.existsSync(dbPath) && (!useEmbeddings || fs.existsSync(binPath)))
         : (fs.existsSync(indexJsonPath) && (!useEmbeddings || fs.existsSync(binPath)));
@@ -290,13 +273,11 @@ export async function runSuite(suite, opts = {}) {
         indexResult = { wallMs: 0, exitCode: 0, stdout: '', stderr: '' };
     }
 
-    // ── 2. Load the index ─────────────────────────────────────────────────────
     const db = loadIndex(fixtureDir, { useSqlite });
     if (!db) {
         return { META, error: (useSqlite ? 'code-index.db' : 'code-index.json') + ' not found after indexing', indexResult };
     }
 
-    // ── 3. Compute static metrics ─────────────────────────────────────────────
     const stats = indexStats(db);
     const sizes = measureIndexSize(fixtureDir);
     const srcTokens = totalSourceTokens(fixtureDir);
@@ -304,7 +285,6 @@ export async function runSuite(suite, opts = {}) {
         ? stats.chunkCount / (indexResult.wallMs / 1000)
         : null;
 
-    // Sanity check against expected minimums
     const warnings = [];
     if (stats.chunkCount < META.expectedMinChunks) {
         warnings.push(`chunk count ${stats.chunkCount} < expected minimum ${META.expectedMinChunks}`);
@@ -313,10 +293,8 @@ export async function runSuite(suite, opts = {}) {
         warnings.push(`file count ${stats.fileCount} < expected minimum ${META.expectedMinFiles}`);
     }
 
-    // ── 4. Run queries ────────────────────────────────────────────────────────
     let queryVectors = null;
     if (embedFn && db.vectors.size > 0) {
-        // Fetch query embeddings in a single batch for efficiency
         queryVectors = await embedFn(QUERIES);
     }
     const { queryResults, aggregate } = runQueries(db, QUERIES, fixtureDir, { queryVectors });

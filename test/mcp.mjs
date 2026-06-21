@@ -103,7 +103,6 @@ async function main() {
         check('get_subgraph returns a bounded subgraph over stdio', () => {
             const sc = subgraph?.result?.structuredContent;
             assert.ok(sc, 'no structuredContent');
-            // Either the seed resolved (nodes/edges arrays present) or a clean not-found.
             assert.ok(Array.isArray(sc.nodes) && Array.isArray(sc.edges), 'nodes/edges arrays present');
             if (sc.found) assert.ok(sc.nodes.length >= 1 && sc.nodes.length <= 8, 'respects max_nodes');
         });
@@ -124,12 +123,11 @@ async function main() {
             assert.ok(sc && Array.isArray(sc.results), 'structuredContent.results missing');
             assert.ok(sc.results.length > 0, 'no results in structured payload');
             assert.equal(typeof sc.results[0].id, 'string', 'result id should be a typed field');
-            // The JSON text block must parse back to the same object.
             assert.deepEqual(JSON.parse(textOf(json)), sc, 'text block mirrors structuredContent');
         });
     } finally {
         srv.child.kill('SIGTERM');
-        // Clean up the watch daemon the server spawned in the fixture.
+
         try {
             const pidFile = path.join(FIXTURE, '.idx-daemon.pid');
             if (fs.existsSync(pidFile)) {

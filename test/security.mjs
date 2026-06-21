@@ -46,11 +46,9 @@ test('get_file_skeleton blocks a symlink inside the project that points outside'
         const safe = await skeleton({ file_path: 'safe.ts' });
         assert.doesNotMatch(safe.content[0].text, /Access denied/, 'in-root file is allowed');
 
-        // Classic textual traversal is rejected.
         const trav = await skeleton({ file_path: '../outside/secret.ts' });
         assert.match(trav.content[0].text, /Access denied/, 'path traversal blocked');
 
-        // The realpath defence: a symlink whose *path* is in-root but resolves outside.
         if (symlinked) {
             const evil = await skeleton({ file_path: 'evil.ts' });
             assert.match(evil.content[0].text, /Access denied/, 'symlink escape blocked by realpath check');

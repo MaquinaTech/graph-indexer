@@ -78,7 +78,6 @@ export class Admin extends User {
 `,
 };
 
-// Resolved local import edges (file → files it imports), as the indexer would build.
 const IMPORTS = {
     'service.ts': ['models.ts', 'helpers.ts'],
     'admin.ts': ['models.ts'],
@@ -92,7 +91,7 @@ function parseFixture() {
         const tree = parser.parse((offset) => (offset < src.length ? src.slice(offset, offset + 4096) : null));
         const chunks = extractSemanticChunks(tree.rootNode, file, src, '.ts');
         idx.applyFileUpdate(file, { chunks, imports: IMPORTS[file] || [] });
-        if (idx._saveTimer) { clearTimeout(idx._saveTimer); idx._saveTimer = null; } // no disk writes in test
+        if (idx._saveTimer) { clearTimeout(idx._saveTimer); idx._saveTimer = null; }
     }
     return idx;
 }
@@ -113,8 +112,6 @@ test('findReferers captures type_refs and extends matches (not just calls)', () 
     if (!idx) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
 
     const referers = idx.findReferers('User').map(c => c.name).sort();
-    // handle/summarize annotate `: User`; Admin `extends User`. The two User
-    // *definitions* are not themselves referers.
     assert.deepEqual(referers, ['Admin', 'handle', 'summarize'], 'all type/extends referers found');
 
     // Case-insensitive, and no partial matches (a "UserProfile" must not match).
@@ -132,17 +129,14 @@ test('findReferences splits high-confidence from name-only via the import graph'
     const { ambiguous, inherits, types, calls } = findReferences(idx, 'User');
     assert.equal(ambiguous, true, 'User is ambiguous');
 
-    // Inheritance: Admin imports the indexed User → high-confidence.
     assert.deepEqual(inherits.map(i => i.chunk.name), ['Admin']);
     assert.equal(inherits[0].confidence, 'high', 'subclass importing the def is high-confidence');
 
-    // Types: handle imports the def (high); summarize annotates an unknown User (name-only).
     const high = types.filter(t => t.confidence === 'high').map(t => t.chunk.name).sort();
     const nameOnly = types.filter(t => t.confidence === 'name-only').map(t => t.chunk.name).sort();
     assert.deepEqual(high, ['handle'], 'importing type-user is high-confidence');
     assert.deepEqual(nameOnly, ['summarize'], 'non-importing type-user is demoted to name-only');
 
-    // User is never *called*, so the call dimension is empty.
     assert.equal(calls.high.length + calls.nameOnly.length, 0, 'User has no call-site references');
 
     console.log(`\n  references to ambiguous \`User\``);
@@ -153,7 +147,6 @@ test('findReferences splits high-confidence from name-only via the import graph'
 test('findReferences flows the call dimension through (broader than get_call_graph)', () => {
     const idx = parseFixture();
     if (!idx) return;
-    // `format` is a unique free function called by handle → high-confidence caller.
     const { calls, inherits, types } = findReferences(idx, 'format');
     assert.deepEqual(calls.high.map(h => h.chunk.name), ['handle'], 'caller of format found and credited');
     assert.equal(inherits.length, 0);
@@ -190,6 +183,5 @@ test('find_references tool returns typed structuredContent for json format', asy
     assert.equal(sc.subclassed_by[0].confidence, 'high');
     assert.ok(sc.used_as_type_by.some(r => r.name === 'handle' && r.confidence === 'high'));
     assert.ok(sc.used_as_type_by.some(r => r.name === 'summarize' && r.confidence === 'name-only'));
-    // The JSON text block mirrors the structured content exactly.
     assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
 });

@@ -68,7 +68,6 @@ const ROUTES = extractRoutes(tree.rootNode, 'routes.js', CHUNKS, '.js');
 const GRAPH = { dependencies: { 'routes.js': [] }, importedBy: {}, routes: ROUTES };
 const idOf = (name) => CHUNKS.find(c => c.name === name)?.id;
 
-// In-memory backend: persist {chunks, graph} as the indexer would, then load.
 function loadMemory() {
     const p = path.join(os.tmpdir(), `gi-routes-${process.pid}-${passed}-${failed}.json`);
     tmpFiles.push(p, `${p.replace(/\.json$/, '')}.embeddings.bin`);
@@ -83,7 +82,6 @@ test('extractRoutes produced 3 routes + 3 handler chunks from the fixture', () =
     for (const name of ['listUsers', 'getUser', 'getHealth']) {
         assert.ok(idOf(name), `handler chunk ${name} missing`);
     }
-    // Each route resolved its handler_chunk_id at index time.
     for (const r of ROUTES) assert.ok(r.handler_chunk_id, `route ${r.path} did not resolve a handler chunk`);
 });
 
@@ -103,10 +101,8 @@ test("find_routes('GET', '/api') returns the correct handler chunks (in-memory)"
 test('find_routes() with no filter returns all 3 routes (in-memory)', () => {
     const mem = loadMemory();
     assert.equal(findRoutes(mem, {}).length, 3);
-    // method filter is case-insensitive; a non-matching method yields none.
     assert.equal(findRoutes(mem, { method: 'get' }).length, 3);
     assert.equal(findRoutes(mem, { method: 'POST' }).length, 0);
-    // pattern hint (contains ':') → contains-match.
     assert.equal(findRoutes(mem, { path: ':id' }).length, 1);
     mem.close?.();
 });

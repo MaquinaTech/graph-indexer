@@ -19,6 +19,7 @@ import {
     resolveEmbedProvider, createEmbedder, localEmbedAvailable,
     readEmbedMeta, writeEmbedMeta, embedMetaPath, describeEmbedder,
     LOCAL_EMBED_DIM, _resetLocalPipeline,
+    MLX_EMBED_MODEL,
 } from '../embeddings.mjs';
 import {
     embeddingWindows, baseEmbeddingKey, EMBEDDING_CONTEXT_LIMIT, EMBEDDING_MAX_WINDOWS,
@@ -70,6 +71,43 @@ test('forced providers skip probing', async () => {
     assert.equal((await resolveEmbedProvider({ ...baseConfig, embedProvider: 'off' }, { probe: up, hasLocal: up })).provider, 'off');
 });
 
+// ── Native Python embedder: mlx (Apple Metal) ─────────────────────────────────
+// Deterministic, no Python: only provider resolution, the model id, and the platform
+// guard are exercised here (the subprocess path needs the venv deps).
+const _withPlatform = async (p, fn) => {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: p, configurable: true });
+    try { return await fn(); } finally { Object.defineProperty(process, 'platform', real); }
+};
+
+test('forced mlx resolves to its model id (default + user override)', async () => {
+    // The resolved model is passed to the Python server AND stamped into the .meta.json
+    // sidecar, so switching it must trigger a clean re-embed.
+    await _withPlatform('darwin', async () => {
+        assert.deepEqual(
+            await resolveEmbedProvider({ ...baseConfig, embedProvider: 'mlx' }, { probe: down, hasLocal: down }),
+            { provider: 'mlx', model: MLX_EMBED_MODEL });
+        // A user-supplied mlxEmbedModel wins over the pinned default.
+        assert.deepEqual(
+            await resolveEmbedProvider({ ...baseConfig, embedProvider: 'mlx', mlxEmbedModel: 'mlx-community/custom' }, { probe: down, hasLocal: down }),
+            { provider: 'mlx', model: 'mlx-community/custom' });
+    });
+});
+
+test('platform guard: mlx is macOS-only', async () => {
+    await _withPlatform('linux', async () => {
+        await assert.rejects(() => resolveEmbedProvider({ ...baseConfig, embedProvider: 'mlx' }), /macOS/);
+    });
+    await _withPlatform('win32', async () => {
+        await assert.rejects(() => resolveEmbedProvider({ ...baseConfig, embedProvider: 'mlx' }), /macOS/);
+    });
+});
+
+test('embeddings disabled forces off even for mlx (before the platform guard)', async () => {
+    // off short-circuits first, so this holds on every platform without an override.
+    assert.equal((await resolveEmbedProvider({ ...baseConfig, embeddingsEnabled: false, embedProvider: 'mlx' })).provider, 'off');
+});
+
 test('createEmbedder routes to the resolved backend and learns dim', async () => {
     const calls = { q: 0, d: 0 };
     const backends = {
@@ -109,17 +147,16 @@ test('embed-meta sidecar round-trips next to the bin', () => {
 test('describeEmbedder labels each provider', () => {
     assert.match(describeEmbedder({ provider: 'ollama', model: 'nomic-embed-text' }), /Ollama/);
     assert.match(describeEmbedder({ provider: 'local', model: 'x' }), /Local/);
+    assert.match(describeEmbedder({ provider: 'mlx', model: 'x' }), /MLX/);
     assert.match(describeEmbedder({ provider: 'off' }), /Lexical/);
 });
 
 // ── Window-and-pool sub-chunking for the dense channel ───────────────────────
 
 test('embeddingWindows: small payloads keep one vector; oversized split with bounded, overlapping windows', () => {
-    // Fits in a single window → no extra vectors (default path, byte-identical).
     assert.deepEqual(embeddingWindows('short payload'), []);
     assert.deepEqual(embeddingWindows('x'.repeat(EMBEDDING_CONTEXT_LIMIT)), []);
 
-    // Just over the limit → splits, window 0 is the same first-limit slice as before.
     const payload = 'HEAD_' + 'a'.repeat(EMBEDDING_CONTEXT_LIMIT) + '_TAIL';
     const w = embeddingWindows(payload);
     assert.ok(w.length >= 2, 'oversized payload splits');
@@ -127,11 +164,9 @@ test('embeddingWindows: small payloads keep one vector; oversized split with bou
     assert.ok(w.every(s => s.length <= EMBEDDING_CONTEXT_LIMIT), 'every window respects the context limit');
     assert.ok(w[1].endsWith('_TAIL'), 'a later window reaches the tail the single vector dropped');
 
-    // Growth is hard-capped regardless of size → bounded .bin growth.
     const huge = embeddingWindows('z'.repeat(EMBEDDING_CONTEXT_LIMIT * 50));
     assert.equal(huge.length, EMBEDDING_MAX_WINDOWS, 'window count is capped');
 
-    // baseEmbeddingKey folds both summary and window suffixes back to the base.
     assert.equal(baseEmbeddingKey('h1' + WINDOW_VEC_SUFFIX + 2), 'h1');
     assert.equal(baseEmbeddingKey('h1|s'), 'h1');
     assert.equal(baseEmbeddingKey('h1'), 'h1');
@@ -143,13 +178,10 @@ test('fullBodyForEmbedding: returns the full body only for truncated, non-skelet
     const content = `function big() {\n${lines.join('\n')}\n}\n`;
     const end = content.split('\n').length;
 
-    // Truncated (snippet hit the 3000 cap) → returns the whole, larger body.
     const body = fullBodyForEmbedding({ code_snippet: 'x'.repeat(3000), start_line: 1, end_line: end }, content);
     assert.ok(body && body.length > 3000, 'truncated chunk yields its full body for windowing');
 
-    // Body that fits the cap → no override (the dense path stays byte-identical).
     assert.equal(fullBodyForEmbedding({ code_snippet: 'short body', start_line: 1, end_line: 3 }, content), null);
-    // God-class skeleton → no override (its methods are already their own chunks).
     assert.equal(
         fullBodyForEmbedding({ code_snippet: 'x'.repeat(3000) + ' // Large class: 999 lines', start_line: 1, end_line: end }, content),
         null, 'god-class skeleton is not windowed over the whole class');
@@ -162,8 +194,6 @@ test('fullBodyForEmbedding: returns the full body only for truncated, non-skelet
 function buildWindowedIndex(includeWindowVector) {
     const HEAD = 'HEADNEEDLE';
     const TAIL = 'TAILNEEDLE';
-    // Snippet sized so buildEmbeddingPayload spans exactly two windows, with the tail
-    // marker only in window 1 (past the 8000-char boundary).
     const bigSnippet = HEAD + 'x'.repeat(9000) + TAIL + 'y'.repeat(2000);
     const bigChunk = {
         id: 'big1', file_path: 'src/big.ts', node_type: 'function_declaration',
@@ -184,7 +214,6 @@ function buildWindowedIndex(includeWindowVector) {
     assert.ok(!windows[0].includes('TAILNEEDLE'), 'tail marker is past window 0');
     assert.ok(windows[1].includes('TAILNEEDLE'), 'window 1 covers the tail');
 
-    // head vector ⟂ query; tail (window 1) vector == query.
     const headVec = new Float32Array([1, 0, 0, 0]);
     const tailVec = new Float32Array([0, 1, 0, 0]);
     const distVec = new Float32Array([0, 0, 1, 0]);
@@ -204,16 +233,13 @@ function buildWindowedIndex(includeWindowVector) {
 }
 
 test('oversized definition: a tail-only query retrieves it via a window vector (max-sim)', () => {
-    const queryVec = new Float32Array([0, 1, 0, 0]); // == the tail-window vector
-    // With windowing: the tail window matches → the big function is retrieved.
+    const queryVec = new Float32Array([0, 1, 0, 0]);
     const win = buildWindowedIndex(true);
     try {
         const hits = win.mem.searchHybrid('completely unrelated query text', queryVec, 5, 0.0).map(r => r.chunk.id);
         assert.ok(hits.includes('big1'), 'windowed: tail-only query reaches the oversized function');
     } finally { win.cleanup(); }
 
-    // Without the window vector (old behaviour): only the head vector exists, which is
-    // orthogonal to the query → the function is invisible to the dense channel.
     const base = buildWindowedIndex(false);
     try {
         const hits = base.mem.searchHybrid('completely unrelated query text', queryVec, 5, 0.0).map(r => r.chunk.id);

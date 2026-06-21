@@ -35,7 +35,6 @@ function withLang(label, ext, fn) {
     fn();
 }
 
-/** Parse source and return { chunks, imports } as the indexer would. */
 function parse(file, source) {
     const ext = '.' + file.split('.').pop();
     const tree = getParserForFile(ext).parse(source);
@@ -46,7 +45,6 @@ function parse(file, source) {
 }
 const byName = (chunks, name) => chunks.find(c => c.name === name);
 
-/** Parse `source` and return the first node whose type matches `typeRe`. */
 function firstNodeOfType(ext, source, typeRe) {
     const tree = getParserForFile(ext).parse(source);
     const stack = [tree.rootNode];
@@ -279,7 +277,6 @@ withLang('Swift', '.swift', () => {
 // dimensions. Extraction is exercised directly on the class/trait/function node
 // (chunking granularity differs per grammar, but the extractor is what matters).
 const has = (arr, name) => (arr || []).includes(name);
-/** test() that auto-skips when the grammar isn't built (graceful-degradation contract). */
 function langTest(label, ext, fn) {
     if (!getParserForFile(ext)) { skipped++; console.log(`  ⊘ ${label} — grammar for ${ext} not built (skipped)`); return; }
     test(label, fn);
@@ -321,7 +318,6 @@ langTest('C#: fully-qualified generic type yields clean inner names, no malforme
     const cls = firstNodeOfType('.cs', 'class C { private System.Collections.Generic.List<Order> items; }', /class_declaration/);
     const tr = extractTypeAnnotations(cls, '.cs');
     assert.ok(has(tr, 'List') && has(tr, 'Order'), `qualified generic → ${JSON.stringify(tr)}`);
-    // The combined "List<Order>" token (and bare namespace segments) must not leak.
     assert.ok(tr.every(t => !t.includes('<') && !t.includes('>')), `malformed generic token leaked → ${JSON.stringify(tr)}`);
     assert.ok(!has(tr, 'System') && !has(tr, 'Collections') && !has(tr, 'Generic'), `namespace leaked → ${JSON.stringify(tr)}`);
 });
@@ -355,8 +351,7 @@ langTest('Rust: supertrait bound', '.rs', () => {
     assert.ok(has(h, 'Animal'), `Rust supertrait bound → ${JSON.stringify(h)}`);
 });
 langTest('Rust: type refs (params, refs, generics, return)', '.rs', () => {
-    // Rust spells types as `type_identifier`, already captured by the shared
-    // cross-language branch — this asserts that contract holds (no regression).
+    // Asserts the shared `type_identifier` cross-language branch covers Rust (no regression).
     const fn = firstNodeOfType('.rs', 'fn process(config: Config, store: &Store) -> Result<Output> { let x: u32 = 0; }', /function_item/);
     const tr = extractTypeAnnotations(fn, '.rs');
     for (const want of ['Config', 'Store', 'Output', 'Result']) {
