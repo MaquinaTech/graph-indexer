@@ -8,7 +8,7 @@ Strict metrics are primary. `s@5`=strict success@5, `r1`=strict rank-1 accuracy,
 
 ## Canonical structural-coverage table (authoritative)
 
-One row per fixture; **the single source of truth for structural gaps**. Every `none` / `empty` / `degraded` verdict was confirmed by **invoking the actual tool** (`get_call_graph` / `find_references`) on the fixture's real index via `bench/verify-structural.mjs` — not by reading a field (the method that previously produced false positives: macOS `grep` treating `mcp-tools.mjs` as binary; the `recv` vs `receiver_type` mismatch). Where any other doc or section disagreed, **this table is the correction**.
+One row per fixture; **the single source of truth for structural gaps**. Every `none` / `empty` / `degraded` verdict was confirmed by **invoking the actual tool** (`get_call_graph` / `find_references`) on the fixture's real index via `bench/verify-structural.mjs` — not by reading a field (the method that previously produced false positives: macOS `grep` treating `mcp/tools.mjs` as binary; the `recv` vs `receiver_type` mismatch). Where any other doc or section disagreed, **this table is the correction**.
 
 | Language | fixture | call_graph edges | type_refs channel | callers resolution | inheritance |
 |---|---|---|---|---|---|
@@ -22,10 +22,10 @@ One row per fixture; **the single source of truth for structural gaps**. Every `
 | Rust | rust | yes | populated (86%) | name-only (0%) | yes (26.1%) |
 | Java/Spring | spring | degraded (class-granular)† | populated (3.6%) | receiver-aware (87.7%)† | yes (1.1%) |
 | Kotlin/Android | android | yes | populated (100%) | name-only (0%) | yes (18.1%) |
-| C#/ASP.NET | aspnet | none | populated (82.6%) | none | yes (32.2%) |
+| C#/ASP.NET | aspnet | yes | populated (53.6%) | receiver-aware (91.1%) | yes (32.2%) |
 | Ruby/Rails | rails | yes | **empty** | name-only (0%) | yes (11.9%) |
-| PHP/Laravel | laravel | none | populated (72.2%) | none | yes (81.1%) |
-| PHP/Symfony | symfony | none | populated (58.7%) | none | yes (75.4%) |
+| PHP/Laravel | laravel | yes | populated (73.1%) | receiver-aware (83.6%) | yes (65.9%) |
+| PHP/Symfony | symfony | yes | populated (35.2%) | receiver-aware (86%) | yes (23.2%) |
 | SCSS | css | none (6 trivial)‡ | **empty** | none (6 trivial) | n/a |
 | C | cjson | yes | populated (9.3%) | name-only (2.5%) | n/a |
 | Bash | nvm | yes | **empty** | name-only (0%) | n/a |
@@ -41,16 +41,16 @@ One row per fixture; **the single source of truth for structural gaps**. Every `
 Source: [https://github.com/axios/axios](https://github.com/axios/axios) @ `v1.6.0`  
 Index: 450 chunks · 124 files · 19 scored queries (**sem n=5**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 84% | 58% | 0.68 | 0% | 80% | 100% | 10.5% | 0.9s | 487.54 | 0.5MB | — | 0.17ms |
-| E0 | 84% | 63% | 0.72 | 20% | 80% | 100% | 10.5% | 23.1s | 19.5 | 1.2MB | 384 | 0.39ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 79% | 58% | 0.68 | 0% | 60% | 100% | 10.5% | 15.4s | 29.24 | 1.7MB | 768 | 1.00ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 84% | 58% | 0.68 | 0% | 80% | 100% | 68% | 89% | 10.5% | 1.1s | 422.14 | 0.5MB | — | 0.16ms |
+| E0 | 84% | 63% | 0.72 | 20% | 80% | 100% | — | — | 10.5% | 23.1s | 19.5 | 1.2MB | 384 | 0.39ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 79% | 58% | 0.68 | 0% | 60% | 100% | — | — | 10.5% | 15.4s | 29.24 | 1.7MB | 768 | 1.00ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 82% of chunks carry call edges (3.78/chunk); `find_references`: type_refs 26.7%, extends 0.2%; call_sites 2098 (80.2% via a receiver).
 
@@ -61,16 +61,16 @@ Index: 450 chunks · 124 files · 19 scored queries (**sem n=5**) + held-out spl
 Source: [https://github.com/expressjs/express](https://github.com/expressjs/express) @ `4.18.2`  
 Index: 389 chunks · 150 files · 21 scored queries (**sem n=7**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 86% | 67% | 0.74 | 43% | 57% | 67% | 4.8% | 1.3s | 303.91 | 0.5MB | — | 0.21ms |
-| E0 | 86% | 67% | 0.75 | 43% | 57% | 67% | 9.5% | 20.1s | 19.32 | 1.1MB | 384 | 0.40ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 86% | 62% | 0.73 | 29% | 57% | 67% | 9.5% | 17.1s | 22.72 | 1.7MB | 768 | 0.88ms |
-| O2 | 90% | 62% | 0.73 | 29% | 71% | 67% | 9.5% | 348.4s | 1.12 | 4.3MB | 2560 | 1.40ms |
-| R0 | 95% | 67% | 0.77 | 43% | 86% | 100% | 4.8% | reuse | — | 4.3MB | 2560 | 1.44ms |
-| R1 | 90% | 62% | 0.73 | 29% | 71% | 67% | 9.5% | 479.5s | 0.81 | 5.2MB | 2560 | 1.68ms |
-| R2 | 86% | 62% | 0.72 | 29% | 57% | 100% | 14.3% | reuse | — | 5.2MB | 2560 | 1.71ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 86% | 67% | 0.74 | 43% | 57% | 67% | 76% | 90% | 4.8% | 1.5s | 260.55 | 0.6MB | — | 0.20ms |
+| E0 | 86% | 67% | 0.75 | 43% | 57% | 67% | — | — | 9.5% | 20.1s | 19.32 | 1.1MB | 384 | 0.40ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 86% | 62% | 0.73 | 29% | 57% | 67% | — | — | 9.5% | 17.1s | 22.72 | 1.7MB | 768 | 0.88ms |
+| O2 | 90% | 62% | 0.73 | 29% | 71% | 67% | — | — | 9.5% | 348.4s | 1.12 | 4.3MB | 2560 | 1.40ms |
+| R0 | 95% | 67% | 0.77 | 43% | 86% | 100% | — | — | 4.8% | reuse | — | 4.3MB | 2560 | 1.44ms |
+| R1 | 90% | 62% | 0.73 | 29% | 71% | 67% | — | — | 9.5% | 479.5s | 0.81 | 5.2MB | 2560 | 1.68ms |
+| R2 | 86% | 62% | 0.72 | 29% | 57% | 100% | — | — | 14.3% | reuse | — | 5.2MB | 2560 | 1.71ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 93.1% of chunks carry call edges (4.33/chunk); `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 0%; call_sites 1923 (74.2% via a receiver).
 
@@ -81,16 +81,16 @@ Index: 389 chunks · 150 files · 21 scored queries (**sem n=7**) + held-out spl
 Source: [https://github.com/nestjs/nest](https://github.com/nestjs/nest) @ `v10.4.9`  
 Index: 2675 chunks · 1459 files · 21 scored queries (**sem n=7**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 57% | 43% | 0.49 | 14% | 43% | 67% | 38.1% | 6.8s | 396.18 | 4.0MB | — | 1.18ms |
-| E0 | 57% | 33% | 0.44 | 14% | 29% | 67% | 28.6% | 151.6s | 17.64 | 7.8MB | 384 | 2.48ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 67% | 48% | 0.55 | 14% | 57% | 67% | 28.6% | 107.2s | 24.95 | 11.5MB | 768 | 4.23ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 57% | 43% | 0.49 | 14% | 43% | 67% | — | — | 38.1% | 6.7s | 399.85 | 4.0MB | — | 1.16ms |
+| E0 | 57% | 33% | 0.44 | 14% | 29% | 67% | — | — | 28.6% | 151.6s | 17.64 | 7.8MB | 384 | 2.48ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 67% | 48% | 0.55 | 14% | 57% | 67% | — | — | 28.6% | 107.2s | 24.95 | 11.5MB | 768 | 4.23ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 72.9% of chunks carry call edges (4.24/chunk); `find_references`: type_refs 86%, extends 11%; call_sites 12398 (73% via a receiver).
 
@@ -101,16 +101,16 @@ Index: 2675 chunks · 1459 files · 21 scored queries (**sem n=7**) + held-out s
 Source: [https://github.com/react-bootstrap/react-bootstrap](https://github.com/react-bootstrap/react-bootstrap) @ `unpinned` (subdir-reduced clone) · subdirs: `src`  
 Index: 351 chunks · 141 files · 10 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 60% | 40% | 0.50 | 0% | 33% | 33% | 20.0% | 0.7s | 531.01 | 0.4MB | — | 0.21ms |
-| E0 | 60% | 40% | 0.52 | 0% | 33% | 67% | 20.0% | 19.8s | 17.71 | 0.9MB | 384 | 0.40ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 60% | 40% | 0.53 | 0% | 33% | 67% | 20.0% | 11.8s | 29.62 | 1.5MB | 768 | 0.90ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 60% | 40% | 0.50 | 0% | 33% | 33% | 50% | 80% | 20.0% | 0.7s | 478.2 | 0.4MB | — | 0.22ms |
+| E0 | 60% | 40% | 0.52 | 0% | 33% | 67% | — | — | 20.0% | 19.8s | 17.71 | 0.9MB | 384 | 0.40ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 60% | 40% | 0.53 | 0% | 33% | 67% | — | — | 20.0% | 11.8s | 29.62 | 1.5MB | 768 | 0.90ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 49.6% of chunks carry call edges (1.98/chunk); `find_references`: type_refs 85.8%, extends 0.3%; call_sites 702 (33.5% via a receiver).
 
@@ -121,16 +121,16 @@ Index: 351 chunks · 141 files · 10 scored queries (**sem n=3**) + held-out spl
 Source: [https://github.com/tiangolo/fastapi](https://github.com/tiangolo/fastapi) @ `0.103.0`  
 Index: 3694 chunks · 1005 files · 21 scored queries (**sem n=7**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 76% | 57% | 0.65 | 14% | 43% | 100% | 4.8% | 5.0s | 738.95 | 4.0MB | — | 1.07ms |
-| E0 | 71% | 71% | 0.73 | 43% | 43% | 67% | 9.5% | 166.8s | 22.15 | 7.7MB | 384 | 2.66ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 76% | 67% | 0.72 | 43% | 57% | 67% | 9.5% | 100.1s | 36.91 | 11.2MB | 768 | 5.30ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 76% | 57% | 0.65 | 14% | 43% | 100% | 62% | 71% | 4.8% | 5.5s | 667.99 | 4.2MB | — | 1.07ms |
+| E0 | 71% | 71% | 0.73 | 43% | 43% | 67% | — | — | 9.5% | 166.8s | 22.15 | 7.7MB | 384 | 2.66ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 76% | 67% | 0.72 | 43% | 57% | 67% | — | — | 9.5% | 100.1s | 36.91 | 11.2MB | 768 | 5.30ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 82.7% of chunks carry call edges (2.08/chunk); `find_references`: type_refs 17.8%, extends 10.9%; call_sites 7870 (64.7% via a receiver).
 
@@ -141,16 +141,16 @@ Index: 3694 chunks · 1005 files · 21 scored queries (**sem n=7**) + held-out s
 Source: [https://github.com/django-oscar/django-oscar](https://github.com/django-oscar/django-oscar) @ `unpinned` (subdir-reduced clone) · subdirs: `src/oscar/apps`  
 Index: 1381 chunks · 321 files · 9 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 78% | 67% | 0.72 | 33% | 67% | 0% | 11.1% | 2.1s | 667.15 | 1.9MB | — | 0.86ms |
-| E0 | 89% | 67% | 0.76 | 33% | 67% | 33% | 0.0% | 75.8s | 18.23 | 4.0MB | 384 | 1.48ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 78% | 67% | 0.74 | 33% | 67% | 0% | 11.1% | 45.5s | 30.34 | 6.0MB | 768 | 2.69ms |
-| O2 | 100% | 56% | 0.69 | 33% | 100% | 33% | 0.0% | 958.6s | 1.44 | 15.5MB | 2560 | 4.45ms |
-| R0 | 100% | 44% | 0.69 | 67% | 100% | 33% | 0.0% | reuse | — | 15.5MB | 2560 | 4.42ms |
-| R1 | 100% | 67% | 0.74 | 33% | 100% | 33% | 0.0% | 1666.2s | 0.83 | 20.6MB | 2560 | 5.79ms |
-| R2 | 89% | 56% | 0.69 | 67% | 67% | 33% | 0.0% | reuse | — | 20.6MB | 2560 | 5.83ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 78% | 67% | 0.72 | 33% | 67% | 0% | 78% | 89% | 11.1% | 2.3s | 608.1 | 1.9MB | — | 0.84ms |
+| E0 | 89% | 67% | 0.76 | 33% | 67% | 33% | — | — | 0.0% | 75.8s | 18.23 | 4.0MB | 384 | 1.48ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 78% | 67% | 0.74 | 33% | 67% | 0% | — | — | 11.1% | 45.5s | 30.34 | 6.0MB | 768 | 2.69ms |
+| O2 | 100% | 56% | 0.69 | 33% | 100% | 33% | — | — | 0.0% | 958.6s | 1.44 | 15.5MB | 2560 | 4.45ms |
+| R0 | 100% | 44% | 0.69 | 67% | 100% | 33% | — | — | 0.0% | reuse | — | 15.5MB | 2560 | 4.42ms |
+| R1 | 100% | 67% | 0.74 | 33% | 100% | 33% | — | — | 0.0% | 1666.2s | 0.83 | 20.6MB | 2560 | 5.79ms |
+| R2 | 89% | 56% | 0.69 | 67% | 67% | 33% | — | — | 0.0% | reuse | — | 20.6MB | 2560 | 5.83ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 84.1% of chunks carry call edges (4.4/chunk); `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 47.7%; call_sites 6418 (73.9% via a receiver).
 
@@ -161,16 +161,16 @@ Index: 1381 chunks · 321 files · 9 scored queries (**sem n=3**) + held-out spl
 Source: [https://github.com/gin-gonic/gin](https://github.com/gin-gonic/gin) @ `v1.9.1`  
 Index: 1088 chunks · 86 files · 18 scored queries (**sem n=5**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 100% | 67% | 0.76 | 20% | 100% | 67% | 0.0% | 1.2s | 935.51 | 1.0MB | — | 0.34ms |
-| E0 | 100% | 61% | 0.79 | 0% | 100% | 67% | 0.0% | 57.2s | 19.01 | 2.7MB | 384 | 0.76ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 100% | 67% | 0.78 | 20% | 100% | 67% | 0.0% | 35.2s | 30.9 | 4.3MB | 768 | 1.80ms |
-| O2 | 100% | 72% | 0.84 | 20% | 100% | 67% | 0.0% | 752.0s | 1.45 | 11.7MB | 2560 | 3.34ms |
-| R0 | 100% | 89% | 0.93 | 80% | 100% | 67% | 0.0% | reuse | — | 11.7MB | 2560 | 3.35ms |
-| R1 | 89% | 67% | 0.77 | 20% | 80% | 67% | 11.1% | 1072.2s | 1.01 | 14.4MB | 2560 | 4.03ms |
-| R2 | 94% | 78% | 0.83 | 60% | 100% | 67% | 5.6% | reuse | — | 14.4MB | 2560 | 4.03ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 100% | 67% | 0.76 | 20% | 100% | 67% | 61% | 83% | 0.0% | 1.2s | 940.36 | 1.0MB | — | 0.33ms |
+| E0 | 100% | 61% | 0.79 | 0% | 100% | 67% | — | — | 0.0% | 57.2s | 19.01 | 2.7MB | 384 | 0.76ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 100% | 67% | 0.78 | 20% | 100% | 67% | — | — | 0.0% | 35.2s | 30.9 | 4.3MB | 768 | 1.80ms |
+| O2 | 100% | 72% | 0.84 | 20% | 100% | 67% | — | — | 0.0% | 752.0s | 1.45 | 11.7MB | 2560 | 3.34ms |
+| R0 | 100% | 89% | 0.93 | 80% | 100% | 67% | — | — | 0.0% | reuse | — | 11.7MB | 2560 | 3.35ms |
+| R1 | 89% | 67% | 0.77 | 20% | 80% | 67% | — | — | 11.1% | 1072.2s | 1.01 | 14.4MB | 2560 | 4.03ms |
+| R2 | 94% | 78% | 0.83 | 60% | 100% | 67% | — | — | 5.6% | reuse | — | 14.4MB | 2560 | 4.03ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 62% of chunks carry call edges (1.03/chunk); `find_references`: type_refs 87.9%, extends 0.6%; call_sites 1125 (0% via a receiver).
 
@@ -181,16 +181,16 @@ Index: 1088 chunks · 86 files · 18 scored queries (**sem n=5**) + held-out spl
 Source: [https://github.com/serde-rs/json](https://github.com/serde-rs/json) @ `a1ae73ac6a`  
 Index: 914 chunks · 58 files · 12 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 67% | 58% | 0.64 | 0% | 0% | 0% | 16.7% | 1.2s | 764.85 | 0.9MB | — | 0.49ms |
-| E0 | 67% | 50% | 0.59 | 0% | 0% | 0% | 16.7% | 48.1s | 19.01 | 2.2MB | 384 | 0.98ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 75% | 67% | 0.69 | 0% | 0% | 0% | 16.7% | 29.3s | 31.19 | 3.6MB | 768 | 1.96ms |
-| O2 | 75% | 58% | 0.64 | 0% | 0% | 0% | 16.7% | 618.9s | 1.48 | 9.7MB | 2560 | 3.20ms |
-| R0 | 75% | 58% | 0.64 | 0% | 0% | 0% | 16.7% | reuse | — | 9.7MB | 2560 | 3.18ms |
-| R1 | 75% | 67% | 0.72 | 0% | 0% | 0% | 16.7% | 1233.0s | 0.74 | 14.8MB | 2560 | 4.57ms |
-| R2 | 83% | 75% | 0.79 | 33% | 33% | 0% | 16.7% | reuse | — | 14.8MB | 2560 | 4.49ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 67% | 58% | 0.64 | 0% | 0% | 0% | — | — | 16.7% | 1.2s | 784.55 | 0.9MB | — | 0.49ms |
+| E0 | 67% | 50% | 0.59 | 0% | 0% | 0% | — | — | 16.7% | 48.1s | 19.01 | 2.2MB | 384 | 0.98ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 75% | 67% | 0.69 | 0% | 0% | 0% | — | — | 16.7% | 29.3s | 31.19 | 3.6MB | 768 | 1.96ms |
+| O2 | 75% | 58% | 0.64 | 0% | 0% | 0% | — | — | 16.7% | 618.9s | 1.48 | 9.7MB | 2560 | 3.20ms |
+| R0 | 75% | 58% | 0.64 | 0% | 0% | 0% | — | — | 16.7% | reuse | — | 9.7MB | 2560 | 3.18ms |
+| R1 | 75% | 67% | 0.72 | 0% | 0% | 0% | — | — | 16.7% | 1233.0s | 0.74 | 14.8MB | 2560 | 4.57ms |
+| R2 | 83% | 75% | 0.79 | 33% | 33% | 0% | — | — | 16.7% | reuse | — | 14.8MB | 2560 | 4.49ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 53.5% of chunks carry call edges (0.96/chunk); `find_references`: type_refs 86%, extends 26.1%; call_sites 877 (0% via a receiver).
 
@@ -201,16 +201,16 @@ Index: 914 chunks · 58 files · 12 scored queries (**sem n=3**) + held-out spli
 Source: [https://github.com/spring-projects/spring-petclinic](https://github.com/spring-projects/spring-petclinic) @ `a2c2ef9943`  
 Index: 1174 chunks · 47 files · 11 scored queries (**sem n=4**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 100% | 64% | 0.75 | 25% | 100% | 67% | 0.0% | 0.6s | 2006.84 | 1.5MB | — | 1.28ms |
-| E0 | 100% | 64% | 0.78 | 25% | 100% | 67% | 0.0% | 48.2s | 24.35 | 3.3MB | 384 | 1.83ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 100% | 64% | 0.75 | 25% | 100% | 67% | 0.0% | 45.0s | 26.09 | 5.0MB | 768 | 2.69ms |
-| O2 | 100% | 64% | 0.75 | 25% | 100% | 67% | 0.0% | 379.1s | 3.1 | 13.0MB | 2560 | 4.05ms |
-| R0 | 100% | 82% | 0.88 | 75% | 100% | 100% | 0.0% | reuse | — | 13.0MB | 2560 | 4.10ms |
-| R1 | 100% | 64% | 0.76 | 25% | 100% | 100% | 0.0% | 1130.6s | 1.04 | 16.3MB | 2560 | 5.26ms |
-| R2 | 91% | 82% | 0.88 | 75% | 75% | 100% | 0.0% | reuse | — | 16.3MB | 2560 | 5.19ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 100% | 64% | 0.75 | 25% | 100% | 67% | — | — | 0.0% | 0.6s | 2088.97 | 1.5MB | — | 1.25ms |
+| E0 | 100% | 64% | 0.78 | 25% | 100% | 67% | — | — | 0.0% | 48.2s | 24.35 | 3.3MB | 384 | 1.83ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 100% | 64% | 0.75 | 25% | 100% | 67% | — | — | 0.0% | 45.0s | 26.09 | 5.0MB | 768 | 2.69ms |
+| O2 | 100% | 64% | 0.75 | 25% | 100% | 67% | — | — | 0.0% | 379.1s | 3.1 | 13.0MB | 2560 | 4.05ms |
+| R0 | 100% | 82% | 0.88 | 75% | 100% | 100% | — | — | 0.0% | reuse | — | 13.0MB | 2560 | 4.10ms |
+| R1 | 100% | 64% | 0.76 | 25% | 100% | 100% | — | — | 0.0% | 1130.6s | 1.04 | 16.3MB | 2560 | 5.26ms |
+| R2 | 91% | 82% | 0.88 | 75% | 75% | 100% | — | — | 0.0% | reuse | — | 16.3MB | 2560 | 5.19ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 2.7% of chunks carry call edges (0.36/chunk) — **call-graph degraded (verified): edges resolve callers but the callee is not its own chunk; see canonical table**; `find_references`: type_refs 3.6%, extends 1.1%; call_sites 587 (87.7% via a receiver).
 
@@ -221,16 +221,16 @@ Index: 1174 chunks · 47 files · 11 scored queries (**sem n=4**) + held-out spl
 Source: [https://github.com/android/sunflower](https://github.com/android/sunflower) @ `unpinned` (subdir-reduced clone) · subdirs: `app/src/main/java`  
 Index: 72 chunks · 40 files · 11 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 91% | 64% | 0.74 | 33% | 100% | 100% | 0.0% | 0.4s | 193.03 | 0.1MB | — | 0.08ms |
-| E0 | 91% | 64% | 0.76 | 33% | 100% | 100% | 0.0% | 4.3s | 16.56 | 0.2MB | 384 | 0.12ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 91% | 55% | 0.73 | 33% | 100% | 100% | 0.0% | 3.1s | 23.4 | 0.3MB | 768 | 0.40ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 91% | 64% | 0.74 | 33% | 100% | 100% | — | — | 0.0% | 0.4s | 203.39 | 0.1MB | — | 0.08ms |
+| E0 | 91% | 64% | 0.76 | 33% | 100% | 100% | — | — | 0.0% | 4.3s | 16.56 | 0.2MB | 384 | 0.12ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 91% | 55% | 0.73 | 33% | 100% | 100% | — | — | 0.0% | 3.1s | 23.4 | 0.3MB | 768 | 0.40ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 80.6% of chunks carry call edges (3.38/chunk); `find_references`: type_refs 100%, extends 18.1%; call_sites 243 (0% via a receiver).
 
@@ -241,22 +241,18 @@ Index: 72 chunks · 40 files · 11 scored queries (**sem n=3**) + held-out split
 Source: [https://github.com/dotnet-architecture/eShopOnWeb](https://github.com/dotnet-architecture/eShopOnWeb) @ `unpinned` (subdir-reduced clone) · subdirs: `src`  
 Index: 373 chunks · 224 files · 10 scored queries (**sem n=2**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 90% | 60% | 0.70 | 50% | 100% | 67% | 0.0% | 1.4s | 261.94 | 0.4MB | — | 0.16ms |
-| E0 | 90% | 60% | 0.72 | 50% | 100% | 67% | 0.0% | 21.3s | 17.54 | 0.9MB | 384 | 0.34ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 90% | 60% | 0.72 | 50% | 100% | 100% | 0.0% | 11.8s | 31.68 | 1.5MB | 768 | 0.92ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 90% | 50% | 0.62 | 0% | 100% | 67% | 50% | 90% | 0.0% | 1.5s | 254.43 | 0.5MB | — | 0.17ms |
+| E0 | 90% | 60% | 0.71 | 50% | 100% | 67% | 60% | 90% | 0.0% | 22.7s | 16.45 | 1.0MB | 384 | 0.35ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 90% | 60% | 0.72 | 50% | 100% | 100% | 60% | 90% | 0.0% | 12.7s | 29.36 | 1.6MB | 768 | 0.89ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
-**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0% of chunks carry call edges (0/chunk) — **call-graph empty (0 edges, verified by invocation)**; `find_references`: type_refs **82.6%** (200/242 C# chunks carry ≥1 type ref, avg 2.89/chunk — measured on the re-indexed fixture), extends 32.2%; call_sites: none.
-
-> **C# type_refs — before/after.** C# spells type names as bare `identifier`/`generic_name`, so the shared cross-language `type_identifier` walk yielded **0% (empty)** for C#. `extractTypeAnnotations` now has a `.cs`-gated branch that reads types from the field-precise positions where an identifier IS a type — a `parameter`/`field`/`property`/local's `type`, a method's `returns`, and the class `base_list` — skipping `predefined_type`/`var` primitives and keeping PascalCase names. Result on aspnet: **type_refs 0% → 82.6%** of C# chunks (over the full 373-chunk index incl. 131 css/scss chunks that carry no types: 53.6%). `extends` is unchanged at 32.2% (heritage extraction untouched) and all non-C# fixtures are byte-identical (the branch never fires off `.cs`). The change is additive: `find_references` on a C# class now surfaces type users (params, fields, properties, returns, generics, implemented interfaces), not just inheritance.
-
-> **HTTP routes (`find_routes`).** aspnet reports **0 routes** — eShopOnWeb is ASP.NET MVC/Razor and routes via C# `[HttpGet]`/`[Route]` attributes, which are outside the `find_routes` scope (NestJS/Angular, FastAPI/Flask, Spring, Express/Koa). Route detection is exercised on the nestjs/fastapi/spring/express fixtures and in `test/routes.mjs`.
+**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 38.1% of chunks carry call edges (2.62/chunk); `find_references`: type_refs 53.6%, extends 32.2%; call_sites 1532 (91.1% via a receiver).
 
 **Backend parity (P):** ✓ memory vs SQLite top-5 byte-identical across all 13 queries.
 
@@ -265,16 +261,16 @@ Index: 373 chunks · 224 files · 10 scored queries (**sem n=2**) + held-out spl
 Source: [https://github.com/mastodon/mastodon](https://github.com/mastodon/mastodon) @ `unpinned` (subdir-reduced clone) · subdirs: `app/controllers, app/models, app/services, app/serializers, app/workers, app/lib, app/policies, app/helpers, app/mailers, app/validators, app/presenters`  
 Index: 7071 chunks · 1234 files · 12 scored queries (**sem n=5**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 67% | 42% | 0.53 | 0% | 20% | 33% | 8.3% | 6.7s | 1060.92 | 6.9MB | — | 2.16ms |
-| E0 | 58% | 33% | 0.46 | 0% | 20% | 67% | 16.7% | 355.4s | 19.9 | 17.0MB | 384 | 2.98ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 67% | 33% | 0.47 | 0% | 20% | 33% | 8.3% | 173.2s | 40.84 | 26.7MB | 768 | 3.58ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 67% | 42% | 0.53 | 0% | 20% | 33% | 33% | 67% | 8.3% | 6.4s | 1113.37 | 6.9MB | — | 2.14ms |
+| E0 | 58% | 33% | 0.46 | 0% | 20% | 67% | — | — | 16.7% | 355.4s | 19.9 | 17.0MB | 384 | 2.98ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 67% | 33% | 0.47 | 0% | 20% | 33% | — | — | 8.3% | 173.2s | 40.84 | 26.7MB | 768 | 3.58ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 73.8% of chunks carry call edges (2.4/chunk); `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 11.9%; call_sites 16982 (0% via a receiver).
 
@@ -283,40 +279,40 @@ Index: 7071 chunks · 1234 files · 12 scored queries (**sem n=5**) + held-out s
 ## laravel — PHP/Laravel
 
 Source: [https://github.com/koel/koel](https://github.com/koel/koel) @ `unpinned` (subdir-reduced clone) · subdirs: `app/Models, app/Services, app/Http, app/Repositories, app/Providers, app/Console, app/Events, app/Listeners, app/Policies, app/Rules, app/Values, app/Builders, app/Facades, app/Exceptions`  
-Index: 699 chunks · 699 files · 11 scored queries (**sem n=3**) + held-out split.
+Index: 861 chunks · 721 files · 11 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 55% | 45% | 0.54 | 0% | 33% | 33% | 27.3% | 2.0s | 344.5 | 0.9MB | — | 0.37ms |
-| E0 | 73% | 55% | 0.60 | 33% | 33% | 33% | 9.1% | 38.7s | 18.08 | 2.0MB | 384 | 0.85ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 73% | 55% | 0.61 | 33% | 33% | 33% | 9.1% | 29.1s | 23.99 | 3.0MB | 768 | 1.58ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 55% | 55% | 0.57 | 33% | 33% | 33% | 55% | 64% | 27.3% | 2.1s | 400.84 | 1.3MB | — | 0.46ms |
+| E0 | 73% | 55% | 0.60 | 33% | 33% | 33% | 64% | 73% | 9.1% | 47.8s | 18.01 | 2.6MB | 384 | 0.98ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 82% | 55% | 0.61 | 33% | 33% | 33% | 55% | 82% | 0.0% | 33.5s | 25.74 | 3.9MB | 768 | 1.86ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
-**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0% of chunks carry call edges (0/chunk) — **call-graph empty (0 edges, verified by invocation)**; `find_references`: type_refs 72.2%, extends 81.1%; call_sites: none.
+**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 82.1% of chunks carry call edges (5.45/chunk); `find_references`: type_refs 73.1%, extends 65.9%; call_sites 5198 (83.6% via a receiver).
 
 **Backend parity (P):** ✓ memory vs SQLite top-5 byte-identical across all 14 queries.
 
 ## symfony — PHP/Symfony
 
 Source: [https://github.com/symfony/symfony](https://github.com/symfony/symfony) @ `unpinned` (subdir-reduced clone) · subdirs: `src/Symfony/Component/HttpKernel`  
-Index: 407 chunks · 307 files · 12 scored queries (**sem n=3**) + held-out split.
+Index: 1357 chunks · 307 files · 12 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 75% | 67% | 0.73 | 33% | 67% | 50% | 0.0% | 2.4s | 171.66 | 0.6MB | — | 0.29ms |
-| E0 | 92% | 75% | 0.80 | 67% | 67% | 50% | 0.0% | 23.9s | 17.01 | 1.2MB | 384 | 0.49ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 92% | 83% | 0.88 | 67% | 67% | 50% | 0.0% | 22.0s | 18.54 | 1.8MB | 768 | 1.07ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 75% | 67% | 0.73 | 33% | 67% | 50% | 67% | 75% | 0.0% | 3.4s | 397.71 | 2.2MB | — | 0.81ms |
+| E0 | 75% | 75% | 0.78 | 67% | 67% | 50% | 75% | 75% | 0.0% | 76.5s | 17.74 | 4.3MB | 384 | 1.59ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 83% | 75% | 0.81 | 67% | 67% | 50% | 75% | 83% | 0.0% | 57.1s | 23.76 | 6.3MB | 768 | 2.58ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
-**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0% of chunks carry call edges (0/chunk) — **call-graph empty (0 edges, verified by invocation)**; `find_references`: type_refs 58.7%, extends 75.4%; call_sites: none.
+**Structural channels** (authoritative verdicts in the canonical table above): call-graph: 79.1% of chunks carry call edges (7/chunk); `find_references`: type_refs 35.2%, extends 23.2%; call_sites 10211 (86% via a receiver).
 
 **Backend parity (P):** ✓ memory vs SQLite top-5 byte-identical across all 16 queries.
 
@@ -325,16 +321,16 @@ Index: 407 chunks · 307 files · 12 scored queries (**sem n=3**) + held-out spl
 Source: [https://github.com/twbs/bootstrap](https://github.com/twbs/bootstrap) @ `unpinned` (subdir-reduced clone) · subdirs: `scss`  
 Index: 440 chunks · 85 files · 11 scored queries (**sem n=4**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 82% | 36% | 0.50 | 25% | 50% | 67% | 9.1% | 0.4s | 1078.43 | 0.3MB | — | 0.18ms |
-| E0 | 82% | 45% | 0.57 | 50% | 50% | 67% | 9.1% | 21.3s | 20.62 | 1.0MB | 384 | 0.38ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 82% | 45% | 0.55 | 50% | 50% | 100% | 0.0% | 10.5s | 41.73 | 1.6MB | 768 | 1.00ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 82% | 36% | 0.50 | 25% | 50% | 67% | 55% | 91% | 9.1% | 0.4s | 1042.65 | 0.3MB | — | 0.17ms |
+| E0 | 82% | 45% | 0.57 | 50% | 50% | 67% | — | — | 9.1% | 21.3s | 20.62 | 1.0MB | 384 | 0.38ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 82% | 45% | 0.55 | 50% | 50% | 100% | — | — | 0.0% | 10.5s | 41.73 | 1.6MB | 768 | 1.00ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 0.7% of chunks carry call edges (0.01/chunk) — **call-graph degraded (verified): edges resolve callers but the callee is not its own chunk; see canonical table**; `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 0%; call_sites 6 (83.3% via a receiver).
 
@@ -345,16 +341,16 @@ Index: 440 chunks · 85 files · 11 scored queries (**sem n=4**) + held-out spli
 Source: [https://github.com/DaveGamble/cJSON](https://github.com/DaveGamble/cJSON) @ `fb16e5cf35`  
 Index: 562 chunks · 54 files · 12 scored queries (**sem n=4**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 58% | 50% | 0.56 | 25% | 25% | 0% | 41.7% | 0.8s | 696.41 | 1.1MB | — | 0.61ms |
-| E0 | 67% | 42% | 0.52 | 25% | 50% | 0% | 33.3% | 30.4s | 18.51 | 1.9MB | 384 | 0.81ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 67% | 50% | 0.57 | 25% | 50% | 0% | 33.3% | 31.6s | 17.78 | 2.8MB | 768 | 1.43ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 58% | 50% | 0.56 | 25% | 25% | 0% | — | — | 41.7% | 0.8s | 728.92 | 1.1MB | — | 0.56ms |
+| E0 | 67% | 42% | 0.52 | 25% | 50% | 0% | — | — | 33.3% | 30.4s | 18.51 | 1.9MB | 384 | 0.81ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 67% | 50% | 0.57 | 25% | 50% | 0% | — | — | 33.3% | 31.6s | 17.78 | 2.8MB | 768 | 1.43ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 83.1% of chunks carry call edges (3.38/chunk); `find_references`: type_refs 9.3%, extends 0%; call_sites 1918 (2.5% via a receiver).
 
@@ -365,16 +361,16 @@ Index: 562 chunks · 54 files · 12 scored queries (**sem n=4**) + held-out spli
 Source: [https://github.com/nvm-sh/nvm](https://github.com/nvm-sh/nvm) @ `a6ec739430`  
 Index: 158 chunks · 5 files · 12 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 75% | 42% | 0.58 | 33% | 67% | 100% | 25.0% | 0.4s | 435.26 | 0.2MB | — | 0.19ms |
-| E0 | 83% | 58% | 0.71 | 67% | 67% | 67% | 16.7% | 8.9s | 17.84 | 0.5MB | 384 | 0.33ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 83% | 58% | 0.73 | 67% | 67% | 100% | 16.7% | 8.6s | 18.36 | 0.7MB | 768 | 0.62ms |
-| O2 | not run (costly — subset only) | | | | | | | | | | |
-| R0 | not run (costly — subset only) | | | | | | | | | | |
-| R1 | not run (costly — subset only) | | | | | | | | | | |
-| R2 | not run (costly — subset only) | | | | | | | | | | |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 75% | 42% | 0.58 | 33% | 67% | 100% | — | — | 25.0% | 0.3s | 455.33 | 0.2MB | — | 0.19ms |
+| E0 | 83% | 58% | 0.71 | 67% | 67% | 67% | — | — | 16.7% | 8.9s | 17.84 | 0.5MB | 384 | 0.33ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 83% | 58% | 0.73 | 67% | 67% | 100% | — | — | 16.7% | 8.6s | 18.36 | 0.7MB | 768 | 0.62ms |
+| O2 | not run (costly — subset only) | | | | | | | | | | | | |
+| R0 | not run (costly — subset only) | | | | | | | | | | | | |
+| R1 | not run (costly — subset only) | | | | | | | | | | | | |
+| R2 | not run (costly — subset only) | | | | | | | | | | | | |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 79.7% of chunks carry call edges (3.34/chunk); `find_references`: type_refs 0% (**empty** — type-usage refs not extracted; verified), extends 0%; call_sites 528 (0% via a receiver).
 
@@ -385,16 +381,16 @@ Index: 158 chunks · 5 files · 12 scored queries (**sem n=3**) + held-out split
 Source: [https://github.com/Alamofire/Alamofire](https://github.com/Alamofire/Alamofire) @ `unpinned` (subdir-reduced clone) · subdirs: `Source`  
 Index: 568 chunks · 43 files · 12 scored queries (**sem n=3**) + held-out split.
 
-| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file-only | build | ch/s | size | dim | p50 lat |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L1 | 83% | 75% | 0.77 | 67% | 100% | 67% | 8.3% | 1.0s | 543.54 | 1.3MB | — | 0.54ms |
-| E0 | 83% | 75% | 0.79 | 67% | 100% | 67% | 8.3% | 31.0s | 18.35 | 2.2MB | 384 | 0.86ms |
-| E1 | not run (jina q8 not shipped) | | | | | | | | | | |
-| O0 | 83% | 75% | 0.77 | 67% | 100% | 67% | 8.3% | 34.9s | 16.29 | 3.0MB | 768 | 1.36ms |
-| O2 | 83% | 75% | 0.78 | 67% | 100% | 67% | 8.3% | 772.3s | 0.74 | 6.9MB | 2560 | 2.12ms |
-| R0 | 83% | 83% | 0.83 | 100% | 100% | 100% | 8.3% | reuse | — | 6.9MB | 2560 | 2.14ms |
-| R1 | 83% | 75% | 0.77 | 67% | 100% | 67% | 8.3% | 1441.2s | 0.39 | 11.7MB | 2560 | 3.47ms |
-| R2 | 83% | 83% | 0.83 | 100% | 100% | 100% | 8.3% | reuse | — | 11.7MB | 2560 | 3.48ms |
+| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L1 | 83% | 75% | 0.77 | 67% | 100% | 67% | — | — | 8.3% | 1.0s | 550.92 | 1.3MB | — | 0.54ms |
+| E0 | 83% | 75% | 0.79 | 67% | 100% | 67% | — | — | 8.3% | 31.0s | 18.35 | 2.2MB | 384 | 0.86ms |
+| E1 | not run (jina q8 not shipped) | | | | | | | | | | | | |
+| O0 | 83% | 75% | 0.77 | 67% | 100% | 67% | — | — | 8.3% | 34.9s | 16.29 | 3.0MB | 768 | 1.36ms |
+| O2 | 83% | 75% | 0.78 | 67% | 100% | 67% | — | — | 8.3% | 772.3s | 0.74 | 6.9MB | 2560 | 2.12ms |
+| R0 | 83% | 83% | 0.83 | 100% | 100% | 100% | — | — | 8.3% | reuse | — | 6.9MB | 2560 | 2.14ms |
+| R1 | 83% | 75% | 0.77 | 67% | 100% | 67% | — | — | 8.3% | 1441.2s | 0.39 | 11.7MB | 2560 | 3.47ms |
+| R2 | 83% | 83% | 0.83 | 100% | 100% | 100% | — | — | 8.3% | reuse | — | 11.7MB | 2560 | 3.48ms |
 
 **Structural channels** (authoritative verdicts in the canonical table above): call-graph: 82.7% of chunks carry call edges (3.62/chunk); `find_references`: type_refs 97.7%, extends 23.9%; call_sites 2276 (53.4% via a receiver).
 

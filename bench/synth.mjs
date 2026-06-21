@@ -22,13 +22,11 @@ const FIX_ORDER = ['axios', 'express-js', 'nestjs', 'react', 'fastapi', 'django'
 const prov = JSON.parse(fs.readFileSync(path.join(__dirname, 'provenance.json'), 'utf8'));
 const parity = fs.existsSync(path.join(RES, 'parity.json')) ? JSON.parse(fs.readFileSync(path.join(RES, 'parity.json'), 'utf8')) : {};
 const structural = fs.existsSync(path.join(RES, 'structural.json')) ? JSON.parse(fs.readFileSync(path.join(RES, 'structural.json'), 'utf8')) : {};
-// Invocation-verified structural categories (bench/verify-structural.mjs): the
-// authoritative call_graph / type_refs verdicts, each confirmed by calling the
-// real tool on the fixture (not by reading a field — which produced earlier false
-// positives). These drive the canonical structural-coverage table.
+// Invocation-verified: calling the real tool (not reading a field) avoids the
+// false positives produced by earlier field-reading approach (macOS grep treating
+// mcp/tools.mjs as binary; recv vs receiver_type mismatch).
 const verify = fs.existsSync(path.join(RES, 'verify-structural.json')) ? JSON.parse(fs.readFileSync(path.join(RES, 'verify-structural.json'), 'utf8')) : {};
-// Docs now live in test/ (moved by the maintainer). Write them there.
-const DOCS = path.join(ROOT, 'test');
+const DOCS = path.join(ROOT, 'docs', 'benchmarks');
 
 const f2 = (x) => (x == null ? '—' : x.toFixed(2));
 const pc = (x) => (x == null ? '—' : `${(x * 100).toFixed(0)}%`);
@@ -115,15 +113,13 @@ function canonicalStructuralTable() {
     }
     return T.join('\n');
 }
-// Reconciled gap sets, derived from the invocation-verified categories (NOT from a
-// raw <1% threshold, which mis-classified css and spring).
-const NO_CALLGRAPH = FIX_ORDER.filter(fx => verify[fx]?.callGraph?.category === 'none');         // 0 call edges
-const DEGRADED_CALLGRAPH = FIX_ORDER.filter(fx => verify[fx]?.callGraph?.category === 'degraded'); // edges, coarse granularity
+// NOT derived from a raw <1% threshold, which mis-classified css and spring.
+const NO_CALLGRAPH = FIX_ORDER.filter(fx => verify[fx]?.callGraph?.category === 'none');
+const DEGRADED_CALLGRAPH = FIX_ORDER.filter(fx => verify[fx]?.callGraph?.category === 'degraded');
 const EMPTY_TYPEREFS = FIX_ORDER.filter(fx => verify[fx]?.findReferences?.category === 'empty');
 
-// Real per-language semantic query counts (the denominator behind every `sem`
-// figure). Computed, never hardcoded, so the caveat text can't drift from the data
-// (e.g. aspnet has sem n=2 → a single query is worth 50 points, not 33).
+// Computed rather than hardcoded so caveat text can't drift from the data
+// (e.g. aspnet sem n=2 → a single query is worth 50 points, not 33).
 const SEM_NS = FIX_ORDER.map(fx => derive(cell(fx, 'L1'))).filter(d => d.ok && d.semN != null).map(d => d.semN);
 const SEM_N_LO = Math.min(...SEM_NS), SEM_N_HI = Math.max(...SEM_NS);
 const SEM_N_PHRASE = `n=${SEM_N_LO}–${SEM_N_HI}`;
@@ -139,7 +135,7 @@ function languagesDoc() {
 
     // ── Canonical structural-coverage table (authoritative) ──
     L.push('## Canonical structural-coverage table (authoritative)\n');
-    L.push('One row per fixture; **the single source of truth for structural gaps**. Every `none` / `empty` / `degraded` verdict was confirmed by **invoking the actual tool** (`get_call_graph` / `find_references`) on the fixture\'s real index via `bench/verify-structural.mjs` — not by reading a field (the method that previously produced false positives: macOS `grep` treating `mcp-tools.mjs` as binary; the `recv` vs `receiver_type` mismatch). Where any other doc or section disagreed, **this table is the correction**.\n');
+    L.push('One row per fixture; **the single source of truth for structural gaps**. Every `none` / `empty` / `degraded` verdict was confirmed by **invoking the actual tool** (`get_call_graph` / `find_references`) on the fixture\'s real index via `bench/verify-structural.mjs` — not by reading a field (the method that previously produced false positives: macOS `grep` treating `mcp/tools.mjs` as binary; the `recv` vs `receiver_type` mismatch). Where any other doc or section disagreed, **this table is the correction**.\n');
     L.push(canonicalStructuralTable());
     L.push('\n**Legend.** `call_graph edges`: **yes** = `get_call_graph` resolves callers · **none** = index has zero call edges (tool returns nothing for any symbol) · **degraded (class-granular)†** = call edges exist and resolve callers, but the language is chunked at class granularity so the callee method is not its own node · **none (N trivial)‡** = only N outbound edges, none resolving to an indexed definition. `type_refs channel`: **populated** = ≥1 chunk carries `type_refs` (type-usage refs extractable) · **empty** = no chunk carries any `type_refs` (`find_references` degrades to callers + `extends`). `callers resolution`: **receiver-aware** = a meaningful share of `call_sites` carry a receiver (high-confidence caller classification) · **mixed** / **name-only** = lower / zero receiver share · **none** = no usable call edges. `inheritance`: `extends` populated (subclass/implements refs) or n/a (language has no inheritance / none indexed).\n');
     L.push('> **† spring (Java):** 426 method-call edges exist and every callee name resolves callers, but spring-petclinic\'s Java is chunked at *class* granularity (god-class split only fires ≥200 lines), so the callee method is not its own chunk and callers attribute at class level. The fixture is also SCSS-diluted (1132 of 1174 chunks are `rule_set`). **‡ css (SCSS):** 6 outbound `@include`/`@function` edges, none resolving to an indexed definition — `get_call_graph` is effectively empty for SCSS.\n');
@@ -155,7 +151,6 @@ function languagesDoc() {
         L.push(`Source: ${provLine(fx)}  `);
         L.push(`Index: ${chunks ?? '?'} chunks · ${files ?? '?'} files · ${qn} scored queries (**sem n=${semN}**) + held-out split.\n`);
 
-        // config table
         L.push('| Config | s@5 | r1 | MRR | sem r1 | sem s@5 | held r1 | file@1 | file@5 | file-only | build | ch/s | size | dim | p50 lat |');
         L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
         for (const cfg of CONFIG_ORDER) {
@@ -169,7 +164,6 @@ function languagesDoc() {
             L.push(`| ${cfg} | ${pc(d.s5)} | ${pc(d.r1)} | ${f2(d.mrr)} | ${pc(d.semR1)} | ${pc(d.semS5)} | ${pc(d.heldR1)} | ${d.fileHit1 != null ? pc(d.fileHit1) : '—'} | ${d.fileHit5 != null ? pc(d.fileHit5) : '—'} | ${pc1(d.foPct)} | ${secs(d.buildMs)} | ${d.thr ?? '—'} | ${mb(d.sizeBytes)} | ${d.dim ?? '—'} | ${d.latMed != null ? d.latMed.toFixed(2) + 'ms' : '—'} |`);
         }
 
-        // structural channel
         const s = structural[fx];
         if (s) {
             const cgCat = verify[fx]?.callGraph?.category;
@@ -182,7 +176,6 @@ function languagesDoc() {
                 + `\`find_references\`: type_refs ${s.typeRefChannel.typeRefsPct}%${trEmpty ? ' (**empty** — type-usage refs not extracted; verified)' : ''}, extends ${s.typeRefChannel.extendsPct}%; `
                 + (s.callSites.total ? `call_sites ${s.callSites.total} (${s.callSites.withReceiverPct}% via a receiver)` : 'call_sites: none') + '.');
         }
-        // parity
         const pr = parity[fx];
         if (pr) L.push(`\n**Backend parity (P):** ${pr.ok ? `✓ memory vs SQLite top-5 byte-identical across all ${pr.queries} queries.` : `✗ **PARITY BROKEN** on ${pr.mismatches.length}/${pr.queries} queries (defect).`}`);
     }
@@ -215,7 +208,6 @@ function summaryDoc() {
     S.push('- **Held-out discipline:** each language has a held-out split (~20–25%) reported separately, never used to tune.');
     S.push('- **No tuning, no fabrication:** ranking code is byte-identical to HEAD (only `test/evaluate.mjs` test-harness flags were added); every expected symbol was verified against the real index by `bench/verify-suite.mjs`; every cell is extracted, never estimated.\n');
 
-    // master table: default-path L1 + best-achievable
     S.push('## Per-language: default path (L1) vs best-achievable\n');
     S.push('`sem n` = number of scored semantic queries for that language (the denominator behind every `sem` figure). `sym n` is correspondingly the larger symbolic denominator. Semantic columns are directional at these n; symbolic is the reliable channel.\n');
     S.push('| Language | fixture | sym n | L1 sym r1 | sem n | L1 sem r1 | L1 sem s@5 | L1 file@5 | best sem r1 (config) | best sem s@5 (config) |');
@@ -224,7 +216,6 @@ function summaryDoc() {
     for (const fx of FIX_ORDER) {
         const p = prov[fx]; if (!p) continue;
         const l1 = derive(cell(fx, 'L1')); if (!l1.ok) continue;
-        // best semantic across all present+ok configs
         let bestR1 = { v: l1.semR1, cfg: 'L1' }, bestS5 = { v: l1.semS5, cfg: 'L1' };
         for (const cfg of CONFIG_ORDER) {
             const d = derive(cell(fx, cfg)); if (!d.ok) continue;
@@ -236,7 +227,6 @@ function summaryDoc() {
         S.push(`| ${p.language} | ${fx} | ${l1.symN} | ${pc(l1.symR1)} | ${l1.semN} | ${pc(l1.semR1)} | ${pc(l1.semS5)} | ${fh5} | ${pc(bestR1.v)} (${bestR1.cfg}) | ${pc(bestS5.v)} (${bestS5.cfg}) |`);
     }
 
-    // cross-language spread
     const arr = (sel) => rowsForAvg.map(sel).filter(x => x != null);
     const stat = (xs) => xs.length ? { mean: xs.reduce((a, b) => a + b, 0) / xs.length, min: Math.min(...xs), max: Math.max(...xs) } : null;
     const symR1 = stat(arr(r => r.l1.symR1)), semR1 = stat(arr(r => r.l1.semR1)), semS5 = stat(arr(r => r.l1.semS5));
@@ -251,15 +241,15 @@ function summaryDoc() {
         S.push(`\n_Averaged over ${rowsForAvg.length} languages. **The semantic means are over small per-language sets (sem n=${Math.min(...semNs)}–${Math.max(...semNs)}, ${semNs.reduce((a, b) => a + b, 0)} semantic queries total)** — the spread is wide and a single mean hides it, which is why the per-language numbers (with their n) exist._`);
     }
 
-    // weaknesses — sets are the invocation-verified canonical ones (NO_CALLGRAPH /
-    // DEGRADED_CALLGRAPH / EMPTY_TYPEREFS), consistent with the canonical table.
+    // Use the invocation-verified canonical sets (not re-derived here) so this
+    // section stays consistent with the canonical structural-coverage table.
     S.push('\n## Where each language is weak\n');
     S.push('_Structural verdicts below are the canonical, invocation-verified ones (full table in BENCH_LANGUAGES.md)._\n');
     if (NO_CALLGRAPH.length) S.push(`- **No call-graph extraction (zero call edges):** ${NO_CALLGRAPH.join(', ')} — \`get_call_graph\` returns nothing for any symbol (C#, PHP). Verified by invocation.`);
     if (DEGRADED_CALLGRAPH.length) S.push(`- **Degraded call-graph:** ${DEGRADED_CALLGRAPH.join(', ')} — call edges exist but are coarse: spring (Java) is chunked at *class* granularity so the callee method is not its own node; css (SCSS) has 6 trivial edges that resolve to no definition. Verified by invocation.`);
     if (EMPTY_TYPEREFS.length) S.push(`- **Empty \`type_refs\` (type-usage) channel:** ${EMPTY_TYPEREFS.join(', ')} — \`find_references\` still fuses callers + \`extends\` (inheritance) where present, but type-usage references are not extracted. Verified by full-scan + invocation.`);
-    // rerank: separate the SEMANTIC delta (where it helps) from the OVERALL delta
-    // (incl. exact symbolic, where it can regress by demoting exact-name hits).
+    // Separate semantic delta from overall delta: rerank can regress exact symbolic
+    // rank-1 by demoting exact-name hits even when it lifts semantic rank-1.
     const fmtD = (x) => `${x >= 0 ? '+' : ''}${(x * 100).toFixed(0)}pt`;
     const semD = [], ovD = [];
     for (const fx of FIX_ORDER) {
@@ -271,14 +261,14 @@ function summaryDoc() {
     }
     if (semD.length) {
         S.push(`- **Rerank (R0 vs O2) lifts *semantic* rank-1 substantially:** ${semD.join(', ')}. But the *overall* rank-1 delta (including exact symbolic queries) is mixed: ${ovD.join(', ')} — reranking favours behavioural queries and can demote exact-name hits (django's overall rank-1 regresses while its semantic rank-1 rises). At these small sem n a single query is 14–33pt, so treat the per-language magnitudes as directional; the *direction* (semantic up, symbolic mixed) is the robust signal. It is opt-in, not default.`);
-        // enrichment (R1 vs O2) overall delta — inverts oppositely to rerank.
+        // Enrichment inverts oppositely to rerank (the two do not stack), so
+        // measuring it separately avoids a misleading combined figure.
         const enD = [];
         for (const fx of FIX_ORDER) { const o2 = derive(cell(fx, 'O2')), r1 = derive(cell(fx, 'R1')); if (o2.ok && r1.ok && o2.r1 != null && r1.r1 != null) enD.push(`${fx} ${fmtD(r1.r1 - o2.r1)}`); }
         if (enD.length) S.push(`- **Enrichment (R1 vs O2) overall rank-1 delta:** ${enD.join(', ')} — it inverts *oppositely* to rerank (helps rust/django, hurts gin), and the two do not stack cleanly (R2 ≠ R0+R1).`);
     }
     S.push('- **Lexical ceiling:** languages whose L1 semantic rank-1 is far below symbolic rank-1 are bounded by the embedding channel, not lexical ranking.');
 
-    // not run
     S.push('\n## What was NOT measured (so the averages are not mistaken for universal)\n');
     S.push('- **O1 (qwen3-embedding:0.6b):** not run — model not pulled in this environment.');
     S.push('- **E1 (in-process jina-embeddings-v2-base-code):** not run in this matrix — the shipped `_localPipeline` loads jina at fp32 (~1-3 chunks/s, no q8 dtype option), and adding one would edit engine source (out of scope). The gin/express deltas were measured in the v2.0 pass (ANALYSIS_V2.md).');
@@ -341,6 +331,6 @@ function summaryDoc() {
 
 fs.writeFileSync(path.join(DOCS, 'BENCH_LANGUAGES.md'), languagesDoc());
 fs.writeFileSync(path.join(DOCS, 'BENCH_SUMMARY.md'), summaryDoc());
-console.log('wrote test/BENCH_LANGUAGES.md + test/BENCH_SUMMARY.md');
+console.log('wrote docs/benchmarks/BENCH_LANGUAGES.md + docs/benchmarks/BENCH_SUMMARY.md');
 const have = fs.readdirSync(RES).filter(f => f.endsWith('.json') && !f.startsWith('_') && f !== 'parity.json' && f !== 'structural.json');
 console.log(`cells present: ${have.length}`);

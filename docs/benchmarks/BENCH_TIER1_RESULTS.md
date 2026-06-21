@@ -16,7 +16,7 @@ Nothing committed.
 
 ## FIX 1 — C# `invocation_expression` call branch (SHIPPED)
 
-**Change (engine):** `parser-utils.mjs::extractCallSites` — added a C# `invocation_expression` branch
+**Change (engine):** `parse/metadata.mjs::extractCallSites` — added a C# `invocation_expression` branch
 (`function` field → `member_access_expression` ⇒ `name` + `_receiverHint(expression)`; bare `identifier`
 ⇒ name; `generic_name` ⇒ stripped name) and a `_csInvokedName` helper that strips `Method<T>` → `Method`.
 Kept the existing `method_invocation` branch for Java (relabelled `// Java`). The root cause (W2): the
@@ -55,7 +55,7 @@ aspnet symbolic rank-1 is unchanged — so it does not block shipping.
 `function_call_expression` (name from `function` field when it is `name`/`qualified_name`, namespace
 stripped), `member_call_expression` + `nullsafe_member_call_expression` (`name` field +
 `_receiverHint(object)`), `scoped_call_expression` (`name` field + `_receiverHint(scope)`). (3) **No code
-needed** — PHP `class_declaration` is already in `GOD_CLASS_NODE_TYPES` (parser-utils.mjs:515), so oversized
+needed** — PHP `class_declaration` is already in `GOD_CLASS_NODE_TYPES` (parse/extractor.mjs), so oversized
 PHP classes already get `buildGodClassSkeleton` and their methods un-nest; the new `method_declaration`
 capture now makes those methods searchable chunks (previously the bodies of large PHP classes were lost to
 the skeleton). Root cause (W2/W4): PHP had no call branch at all and the chunk query omitted
@@ -198,10 +198,10 @@ design that cannot bleed (e.g. NL-gated per T2.1/T2.2, or exact-length-preferenc
 
 ## Final state + honest summary
 
-**Engine touched:** `parser-utils.mjs::extractCallSites` (+ `_csInvokedName` helper) and `LANGUAGE_QUERIES.php`
+**Engine touched:** `parse/metadata.mjs::extractCallSites` (+ `_csInvokedName` helper) and `LANGUAGE_QUERIES.php`
 carry F1 + F2; `search-core.mjs:342` carries F2.5 (the `/i` flag on `TEST_FILE_RE`). F3's `fuseAndRank`
 name-boost edit was applied and fully reverted — the only surviving `search-core.mjs` change is the one-char
-`/i`. `git diff --stat HEAD` shows `parser-utils.mjs` + `search-core.mjs` among the engine files (plus
+`/i`. `git diff --stat HEAD` shows `parse/metadata.mjs` + `search-core.mjs` among the engine files (plus
 untracked bench/investigation docs); no other engine files touched.
 
 **Final verification (shipped state = F1 + F2 + F2.5, F3 reverted):**

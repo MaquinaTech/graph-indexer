@@ -77,7 +77,6 @@ function build(fixture, cfg) {
     if (b.sqlite) args.push('--use-sqlite');
     if (b.enrichment) { args.push('--enrichment'); if (b.enrichModel) args.push('--enrich-model', b.enrichModel); }
 
-    // /usr/bin/time -l → peak RSS on stderr (macOS).
     const t0 = Date.now();
     const res = spawnSync('/usr/bin/time', ['-l', process.execPath, ...args], { env, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
     const wallMs = Date.now() - t0;
@@ -142,7 +141,9 @@ async function embedQueries(queries, meta) {
         queries.forEach((q, i) => map.set(q.id, new Float32Array(data.embeddings[i])));
         return map;
     }
-    const embedder = await createEmbedder({ ollamaHost: OLLAMA_HOST, localEmbedModel: meta.model, embedModel: meta.model }, { provider: 'local', model: meta.model });
+    // Non-Ollama providers (local / mlx) embed in-process via createEmbedder,
+    // routed by the provider stamped in the index meta — never assume 'local'.
+    const embedder = await createEmbedder({ ollamaHost: OLLAMA_HOST, localEmbedModel: meta.model, embedModel: meta.model }, { provider: meta.provider, model: meta.model });
     for (const q of queries) { const v = await embedder.embedQuery(q.query); if (v) map.set(q.id, new Float32Array(v)); }
     return map;
 }
@@ -206,6 +207,16 @@ if (cfg.blocked && process.env.BENCH_FORCE_E1 !== '1') {
     process.exit(0);
 }
 
+// Skip platform-incompatible embedder configs (mlx = macOS only).
+const _provGuard = cfg.build?.provider;
+if (_provGuard === 'mlx' && process.platform !== 'darwin') {
+    record.ok = false;
+    record.reason = `not run — MLX requires macOS (current: ${process.platform})`;
+    fs.writeFileSync(outFile, JSON.stringify(record, null, 2));
+    console.log(`⊘  Skipping ${fixture} ${configId} — ${record.reason}`);
+    process.exit(0);
+}
+
 let buildInfo;
 if (reuse) {
     console.log(`\n▶ ${fixture} · ${configId} (${cfg.label}) — REUSE existing index (no rebuild)…`);
@@ -229,7 +240,6 @@ const stats = indexStats(dir, db);
 record.stats = stats;
 record.throughputChunksPerSec = buildInfo.wallMs > 0 ? +(stats.chunkCount / (buildInfo.wallMs / 1000)).toFixed(2) : null;
 
-// query set for latency
 let queries = [];
 try { const mod = await import(`../test/suites/${fixture}.mjs`); queries = mod.QUERIES || []; } catch { /* no suite */ }
 if (queries.length) {
@@ -237,7 +247,6 @@ if (queries.length) {
     catch (e) { record.latency = { error: e.message }; }
 }
 
-// strict retrieval scoring
 const tmp = path.join(RESULTS_DIR, `_eval_${fixture}__${configId}.json`);
 const sc = score(fixture, cfg, tmp);
 if (sc.ok && fs.existsSync(tmp)) {

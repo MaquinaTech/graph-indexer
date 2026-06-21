@@ -60,4 +60,16 @@ test/agent/results/
 bench/results/
 bench/_chunks/
 bench/logs/
+# One-off authoring scaffolding — already applied (its outputs, the test/suites/*.mjs query
+# sets, are committed and gated by bench/verify-ground-truth.mjs); not part of the repro path.
+bench/_apply-queries.mjs
+bench/_author-queries.workflow.mjs
+
+embedders/venv-mlx/
+
+# Local agent / working files (kept on disk, never published or committed).
 CLAUDE.md
+BENCH_V2_REPORT.md
+
+# Local scratch / dev scripts (not part of the test suite)
+bench_embedders_test.mjs

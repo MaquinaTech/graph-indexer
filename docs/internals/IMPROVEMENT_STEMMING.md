@@ -8,7 +8,7 @@ language (it operates on the English words inside identifiers), needs no model/d
 and is **provably symbolic-neutral and backend-parity-safe**.
 
 - **Captured:** 2026-06-18, branch `feat/prompts`. All numbers from `test/evaluate.mjs --json` (strict, lexical channel).
-- **Files:** `search-core.mjs` (stemmer + tokenizer), `core-engine.mjs` + `sqlite-store.mjs` (raw-length + NL-gated query stemming), `test/unit.mjs` (5 new tests).
+- **Files:** `search-core.mjs` (stemmer + tokenizer), `engine/memory.mjs` + `engine/sqlite.mjs` (raw-length + NL-gated query stemming), `test/unit.mjs` (5 new tests).
 
 ## Why (data-driven diagnosis)
 

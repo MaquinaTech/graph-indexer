@@ -18,7 +18,7 @@ public discussion.
 
 ## Supported versions
 
-Security fixes are applied to the latest published `1.x` release. Older versions
+Security fixes are applied to the latest published `2.x` release. Older versions
 are not maintained; please upgrade to the latest version.
 
 ## Security posture

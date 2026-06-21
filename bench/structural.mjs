@@ -33,7 +33,6 @@ for (const fx of fixtures) {
     const chunks = Array.from(db.iterateChunks());
     const n = chunks.length || 1;
 
-    // node_type distribution (the real chunk-kind signal: function/method/class/...).
     const nodeTypes = {};
     for (const c of chunks) { const t = c.node_type || '∅'; nodeTypes[t] = (nodeTypes[t] || 0) + 1; }
 
@@ -43,11 +42,9 @@ for (const fx of fixtures) {
     const withExtends = chunks.filter(c => c.extends && c.extends.length).length;
     const withEither = chunks.filter(c => (c.type_refs && c.type_refs.length) || (c.extends && c.extends.length)).length;
 
-    // call_sites carry { name, recv } where `recv` is the receiver expression (e.g.
-    // `this`, a variable, or a type). A present receiver is what lets the query-time
-    // classifyCallers split high-confidence (receiver-qualified) from name-only
-    // callers — the actual high/low classification is computed at query time, not
-    // stored, so we report receiver PRESENCE here, not the final classification.
+    // The high/low-confidence classification is computed at query time by classifyCallers,
+    // not stored in the index, so we report receiver PRESENCE here rather than the
+    // final classification.
     let csTotal = 0, csRecv = 0;
     for (const c of chunks) {
         for (const cs of (c.call_sites || [])) {

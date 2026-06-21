@@ -245,7 +245,7 @@ held flat throughout (display artifact; true express ≈4.8%, gin 0.0% — see E
 
 ### WI3 — query-side HyDE (opt-in, gated)
 
-Code shipped in `mcp-tools.mjs` (`hydeQueryVector`/`blendVectors`/`buildHydePrompt`, 3 unit
+Code shipped in `mcp/tools.mjs` (`hydeQueryVector`/`blendVectors`/`buildHydePrompt`, 3 unit
 tests), wired through `search_code(hyde:)` + `hyde.enabled` config + the eval harness `--hyde`
 flag, documented in README + prompts/CORE.md. A local model writes a hypothetical snippet, it's
 embedded with the index's own model and **blended** (α=0.5, never replaces) into the query

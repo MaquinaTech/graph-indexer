@@ -18,7 +18,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const RES = path.join(__dirname, 'results');
-const DOCS = path.join(ROOT, 'test'); // docs live in test/ (moved by maintainer)
+const DOCS = path.join(ROOT, 'docs', 'benchmarks');
 const FIX_ORDER = ['axios', 'express-js', 'nestjs', 'react', 'fastapi', 'django', 'gin', 'rust', 'spring', 'android', 'aspnet', 'rails', 'laravel', 'symfony', 'css', 'cjson', 'nvm', 'alamofire'];
 const prov = JSON.parse(fs.readFileSync(path.join(__dirname, 'provenance.json'), 'utf8'));
 const tokens = fs.existsSync(path.join(RES, 'tokens.json')) ? JSON.parse(fs.readFileSync(path.join(RES, 'tokens.json'), 'utf8')) : {};
@@ -94,4 +94,4 @@ if (Object.keys(trace).length) {
 A.push('\n## Reproduce\n```bash\nnode bench/tokens.mjs <fixture...>\nnode bench/synth-agent.mjs\n```\n');
 
 fs.writeFileSync(path.join(DOCS, 'BENCH_AGENT.md'), A.join('\n'));
-console.log('wrote test/BENCH_AGENT.md');
+console.log('wrote docs/benchmarks/BENCH_AGENT.md');

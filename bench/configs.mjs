@@ -1,6 +1,4 @@
 /**
- * bench/configs.mjs
- *
  * The user-facing retrieval configurations measured by the multi-language
  * benchmark. Each entry describes (a) how to build a CLEAN index for that
  * configuration and (b) how to score it with the strict evaluator
@@ -45,6 +43,18 @@ export const CONFIGS = {
         // were measured in the v2.0 analysis pass (see ANALYSIS_V2.md) and are cited
         // there. Mark this row "not run — q8 dtype not shipped" unless BENCH_FORCE_E1=1.
         blocked: 'jina fp32 via the shipped engine is impractically slow; q8 dtype is not a shipped option (would require an engine edit). See ANALYSIS_V2.md for the measured gin/express deltas.',
+    },
+
+    // ── Native Python embedder (no Ollama daemon; ~same all-MiniLM-L6-v2 vectors) ──
+    // Same model family as E0, but inference runs in a Python subprocess: MLX on the
+    // Apple Metal GPU (macOS only). Faster indexing than the in-process Xenova path.
+    // bench/cell.mjs skips this on non-macOS platforms.
+    E0_MLX: {
+        label: 'E0-MLX (Apple Metal · mlx-community/all-MiniLM-L6-v2-4bit)',
+        family: 'in-process',
+        build: { embeddings: true, provider: 'mlx' },
+        score: { embeddings: true, embedProvider: 'mlx' },
+        needsOllama: false,
     },
 
     // ── Ollama embeddings ───────────────────────────────────────────────────────

@@ -37,9 +37,9 @@ const out = {
     names: [...names].sort(),
     files: [...fileSet].sort(),
     byType: Object.fromEntries(Object.entries(byType).map(([t, v]) => [t, v.length])),
-    sample: chunks.slice(0, 0), // populated below as a readable sample
+    sample: chunks.slice(0, 0),
 };
-// A readable sample: up to 60 named chunks with file + type, to orient the author.
+// Sample populated to orient ground-truth authors against real chunk names.
 out.sample = chunks.filter(c => c.name && c.name !== 'anonymous')
     .slice(0, 200)
     .map(c => ({ name: c.name, type: c.type || c.kind, file: c.file_path, ctx: c.class_context || undefined }));

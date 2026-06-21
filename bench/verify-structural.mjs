@@ -3,7 +3,7 @@
  * bench/verify-structural.mjs — confirm the "none" / "empty" structural verdicts
  * by ACTUALLY INVOKING the engine tools on each fixture's real index, not by
  * reading a field count (which once produced false positives: macOS grep treating
- * mcp-tools.mjs as binary; the `recv` vs `receiver_type` field mismatch).
+ * mcp/tools.mjs as binary; the `recv` vs `receiver_type` field mismatch).
  *
  *   • call-graph: for every uniquely-named defined symbol, run classifyCallers and
  *     count how many resolve ≥1 caller. A language with no call edges returns 0 for
