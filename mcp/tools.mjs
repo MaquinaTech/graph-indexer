@@ -16,7 +16,7 @@ import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
 import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '../git-signals.mjs';
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
 import {
-    assessConfidence, hydeQueryVector, buildHydePrompt,
+    assessConfidence, hydeQueryVector, buildHydePrompt, detectRepoLanguage,
     classifyCallers, findReferences, findRoutes, buildSubgraph,
 } from './topology.mjs';
 
@@ -118,13 +118,14 @@ function refCard({ chunk, recvHint, reason, confidence }) {
  */
 export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', gitSignals = null, gitRankBoost = 0 }) {
 
+    // Scoped here (not module-level) so multiple servers in one process don't cross-contaminate.
+    // `undefined` = not yet detected; `null` = unknown (→ generic prompt).
+    let _repoLang;
+
     // ── Index-freshness contract ──────────────────────────────────────────────
     // A stale call graph silently misleads the agent, so tool responses carry a
-    // freshness signal: index age, the commit it was built at (git-signals stamp),
-    // and whether the working tree has drifted since. Computed once per call
-    // (cheap, cached git read). JSON always carries the structured `index` field;
-    // the markdown footer is shown ONLY when the index is NOT fresh — so confident,
-    // up-to-date cards keep their lean token size (no per-call bloat).
+    // freshness signal. The markdown footer is shown ONLY when the index is NOT
+    // fresh — confident, up-to-date cards stay lean (no per-call token bloat).
     const isDaemonAlive = () => {
         try {
             if (!pidFile || !fs.existsSync(pidFile)) return false;
@@ -199,11 +200,15 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     catch { /* lexical fallback */ }
                 }
 
-                // Opt-in query-side HyDE: blend a hypothetical-snippet embedding into
-                // the query vector for natural-language queries (never when a symbol
-                // is pinned). Off → queryVector is untouched (byte-identical search).
+                // HyDE is suppressed when an exact symbol is pinned: the symbolic
+                // query vector is already precise, and HyDE's hypothetical snippet
+                // would only blur it. Off → queryVector is untouched (byte-identical search).
                 const wantHyde = hydeParam ?? Boolean(hyde?.enabled);
                 if (wantHyde && queryVector && !exact_tokens && isNaturalLanguageQuery(fullQuery)) {
+                    if (_repoLang === undefined) {
+                        try { _repoLang = detectRepoLanguage(db.stats().extCounts, db.iterateChunks()); }
+                        catch { _repoLang = null; }
+                    }
                     queryVector = await hydeQueryVector(fullQuery, queryVector, {
                         embedder,
                         generate: (prompt) => ollamaGenerate(prompt, {
@@ -211,27 +216,21 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                             ollamaHost, timeoutMs: 20000,
                             options: { temperature: 0.2, num_predict: 220 },
                         }),
+                        lang: _repoLang,
                     });
                 }
 
-                // Opt-in LLM rerank: only for natural-language queries (symbol
-                // lookups are already rank-1-dominant), never when the caller
-                // pinned an exact symbol. Best-effort — order is preserved on
-                // any model failure.
+                // Rerank is suppressed for exact-token queries: symbol lookups are
+                // already rank-1-dominant and re-ordering them wastes the judge call.
+                // Best-effort — order is preserved on any model failure.
                 const wantRerank = rerankParam ?? Boolean(rerank?.enabled);
                 const willRerank = wantRerank && !exact_tokens && isNaturalLanguageQuery(fullQuery);
 
-                // When reranking, OVER-FETCH a deeper candidate pool and let the
-                // judge reorder it, then truncate to top_k. Without this the judge
-                // only ever sees the top_k it was asked for (default 5), so it can
-                // reorder but never RESCUE a correct-but-deep hit into the top_k —
-                // which is exactly where the semantic recall lives. Pool size is
-                // capped well above top_k; the user still receives only top_k cards.
-                // Opt-in git ranking boost (default OFF): nudge results toward
-                // recently-/frequently-changed files. Like rerank it over-fetches so
-                // a hot-but-deep hit can be rescued into top_k. It lives here in the
-                // tool layer — never in db.searchHybrid — so the measured retrieval
-                // ranking (and backend parity) is unchanged unless explicitly enabled.
+                // Over-fetch for rerank: without a deeper candidate pool the judge
+                // can reorder but never RESCUE a correct-but-deep hit into top_k.
+                // Git boost also over-fetches for the same rescue reason, and lives
+                // in the tool layer — never in db.searchHybrid — so measured
+                // retrieval ranking and backend parity are unchanged unless enabled.
                 const applyGitBoost = gitRankBoost > 0 && gitSignals;
                 const poolSize = willRerank
                     ? Math.min(Math.max(top_k, rerank?.poolSize ?? 15), 25)
@@ -250,17 +249,29 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                             }),
                         });
                     } catch {
-                        // Rerank is a best-effort rank-1 lever: an unreachable or slow
-                        // Ollama judge must degrade to the un-reranked fused pool, never
-                        // turn the whole search into an error. `matches` keeps its pre-rerank
-                        // order because the throwing await never reassigned it.
+                        // An unreachable or slow judge must degrade gracefully — never
+                        // turn the whole search into an error. `matches` retains its
+                        // pre-rerank order because the throwing await never reassigned it.
                         rerankFailed = true;
                     }
                 }
                 if (applyGitBoost && matches.length > 1) {
-                    matches = matches
-                        .map(m => ({ ...m, score: m.score * (1 + gitRankBoost * gitBoostScore(gitSignals, m.chunk.file_path)) }))
-                        .sort((a, b) => b.score - a.score);
+                    if (willRerank && !rerankFailed) {
+                        // The LLM judge has already set the order, and rerank leaves each
+                        // result's fused `score` untouched (still in pre-rerank descending
+                        // order). Re-sorting by that score would REVERT the judge, so here
+                        // git only NUDGES: boost a rank surrogate and keep the displayed
+                        // score intact. A strong git signal can still lift a recently-changed
+                        // file a few places, but it no longer cancels the rerank.
+                        matches = matches
+                            .map((m, i) => ({ m, key: (matches.length - i) * (1 + gitRankBoost * gitBoostScore(gitSignals, m.chunk.file_path)) }))
+                            .sort((a, b) => b.key - a.key)
+                            .map(({ m }) => m);
+                    } else {
+                        matches = matches
+                            .map(m => ({ ...m, score: m.score * (1 + gitRankBoost * gitBoostScore(gitSignals, m.chunk.file_path)) }))
+                            .sort((a, b) => b.score - a.score);
+                    }
                 }
                 matches = matches.slice(0, top_k);
                 if (matches.length === 0) {
@@ -363,8 +374,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     }
                 }
 
-                // Low-confidence handoff: no dominant match on a behavioural query —
-                // point the agent at the distinct candidate files to skeleton next.
+                // Low-confidence: surface candidate files so the agent can
+                // call get_file_skeleton rather than issuing another vague search.
                 if (lowConfidence) {
                     lines.push(`\n${'─'.repeat(50)}`);
                     lines.push(`⚠️ Low confidence — no dominant match. Candidate files (top distinct): ${candidateFiles.map(f => `\`${f}\``).join(', ')}`);
@@ -628,9 +639,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 }
                 if (!fs.existsSync(absolutePath)) throw new Error('File not found.');
                 // Defence in depth: the textual check above can be defeated by a
-                // symlink *inside* the project that points outside it. Resolve
-                // symlinks on both the root and the target and re-check containment
-                // so a tool call can never read a file outside the project root.
+                // symlink inside the project that points outside it. Resolve symlinks
+                // on both sides and re-check containment to block that escape path.
                 let realRoot, realPath;
                 try { realRoot = fs.realpathSync(safeRoot); } catch { realRoot = safeRoot; }
                 try { realPath = fs.realpathSync(absolutePath); } catch { realPath = norm; }
@@ -699,7 +709,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 }
 
                 if (total === 0) {
-                    // A stale index makes "no callers" dangerously misleading — surface it.
+                    // "No callers" from a stale index is dangerously misleading — always surface freshness here.
                     const parts = [`✅ Safe to modify: no callers of \`${label}\` found.`];
                     if (coChanges.length) parts.push(coChangeLine(coChanges));
                     if (note) parts.push(note);
@@ -829,7 +839,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
         'find_routes',
         'Map HTTP routes to their handler functions. Returns the handler chunk ID so '
         + 'you can call get_chunk or get_call_graph on the handler directly. Covers '
-        + 'NestJS/Angular decorators, FastAPI/Flask, Spring annotations, and Express/Koa '
+        + 'NestJS decorators, FastAPI/Flask, Spring (Java) annotations, and Express/Koa '
         + 'registration. Filter by method and/or path.',
         {
             method: z.string().optional().describe(

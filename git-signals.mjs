@@ -106,7 +106,6 @@ export function collectGitSignals(repoRoot, { maxCommits = 500, topCoChange = 8,
                 if (!f) continue;
                 // git quotes paths with unusual chars: "src/é.ts" — unwrap.
                 if (f.startsWith('"') && f.endsWith('"')) f = f.slice(1, -1);
-                // Make paths relative to repoRoot when indexing a subdirectory.
                 if (stripPrefix) {
                     if (!f.startsWith(stripPrefix)) continue; // outside the indexed subtree
                     f = f.slice(stripPrefix.length);
@@ -141,7 +140,6 @@ export function collectGitSignals(repoRoot, { maxCommits = 500, topCoChange = 8,
             { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
     } catch { /* detached/empty — no stamp */ }
 
-    // Reduce co-change to the top-K strongest partners per file.
     const coChange = Object.create(null);
     for (const [file, row] of pairCounts) {
         const top = [...row.entries()]

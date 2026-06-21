@@ -48,11 +48,10 @@ function freshness(file) {
     } catch { return 'never indexed'; }
 }
 
-/** Spawn the watch daemon detached, logging to the data dir. */
 function spawnDaemon() {
     ensureDataDir(ROOT);
     let logFd = null;
-    try { logFd = fs.openSync(config.logFile, 'a'); } catch { /* log to /dev/null */ }
+    try { logFd = fs.openSync(config.logFile, 'a'); } catch { }
     const child = spawn(process.execPath, [DAEMON_PATH], {
         detached: true,
         stdio: logFd !== null ? ['ignore', logFd, logFd] : 'ignore',
@@ -97,7 +96,7 @@ async function cmdStop() {
     const pid = readPid(config.pidFile);
     if (!isAlive(pid)) {
         log(`${glyph.keep} No daemon running.`);
-        try { if (pid) fs.unlinkSync(config.pidFile); } catch { /* nothing to clear */ }
+        try { if (pid) fs.unlinkSync(config.pidFile); } catch { }
         return 0;
     }
     try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
@@ -142,7 +141,6 @@ async function cmdLogs(args) {
     process.stdout.write(lines.join('\n'));
     if (!follow) { log(''); return 0; }
 
-    // Follow mode: print appended bytes as they arrive until interrupted.
     let pos = size;
     log(c.dim(`\n— following ${path.relative(ROOT, config.logFile)} (Ctrl-C to stop) —`));
     fs.watchFile(config.logFile, { interval: 500 }, (cur) => {

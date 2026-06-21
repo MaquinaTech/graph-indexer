@@ -53,8 +53,8 @@ export function acquireLock(pidFile) {
         } catch (err) {
             if (err.code !== 'EEXIST') throw err;
             const pid = readPid(pidFile);
-            if (pid === process.pid) return true;          // already ours
-            if (isAlive(pid)) return false;                // a live daemon owns it
+            if (pid === process.pid) return true;
+            if (isAlive(pid)) return false;
             try { fs.unlinkSync(pidFile); } catch { /* another racer cleared it — retry */ }
         }
     }
@@ -64,6 +64,6 @@ export function acquireLock(pidFile) {
 /** Release the lock, but only if this process owns it (never steal another's). */
 export function releaseLock(pidFile) {
     if (readPid(pidFile) === process.pid) {
-        try { fs.unlinkSync(pidFile); } catch { /* already gone */ }
+        try { fs.unlinkSync(pidFile); } catch { }
     }
 }

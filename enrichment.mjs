@@ -58,20 +58,9 @@ export function attachEnrichment(chunk, entry) {
     return Boolean(chunk.summary || chunk.concepts.length);
 }
 
-// Two-line output format — robust to parse, rich enough to discriminate:
-//  • SUMMARY  — one declarative sentence (or two), in developer search vocabulary,
-//               that now also states the PROBLEM solved, key INPUTS/OUTPUTS and
-//               notable SIDE EFFECTS. It leads the summary-only embedding vector
-//               (search-core.summaryEmbeddingText), so a richer summary directly
-//               sharpens the conceptual channel — and because enrichment is offline
-//               and cached by content hash, that quality costs nothing at query time.
-//  • TAGS     — comma-separated domain keywords; joined into chunk.hyde so BM25
-//               receives high-IDF concept terms instead of question stopword noise.
-//
-// The single-line SUMMARY contract keeps parseEnrichResponse trivial regardless of
-// how capable the model is; a stronger model (see resolveEnrichModel / config
-// enrichment.model: "auto") simply packs more accurate intent into the same shape.
+// Single-line SUMMARY keeps parseEnrichResponse trivial regardless of model capability.
 // One-shot example is mandatory for small (1.5B) models to follow the format.
+// TAGS → chunk.hyde gives BM25 high-IDF domain terms instead of question stopword noise.
 export const buildEnrichPrompt = (chunk) => {
     const code = (chunk.code_snippet || '').slice(0, 1000);
     const base = path.basename(chunk.file_path);
@@ -156,8 +145,7 @@ export async function ollamaGenerate(prompt, { model, ollamaHost, timeoutMs = 30
 /**
  * Parse the SUMMARY + TAGS response into { summary, concepts, hyde }.
  *
- * hyde = concepts.join(' ') — a space-separated keyword string fed to BM25.
- * Concepts are domain terms only (stopwords scrubbed), so every token has
+ * Concepts are domain terms only (stopwords scrubbed) so every token has
  * meaningful IDF weight. Falls back to extracting non-stopword keywords from
  * the summary when the model omits the TAGS line (graceful degradation).
  */
@@ -188,7 +176,7 @@ export function parseEnrichResponse(text) {
 
     if (!summary && lines.length) summary = lines[0].replace(/^SUMMARY:\s*/i, '').trim();
 
-    // Fallback: derive concepts from the summary when TAGS line is absent or empty.
+
     if (concepts.length === 0 && summary) {
         const words = summary.toLowerCase().match(/\b[a-z][a-z-]{2,}\b/g) || [];
         concepts.push(...words.filter(w => !_stop.has(w)).slice(0, 8));
@@ -250,7 +238,7 @@ export function parseRerankResponse(text, n) {
  * anchor strongly-retrieved hits against judge mistakes) and measured WORSE on
  * both rank-1 and MRR while not recovering recall@k — so the straight reorder is
  * what ships. Recall@k is protected upstream instead, by over-fetching a deep pool
- * before reranking (see mcp-tools search_code) so the judge reorders real
+ * before reranking (see mcp/tools.mjs search_code) so the judge reorders real
  * candidates rather than a thin top_k.
  *
  * @param {string} queryText
@@ -369,8 +357,7 @@ export async function enrichCoreChunks(chunks, graph, config, { generate, concur
     let enriched = 0, attempted = 0, failures = 0;
     let aborted = false;
 
-    // Sliding-window pool: `slots` workers each drain the queue independently.
-    // No batch boundaries — a worker immediately takes the next item when done.
+
     let cursor = 0;
     async function runWorker() {
         while (cursor < pending.length && !aborted) {
@@ -381,7 +368,7 @@ export async function enrichCoreChunks(chunks, graph, config, { generate, concur
             if (parsed) {
                 chunk.summary = parsed.summary;
                 chunk.concepts = parsed.concepts;
-                chunk.hyde = parsed.hyde;  // = concepts.join(' ') — domain keywords for BM25
+                chunk.hyde = parsed.hyde;
                 if (chunk.content_hash) {
                     cache.set(chunk.content_hash, { summary: parsed.summary, concepts: parsed.concepts, model });
                 }

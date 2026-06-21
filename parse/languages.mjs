@@ -72,9 +72,8 @@ export const LANGUAGE_MAP = {
     ...(Kotlin ? { '.kt': Kotlin, '.kts': Kotlin } : {}),
     ...(CSharp ? { '.cs': CSharp } : {}),
     ...(Ruby ? { '.rb': Ruby } : {}),
-    // C maps .c sources and .h headers (structs/typedefs/macros live in headers).
     ...(C ? { '.c': C, '.h': C } : {}),
-    // Bash maps .sh and .bash; shebang-only extensionless scripts are not keyed.
+    // Shebang-only extensionless scripts are not keyed.
     ...(Bash ? { '.sh': Bash, '.bash': Bash } : {}),
     ...(Swift ? { '.swift': Swift } : {}),
 };

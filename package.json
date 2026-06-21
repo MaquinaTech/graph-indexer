@@ -3,9 +3,9 @@
     "version": "2.0.0",
     "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph, with an optional zero-dependency SQLite backend for monorepo scale and optional local-LLM semantic enrichment.",
     "type": "module",
-    "main": "core-engine.mjs",
+    "main": "engine/memory.mjs",
     "exports": {
-        ".": "./core-engine.mjs"
+        ".": "./engine/memory.mjs"
     },
     "bin": {
         "graph-indexer": "init.mjs",
@@ -16,8 +16,18 @@
     },
     "files": [
         "*.mjs",
+        "engine/",
+        "mcp/",
+        "parse/",
+        "embedders/setup-mlx.mjs",
+        "embedders/python/mlx_embed_server.py",
+        "embedders/python/requirements-mlx.txt",
+        "!embedders/python/test_servers.mjs",
         "prompts/",
         "README.md",
+        "CHANGELOG.md",
+        "SECURITY.md",
+        "TRADEMARK.md",
         "LICENSE"
     ],
     "repository": {
@@ -50,6 +60,7 @@
         "test:suite": "node test/run.mjs --suite",
         "test:json": "node test/run.mjs --json",
         "test:reset": "rm -rf test/fixtures && node test/setup.mjs",
+        "embed:setup:mlx": "node embedders/setup-mlx.mjs",
         "mcp:index": "idx-index --repo .",
         "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
         "mcp:index:enriched": "node indexer.mjs --repo . --enrichment",
@@ -67,7 +78,6 @@
         "chokidar": "5.0.0",
         "ignore": "5.3.2",
         "tree-sitter": "0.21.1",
-        "tree-sitter-scss": "1.0.0",
         "zod": "3.23.8"
     },
     "keywords": [
@@ -117,6 +127,7 @@
         "tree-sitter-python": "0.21.0",
         "tree-sitter-ruby": "0.23.1",
         "tree-sitter-rust": "0.21.0",
+        "tree-sitter-scss": "1.0.0",
         "tree-sitter-swift": "0.5.0",
         "tree-sitter-typescript": "0.21.2"
     }

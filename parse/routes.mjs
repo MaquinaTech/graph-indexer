@@ -10,7 +10,7 @@
 // The call graph records that a function was called, but cannot connect an HTTP
 // verb+path (`GET /api/users`) to the handler that serves it. extractRoutes mines
 // that mapping at index time from the four common shapes:
-//   • decorator-on-method     — NestJS/Angular  (@Get/@Post on a class method)
+//   • decorator-on-method     — NestJS           (@Get/@Post on a class method)
 //   • decorator-on-function   — FastAPI/Flask    (@app.get / @app.route)
 //   • annotation-on-method    — Spring Boot      (@GetMapping / @RequestMapping)
 //   • functional registration — Express/Koa      (router.get('/x', handler))
@@ -20,7 +20,6 @@
 // AST node type, mirroring extractDecorators / extractCallSites.
 
 const HTTP_VERBS = new Set(['get', 'post', 'put', 'delete', 'patch', 'all', 'head', 'options']);
-// C# generic-constraint keywords that can sit in type position but are not types.
 const ROUTE_JS_LIKE = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 
 /** Unquote a string-literal node across grammars (JS string_fragment, Python
@@ -75,16 +74,15 @@ function _parseTsDecorator(decoNode) {
     return { name, path: _routeLiteral(firstStr) };
 }
 
-/** NestJS / Angular: @Get/@Post/… on class methods, with the enclosing
+/** NestJS: @Get/@Post/… on class methods, with the enclosing
  *  @Controller(prefix) prepended. */
 function _extractNestRoutes(rootNode, emit) {
     const stack = [rootNode];
     while (stack.length) {
         const n = stack.pop();
         if (n.type === 'class_declaration' || n.type === 'abstract_class_declaration') {
-            // @Controller prefix. For `export class` the decorator is a leading
-            // sibling (inside export_statement); for a bare/abstract `class` it is a
-            // direct child of the class node before class_body. Check both.
+            // For `export class` the @Controller decorator is a leading sibling inside
+            // export_statement; for bare/abstract class it is a direct child before class_body.
             const classDecos = [..._leadingDecorators(n)];
             for (let i = 0; i < n.namedChildCount; i++) {
                 const c = n.namedChild(i);
@@ -154,8 +152,7 @@ function _extractExpressRoutes(rootNode, emit) {
                     const named = args.namedChildren || [];
                     const routePath = _routeLiteral(named[0]);
                     if (routePath != null && /^[/*]/.test(routePath) && named.length >= 2) {
-                        // The handler is the LAST argument (preceding args are middleware);
-                        // it may be an identifier, a member expression, or a .bind() call.
+                        // The handler is the LAST argument — preceding args may be middleware.
                         const handler = _jsHandlerName(named[named.length - 1]);
                         emit(verb, routePath, handler, n.startPosition.row + 1, 'express');
                     }
@@ -183,21 +180,20 @@ function _extractPyRoutes(rootNode, emit) {
                 if (fn?.type !== 'attribute') continue;
                 const verb = fn.childForFieldName?.('attribute')?.text || '';
                 const args = call.childForFieldName?.('arguments');
-                // Positional path string, or the `path=`/`rule=` keyword argument.
+                // FastAPI uses a positional path string; Flask uses `path=`/`rule=` keyword argument.
                 let routePath = _routeLiteral(args?.namedChildren?.find(c => c.type === 'string'));
                 if (routePath == null) {
                     const kw = args?.namedChildren?.find(c => c.type === 'keyword_argument'
                         && ['path', 'rule'].includes(c.childForFieldName?.('name')?.text));
                     routePath = _routeLiteral(kw?.childForFieldName?.('value'));
                 }
-                // A real FastAPI/Flask route always carries a rooted path string — this
-                // rejects look-alike decorators (`@cache.get("key")`, `@retry.post(n=3)`).
+                // Require a rooted path string to reject look-alike decorators such as
+                // `@cache.get("key")` or `@retry.post(n=3)` that share verb names.
                 const isRoute = routePath != null && routePath.startsWith('/');
                 if (HTTP_VERBS.has(verb.toLowerCase())) {
                     if (isRoute) emit(verb, routePath, handler, line, 'fastapi');
                 } else if (verb === 'route' && isRoute) {
-                    // @app.route(path, methods=["GET","POST"]) — Flask. One route per
-                    // method; default GET when methods is omitted.
+                    // Flask `@app.route` can declare multiple HTTP methods; default GET when `methods` is omitted.
                     const kw = args?.namedChildren?.find(c => c.type === 'keyword_argument'
                         && c.childForFieldName?.('name')?.text === 'methods');
                     const list = kw?.childForFieldName?.('value');
@@ -231,7 +227,7 @@ function _springAnnotation(annNode) {
             const valNode = pair.namedChildren?.[1];
             if (key === 'value' || key === 'path') path = _routeLiteral(valNode) ?? path;
             else if (key === 'method') {
-                // Single (method = RequestMethod.GET) or array (method = {…, …}).
+                // `method` may be a single value or an array literal — handle both shapes.
                 methods = (valNode?.type === 'element_value_array_initializer'
                     ? (valNode.namedChildren || []).map(c => verbOf(c.text))
                     : [verbOf(valNode?.text)]).filter(Boolean);
@@ -294,7 +290,7 @@ export function extractRoutes(rootNode, relPath, chunks, ext) {
     const routes = [];
     if (!rootNode) return routes;
 
-    // handler name → chunk id (case-sensitive, first definition wins).
+    // Case-sensitive; first definition wins to match the chunk extraction order.
     const idByName = new Map();
     for (const c of (chunks || [])) {
         if (c && c.name && !idByName.has(c.name)) idByName.set(c.name, c.id);
@@ -302,8 +298,8 @@ export function extractRoutes(rootNode, relPath, chunks, ext) {
 
     const emit = (method, routePath, handlerName, line, framework) => {
         if (!method) return;
-        // Normalise to a rooted path so NestJS controller-prefixed paths ('users/:id')
-        // are uniform with Spring/Express/FastAPI ('/…') and a '/'-prefix query matches.
+        // NestJS controller-prefixed paths omit the leading slash ('users/:id'); normalise
+        // so a '/'-prefix query matches uniformly across all frameworks.
         let p = routePath == null ? '' : String(routePath);
         if (p && !p.startsWith('/')) p = '/' + p;
         routes.push({
@@ -319,13 +315,13 @@ export function extractRoutes(rootNode, relPath, chunks, ext) {
 
     try {
         if (ROUTE_JS_LIKE.includes(ext)) {
-            _extractNestRoutes(rootNode, emit);    // decorator-based (NestJS/Angular)
-            _extractExpressRoutes(rootNode, emit);  // functional (Express/Koa)
+            _extractNestRoutes(rootNode, emit);
+            _extractExpressRoutes(rootNode, emit);
         } else if (ext === '.py') {
             _extractPyRoutes(rootNode, emit);
         } else if (ext === '.java') {
             _extractSpringRoutes(rootNode, emit);
         }
-    } catch { /* route extraction is best-effort metadata — never fail indexing */ }
+    } catch { /* best-effort — never fail indexing */ }
     return routes;
 }

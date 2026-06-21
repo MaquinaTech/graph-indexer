@@ -18,18 +18,14 @@
 import fs from 'fs';
 import path from 'path';
 
-/** The one directory that holds every generated runtime artifact. */
 export const DATA_DIR_NAME = '.graph-indexer';
 
-/** Project-relative config file, inside the data dir (was `.graph-indexer.json` at root). */
 export const CONFIG_FILE_NAME = 'config.json';
 
-/** @returns {string} absolute path to `<root>/.graph-indexer`. */
 export function dataDir(root) {
     return path.join(root, DATA_DIR_NAME);
 }
 
-/** Create the data dir if absent (idempotent). @returns {string} its path. */
 export function ensureDataDir(root) {
     const dir = dataDir(root);
     fs.mkdirSync(dir, { recursive: true });
@@ -74,7 +70,6 @@ const LEGACY_ARTIFACTS = [
     ['.idx-daemon.log', 'daemon.log'],
 ];
 
-/** Move src→dst across devices when rename() can't (best-effort). */
 function relocate(src, dst) {
     try { fs.renameSync(src, dst); return true; }
     catch {
@@ -103,7 +98,6 @@ export function migrateLegacyLayout(root) {
         if (!fs.existsSync(src)) continue;
         const dst = path.join(dir, newName);
         if (fs.existsSync(dst)) {
-            // A current copy already exists — drop the stale root cache.
             try { fs.unlinkSync(src); removed.push(legacyName); } catch { /* keep on failure */ }
         } else {
             ensureDataDir(root);
@@ -111,7 +105,6 @@ export function migrateLegacyLayout(root) {
         }
     }
 
-    // User config: migrate once, never clobber an existing new config.
     const legacyCfg = path.join(root, '.graph-indexer.json');
     const newCfg = path.join(dir, CONFIG_FILE_NAME);
     if (fs.existsSync(legacyCfg) && !fs.existsSync(newCfg)) {
@@ -124,7 +117,6 @@ export function migrateLegacyLayout(root) {
     return { moved, removed, stoppedDaemon: false };
 }
 
-/** True if any pre-v1.4 root artifact or legacy config is present. */
 export function hasLegacyLayout(root) {
     if (fs.existsSync(path.join(root, '.graph-indexer.json'))) return true;
     return LEGACY_ARTIFACTS.some(([legacyName]) => fs.existsSync(path.join(root, legacyName)));

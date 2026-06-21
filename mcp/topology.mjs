@@ -52,7 +52,79 @@ export function assessConfidence(matches, fullQuery, exactPinned, limit = 5) {
 const HYDE_ALPHA = 0.5;          // blend weight on the hypothetical vector (0 = pure query, 1 = pure HyDE)
 const _hydeCache = new Map();    // normalized query → blended Float32Array
 
-export function buildHydePrompt(query) {
+// ─── Repo-language detection (drives the language-aware HyDE prompt) ───────────
+const _EXT_FAMILY = {
+    ts: 'typescript', tsx: 'typescript',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    py: 'python', go: 'go', rs: 'rust', java: 'java',
+    kt: 'kotlin', kts: 'kotlin', cs: 'csharp', rb: 'ruby', php: 'php',
+    swift: 'swift', c: 'c', h: 'c',
+    sh: 'bash', bash: 'bash', zsh: 'bash',
+    scss: 'scss', css: 'scss', sass: 'scss',
+};
+const _LARAVEL_DIRS = new Set([
+    'models', 'http', 'controllers', 'console', 'providers',
+    'middleware', 'requests', 'builders', 'repositories', 'services',
+]);
+
+/**
+ * Pick the canonical language/framework key for a repo from its index stats.
+ * @param {Map<string, number>} extCounts  extension → chunk count (db.stats().extCounts)
+ * @param {Iterable<{file_path?:string}>} chunksIterable  bounded path scan (db.iterateChunks())
+ * @returns {string|null} one of typescript|javascript|python|go|rust|java-spring|java|
+ *   kotlin|csharp|ruby|php-laravel|php|swift|c|bash|scss, or null when ambiguous/unknown
+ *   (null → buildHydePrompt falls back to the generic, never-regressing prompt).
+ */
+export function detectRepoLanguage(extCounts, chunksIterable = []) {
+    const score = new Map();
+    if (extCounts && typeof extCounts.forEach === 'function') {
+        for (const [ext, n] of extCounts) {
+            const fam = _EXT_FAMILY[String(ext).toLowerCase()];
+            if (fam) score.set(fam, (score.get(fam) || 0) + n);
+        }
+    }
+    if (score.size === 0) return null;
+
+    let springSignal = false;
+    const laravelDirs = new Set();
+    let laravelKw = false;
+    let scanned = 0;
+    for (const chunk of (chunksIterable || [])) {
+        if (scanned++ >= 400) break;
+        const fp = String(chunk?.file_path || '').toLowerCase();
+        if (!fp) continue;
+        if (fp.includes('springframework')) springSignal = true;
+        for (const seg of fp.split('/')) {
+            if (_LARAVEL_DIRS.has(seg)) laravelDirs.add(seg);
+            if (seg === 'laravel' || seg === 'eloquent' || seg === 'artisan' || seg === 'symfony') laravelKw = true;
+        }
+    }
+
+        const ts = score.get('typescript') || 0;
+    const js = score.get('javascript') || 0;
+    const web = ts + js;
+    const ranking = [];
+    for (const [fam, n] of score) {
+        if (fam === 'typescript' || fam === 'javascript') continue;
+        ranking.push([fam, n]);
+    }
+    if (web > 0) ranking.push(['web', web]);
+    ranking.sort((a, b) => b[1] - a[1]);
+    const [topFam, topScore] = ranking[0];
+    const secondScore = ranking[1]?.[1] ?? 0;
+
+    if ((score.get('java') || 0) > 0 && springSignal) return 'java-spring';
+
+    if (secondScore > 0 && secondScore >= 0.9 * topScore) return null;
+
+    if (topFam === 'web') return ts >= 0.6 * web ? 'typescript' : 'javascript';
+    if (topFam === 'php') return (laravelKw || laravelDirs.size >= 2) ? 'php-laravel' : 'php';
+    if (topFam === 'java') return springSignal ? 'java-spring' : 'java';
+    return topFam;
+}
+
+// HyDE must never degrade below no-HyDE when language is unknown/ambiguous.
+function _genericHydePrompt(query) {
     return (
         `Write a short, realistic code snippet (5-15 lines, any language) that implements or `
         + `directly answers the request below. Output ONLY code — no prose, no markdown fences, `
@@ -60,7 +132,100 @@ export function buildHydePrompt(query) {
     );
 }
 
-/** Blend two vectors (cosine normalises magnitude, so only the direction matters). */
+const _HYDE_LANG = {
+    typescript: {
+        name: 'TypeScript',
+        idioms: 'Match NestJS/React idioms: @Injectable/@Controller providers with constructor injection (private readonly svc: Service) and async handlers, or a React FC using useState/useEffect with a typed props interface.',
+        primer: 'export ',
+    },
+    javascript: {
+        name: 'JavaScript',
+        idioms: 'Match Axios/Express idioms: middleware (req, res, next), router.get/post, module.exports, request/response interceptors, and promise chains.',
+        primer: 'const ',
+    },
+    python: {
+        name: 'Python',
+        idioms: 'Match FastAPI/Django idioms: @router.get/@router.post async handlers with Depends() and Pydantic BaseModel, or Django class-based views and models with CharField/ForeignKey and QuerySet .filter()/.select_related().',
+        primer: 'async def ',
+    },
+    go: {
+        name: 'Go',
+        idioms: 'Match Gin idioms: handlers func(c *gin.Context) calling c.JSON(http.StatusOK, ...) and c.ShouldBindJSON(&req), middleware as gin.HandlerFunc, and router groups r.Group("/api").',
+        primer: 'func ',
+    },
+    rust: {
+        name: 'Rust',
+        idioms: 'Match idiomatic Rust: pub struct/trait definitions, impl blocks, #[derive(Debug, Clone)], Result/Option return types, match arms, and use crate:: imports.',
+        primer: 'pub ',
+    },
+    'java-spring': {
+        name: 'Java (Spring Boot)',
+        idioms: 'Match Spring Boot idioms: @Service/@Repository/@RestController annotations, constructor injection, @Transactional, ResponseEntity<T>, JpaRepository<Entity, ID>, and @GetMapping/@PostMapping.',
+        primer: 'import org.springframework.',
+    },
+    java: {
+        name: 'Java',
+        idioms: 'Match standard Java idioms: class/interface definitions, generics, Optional<T>, try/catch, and stream().filter().map().collect().',
+        primer: 'public class ',
+    },
+    kotlin: {
+        name: 'Kotlin (Android)',
+        idioms: 'Match Android/Kotlin idioms: ViewModel with LiveData/StateFlow, coroutines (suspend fun, viewModelScope.launch), Hilt injection (@HiltViewModel, @Inject constructor), and companion object.',
+        primer: 'class ',
+    },
+    csharp: {
+        name: 'C# (ASP.NET Core)',
+        idioms: 'Match ASP.NET Core idioms: [ApiController]/[Route] controllers, async Task<IActionResult>, [HttpGet]/[HttpPost], ILogger<T> injection, and Entity Framework (.Include, .Where, .FirstOrDefaultAsync).',
+        primer: 'public class ',
+    },
+    ruby: {
+        name: 'Ruby (Rails)',
+        idioms: 'Match Rails idioms: ActiveRecord models (belongs_to, has_many, scope, validate), controller actions (def index/show/create) with before_action, and render json:.',
+        primer: 'class ',
+    },
+    'php-laravel': {
+        name: 'PHP (Laravel/Symfony)',
+        idioms: 'Match Laravel idioms: Eloquent models (extends Model, $fillable, hasMany/belongsTo), Service classes with constructor injection, Controllers extending Controller, Artisan commands (extends Command, handle()), and Facades (Route::, Auth::). For Symfony use #[Route] attributes and autowired services.',
+        primer: '<?php\n\nnamespace App\\',
+    },
+    php: {
+        name: 'PHP',
+        idioms: 'Match idiomatic PHP: namespaced classes, typed properties and method signatures, constructor injection, and interface implementations.',
+        primer: '<?php\n\n',
+    },
+    swift: {
+        name: 'Swift',
+        idioms: 'Match Swift/Alamofire idioms: AF.request(...).responseDecodable, Session, RequestInterceptor/EventMonitor, Result<T, Error> completion handlers, @discardableResult, and protocol conformances.',
+        primer: 'public ',
+    },
+    c: {
+        name: 'C',
+        idioms: 'Match idiomatic C: function definitions with pointer parameters, struct definitions, malloc/free with NULL checks, and a typed C API (e.g. cJSON_Parse, cJSON_GetObjectItem, cJSON_CreateObject).',
+        primer: 'static ',
+    },
+    bash: {
+        name: 'Bash',
+        idioms: 'Match idiomatic Bash: function definitions name() { ... }, local variables, case statements, [[ ]] conditionals, $() command substitution, and return 0/1.',
+        primer: null,
+    },
+    scss: {
+        name: 'SCSS',
+        idioms: 'Match idiomatic SCSS: @mixin definitions used via @include, nested selectors, $variable declarations, @extend, and &:hover/&:focus patterns.',
+        primer: null,
+    },
+};
+
+export function buildHydePrompt(query, lang = null) {
+    const spec = lang ? _HYDE_LANG[lang] : null;
+    if (!spec) return _genericHydePrompt(query);
+    const primer = spec.primer ?? `${spec.name} code:\n`;
+    return (
+        `Write a short, realistic ${spec.name} code snippet (5-15 lines) that implements or `
+        + `directly answers the request below. ${spec.idioms} Output ONLY code — no prose, `
+        + `no markdown fences, no comments explaining yourself.\n\nRequest: ${query}\n\n${primer}`
+    );
+}
+
 export function blendVectors(a, b, alpha = HYDE_ALPHA) {
     const out = new Float32Array(a.length);
     for (let i = 0; i < a.length; i++) out[i] = (1 - alpha) * a[i] + alpha * b[i];
@@ -72,13 +237,13 @@ export function blendVectors(a, b, alpha = HYDE_ALPHA) {
  * failure (generator down, dim mismatch, empty snippet) returns the raw vector
  * unchanged, so HyDE can never degrade a query below the no-HyDE baseline.
  */
-export async function hydeQueryVector(query, rawVec, { embedder, generate }) {
+export async function hydeQueryVector(query, rawVec, { embedder, generate, lang = null }) {
     if (!rawVec || !embedder || !generate) return rawVec;
     const norm = query.trim().toLowerCase();
     if (_hydeCache.has(norm)) return _hydeCache.get(norm);
     let blended = rawVec;
     try {
-        const snippet = await generate(buildHydePrompt(query));
+        const snippet = await generate(buildHydePrompt(query, lang));
         if (snippet && snippet.trim()) {
             const hydeVec = await embedder.embedQuery(snippet.slice(0, 2000));
             if (hydeVec && hydeVec.length === rawVec.length) blended = blendVectors(rawVec, hydeVec);
@@ -90,7 +255,7 @@ export async function hydeQueryVector(query, rawVec, { embedder, generate }) {
 
 /** Lowercased capitalized type tokens from a type / return-type string —
  *  "Promise<OrderRepo>" → ["promise","orderrepo"]. Lets an inferred receiver type
- *  (parser-utils attaches recv_type / recv_via_call to call sites) be matched
+ *  (parse/metadata.mjs attaches recv_type / recv_via_call to call sites) be matched
  *  against a target method's defining class without parsing the type grammar. */
 function _typeMatchTokens(str) {
     const out = [];
@@ -112,7 +277,7 @@ function _typeMatchTokens(str) {
  * only cheap, index-time signals — no type inference:
  *   • target uniqueness  — one symbol named X ⇒ every caller is unambiguous;
  *   • receiver hints      — `this.X` from the same class, or a direct `X()` to a
- *                           free function (captured by parser-utils.extractCallSites);
+ *                           free function (captured by parse/metadata.mjs extractCallSites);
  *   • the file import graph — a caller whose file imports the file defining X is
  *                            very likely calling that X.
  * `targetClass` scopes the question to one class's method.
@@ -241,7 +406,6 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
         if ((ref.extends || []).some(t => t.toLowerCase() === key)) inherits.push({ chunk: ref, confidence, reason });
         if ((ref.type_refs || []).some(t => t.toLowerCase() === key)) types.push({ chunk: ref, confidence, reason });
     }
-    // High-confidence first, then by file for stable output.
     const order = (a, b) => (a.confidence === b.confidence
         ? a.chunk.file_path.localeCompare(b.chunk.file_path)
         : a.confidence === 'high' ? -1 : 1);
@@ -336,7 +500,6 @@ export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudg
         const k = `${from} ${to} ${kind}`;
         if (!edgeSeen.has(k)) { edgeSeen.add(k); edges.push({ from, to, kind }); }
     };
-    // Add a node if it fits the node-count and token budgets. Returns true when newly added.
     const tryAdd = (c, depth) => {
         if (!c) return false;
         if (nodes.has(c.id)) return false;
@@ -357,7 +520,6 @@ export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudg
         const chunk = entry.chunk;
         const d = entry.depth + 1;
 
-        // Callees: symbols this chunk calls (first matching def, deterministic).
         for (const name of [...new Set(chunk.calls || [])].sort()) {
             const defs = db.resolveSymbol(name);
             if (!defs.length) continue;
@@ -366,14 +528,12 @@ export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudg
             if (nodes.has(target.id)) addEdge(chunk.id, target.id, 'calls');
             if (added) queue.push(target.id);
         }
-        // High-confidence callers (real blast radius).
         if (chunk.name && chunk.name !== 'anonymous') {
             for (const caller of _subgraphSort(classifyCallers(db, chunk.name).high.map(h => h.chunk))) {
                 const added = tryAdd(caller, d);
                 if (nodes.has(caller.id)) addEdge(caller.id, chunk.id, 'calls');
                 if (added) queue.push(caller.id);
             }
-            // Type / inheritance referers.
             for (const ref of _subgraphSort(db.findReferers(chunk.name))) {
                 const added = tryAdd(ref, d);
                 if (nodes.has(ref.id)) addEdge(ref.id, chunk.id, 'references');

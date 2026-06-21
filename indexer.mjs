@@ -116,18 +116,13 @@ async function main() {
             const imports = resolveLocalImports(rawImports, relPath, PROJECT_ROOT);
             indexData.graph.dependencies[relPath] = imports;
 
-            // Chunks are collected first; embedding/enrichment happen in batch below so
-            // we can route the high-value subset through the LLM before vectorising.
-            const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
+                    const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
             for (const chunk of fileChunks) {
                 const fullBody = fullBodyForEmbedding(chunk, content);
                 if (fullBody) fullBodies.set(chunk.id, fullBody);
                 pendingChunks.push(chunk);
             }
 
-            // HTTP routes → handler chunks. Accumulated into the global graph.routes
-            // array (each route is self-describing with file_path/line/handler_chunk_id),
-            // mirroring the per-file dependencies assignment above.
             for (const route of extractRoutes(tree.rootNode, relPath, fileChunks, ext)) {
                 indexData.graph.routes.push(route);
             }
@@ -136,30 +131,24 @@ async function main() {
         }
     }
 
-    // ── Optional LLM enrichment of the most central chunks (HyDE + summaries) ──────
-    // Runs before embedding so the hypothetical questions ride the same vector.
+    // Enrichment runs before embedding so hypothetical questions share the same vector space.
     if (config.enrichment.enabled) {
         await enrichCoreChunks(pendingChunks, indexData.graph, config);
     }
 
     // ── Embedding generation (cache-aware) ────────────────────────────────────────
-    // Vectors are keyed by embeddingKeyFor(chunk): content_hash for plain chunks,
-    // content_hash + enrichment digest for enriched ones. Because the enrichment
-    // cache returns the same summary for the same code, enriched chunks now HIT
-    // this cache on re-runs — previously every enriched chunk was re-embedded on
-    // every single index run.
+    // Vectors are keyed by embeddingKeyFor(chunk), which includes an enrichment
+    // digest so enriched chunks hit the cache on re-runs (previously they were
+    // re-embedded on every run).
     const toEmbed = [];
     for (const chunk of pendingChunks) {
         const vecKey = embeddingKeyFor(chunk);
         const sKey = vecKey + SUMMARY_VEC_SUFFIX;
-        // Compute the payload once here and reuse it in the worker (avoids a second
-        // build) — it also tells us how many window vectors an oversized chunk needs.
-        // Oversized definitions embed their full body (windowed); others use the snippet.
+        // Compute the payload once here and reuse it in the worker to avoid a second build.
         const payload = buildEmbeddingPayload(chunk, indexData.graph.dependencies[chunk.file_path] || [], fullBodies.get(chunk.id) || null);
-        const windows = embeddingWindows(payload); // [] unless the payload is oversized
-        // An enriched chunk needs its summary vector cached, and an oversized chunk
-        // needs all its window vectors, to skip embedding — e.g. indexes built before
-        // dual/window vectors only have the base.
+        const windows = embeddingWindows(payload);
+        // Indexes built before dual/window vectors only have the base key, so we must
+        // check that summary and window keys are also cached before skipping embedding.
         const summaryMissing = summaryEmbeddingText(chunk) && !existingCache.has(sKey);
         let windowsMissing = false;
         for (let i = 1; i < windows.length; i++) if (!existingCache.has(vecKey + WINDOW_VEC_SUFFIX + i)) { windowsMissing = true; break; }
@@ -196,12 +185,10 @@ async function main() {
         let completed = 0, vectorBatches = 0, failedBatches = 0;
         console.time('Embedding Generation Duration');
         const worker = async (batch) => {
-            // Each chunk yields: the base code-payload vector; one vector per tail
-            // window (`key|wN`) when the payload is oversized so semantic search can
-            // reach the tail (the base text is the full payload — the embedder
-            // truncates it to window 0, byte-identical to the single-vector path); and
-            // a compact summary-only vector (`key|s`) for enriched chunks, which
-            // matches the vocabulary of natural-language queries.
+            // Oversized chunks need window vectors so semantic search can reach
+            // their tail (the embedder truncates the base text to window 0 only).
+            // Enriched chunks also get a compact summary vector whose vocabulary
+            // matches natural-language queries.
             const entries = [];
             for (const { chunk: c, payload, windows } of batch) {
                 const baseKey = embeddingKeyFor(c);
@@ -237,7 +224,6 @@ async function main() {
         }
     }
 
-    // ── Reverse topology edges ────────────────────────────────────────────────────
     for (const [filePath, imports] of Object.entries(indexData.graph.dependencies)) {
         for (const dep of imports) {
             if (!indexData.graph.importedBy[dep]) indexData.graph.importedBy[dep] = [];
@@ -245,9 +231,8 @@ async function main() {
         }
     }
 
-    // ── Persist to the configured backend ─────────────────────────────────────────
-    // Resolve 'auto' now that the true chunk count is known: keep small repos in the
-    // zero-dependency in-memory JSON index; switch big ones to disk-backed SQLite.
+    // Resolve 'auto' now that the true chunk count is known — the threshold is only
+    // meaningful after all chunks have been extracted.
     const backend = config.storage === 'auto'
         ? (indexData.chunks.length >= AUTO_SQLITE_CHUNK_THRESHOLD ? 'sqlite' : 'memory')
         : config.storage;
@@ -262,7 +247,6 @@ async function main() {
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
         });
         store.close?.();
-        // Remove the in-memory artifact so readers (server/daemon) unambiguously pick SQLite.
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
         console.log(`\n🎉 SQLite index built: ${res.chunks} chunks · ${res.terms} terms · dim ${res.dim}`);
         console.log(`   → ${config.sqlitePath}\n`);
@@ -277,11 +261,15 @@ async function main() {
             fs.promises.rename(tmpPath, INDEX_PATH),
             fs.promises.rename(tmpBinPath, EMBEDDINGS_PATH),
         ]);
-        // Remove any SQLite artifact so readers unambiguously pick the in-memory index.
         for (const p of [config.sqlitePath, `${config.sqlitePath}-wal`, `${config.sqlitePath}-shm`]) {
             try { fs.unlinkSync(p); } catch { /* none */ }
         }
-        console.log(`\n🎉 Indexing completed blazingly fast. Total fragments: ${indexData.chunks.length}\n`);
+        if (indexData.chunks.length === 0) {
+            console.log(`\n⚠️  Indexing finished but produced 0 chunks — no indexable definitions found under ${PROJECT_ROOT}.`);
+            console.log(`   Check the --repo path is correct and contains supported languages (see README), and note that trivial one-line definitions are intentionally skipped.\n`);
+        } else {
+            console.log(`\n🎉 Indexing complete. Total fragments: ${indexData.chunks.length}\n`);
+        }
     }
 
     // Stamp which model produced the shared embeddings bin, so the server queries
@@ -292,18 +280,15 @@ async function main() {
         dim: embedder.dim ?? prevMeta?.dim ?? null,
     });
 
-    // ── Git signals (air-gapped: local commit log only) ───────────────────────────
-    // A sidecar of churn / recency / co-change, consumed by the blast-radius tools
-    // and the opt-in ranking boost. Kept out of the index/ranking math so the
-    // measured retrieval ranking is unchanged. No-op outside a git repo.
+    // Git signals are a sidecar kept out of the main index so they don't affect
+    // measured retrieval ranking — only opt-in tools consume them.
     if (config.gitSignals) {
         const signals = collectGitSignals(PROJECT_ROOT);
         if (signals) {
             writeGitSignals(config.gitSignalsPath, signals);
             console.log(`🔄 Git signals: ${signals.commits} commits · ${Object.keys(signals.churn).length} files (churn/recency/co-change).\n`);
         } else {
-            // Not a git repo (or a subtree with no tracked history) — drop any stale
-            // sidecar so degenerate/foreign signals never linger.
+            // Drop any stale sidecar so signals from a previous run don't linger.
             try { fs.unlinkSync(config.gitSignalsPath); } catch { /* none to remove */ }
         }
     }

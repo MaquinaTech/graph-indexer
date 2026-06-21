@@ -1,27 +1,27 @@
 /**
  * @file engine/binary.mjs
- * @description Binary vector I/O and quantized sketch for the graph-indexer engine.
+ * @description Dense-embedding binary codec (`.embeddings.bin` read/write/append/scan),
+ *              the optional HNSW vector index, and the approximate sketch search used
+ *              for large corpora — plus the thresholds that select eager vs lazy access.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
  */
 import fs from 'fs';
 
-// Thresholds for adaptive vector loading strategy
 export const HNSW_THRESHOLD = 5000;      // Build HNSW index above this (eager mode only)
 export const LAZY_VEC_THRESHOLD = 10000; // Switch to lazy (disk-backed) vector access above this
+export const SKETCH_THRESHOLD = 10000;   // Build the binary-quantized sketch above this many VECTORS.
+                                         // Single-sourced so the memory and SQLite stores switch to
+                                         // the approximate sketch at the exact same point (parity).
 
-// Optional HNSW accelerator for medium corpora (eager mode only)
 export let HierarchicalNSW = null;
 try {
     const mod = await import('hnswlib-node');
     HierarchicalNSW = mod.HierarchicalNSW ?? mod.default?.HierarchicalNSW ?? null;
 } catch { /* not installed — flat scan used */ }
 
-/**
- * Serializes embeddingCache to compact binary.
- * Format per entry: [uint32 hashLen][utf8 hash][uint32 dim][float32 × dim]
- */
+/** Format per entry: [uint32 hashLen][utf8 hash][uint32 dim][float32 × dim] */
 export function writeEmbeddingBinary(embeddingCache) {
     const entries = embeddingCache instanceof Map
         ? Array.from(embeddingCache.entries())
@@ -136,7 +136,7 @@ export function scanEmbeddingBinary({ fd = -1, buffer = null }, queryVector, { t
     qNorm = Math.sqrt(qNorm);
     if (qNorm === 0) return [];
 
-    const top = []; // sorted desc, capped at topN
+    const top = [];
     let worst = -Infinity;
     const push = (key, score) => {
         if (score <= minScore) return;
@@ -207,8 +207,11 @@ export function scanEmbeddingBinary({ fd = -1, buffer = null }, queryVector, { t
 // words — a few ms even at 200k rows), keeping the best `oversample × topN`
 // candidates, then (2) an exact cosine rescore of only those candidates, pread
 // from the bin. Sign quantization of normalized embeddings preserves cosine
-// ordering well enough that a 4× oversampled rescore recovers the exact top-N
-// (validated in test/unit.mjs against the exhaustive scan).
+// ordering well enough that a 4× oversampled rescore returns a NEAR-EXACT head:
+// at the production topN (400) the consumed top-5/top-10 overlap the exhaustive
+// scan ~95% (rank-1 parity is asserted in test/unit.mjs). Full top-N recall is
+// APPROXIMATE — the tail past the consumed head can differ — which is the
+// bounded-RAM, sub-linear trade the sketch exists to make.
 //
 // The sketch is APPEND-AWARE: the bin only ever grows between full rebuilds
 // (the daemon appends), so `updateVectorSketch` re-reads just the tail beyond
@@ -339,7 +342,6 @@ export function searchVectorSketch(sketch, { fd = -1, buffer = null }, queryVect
     if (!sketch || sketch.n === 0 || queryVector.length !== sketch.dim) return [];
     const words = sketch.words;
 
-    // 1. Quantize the query and rank rows by Hamming distance (bounded top-M).
     const qbits = new Uint32Array(words);
     quantizeToBits(queryVector, qbits, 0, words);
 
@@ -353,7 +355,6 @@ export function searchVectorSketch(sketch, { fd = -1, buffer = null }, queryVect
         let ham = 0;
         for (let w = 0; w < words; w++) ham += popcnt32((bits[base + w] ^ qbits[w]) >>> 0);
         if (count >= M && ham >= worst) continue;
-        // bounded insertion sort (ascending hamming)
         let lo = 0, hi = count;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (candHam[mid] <= ham) lo = mid + 1; else hi = mid; }
         const end = Math.min(count, M - 1);
@@ -363,7 +364,6 @@ export function searchVectorSketch(sketch, { fd = -1, buffer = null }, queryVect
         worst = candHam[count - 1];
     }
 
-    // 2. Exact cosine rescore of the candidates only (pread per candidate).
     let qNorm = 0;
     for (let d = 0; d < queryVector.length; d++) qNorm += queryVector[d] * queryVector[d];
     qNorm = Math.sqrt(qNorm);

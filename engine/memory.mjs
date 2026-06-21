@@ -12,7 +12,7 @@ import {
     isNaturalLanguageQuery, WINDOW_VEC_SUFFIX, EMBEDDING_MAX_WINDOWS, baseEmbeddingKey,
 } from '../search-core.mjs';
 import {
-    HierarchicalNSW, HNSW_THRESHOLD, LAZY_VEC_THRESHOLD,
+    HierarchicalNSW, HNSW_THRESHOLD, LAZY_VEC_THRESHOLD, SKETCH_THRESHOLD,
     writeEmbeddingBinary, scanEmbeddingBinary, updateVectorSketch, searchVectorSketch,
 } from './binary.mjs';
 
@@ -85,7 +85,6 @@ export class MemoryGraphIndex {
 
         const chunkCount = (data.chunks || []).length;
 
-        // Decide loading strategy based on corpus size and cacheEmbeddings flag
         this._lazyMode = (!this._cacheEmbeddings) && chunkCount >= LAZY_VEC_THRESHOLD;
 
         if (fs.existsSync(this._embeddingPath)) {
@@ -95,13 +94,10 @@ export class MemoryGraphIndex {
                 // For very large corpora: open persistent fd, release buffer from heap
                 if (chunkCount >= 50000) {
                     try { this._vecFd = fs.openSync(this._embeddingPath, 'r'); } catch { this._vecFd = -1; }
-                    // binBuf goes out of scope → GC can collect it
                 } else {
-                    // Medium-large: keep buffer for zero-copy slice access
                     this._embeddingBuf = binBuf;
                 }
             } else {
-                // Eager: fill embeddingCache (needed by indexer + small-corpus MCP server)
                 this._loadEmbeddingBinary(binBuf);
             }
         } else if (data.embeddingCache) {
@@ -142,12 +138,9 @@ export class MemoryGraphIndex {
                 }
             }
 
-            // Build inverted lexical index from the shared document builder
-            // (search-core.buildLexicalDocument) — identical text across backends.
             const deps = this.graph.dependencies[chunk.file_path] || [];
             this._indexLexical(chunk.id, buildLexicalDocument(chunk, deps), chunk.file_path);
 
-            // Build symbol table (Frontier 2)
             if (chunk.name && chunk.name !== 'anonymous') {
                 const n = chunk.name.toLowerCase();
                 if (!this.symbolTable.has(n)) this.symbolTable.set(n, new Set());
@@ -236,19 +229,16 @@ export class MemoryGraphIndex {
             termCounts.set(token, (termCounts.get(token) || 0) + 1);
         }
 
-        // Track document length for BM25 length normalization.
-        // RAW token count only — the additive stem tokens earn their own postings
-        // (so behavioural queries can match them) but must NOT inflate docLen, or
-        // they would perturb length normalisation for exact symbolic matches. With
-        // raw-based docLen, raw-term BM25 is byte-identical to the pre-stem index.
-        // Path tokens are handled separately in searchHybrid.
+        // Additive stem tokens earn their own postings but must NOT inflate docLen —
+        // inflated length would perturb BM25 normalisation for exact symbolic matches.
+        // raw-based docLen keeps raw-term BM25 byte-identical to the pre-stem index.
+        // Path tokens are tallied separately in searchHybrid, not here.
         const rawLen = tokenize(text, false).length;
         this.docLens.set(chunkId, rawLen);
         this.totalDocLen += rawLen;
 
         const chunkTokenSet = new Set();
         for (const [term, count] of termCounts) {
-            // Store raw term count — BM25 applies saturation at search time
             this.df.set(term, (this.df.get(term) || 0) + 1);
             let posting = this.invertedIndex.get(term);
             if (!posting) { posting = new Map(); this.invertedIndex.set(term, posting); }
@@ -284,7 +274,6 @@ export class MemoryGraphIndex {
                 else this.df.set(term, freq - 1);
             }
         }
-        // Update BM25 length accounting
         const dl = this.docLens.get(chunkId);
         if (dl !== undefined) {
             this.totalDocLen = Math.max(0, this.totalDocLen - dl);
@@ -367,7 +356,6 @@ export class MemoryGraphIndex {
         this._vecNorms  = norms;
         this._matrixDirty = false;
 
-        // HNSW for large eager corpora
         if (HierarchicalNSW && n >= HNSW_THRESHOLD) {
             try {
                 const hnsw = new HierarchicalNSW('cosine', dim);
@@ -381,7 +369,7 @@ export class MemoryGraphIndex {
                 }
                 this._hnsw = hnsw;
             } catch (e) {
-                process.stderr.write(`[core-engine] HNSW build failed: ${e.message}\n`);
+                process.stderr.write(`[engine/memory] HNSW build failed: ${e.message}\n`);
                 this._hnsw = null;
             }
         }
@@ -401,7 +389,6 @@ export class MemoryGraphIndex {
         qNorm = Math.sqrt(qNorm);
         if (qNorm === 0) return [];
 
-        // HNSW fast path
         if (this._hnsw) {
             const topK = Math.min(200, n);
             try {
@@ -416,7 +403,6 @@ export class MemoryGraphIndex {
             } catch { /* fall through to flat scan */ }
         }
 
-        // Exact flat scan
         const results = [];
         for (let i = 0; i < n; i++) {
             const base = i * dim;
@@ -441,9 +427,14 @@ export class MemoryGraphIndex {
         if (!this._embeddingBuf && this._vecFd < 0) return [];
         // Large corpora: binary sketch (built once on first vector query) replaces
         // the exact O(corpus) scan with a Hamming prefilter + bounded rescore.
-        // 10k threshold matches the SQLite store so backends stay rank-identical
-        // wherever the exact scan is still fast.
-        if (!this._sketch && this._vecOffsets.size >= 10000) {
+        // SKETCH_THRESHOLD is shared with the SQLite store so both switch to the
+        // sketch at the same vector count. NOTE: this lazy path only runs when the
+        // store is in lazy mode (cacheEmbeddings off AND chunkCount ≥ LAZY_VEC_THRESHOLD);
+        // a corpus with < LAZY_VEC_THRESHOLD chunks but ≥ SKETCH_THRESHOLD vectors
+        // (heavy enrichment/oversized windows) still scans exactly here while SQLite
+        // sketches — a narrow band worth a dedicated scale parity test before relying
+        // on byte-identical top-5 above the threshold.
+        if (!this._sketch && this._vecOffsets.size >= SKETCH_THRESHOLD) {
             try { this._sketch = updateVectorSketch(null, source); } catch { this._sketch = null; }
         }
         const hits = this._sketch
@@ -501,9 +492,6 @@ export class MemoryGraphIndex {
             vectorResults = [];
         }
 
-        // Fusion + boost ladder lives in search-core.mjs so the in-memory engine
-        // and the SQLite store rank identically. Backend state is reached through
-        // accessors; the math is measured once and shared.
         return fuseAndRank({
             lexicalResults,
             vectorResults,
@@ -516,8 +504,7 @@ export class MemoryGraphIndex {
             queryText,
             exactBoostName,
             corpusEnriched: this._corpusEnriched,
-            // Equivalent to the former full-scan (symbolTable is keyed by name.toLowerCase()),
-            // but O(1) and reusable by the SQLite backend.
+            // O(1) vs the old full-scan; same contract implemented by the SQLite backend.
             resolveExact:  (term) => this.symbolTable.get(term) || [],
         });
     }
@@ -553,7 +540,7 @@ export class MemoryGraphIndex {
         this._saveTimer = setTimeout(async () => {
             this._saveTimer = null;
             try { await this.save(); }
-            catch (err) { process.stderr.write(`[core-engine] ❌ Async save failed: ${err.message}\n`); }
+            catch (err) { process.stderr.write(`[engine/memory] ❌ Async save failed: ${err.message}\n`); }
         }, delayMs);
     }
 
@@ -703,7 +690,7 @@ export class MemoryGraphIndex {
     /**
      * Chunks that reference a symbol *by name* as a type (`type_refs`) or as a
      * base class/interface (`extends`) — the non-call half of symbol-level
-     * references. Calls are served by findCallers; mcp-tools.findReferences fuses
+     * references. Calls are served by findCallers; mcp/topology.mjs findReferences fuses
      * the two and classifies each by confidence. Case-insensitive exact match.
      * @returns {object[]}
      */
@@ -756,8 +743,6 @@ export class MemoryGraphIndex {
         return files.size;
     }
     vectorCount() {
-        // Count one vector per chunk: exclude the summary (`|s`) and window (`|wN`)
-        // pseudo-entries, which all fold onto a base key / chunk id.
         if (this._lazyMode) {
             let n = 0;
             for (const k of this._vecOffsets.keys()) if (baseEmbeddingKey(k) === k) n++;

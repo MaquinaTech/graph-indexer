@@ -4,7 +4,9 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
-## [Unreleased]
+## [2.0.0] — 2026-06-21
+
+This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.
 
 ### Onboarding (`graph-indexer init`) — environment-agnostic setup
 
@@ -20,18 +22,15 @@ The first-run setup now produces a working configuration in **any** repository, 
 
 Idempotency, merge-safe config writes, air-gapped defaults, and `--dry-run` are all preserved.
 
----
-
-## [2.0.0] — 2026-06-18
-
-This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible.
-
 ### New MCP tools
 
 | Tool | Purpose |
 |------|---------|
 | `find_references` | Where a symbol is used: callers, subclasses, and type-annotation references, split into high-confidence vs name-only blast radius. |
+| `find_routes` | HTTP routes mapped to their handler chunks — NestJS, Express/Koa, FastAPI/Flask, and Spring (Java); the controller/router prefix is joined onto the method path. Attribute-routed C#/ASP.NET, PHP (Laravel/Symfony), Rails, and Django URLconf are out of scope. |
 | `get_subgraph` | Bounded connected subgraph (callers + callees + type/inheritance referers) around a seed symbol, in one call. Replaces multi-hop `search_code → get_call_graph → find_references` round-trips. |
+
+HTTP route extraction (`parse/routes.mjs`) parses route definitions from the AST so `find_routes` can resolve an endpoint straight to its handler chunk; coverage is per-framework as noted above.
 
 **All tools** now support a `response_format: 'json'` parameter that returns typed structured fields instead of markdown prose, for programmatic clients.
 
@@ -195,14 +194,14 @@ New end-to-end agent benchmark that drives real MCP tools and traces an agent's 
 
 ### Documentation
 
-- **README.md** — rewritten: 702 lines → 207 lines. Focused on the quick start, MCP tool reference, configuration trade-offs table, CLI flags, and environment variables. Benchmark numbers verifiable via `npm run test:eval`.
+- **README.md** — rewritten to roughly a third its previous length (~700 → ~310 lines). Focused on the quick start, MCP tool reference, configuration trade-offs table, CLI flags, and environment variables. Benchmark numbers verifiable via `npm run test:eval`.
 - **`docs/benchmarks/`** — new directory with detailed benchmark reports: `BENCH_BASELINE.md`, `BENCH_FULL_SUITE.md`, `BENCH_LANGUAGES.md`, `BENCH_SUMMARY.md`, `BENCH_AGENT.md`, `BENCH_TIER1_BASELINE.md`, `BENCH_TIER1_RESULTS.md`, `FIXTURES.md`.
 - **`docs/internals/IMPROVEMENT_STEMMING.md`** — internal design note for the Porter stemming bridge.
 - **SECURITY.md** — updated to document the git-signals subprocess, the one-time model-weight download for the local embedding provider, and the strengthened symlink path guard.
 
 ### CI
 
-- `.github/workflows/ci.yml` — verifies all 14 languages are present in `parser-utils.mjs`, checks the `.graph-indexer/` data directory is created (not the legacy root layout), and validates that the `prompts/CORE.md` and `prompts/INTEGRATION.md` files are in the published package.
+- `.github/workflows/ci.yml` — verifies all 14 languages are present in `parse/languages.mjs`, checks the `.graph-indexer/` data directory is created (not the legacy root layout), validates that `prompts/CORE.md` and `prompts/INTEGRATION.md` are present, and runs a package-integrity step that `npm pack`s the tarball and asserts the `engine/`, `mcp/`, and `parse/` subdir modules ship and every entrypoint resolves its imports from the package.
 - Removed `.github/workflows/publish-with-provenance.yml` (deprecated).
 
 ### Dependencies
@@ -214,8 +213,22 @@ New optional and production dependencies:
 | `tree-sitter-bash` | 0.23.3 | optional | Bash language parser |
 | `tree-sitter-c` | 0.21.4 | optional | C language parser |
 | `tree-sitter-swift` | 0.5.0 | optional | Swift language parser |
-| `tree-sitter-scss` | 1.0.0 | production | SCSS language parser |
+| `tree-sitter-scss` | 1.0.0 | optional | SCSS language parser |
 | `@huggingface/transformers` | 3.8.1 | optional | In-process local embedding model |
+| `hnswlib-node` | 3.0.0 | optional | Approximate-nearest-neighbour vector index (large embedded corpora) |
+
+### Module reorganization (breaking only for deep imports)
+
+Internal source files were grouped into directories. The CLI bins, the MCP server, and the default behaviour are unchanged; only code that imported a specific internal file path is affected. The package entry point (`import 'graph-indexer'`) now resolves to `engine/memory.mjs`.
+
+| Old path | New path |
+|----------|----------|
+| `core-engine.mjs` | `engine/memory.mjs` |
+| `sqlite-store.mjs` | `engine/sqlite.mjs` |
+| `mcp-tools.mjs` | `mcp/tools.mjs` |
+| `parser-utils.mjs` | split into `parse/extractor.mjs`, `parse/imports.mjs`, `parse/languages.mjs`, `parse/metadata.mjs`, `parse/routes.mjs` |
+
+New modules added in the reorg: `engine/binary.mjs` (embedding binary codec + vector index), `mcp/format.mjs`, `mcp/topology.mjs`, `embeddings.mjs`, `git-signals.mjs`, `layout.mjs`, `daemon-ctl.mjs`, `daemon-lock.mjs`, `config.mjs`, `cli-ui.mjs`, `storage.mjs`.
 
 ---
 

@@ -19,11 +19,19 @@ export const DEFAULTS = Object.freeze({
     storage: 'auto',                   // 'auto' (default) | 'memory' | 'sqlite'
     embeddings: false,                 // OFF by default — lexical + stemming need zero dependencies.
                                        // Opt in with --embeddings or INDEXER_EMBEDDINGS=on.
-    embedProvider: 'auto',             // 'auto' (Ollama→local→lexical) | 'ollama' | 'local' | 'off'
+    embedProvider: 'auto',
+    // 'auto'   → Ollama (if running w/ the model) → in-process local → lexical-only
+    // 'ollama' → force Ollama daemon   (requires: ollama serve + pulled model)
+    // 'local'  → in-process Xenova     (requires: npm i @huggingface/transformers)
+    // 'mlx'    → Apple Metal GPU       (requires: npm run embed:setup:mlx; macOS only)
+    // 'off'    → lexical-only, no vectors
     embedModel: 'nomic-embed-text',    // default Ollama embed model when embeddings are enabled.
                                        // qwen3-embedding:4b is a documented opt-in upgrade
                                        // (--embed-model / EMBED_MODEL), never a hardcoded default.
     localEmbedModel: 'Xenova/all-MiniLM-L6-v2', // in-process model (optional @huggingface/transformers)
+    mlxEmbedModel: 'mlx-community/all-MiniLM-L6-v2-4bit', // MLX embedder model (provider 'mlx').
+                                       // Override with --mlx-embed-model / INDEXER_MLX_EMBED_MODEL;
+                                       // must be an mlx_embeddings-compatible sentence model.
     ollamaHost: 'http://localhost:11434',
     gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
     gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
@@ -60,7 +68,7 @@ export const DEFAULTS = Object.freeze({
  */
 export function loadConfigFile(root) {
     const candidates = [
-        path.join(root, DATA_DIR_NAME, CONFIG_FILE_NAME), // current canonical location
+        path.join(root, DATA_DIR_NAME, CONFIG_FILE_NAME),
         path.join(root, '.graph-indexer.json'),           // legacy root config (back-compat)
     ];
     for (const configPath of candidates) {
@@ -129,19 +137,15 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     const gitSignals = env.INDEXER_GIT_SIGNALS === 'off' || argv.includes('--no-git-signals')
         ? false
         : (file.gitSignals === false ? false : DEFAULTS.gitSignals);
-    // Opt-in ranking boost weight (0..1). 0 keeps search ranking byte-identical.
     const gitRankBoostRaw = env.INDEXER_GIT_RANK_BOOST ?? flagValue(argv, '--git-rank-boost')
         ?? (Number.isFinite(file.gitRankBoost) ? file.gitRankBoost : DEFAULTS.gitRankBoost);
     const gitRankBoost = Math.min(1, Math.max(0, Number(gitRankBoostRaw) || 0));
 
-    // All generated artifacts live together under `<projectRoot>/.graph-indexer/`
-    // (see layout.mjs) so they never clutter the project root.
     const paths = artifactPaths(projectRoot);
 
     return Object.freeze({
         projectRoot,
         storage,
-        // Index artifact paths — all derive from the same data dir (layout.mjs).
         dataDir: paths.dataDir,
         indexPath: paths.indexPath,
         embeddingPath: paths.embeddingPath,
@@ -160,6 +164,10 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         // This is the model `auto`/`ollama` providers pull (e.g. qwen3-embedding:4b).
         embedModel: flagValue(argv, '--embed-model') || env.EMBED_MODEL || file.embedModel || DEFAULTS.embedModel,
         localEmbedModel: file.localEmbedModel || DEFAULTS.localEmbedModel,
+        // MLX embedder model: --mlx-embed-model flag > INDEXER_MLX_EMBED_MODEL env >
+        // config > pinned MiniLM default. Passed to the Python server + stamped in meta.
+        mlxEmbedModel: flagValue(argv, '--mlx-embed-model') || env.INDEXER_MLX_EMBED_MODEL
+            || file.mlxEmbedModel || DEFAULTS.mlxEmbedModel,
         gitSignals,
         gitRankBoost,
 
@@ -191,7 +199,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     });
 }
 
-// Memoised singleton for import-time consumers (e.g. parser-utils language loading).
+// Memoised singleton for import-time consumers (e.g. parse/languages.mjs language loading).
 let _cached = null;
 export function getConfig() {
     if (!_cached) _cached = resolveConfig();
@@ -210,8 +218,12 @@ export function getConfig() {
  * @returns {string[]}
  */
 export function describeConfig(config, { backend = config.storage } = {}) {
+    // Show the model that the chosen provider actually loads (mlx/local use their own).
+    const provModel = config.embedProvider === 'mlx' ? config.mlxEmbedModel
+        : config.embedProvider === 'local' ? config.localEmbedModel
+            : config.embedModel;
     const emb = config.embeddingsEnabled
-        ? `on · provider=${config.embedProvider}, model=${config.embedModel}`
+        ? `on · provider=${config.embedProvider}, model=${provModel}`
         : 'off (lexical + stemming only)';
     return [
         `storage     : ${backend}`,

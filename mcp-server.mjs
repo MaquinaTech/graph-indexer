@@ -3,9 +3,9 @@
  * @file mcp-server.mjs
  * @description MCP server bootstrap. Resolves configuration, selects the storage
  *              backend (in-memory by default, SQLite when configured), registers
- *              the tool surface (mcp-tools.mjs) and connects over stdio. All
+ *              the tool surface (mcp/tools.mjs) and connects over stdio. All
  *              retrieval logic lives in the store + search-core; all tool logic in
- *              mcp-tools — this file is wiring only.
+ *              mcp/tools.mjs — this file is wiring only.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -29,8 +29,6 @@ const PROJECT_ROOT = config.projectRoot;
 const PID_FILE = config.pidFile;
 const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
-// Make sure the data dir exists and any pre-v1.4 root artifacts are relocated
-// before we touch index paths or start watching the data dir.
 ensureDataDir(PROJECT_ROOT);
 migrateLegacyLayout(PROJECT_ROOT);
 
@@ -75,9 +73,8 @@ const version = readPackageVersion();
 const server = new McpServer({ name: 'graph-indexer', version });
 
 const db = await createStore(config, { cacheEmbeddings: false });
-const backend = db.backend; // 'auto' is resolved to a concrete backend by createStore.
+const backend = db.backend;
 
-// Effective configuration, so users can see exactly what is running, never silently.
 process.stderr.write('⚙️  Effective configuration:\n');
 for (const line of describeConfig(config, { backend })) process.stderr.write(`     ${line}\n`);
 for (const notice of configNotices(config)) process.stderr.write(`⚠️  ${notice}\n`);

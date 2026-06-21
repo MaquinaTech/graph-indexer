@@ -8,7 +8,6 @@
 
 // ─── Rendering helpers ──────────────────────────────────────────────────────────
 
-/** Extract just the function signature (first lines up to the opening brace). */
 export function extractSignatureLine(codeSnippet) {
     if (!codeSnippet) return '';
     const lines = codeSnippet.split('\n');
@@ -22,12 +21,10 @@ export function extractSignatureLine(codeSnippet) {
 }
 
 /**
- * Prune a function body: keep signature + query-relevant lines + tail.
- *
- * Semantic fallback: when no lexical token matches (the agent used a high-level
- * description like "authentication bottleneck" that isn't in the code verbatim),
- * preserve the structural skeleton — control-flow lines and calls — rather than
- * blindly truncating, so 'smart' detail always returns meaningful context.
+ * When no lexical token matches (e.g. the agent used a high-level description
+ * like "authentication bottleneck" that isn't in the code verbatim), fall back
+ * to preserving structural skeleton — control-flow lines and calls — rather than
+ * blindly truncating, so the caller still gets meaningful context.
  */
 export function pruneBodyByQuery(codeSnippet, queryTokens, maxLines = 40) {
     if (!codeSnippet) return '';

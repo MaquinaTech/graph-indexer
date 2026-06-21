@@ -98,8 +98,7 @@ function scheduleEnrichCacheSave() {
     }, 3000);
 }
 
-// Resolve the enrichment model once (handles "auto" → strongest local code model),
-// cached for the daemon's lifetime — same policy as the bootstrap indexer.
+// "auto" resolves to the strongest available local code model, same policy as the bootstrap indexer.
 let _enrichModel = null;
 async function getEnrichModel() {
     if (_enrichModel) return _enrichModel;
@@ -198,21 +197,20 @@ async function processFileChange(absolutePath) {
         const newChunks = extractSemanticChunks(tree.rootNode, filename, content, ext);
         _coreFiles = null; // dependency graph may change → PageRank core set is stale
 
-        // Enrichment BEFORE embedding so the summary rides the vector payload
-        // (embeddingKeyFor accounts for it, so cache lookups stay correct).
+        // Enrichment BEFORE embedding: summary rides the vector payload and
+        // embeddingKeyFor accounts for it, so cache lookups stay correct.
         await enrichChunks(filename, newChunks);
 
-        // 🥇 STRICT PAYLOAD PARITY: identical embedding payloads to indexer.mjs
-        // (shared helpers) so incremental updates match the bootstrap index —
-        // including the summary-only second vector for enriched chunks.
+        // Identical embedding payloads to indexer.mjs (shared helpers) so incremental
+        // updates match the bootstrap index, including summary-only vectors for enriched chunks.
         const chunksToEmbed = newChunks.filter(c => !db.hasEmbedding(embeddingKeyFor(c)));
         const embeddings = new Map();
         if (chunksToEmbed.length > 0) {
             const entries = [];
             for (const c of chunksToEmbed) {
                 const baseKey = embeddingKeyFor(c);
-                // Oversized definitions embed their full body (windowed); the lexical path
-                // keeps the 3000-char snippet. `content` is the file we just re-read.
+                // Oversized definitions embed their full body (windowed) while the lexical path
+                // keeps the 3000-char snippet — parity with how indexer.mjs builds payloads.
                 const payload = buildEmbeddingPayload(c, imports, fullBodyForEmbedding(c, content));
                 entries.push({ key: baseKey, text: payload });
                 const windows = embeddingWindows(payload); // tail windows for oversized chunks

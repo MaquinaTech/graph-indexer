@@ -1,5 +1,5 @@
 /**
- * @file sqlite-store.mjs
+ * @file engine/sqlite.mjs
  * @description Disk-backed graph store for enterprise-scale monorepos. Implements
  *              the same read contract as MemoryGraphIndex (see storage.mjs) over
  *              `node:sqlite` — built into Node, so this adds ZERO dependencies.
@@ -33,15 +33,15 @@ import {
 } from '../search-core.mjs';
 import {
     writeEmbeddingBinary, appendEmbeddingBinary, scanEmbeddingBinary,
-    updateVectorSketch, searchVectorSketch,
+    updateVectorSketch, searchVectorSketch, SKETCH_THRESHOLD,
 } from './binary.mjs';
 
 // node:sqlite is loaded lazily so the default in-memory path never requires it.
 let DatabaseSync = null;
 try { ({ DatabaseSync } = await import('node:sqlite')); } catch { /* reported in ctor */ }
 
-const SKETCH_THRESHOLD   = 10000; // build the binary sketch above this many vectors.
-                                  // Below it the exact streaming scan stays under ~20 ms
+// SKETCH_THRESHOLD (shared with the memory store via binary.mjs) — build the binary
+// sketch above this many vectors. Below it the exact streaming scan stays under ~20 ms
                                   // AND both backends rank identically (the sketch is
                                   // approximate in the candidate tail); above it the
                                   // sketch caps latency at ~5–15 ms regardless of size.
@@ -491,9 +491,8 @@ export class SqliteGraphStore {
     searchHybrid(queryText, queryVector, topK = 5, minScore = 0.3, exactBoostName = null) {
         this._maybeRefresh();
 
-        // 1. Lexical BM25 over posting lists (one indexed lookup per query term).
-        // Asymmetric stemming mirrors the in-memory engine (parity): stem the query
-        // only for natural-language queries; symbolic lookups stay exact.
+        // Asymmetric stemming: stem only for natural-language queries so symbolic
+        // lookups stay exact — mirrors the in-memory engine for parity.
         const qTokens = tokenize(queryText, isNaturalLanguageQuery(queryText));
         const occ = new Map();
         for (const t of qTokens) occ.set(t, (occ.get(t) || 0) + 1);
@@ -514,10 +513,9 @@ export class SqliteGraphStore {
             .slice(0, LEXICAL_FUSION_CAP)
             .map(([id, score], i) => ({ id, score, rank: i + 1 }));
 
-        // 2. Vector channel: stream the FULL embeddings bin (bounded buffers) so a
-        //    conceptual query that shares no tokens with the code can still match.
-        //    The old design scored only lexical candidates, which silently turned
-        //    semantic search off exactly where it was needed.
+        // Stream the FULL embeddings bin (bounded buffers) so conceptual queries
+        // that share no tokens with the code can still match — scoring only lexical
+        // candidates silently disabled semantic search where it mattered most.
         let vectorResults = [];
         if (queryVector && this._vecFd >= 0) {
             // Binary sketch above SKETCH_THRESHOLD (Hamming prefilter + exact
@@ -541,9 +539,6 @@ export class SqliteGraphStore {
             vectorResults = finalizeVectorCandidates(entries);
         }
 
-        // 3. Fetch candidate rows ONCE (transient, bounded by the caps above), then
-        //    fuse + boost with the shared ranker. getChunk lazy-fetches stragglers
-        //    (e.g. exact-boost ids) and caches them for the duration of the call.
         const rowCache = new Map();
         const fetchRow = (id) => {
             if (rowCache.has(id)) return rowCache.get(id);
@@ -597,7 +592,7 @@ export class SqliteGraphStore {
     _insertChunk(chunk, imports, vecEntry) {
         const doc = buildLexicalDocument(chunk, imports);
         const tokens = tokenize(doc);                       // raw + additive stems
-        const docLen = tokenize(doc, false).length;          // raw-only BM25 length (parity w/ memory engine)
+        const docLen = tokenize(doc, false).length;          // raw-only length for BM25 avgdl (parity w/ memory engine)
 
         const termCounts = new Map();
         for (const t of tokens) termCounts.set(t, (termCounts.get(t) || 0) + 1);
@@ -645,8 +640,8 @@ export class SqliteGraphStore {
         this._prepareWrite();
         this._maybeRefresh();
 
-        // 1. Append new vectors first — orphan bytes on a failed commit are
-        //    harmless and compacted away by the next full index run.
+        // Append new vectors first — orphan bytes on a failed commit are harmless
+        // and compacted away by the next full index run.
         let appended = new Map();
         const embCount = embeddings ? (embeddings instanceof Map ? embeddings.size : Object.keys(embeddings).length) : 0;
         if (embCount > 0) {
@@ -662,8 +657,8 @@ export class SqliteGraphStore {
 
         this.db.exec('BEGIN');
         try {
-            // 2. Capture reusable vector offsets for incoming chunks BEFORE the
-            //    file's old rows (which may hold those offsets) are deleted.
+            // Capture reusable vector offsets BEFORE deleting old rows, which may
+            // be the only rows that hold those offsets.
             const reuse = new Map();
             for (const chunk of chunks) {
                 if (!chunk.content_hash) continue;
@@ -673,7 +668,6 @@ export class SqliteGraphStore {
                 if (row) reuse.set(key, { offset: row.vec_offset, dim: row.vec_dim });
             }
 
-            // 3. Remove the file's old rows with exact BM25 bookkeeping.
             let docCount = this._docCount;
             let totalDocLen = this._totalDocLen;
             for (const row of this._stmtByFile.all(filePath)) {
@@ -687,7 +681,6 @@ export class SqliteGraphStore {
                 docCount--;
             }
 
-            // 4. Insert the new chunks.
             for (const chunk of chunks) {
                 const key = chunk.content_hash ? embeddingKeyFor(chunk) : null;
                 const vecEntry = key ? (appended.get(key) ?? reuse.get(key) ?? null) : null;
@@ -696,7 +689,6 @@ export class SqliteGraphStore {
             }
             this._stmtPruneTerms.run();
 
-            // 5. Dependency edges + meta.
             this._stmtDelDeps.run(filePath);
             if (!imports || imports.length === 0) this._stmtInsDep.run(filePath, null);
             else for (const d of imports) this._stmtInsDep.run(filePath, d);
@@ -717,7 +709,6 @@ export class SqliteGraphStore {
             throw err;
         }
 
-        // 6. Mirror the in-RAM dependency graph (same shape as updateFileGraph).
         const oldDeps = this._graph.dependencies[filePath] || [];
         for (const oldDep of oldDeps) {
             if (this._graph.importedBy[oldDep]) {
@@ -760,9 +751,8 @@ export class SqliteGraphStore {
      */
     buildFrom({ chunks, graph, embeddingCache }) {
         this._open();
-        this.db.exec('PRAGMA synchronous = OFF;'); // fast bulk load; rebuilt artifact
+        this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
-        // Write the embedding binary and derive each key's float offset.
         const offsets = new Map();
         let dim = 0;
         const cacheSize = embeddingCache instanceof Map ? embeddingCache.size : Object.keys(embeddingCache || {}).length;
@@ -785,8 +775,8 @@ export class SqliteGraphStore {
         let totalDocLen = 0, docCount = 0;
 
         this.db.exec('BEGIN');
-        // Fresh build — drop any prior content (inside the txn: readers keep the
-        // old index until COMMIT, instead of briefly seeing empty tables).
+        // Drop inside the transaction so concurrent readers see the old index
+        // until COMMIT, never briefly-empty tables.
         this.db.exec(`
             DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS postings;
             DROP TABLE IF EXISTS terms;  DROP TABLE IF EXISTS call_edges;
@@ -807,7 +797,7 @@ export class SqliteGraphStore {
             const deps = (graph?.dependencies?.[chunk.file_path]) || [];
             const doc = buildLexicalDocument(chunk, deps);
             const tokens = tokenize(doc);                       // raw + additive stems
-            const docLen = tokenize(doc, false).length;          // raw-only BM25 length (parity w/ memory engine)
+            const docLen = tokenize(doc, false).length;          // raw-only length for BM25 avgdl (parity w/ memory engine)
             totalDocLen += docLen; docCount++;
 
             const termCounts = new Map();
@@ -844,8 +834,8 @@ export class SqliteGraphStore {
             else for (const d of list) insDep.run(file, d);
         }
 
-        // HTTP routes (global array; each row is self-describing). Inserted in array
-        // order so the autoincrement id mirrors the in-memory graph.routes order.
+        // Inserted in array order so the autoincrement id mirrors the in-memory
+        // graph.routes order, keeping both backends rank-identical.
         const insRoute = this.db.prepare(
             'INSERT INTO routes (method, path, handler_name, handler_chunk_id, file_path, line, framework) '
             + 'VALUES (?, ?, ?, ?, ?, ?, ?)'

@@ -32,8 +32,12 @@ import {
     migrateLegacyLayout, hasLegacyLayout,
 } from './layout.mjs';
 import { readPid, isAlive } from './daemon-lock.mjs';
+import { ensureMlxEnv, mlxEnvReady } from './embedders/setup-mlx.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Default MLX embed model offered in onboarding (mirrors config.mjs DEFAULTS.mlxEmbedModel).
+const MLX_MODEL_DEFAULT = 'mlx-community/all-MiniLM-L6-v2-4bit';
 
 // ─── Subcommand dispatch ─────────────────────────────────────────────────────
 // package.json maps the `graph-indexer` bin to THIS file, so `npx graph-indexer
@@ -100,8 +104,6 @@ const forceNonInteractive = isAllLanguages
     || cli.flags.has('--non-interactive') || cli.flags.has('--ci');
 const isInteractive = !forceNonInteractive && Boolean(process.stdin.isTTY);
 
-// Target repo: --repo wins, then a positional path, then the current directory.
-// Everything (artifacts, configs, wired commands, env) anchors to this absolute path.
 const PROJECT_ROOT = path.resolve(cli.repo || cli.positional || process.cwd());
 const PATHS = artifactPaths(PROJECT_ROOT);
 const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
@@ -568,6 +570,21 @@ async function selectModel({ purpose, def, models }) {
     return await promptText({ label: `${purpose} model`, def, hint: '· Ollama offline — used once pulled' });
 }
 
+/**
+ * Pick the MLX embedding model. Offers the proven MiniLM 4-bit default plus an
+ * "Other…" escape hatch for any mlx_embeddings-compatible model id. The chosen id is
+ * passed to the Python server at spawn time and stamped into the embed-meta sidecar.
+ */
+async function selectMlxModel(def) {
+    const items = [
+        { key: MLX_MODEL_DEFAULT, label: 'all-MiniLM-L6-v2 (4-bit)', desc: c.dim('recommended · 384-dim · fastest, proven') },
+        { key: CUSTOM_MODEL, label: 'Other (type a model id)…', desc: c.dim('any mlx_embeddings-compatible model') },
+    ];
+    const choice = await interactiveSelect({ title: 'MLX embedding model', items, selectedKey: def });
+    if (choice !== CUSTOM_MODEL) return choice;
+    return await promptText({ label: 'MLX model id', def, hint: '· e.g. an mlx-community/* sentence model' });
+}
+
 // ─── Stack config persistence (.graph-indexer/config.json) ───────────────────
 
 function saveStackConfig({ languages, frameworks, engine, interactive }) {
@@ -577,16 +594,13 @@ function saveStackConfig({ languages, frameworks, engine, interactive }) {
     const before = JSON.stringify(existing);
 
     if (interactive) {
-        // The user just made an explicit choice — it is authoritative.
-        if (languages) existing.languages = languages; else delete existing.languages;
+            if (languages) existing.languages = languages; else delete existing.languages;
         if (frameworks && frameworks.length) existing.frameworks = frameworks; else delete existing.frameworks;
     } else {
-        // Auto-detect run: never destroy an existing selection; only fill blanks.
         if (languages && !existing.languages) existing.languages = languages;
         if (frameworks && frameworks.length && !existing.frameworks) existing.frameworks = frameworks;
     }
 
-    // Engine settings only when the user explicitly configured them (interactive).
     // Merge nested objects so power-user knobs we didn't prompt for (coreRatio,
     // topM, poolSize, …) survive a re-run.
     if (engine) {
@@ -596,6 +610,7 @@ function saveStackConfig({ languages, frameworks, engine, interactive }) {
         existing.ollamaHost = engine.ollamaHost;
         existing.embedModel = engine.embedModel;
         if (engine.localEmbedModel) existing.localEmbedModel = engine.localEmbedModel;
+        if (engine.mlxEmbedModel) existing.mlxEmbedModel = engine.mlxEmbedModel;
         existing.enrichment = { ...(existing.enrichment || {}), ...engine.enrichment };
         existing.rerank = { ...(existing.rerank || {}), ...engine.rerank };
     }
@@ -744,11 +759,9 @@ function updateGitignore() {
     const gitignorePath = path.join(PROJECT_ROOT, '.gitignore');
     const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : '';
 
-    // Drop any previous managed block...
-    let body = existing.replace(
+        let body = existing.replace(
         new RegExp(`\\n?${GITIGNORE_BEGIN}[\\s\\S]*?${GITIGNORE_END}\\n?`, 'g'), '\n'
     );
-    // ...and any stray pre-v1.4 single lines we used to add.
     const cleaned = body.split('\n').filter(line => !OLD_GITIGNORE_LINES.has(line.trim()));
     body = cleaned.join('\n');
 
@@ -868,8 +881,6 @@ function runMigration() {
 
     log('\n' + c.bold('  ' + glyph.move + ' Tidying project layout'));
 
-    // A daemon from an older install may hold the SQLite db open at the old root
-    // path; stop it before relocating so nothing writes to a moved inode.
     let stoppedDaemon = false;
     for (const pf of [path.join(PROJECT_ROOT, '.idx-daemon.pid'), PATHS.pidFile]) {
         const pid = readPid(pf);
@@ -911,14 +922,12 @@ const stackPreview = [
 ].filter(Boolean).join(', ');
 log(`  ${c.dim('Detected')} ${stackPreview ? stackPreview + c.dim(' in this repo') : c.dim('no known stack auto-detected')}`);
 
-// ── Pre-flight migration ──────────────────────────────────────────────────────
 runMigration();
 
-// ── Step 1 · Languages ────────────────────────────────────────────────────────
 
 stepHeader(1, 'Languages to index');
 
-let selectedLanguages = null; // null = all languages (default)
+let selectedLanguages = null;
 if (isInteractive) {
     const picked = await interactiveMultiSelect({
         title: 'Select languages',
@@ -935,12 +944,9 @@ if (selectedLanguages) {
     if (detectedLanguages.size > 0) log(c.dim(`      detected: ${Array.from(detectedLanguages).join(', ')}`));
 }
 
-// ── Step 2 · Frameworks ───────────────────────────────────────────────────────
 
 stepHeader(2, 'Frameworks (sharpen the agent prompt)');
 
-// Languages that drive prompt assembly: explicit selection wins; otherwise what
-// the scan found (keeps "all languages" from dumping every Layer 2 file).
 const promptLanguages = selectedLanguages || Array.from(detectedLanguages);
 const availableFrameworks = FRAMEWORKS.filter(f => f.langs.some(l => promptLanguages.includes(l)));
 
@@ -967,11 +973,10 @@ if (availableFrameworks.length === 0) {
     }
 }
 
-// ── Step 3 · Search engine & LLM features ─────────────────────────────────────
 
 stepHeader(3, 'Search engine & LLM features');
 
-let engineConfig = null; // null = leave engine settings to defaults / existing config
+let engineConfig = null;
 {
     const existing = readJsonSafe(PATHS.configPath) || {};
     const exEnrich = existing.enrichment || {};
@@ -980,9 +985,6 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
     if (!isInteractive) {
         line(glyph.skip, 'Engine', 'using defaults / existing config (non-interactive)');
     } else if (await confirm({ label: 'Use recommended defaults?  (lexical search · no LLM · no network)', def: true })) {
-        // Fast path: skip the ~10 engine prompts and apply the shipped defaults
-        // (lexical + stemming; no embeddings/enrichment/rerank). Storage stays on
-        // whatever backend the user previously forced, else 'auto'.
         const keepStorage = existing.storage === 'memory' || existing.storage === 'sqlite' ? existing.storage : 'auto';
         engineConfig = {
             storage: keepStorage,
@@ -991,12 +993,12 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
             ollamaHost: existing.ollamaHost || 'http://localhost:11434',
             embedModel: existing.embedModel || 'nomic-embed-text',
             localEmbedModel: existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2',
+            mlxEmbedModel: existing.mlxEmbedModel || MLX_MODEL_DEFAULT,
             enrichment: { enabled: false },
             rerank: { enabled: false },
         };
         line(glyph.ok, 'Engine', 'recommended defaults — lexical search, no LLM, no network');
     } else {
-        // Storage backend
         const storage = await interactiveSelect({
             title: 'Storage backend',
             items: [
@@ -1007,23 +1009,23 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
             selectedKey: existing.storage || 'auto',
         });
 
-        // Semantic search engine — how query/code vectors are produced. Embeddings
-        // are opt-in (the default lexical + stemming path needs zero dependencies),
-        // so 'Lexical only' is highlighted; choosing a provider enables them. 'auto'
-        // prefers a running Ollama and otherwise a small in-process model (no daemon).
+        const engineItems = [
+            { key: 'off', label: 'Lexical only', desc: c.dim('default · keyword/symbol + stemming · no vectors, no dependencies') },
+            { key: 'auto', label: 'Auto', desc: c.dim('Ollama if running, else a bundled local model — no setup') },
+            { key: 'ollama', label: 'Ollama', desc: c.dim('highest quality · needs the Ollama app + a pulled model') },
+            { key: 'local', label: 'Local (in-process)', desc: c.dim('no daemon · downloads a ~25 MB model on first index') },
+        ];
+        // MLX runs on the Apple Metal GPU and is macOS-only; only offer it there.
+        if (process.platform === 'darwin') {
+            engineItems.push({ key: 'mlx', label: 'Apple Metal (MLX)', desc: c.dim('fastest local vectors · auto-installs a Python venv (~900 MB)') });
+        }
         const embedProvider = await interactiveSelect({
             title: 'Semantic search engine',
-            items: [
-                { key: 'off', label: 'Lexical only', desc: c.dim('default · keyword/symbol + stemming · no vectors, no dependencies') },
-                { key: 'auto', label: 'Auto', desc: c.dim('Ollama if running, else a bundled local model — no setup') },
-                { key: 'ollama', label: 'Ollama', desc: c.dim('highest quality · needs the Ollama app + a pulled model') },
-                { key: 'local', label: 'Local (in-process)', desc: c.dim('no daemon · downloads a ~25 MB model on first index') },
-            ],
+            items: engineItems,
             selectedKey: existing.embeddings === true ? (existing.embedProvider || 'auto') : 'off',
         });
         const embeddingsEnabled = embedProvider !== 'off';
 
-        // Ollama endpoint — powers Ollama embeddings, enrichment and reranking.
         const ollamaHost = normalizeHost(await promptText({
             label: 'Ollama host', hint: '(URL or port)',
             def: existing.ollamaHost || 'http://localhost:11434',
@@ -1033,14 +1035,28 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
         if (models) line(glyph.ok, 'Ollama', `${models.length} model(s) at ${ollamaHost}`);
         else line(glyph.warn, 'Ollama', `not reachable at ${ollamaHost} — you can still name models to pull later`);
 
-        // Ollama embedding model — only when Ollama can be the embedder. nomic is the
-        // safe default; qwen3-embedding:4b is the documented opt-in upgrade.
         const embedModel = (embedProvider === 'ollama' || embedProvider === 'auto')
             ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'nomic-embed-text', models })
             : (existing.embedModel || 'nomic-embed-text');
         const localEmbedModel = existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2';
 
-        // LLM enrichment (opt-in)
+        // MLX (Apple Metal): let the user pick the model, then offer to provision the
+        // dedicated Python venv right now so the first index doesn't fail on missing deps.
+        let mlxEmbedModel = existing.mlxEmbedModel || MLX_MODEL_DEFAULT;
+        if (embedProvider === 'mlx') {
+            mlxEmbedModel = await selectMlxModel(mlxEmbedModel);
+            if (mlxEnvReady()) {
+                line(glyph.ok, 'MLX', 'environment ready (embedders/venv-mlx)');
+            } else if (await confirm({ label: 'Set up the MLX environment now?  (creates embedders/venv-mlx + pip install, ~900 MB)', def: true })) {
+                log(c.dim('      provisioning MLX venv — downloads MLX wheels, may take a few minutes…'));
+                const res = ensureMlxEnv({ autoInstall: true, log: (s) => log(c.dim('      ' + s)) });
+                if (res.ready) line(glyph.ok, 'MLX', 'environment ready (embedders/venv-mlx)');
+                else line(glyph.warn, 'MLX', `setup incomplete: ${res.error} — run ${c.cyan('npm run embed:setup:mlx')} later`);
+            } else {
+                line(glyph.skip, 'MLX', `setup deferred — run ${c.cyan('npm run embed:setup:mlx')} before indexing`);
+            }
+        }
+
         const enrichEnabled = await confirm({ label: 'Enable LLM enrichment?  (richer semantics, slower indexing)', def: Boolean(exEnrich.enabled) });
         const enrichment = { enabled: enrichEnabled };
         if (enrichEnabled) {
@@ -1051,7 +1067,6 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
             }
         }
 
-        // LLM reranker (opt-in)
         const rerankEnabled = await confirm({ label: 'Enable LLM reranker?  (one LLM call per query, sharper top hits)', def: Boolean(exRerank.enabled) });
         const rerank = { enabled: rerankEnabled };
         if (rerankEnabled) {
@@ -1062,12 +1077,13 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
             }
         }
 
-        engineConfig = { storage, embeddings: embeddingsEnabled, embedProvider, ollamaHost, embedModel, localEmbedModel, enrichment, rerank };
+        engineConfig = { storage, embeddings: embeddingsEnabled, embedProvider, ollamaHost, embedModel, localEmbedModel, mlxEmbedModel, enrichment, rerank };
 
         const embedSummary = embedProvider === 'off' ? 'lexical only'
             : embedProvider === 'local' ? `local · ${localEmbedModel}`
-                : embedProvider === 'ollama' ? `Ollama · ${embedModel}`
-                    : `auto · Ollama ${embedModel} → local`;
+                : embedProvider === 'mlx' ? `MLX · ${mlxEmbedModel}`
+                    : embedProvider === 'ollama' ? `Ollama · ${embedModel}`
+                        : `auto · Ollama ${embedModel} → local`;
         line(glyph.ok, 'Backend', storage === 'sqlite' ? 'SQLite (large repos)'
             : storage === 'memory' ? 'In-memory (forced)' : 'Auto (in-memory → SQLite past 15k chunks)');
         line(embedProvider === 'off' ? glyph.skip : glyph.ok, 'Embeddings', embedSummary);
@@ -1075,9 +1091,8 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
         line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? rerank.model : 'disabled (default)');
     }
 
-    // Node version guard for the SQLite backend (warn, never fail). 'auto' only
-    // switches to SQLite past ~15k chunks, so flag it on repos large enough to
-    // plausibly cross that line; a forced SQLite backend is always flagged.
+    // Warn (never fail): 'auto' can promote to SQLite past ~15k chunks, so flag
+    // large repos too — not just explicitly forced SQLite.
     const effStorage = engineConfig ? engineConfig.storage : (existing.storage || 'auto');
     if (nodeMajor < 22) {
         if (effStorage === 'sqlite') {
@@ -1090,7 +1105,6 @@ let engineConfig = null; // null = leave engine settings to defaults / existing 
     }
 }
 
-// ── Step 4 · Editors & MCP wiring ─────────────────────────────────────────────
 
 stepHeader(4, 'Editors & MCP wiring');
 
@@ -1112,7 +1126,6 @@ for (const { name, fn } of ides) {
     }
 }
 
-// ── Step 5 · Project files & daemon control ───────────────────────────────────
 
 stepHeader(5, 'Project files & daemon control');
 
@@ -1134,7 +1147,6 @@ if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack +
 
 if (!isDryRun) ensureDataDir(PROJECT_ROOT);
 
-// ── Step 6 · Agent instructions (layered prompt suite) ────────────────────────
 
 stepHeader(6, 'Agent instructions');
 
@@ -1161,7 +1173,6 @@ if (!assembled) {
     act(ruleAction, '.cursor/rules/graph-indexer.mdc', 'always-on Cursor rule');
 }
 
-// ── Summary ────────────────────────────────────────────────────────────────────
 
 log('\n' + rule());
 log(`  ${c.bold('Summary')}${isDryRun ? c.yellow('  (dry-run — nothing written)') : ''}`);
@@ -1182,9 +1193,6 @@ if (!anySummary) log(c.dim('  Nothing to do.'));
 if (layersUsed.length > 0) log(`\n  ${c.dim('Prompt layers')}  ${layersUsed.join(' + ')}`);
 
 // ── Build the index now (interactive) ────────────────────────────────────────
-// Finish genuinely ready to use: offer to run the indexer against the resolved
-// repo root. Skipped in --dry-run and non-interactive runs, where "Next steps"
-// shows the command to run instead.
 let indexBuilt = false;
 if (isInteractive && !isDryRun) {
     log('');
@@ -1198,7 +1206,6 @@ if (isInteractive && !isDryRun) {
     }
 }
 
-// ── Next steps ──────────────────────────────────────────────────────────────────
 
 log('\n' + c.bold('  Next steps'));
 let nextStep = 1;

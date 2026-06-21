@@ -148,12 +148,10 @@ export function stemToken(word) {
     let w = word;
     if (w.length <= 3) return w;
 
-    // Step 1a — plurals
     if (w.endsWith('sses')) w = w.slice(0, -2);
     else if (w.endsWith('ies')) w = w.slice(0, -2);
     else if (!w.endsWith('ss') && w.endsWith('s')) w = w.slice(0, -1);
 
-    // Step 1b — -eed / -ed / -ing (with the classic clean-up)
     let fix = false;
     if (w.endsWith('eed')) { if (_measure(w.slice(0, -3)) > 0) w = w.slice(0, -1); }
     else if (w.endsWith('ed') && _hasVowel(w.slice(0, -2))) { w = w.slice(0, -2); fix = true; }
@@ -164,14 +162,11 @@ export function stemToken(word) {
         else if (_measure(w) === 1 && _cvc(w)) w += 'e';
     }
 
-    // Step 1c — terminal y → i when a vowel precedes
     if (w.length > 2 && w.endsWith('y') && _hasVowel(w.slice(0, -1))) w = w.slice(0, -1) + 'i';
 
-    // Step 2 & 3 — derivational suffixes (only when the stem has measure > 0)
     for (const [suf, rep] of _STEP2) { if (w.endsWith(suf)) { const st = w.slice(0, -suf.length); if (_measure(st) > 0) w = st + rep; break; } }
     for (const [suf, rep] of _STEP3) { if (w.endsWith(suf)) { const st = w.slice(0, -suf.length); if (_measure(st) > 0) w = st + rep; break; } }
 
-    // Step 4 — strip the suffix entirely on multi-syllable stems
     for (const suf of _STEP4) {
         if (w.endsWith(suf)) {
             const st = w.slice(0, -suf.length);
@@ -181,7 +176,6 @@ export function stemToken(word) {
         }
     }
 
-    // Step 5 — final -e and double-l clean-up
     if (w.endsWith('e')) { const st = w.slice(0, -1); const m = _measure(st); if (m > 1 || (m === 1 && !_cvc(st))) w = st; }
     if (_measure(w) > 1 && w.endsWith('l') && _endsDoubleCons(w)) w = w.slice(0, -1);
 
@@ -254,7 +248,7 @@ export function summaryEmbeddingText(chunk) {
  *
  * Single source of truth shared by the in-memory engine, the watch daemon and the
  * SQLite writer so every backend indexes identical text. Decorators are
- * deliberately excluded — measured to regress framework repos (see core-engine).
+ * deliberately excluded — measured to regress framework repos (see engine/memory.mjs).
  * When enrichment ran, chunk.concepts contains domain keyword strings that bridge
  * lexical gaps (e.g. "authentication JWT middleware"); chunk.hyde is concepts.join(' ')
  * and serves as the backward-compatible field for existing serialized indexes.
@@ -368,8 +362,8 @@ const VECTOR_WEIGHT = 0.7;
 //     overfitting either; the opt-in LLM reranker recovers the top-rank precision that a
 //     lower weight gives up. (Plain stays 0.4 — raw-code vectors are a weak rescue.)
 //
-// The engine selects the regime per index via `corpusEnriched` (see core-engine /
-// sqlite-store), so a repo indexed without --enrich is never hurt by the strong weight.
+// The engine selects the regime per index via `corpusEnriched` (see engine/memory.mjs /
+// engine/sqlite.mjs), so a repo indexed without --enrich is never hurt by the strong weight.
 const NL_LEXICAL_WEIGHT = 1.5;
 const NL_VECTOR_WEIGHT_PLAIN = 0.4;
 const NL_VECTOR_WEIGHT_ENRICHED = 0.6;
@@ -517,17 +511,13 @@ export function fuseAndRank({
         const chunk = getChunk(id);
         if (!chunk) continue;
 
-        // Demotion: test / spec files (unless the query is itself about tests).
         if (TEST_FILE_RE.test(chunk.file_path)) {
             if (!queryLower.includes('test') && !queryLower.includes('spec')) baseScore *= 0.25;
         }
         // Demotion: synthetic-named stylesheet rule_sets on non-style queries
         // (vendored CSS bundle noise in mixed repos). Named mixins/functions exempt.
         if (!queryIsStyle && chunk.name && chunk.name.endsWith('_rule_set')) baseScore *= 0.2;
-        // Demotion: example / docs dirs (tutorial snippets over-rank on short length
-        // + high keyword density vs the real implementation).
         if (EXAMPLE_DIR_RE.test(chunk.file_path)) baseScore *= 0.5;
-        // Demotion: pure expression sites.
         if (chunk.node_type === 'expression_statement' || chunk.node_type === 'call_expression') {
             baseScore *= 0.8;
         }
@@ -589,7 +579,6 @@ export function fuseAndRank({
         rrfScores.set(id, (rrfScores.get(id) || 0) + baseScore);
     }
 
-    // Optional guaranteed boost for an exactly-named symbol (search_code exact_tokens).
     if (exactBoostName && resolveExact) {
         const boostTerm = String(exactBoostName).toLowerCase().trim();
         for (const id of resolveExact(boostTerm)) {
@@ -597,8 +586,6 @@ export function fuseAndRank({
         }
     }
 
-    // Deterministic tie-break on id: equal fused scores must order identically
-    // on every backend (Map iteration vs SQL row order would otherwise differ).
     return Array.from(rrfScores.entries())
         .sort((a, b) => (b[1] - a[1]) || (a[0] < b[0] ? -1 : 1))
         .slice(0, topK)

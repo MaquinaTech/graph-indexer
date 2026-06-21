@@ -20,12 +20,10 @@ export function extractParams(chunkNode, ext) {
     function walkParams(node) {
         if (node.type === 'formal_parameters' || node.type === 'parameters' || node.type === 'parameter_list') {
             for (const child of node.children) {
-                // TS: required_parameter / optional_parameter have an identifier child
-                if (child.type === 'required_parameter' || child.type === 'optional_parameter' || child.type === 'formal_parameter') {
+                        if (child.type === 'required_parameter' || child.type === 'optional_parameter' || child.type === 'formal_parameter') {
                     const id = child.childForFieldName?.('pattern') || child.childForFieldName?.('name') ||
                         child.children.find(c => c.type === 'identifier');
                     if (id) params.push(id.text);
-                    // also grab type annotation text
                     const typeAnnotation = child.childForFieldName?.('type');
                     if (typeAnnotation) {
                         const typeText = typeAnnotation.text.replace(/^:\s*/, '').trim();
@@ -39,7 +37,7 @@ export function extractParams(chunkNode, ext) {
         for (const child of node.children) walkParams(child);
     }
 
-    // Only walk the direct params node to avoid deep recursion into body
+    // Avoid deep recursion into the function body by walking only the params node.
     const paramsNode = chunkNode.childForFieldName?.('parameters') || chunkNode.childForFieldName?.('formal_parameters');
     if (paramsNode) walkParams(paramsNode);
     return [...new Set(params)].filter(p => p && p.length > 1).slice(0, 15);
@@ -294,11 +292,6 @@ function _csTypeNamesFrom(node, out) {
     }
 }
 
-/**
- * Frontier 2: Extract TypeScript/Python type annotation names from a chunk node.
- * Returns simple type names (e.g. ['User', 'AuthToken', 'PaymentService'])
- * used to enrich the inverted index and the type_refs chunk field.
- */
 export function extractTypeAnnotations(chunkNode, ext) {
     const types = new Set();
     // JS/TS + Python use the precise annotation branches below. Every other indexed
@@ -311,10 +304,8 @@ export function extractTypeAnnotations(chunkNode, ext) {
     // carries no cheap type signal and naturally yields [].
 
     function walk(node) {
-        // TypeScript: type_annotation nodes contain the type text
         if (node.type === 'type_annotation') {
             const typeText = node.text.replace(/^:\s*/, '').trim();
-            // Extract simple identifiers from the type (skip primitives)
             const PRIMITIVES = new Set(['string', 'number', 'boolean', 'void', 'any', 'unknown', 'never', 'null', 'undefined', 'object', 'symbol', 'bigint']);
             for (const match of typeText.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g)) {
                 if (!PRIMITIVES.has(match[1].toLowerCase())) types.add(match[1]);
@@ -332,7 +323,6 @@ export function extractTypeAnnotations(chunkNode, ext) {
             const seg = (node.text || '').replace(/^\?/, '').split('\\').pop().trim();
             if (seg && /^[A-Z]/.test(seg)) types.add(seg);
         }
-        // Python: type comments or annotations (annotation nodes)
         else if (node.type === 'annotation' && ext === '.py') {
             const typeText = node.text.replace(/^->\s*|^:\s*/, '').trim();
             for (const match of typeText.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g)) {
@@ -381,7 +371,7 @@ const BASH_BUILTINS = new Set([
  *                 `UserService.find()` → 'UserService'), the only cheap type signal
  *                 available without full inference.
  * This is what lets get_call_graph separate the real callers of `OrderService.save`
- * from every unrelated `save()` in the repo (see mcp-tools.classifyCallers).
+ * from every unrelated `save()` in the repo (see mcp/topology.mjs classifyCallers).
  */
 function _receiverHint(objNode) {
     if (!objNode) return '';
@@ -503,24 +493,24 @@ function _inferLocalBindings(rootNode) {
     };
     function walk(node) {
         const t = node.type;
-        if (t === 'variable_declarator') { // TS/JS: const s = new Repo() / getStore()
+        if (t === 'variable_declarator') {
             const nameNode = node.childForFieldName?.('name');
             if (nameNode && nameNode.type === 'identifier') {
                 const val = _classifyValueNode(node.childForFieldName?.('value'));
                 if (val) set(nameNode.text, val);
             }
-        } else if (t === 'required_parameter' || t === 'optional_parameter') { // TS typed param: (s: Repo)
+        } else if (t === 'required_parameter' || t === 'optional_parameter') {
             const id = node.childForFieldName?.('pattern');
             const ty = node.childForFieldName?.('type');
             if (id && id.type === 'identifier' && ty) { const tn = _bindingTypeName(ty.text); if (tn) set(id.text, { type: tn }); }
-        } else if (t === 'assignment') { // Python: s = Repo() / s: Repo = ...
+        } else if (t === 'assignment') {
             const left = node.childForFieldName?.('left');
             const ty = node.childForFieldName?.('type');
             if (left && left.type === 'identifier') {
                 if (ty) { const tn = _bindingTypeName(ty.text); if (tn) set(left.text, { type: tn }); }
                 else { const val = _classifyValueNode(node.childForFieldName?.('right')); if (val) set(left.text, val); }
             }
-        } else if (t === 'typed_parameter' || t === 'typed_default_parameter') { // Python typed param: (s: Repo)
+        } else if (t === 'typed_parameter' || t === 'typed_default_parameter') {
             const id = node.childForFieldName?.('name') || node.children?.find(c => c.type === 'identifier');
             const ty = node.childForFieldName?.('type');
             if (id && ty) { const tn = _bindingTypeName(ty.text); if (tn) set(id.text, { type: tn }); }
@@ -557,8 +547,6 @@ export function extractCallSites(rootNode) {
     const sites = [];
     const bindings = _inferLocalBindings(rootNode);
     const seen = new Set();
-    // `objNode` is the receiver expression node (when the call is a method call), used
-    // to recover a static type for the receiver. Free calls pass none.
     const add = (name, recv, objNode = null) => {
         if (!name) return;
         const key = name + ' ' + recv;
@@ -576,7 +564,7 @@ export function extractCallSites(rootNode) {
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {
                 if (funcNode.type === 'identifier') add(funcNode.text, '');
-                else if (funcNode.type === 'simple_identifier') add(funcNode.text, ''); // Swift free call
+                else if (funcNode.type === 'simple_identifier') add(funcNode.text, '');
                 else if (funcNode.type === 'member_expression' || funcNode.type === 'property_identifier') {
                     const prop = funcNode.childForFieldName?.('property');
                     const obj = funcNode.childForFieldName?.('object');
@@ -590,11 +578,11 @@ export function extractCallSites(rootNode) {
                     if (m) add(m, _receiverHint(target), target);
                 }
             }
-        } else if (t === 'command') { // Bash: a command is a function/program invocation
+        } else if (t === 'command') {
             const cmd = (node.childForFieldName?.('name')?.text || '').trim();
             // bare identifiers only — skip paths, env-prefixed assignments, builtins.
             if (cmd && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(cmd) && !BASH_BUILTINS.has(cmd)) add(cmd, '');
-        } else if (t === 'call') { // Python
+        } else if (t === 'call') {
             const funcNode = node.childForFieldName?.('function') || node.children[0];
             if (funcNode) {
                 if (funcNode.type === 'identifier') add(funcNode.text, '');
@@ -604,10 +592,10 @@ export function extractCallSites(rootNode) {
                     if (attr) add(attr.text, _receiverHint(obj), obj);
                 }
             }
-        } else if (t === 'macro_invocation') { // Rust
+        } else if (t === 'macro_invocation') {
             const macroNode = node.childForFieldName?.('macro') || node.children[0];
             if (macroNode && macroNode.type === 'identifier') add(macroNode.text + '!', '');
-        } else if (t === 'method_invocation') { // Java
+        } else if (t === 'method_invocation') {
             const nameNode = node.childForFieldName?.('name') || node.children.find(c => c.type === 'identifier');
             const obj = node.childForFieldName?.('object');
             if (nameNode) add(nameNode.text, _receiverHint(obj), obj);
@@ -627,21 +615,21 @@ export function extractCallSites(rootNode) {
                     if (nm) add(nm, '');
                 }
             }
-        } else if (t === 'method_call') { // Ruby
+        } else if (t === 'method_call') {
             const method = node.childForFieldName?.('method') || node.children.find(c => c.type === 'identifier');
             const receiver = node.childForFieldName?.('receiver');
             if (method && method.type === 'identifier') add(method.text, _receiverHint(receiver), receiver);
-        } else if (t === 'function_call_expression') { // PHP: foo() / \App\Helpers\bar()
+        } else if (t === 'function_call_expression') {
             const fn = node.childForFieldName?.('function');
             if (fn && (fn.type === 'name' || fn.type === 'qualified_name')) {
                 const nm = (fn.text || '').split('\\').filter(Boolean).pop();
                 if (nm) add(nm, '');
             }
-        } else if (t === 'member_call_expression' || t === 'nullsafe_member_call_expression') { // PHP: $obj->method()
+        } else if (t === 'member_call_expression' || t === 'nullsafe_member_call_expression') {
             const nameNode = node.childForFieldName?.('name');
             const obj = node.childForFieldName?.('object');
             if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(obj), obj);
-        } else if (t === 'scoped_call_expression') { // PHP: Class::method() / self::method() / parent::method()
+        } else if (t === 'scoped_call_expression') {
             const nameNode = node.childForFieldName?.('name');
             const scope = node.childForFieldName?.('scope');
             if (nameNode && nameNode.type === 'name') add(nameNode.text, _receiverHint(scope), scope);

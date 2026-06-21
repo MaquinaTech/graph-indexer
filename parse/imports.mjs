@@ -12,14 +12,12 @@ import { getParserForFile, EXTENSIONS } from './languages.mjs';
 import { truncateForEmbedding } from '../search-core.mjs';
 
 // ─── Ollama host / model resolution ──────────────────────────────────────────
-// Resolves the Ollama host at call time so callers that set ollamaHost via
-// .graph-indexer.json don't have to pass it through every call chain.
 // Priority: caller override → OLLAMA_HOST env var → PROJECT .graph-indexer.json
 // (MCP_PROJECT_ROOT or cwd — NOT the package directory: when graph-indexer is
 // installed as a dependency, the user's config lives in their project root) →
 // default. Mirrors config.mjs precedence so every entry point agrees.
 //
-// Note: OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11434"), not an
+// OLLAMA_HOST in the shell is Ollama's binding address (e.g. "0.0.0.0:11434"), not an
 // HTTP client URL. We normalise bare "host:port" strings by adding http:// and translating
 // 0.0.0.0 → localhost so fetches work in both formats.
 
@@ -86,7 +84,6 @@ export function resolveBarrelExports(barrelAbsPath, projectRoot) {
     const barrelDir = path.dirname(barrelAbsPath);
 
     function walk(node) {
-        // export { X, Y as Z } from './source'
         if (node.type === 'export_statement') {
             const fromNode = node.children.find(c => c.type === 'string');
             if (!fromNode) { node.children.forEach(walk); return; }
@@ -94,7 +91,6 @@ export function resolveBarrelExports(barrelAbsPath, projectRoot) {
             const rawSource = fromNode.text.replace(/['"]/g, '');
             if (!rawSource.startsWith('.')) { node.children.forEach(walk); return; }
 
-            // Resolve the source file
             const absSource = path.resolve(barrelDir, rawSource);
             let finalAbs = null;
             if (EXTENSIONS.has(path.extname(absSource)) && fs.existsSync(absSource)) {
@@ -110,22 +106,18 @@ export function resolveBarrelExports(barrelAbsPath, projectRoot) {
 
             const relSource = path.relative(projectRoot, finalAbs).replace(/\\/g, '/');
 
-            // Walk named exports
             const namedExports = node.children.find(c => c.type === 'named_imports' || c.type === 'export_clause');
             if (namedExports) {
                 for (const child of namedExports.children) {
                     if (child.type === 'import_specifier' || child.type === 'export_specifier') {
-                        // `alias as exported` or just `name`
                         const names = child.children.filter(c => c.type === 'identifier');
                         if (names.length > 0) {
-                            // The exported name is the last identifier (the alias if present)
                             result.set(names[names.length - 1].text, relSource);
                         }
                     }
                 }
             }
 
-            // export * from './source' → map the source file itself
             const starNode = node.children.find(c => c.text === '*');
             if (starNode) {
                 result.set('*', relSource);
@@ -158,7 +150,6 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
     const ext = path.extname(fromFileRelPath);
     const resolved = [];
     for (const raw of rawImports) {
-        // ── Dot-relative (JS/TS/Python relative) ────────────────────────────
         if (raw.startsWith('.')) {
             const absResolved = path.resolve(fileDir, raw);
             const existingExt = path.extname(absResolved);
@@ -180,17 +171,14 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
             if (finalAbs) {
                 const relPath = path.relative(projectRoot, finalAbs).replace(/\\/g, '/');
                 const baseName = path.basename(finalAbs, path.extname(finalAbs));
-                // 🥇 BARREL RESOLUTION: If the resolved file is an index file, expand barrel exports
                 if (baseName === 'index' && ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(path.extname(finalAbs))) {
                     const barrelMap = resolveBarrelExports(finalAbs, projectRoot);
                     if (barrelMap.size > 0) {
-                        // Add all unique source files referenced by this barrel
                         const sources = new Set(barrelMap.values());
                         for (const src of sources) {
                             if (!resolved.includes(src)) resolved.push(src);
                         }
                     } else {
-                        // Barrel has no re-exports — keep the barrel file itself
                         if (!resolved.includes(relPath)) resolved.push(relPath);
                     }
                 } else {
@@ -198,18 +186,17 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
                 }
             }
         }
-        // ── Go intra-module: github.com/owner/repo/sub → sub/*.go ──────────
-        // Go import paths use the module name as prefix; map them to local dirs.
+        // ── Go intra-module imports: module-prefix paths mapped to local dirs ──
         else if (ext === '.go') {
             const modName = _readGoModuleName(projectRoot);
             if (modName && raw.startsWith(modName + '/')) {
-                const subPkg = raw.slice(modName.length + 1); // e.g. 'render'
+                const subPkg = raw.slice(modName.length + 1);
                 const absDir = path.join(projectRoot, subPkg);
                 if (fs.existsSync(absDir)) {
                     try {
                         const goFiles = fs.readdirSync(absDir)
                             .filter(f => f.endsWith('.go') && !f.includes('_test'))
-                            .slice(0, 5); // cap: take a representative sample
+                            .slice(0, 5); // cap to avoid fanning out too many deps per package
                         for (const gof of goFiles) {
                             const rel = path.relative(projectRoot, path.join(absDir, gof)).replace(/\\/g, '/');
                             if (!resolved.includes(rel)) resolved.push(rel);
@@ -274,24 +261,21 @@ export function buildEmbeddingPayload(chunk, depRelPaths = [], bodyOverride = nu
     const topologicalContext = neighbors.length
         ? `This code architectural neighborhood connects with: ${neighbors.join(', ')}.`
         : '';
-    // NOTE: decorators and inheritance edges are NOT added here (A/B-tested: neutral
-    // on vector, regression on BM25 — surfaced as metadata only).
-    // LLM summary leads the payload when available: declarative voice aligns with
-    // nomic-embed-text's search_document: training objective and anchors the embedding
-    // toward developer query vocabulary. Questions/hyde are intentionally excluded from
-    // the vector payload — they add stopword noise and dilute the code's semantic
-    // fingerprint. Concept keywords (chunk.hyde = concepts.join(' ')) go to BM25 only
-    // via buildLexicalDocument, keeping both retrieval channels clean.
+    // Decorators and inheritance edges are NOT included here (A/B-tested: neutral
+    // on vector recall, regression on BM25 — kept as metadata only).
+    // LLM summary leads: declarative voice aligns with nomic's search_document training
+    // objective. hyde/questions are excluded — stopword noise dilutes the code fingerprint.
+    // Concept keywords (chunk.hyde) go to BM25 only via buildLexicalDocument.
     return [
-        chunk.summary || '',   // semantic lead: LLM-generated declarative summary (opt-in)
+        chunk.summary || '',
         `File Location: ${chunk.file_path}`,
         `Symbol Name: ${chunk.node_type} -> ${chunk.name}`,
         chunk.docstring ? `Developer Documentation: ${chunk.docstring}` : '',
         chunk.type_refs?.length ? `Type References: ${chunk.type_refs.join(', ')}` : '',
         topologicalContext,
         `--- Source Code ---`,
-        // The dense channel embeds the FULL body for oversized definitions (bodyOverride,
-        // windowed by embeddingWindows); BM25 keeps using the 3000-char code_snippet.
+        // bodyOverride carries the full source for oversized chunks (>3000 chars); BM25
+        // keeps using code_snippet so lexical and dense channels stay independently capped.
         bodyOverride || chunk.code_snippet,
     ].filter(Boolean).join('\n');
 }

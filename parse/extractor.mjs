@@ -21,11 +21,8 @@ import {
 
 export const MAX_FILE_SIZE_BYTES = 500000;
 
-// Detect whether a dedicated SCSS grammar is installed (distinct from the CSS grammar).
-// Used to select the correct LANGUAGE_QUERIES key for .scss files.
 const _hasSCSS = Boolean(LANGUAGE_MAP['.scss']) && LANGUAGE_MAP['.scss'] !== LANGUAGE_MAP['.css'];
 
-// 🥇 ULTRA-GENERIC QUERIES: Immune to grammar changes between TS/JS/TSX
 const LANGUAGE_QUERIES = {
     ts: `
         (class_declaration) @chunk
@@ -116,7 +113,6 @@ const LANGUAGE_QUERIES = {
     `
 };
 
-// Definition of container node types to avoid nested duplicates
 const CONTAINERS = new Set([
     'class_declaration', 'function_declaration', 'method_definition',
     'lexical_declaration', 'expression_statement', 'export_statement',
@@ -168,7 +164,6 @@ export function extractFileSkeleton(rootNode, content) {
 export function extractImportsFromAST(rootNode, ext) {
     const imports = new Set();
     function walk(node) {
-        // ── JavaScript / TypeScript ──────────────────────────────────────────
         if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
             if (node.type === 'import_statement') {
                 const source = node.children.find(c => c.type === 'string');
@@ -178,7 +173,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 if (arg) imports.add(arg.text.replace(/['"]/g, ''));
             }
         }
-        // ── Python ──────────────────────────────────────────────────────────
         else if (ext === '.py') {
             if (node.type === 'import_statement') {
                 // import foo.bar.baz  → store as foo/bar/baz
@@ -203,7 +197,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
-        // ── Rust ────────────────────────────────────────────────────────────
         else if (ext === '.rs') {
             if (node.type === 'use_declaration') {
                 // Collect the first path text from the argument subtree
@@ -212,7 +205,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 if (arg) imports.add(arg.text.split('::').slice(0, 3).join('::'));
             }
         }
-        // ── Go ──────────────────────────────────────────────────────────────
         else if (ext === '.go') {
             if (node.type === 'import_spec') {
                 const pathNode = node.children.find(c =>
@@ -220,7 +212,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 if (pathNode) imports.add(pathNode.text.replace(/['"`]/g, ''));
             }
         }
-        // ── PHP ─────────────────────────────────────────────────────────────
         else if (ext === '.php') {
             if (node.type === 'include_expression' || node.type === 'require_expression' ||
                 node.type === 'include_once_expression' || node.type === 'require_once_expression') {
@@ -228,14 +219,12 @@ export function extractImportsFromAST(rootNode, ext) {
                     c.type === 'string' || c.type === 'encapsed_string');
                 if (strNode) imports.add(strNode.text.replace(/['"]/g, ''));
             }
-        }        // ── Java ─────────────────────────────────────────────────────────────
-        else if (ext === '.java') {
+        }        else if (ext === '.java') {
             if (node.type === 'import_declaration') {
                 const scopedId = node.children.find(c => c.type === 'scoped_identifier' || c.type === 'identifier');
                 if (scopedId) imports.add(scopedId.text.replace(/\./g, '/'));
             }
         }
-        // ── Kotlin ───────────────────────────────────────────────────────────
         else if (ext === '.kt' || ext === '.kts') {
             if (node.type === 'import_header') {
                 const path = node.children.find(c => c.type === 'identifier' || c.type === 'user_type' || c.isNamed);
@@ -243,7 +232,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 if (raw) imports.add(raw.replace(/\./g, '/'));
             }
         }
-        // ── C# ───────────────────────────────────────────────────────────────
         else if (ext === '.cs') {
             if (node.type === 'using_directive') {
                 const ns = node.children.find(c => c.type === 'qualified_name' || c.type === 'identifier' || c.type === 'name_equals');
@@ -253,7 +241,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
-        // ── Ruby ──────────────────────────────────────────────────────────────
         else if (ext === '.rb') {
             if (node.type === 'call' || node.type === 'method_call') {
                 const method = node.childForFieldName?.('method') || node.children[0];
@@ -264,7 +251,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
-        // ── C ──────────────────────────────────────────────────────────────────
         else if (ext === '.c' || ext === '.h') {
             // Only quoted local includes (`#include "foo.h"`) carry intra-project
             // edges; angle-bracket system includes (<stdio.h>) are stdlib noise.
@@ -273,7 +259,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 if (str) imports.add(str.text.replace(/^[<"]|[>"]$/g, ''));
             }
         }
-        // ── Bash ─────────────────────────────────────────────────────────────────
         else if (ext === '.sh' || ext === '.bash') {
             // `source path` / `. path` pull another script into scope.
             if (node.type === 'command') {
@@ -284,7 +269,6 @@ export function extractImportsFromAST(rootNode, ext) {
                 }
             }
         }
-        // ── Swift ─────────────────────────────────────────────────────────────────
         else if (ext === '.swift') {
             // `import Foundation` / `import MyModule.Submodule` — module-level, rarely
             // file-resolvable, but tracked so the dependency list is non-empty.
@@ -367,7 +351,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
         : (EXT_TO_LANG[ext] || (LANGUAGE_QUERIES[ext.slice(1)] ? ext.slice(1) : null));
     if (!langKey || !LANGUAGE_QUERIES[langKey]) return chunks;
 
-    // 🥇 HEADER INHERITANCE: Extract top-of-file/global comments for module context
+    // Extract top-of-file comments for module context (header inheritance).
     let fileDocstring = "";
     let cursorNode = rootNode.children[0];
     while (cursorNode) {
@@ -383,15 +367,8 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
         const processedNodes = new Set();
 
         // ── God-class pre-pass ─────────────────────────────────────────────────
-        // Identify class-type container nodes whose line count exceeds the threshold.
-        // Their methods are allowed through the isNested filter below so each method
-        // becomes its own independent, searchable chunk; the class node itself gets a
-        // compact skeleton instead of a truncated body dump.
-        //
-        // Cross-language: class_declaration (TS/JS/Java/C#), class_definition (Python),
-        // impl_item (Rust impl blocks), class (Ruby), object_declaration (Kotlin).
-        // TS special case: exported classes live inside export_statement — we mark the
-        // inner class_declaration so the method-isNested check works correctly.
+        // TS exported classes live inside export_statement — mark the inner
+        // class_declaration so the method-isNested check resolves the correct ancestor.
         const GOD_CLASS_LINES = 200;
         const GOD_CLASS_NODE_TYPES = new Set([
             'class_declaration', 'class_definition',
@@ -434,17 +411,17 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             if (!chunkNode || processedNodes.has(chunkNode.id)) continue;
             processedNodes.add(chunkNode.id);
 
-            // Filter out very small fragments (simple variables, etc.)
+            // Skip trivial definitions spanning fewer than 3 lines (one-line getters,
+            // re-export forwarders, stubs): they add symbol noise and rarely carry
+            // behaviour worth its own chunk. A file of ONLY one-liners thus yields no
+            // chunks — the indexer surfaces a warning when the whole repo comes back empty.
             if (chunkNode.endPosition.row - chunkNode.startPosition.row < 2) continue;
 
-            // 🥇 DEDUPLICATION LOGIC: Ignore nodes that are nested inside other container nodes.
-            // Stop at the actual tree root (parent === null) to be language-agnostic:
-            // Python root = 'module', JS root = 'program', Go root = 'source_file', Ruby root = 'program'.
-            // Stopping at 'program' alone was falsely marking top-level Python classes as nested
-            // because Ruby's 'module' keyword (also in CONTAINERS) shares the name with Python's root.
-            //
-            // God-class exception: if the first CONTAINERS ancestor is an oversized class, the
-            // node is a direct method of that class — allow it through as its own chunk.
+            // Walk to parent === null (tree root) rather than stopping at a named root type:
+            // Ruby's `module` keyword is in CONTAINERS but also the name of Python's root node,
+            // so stopping at 'program' alone falsely marked top-level Python classes as nested.
+            // God-class exception: if the first CONTAINERS ancestor is oversized, the node is a
+            // direct method — allow it through as its own chunk.
             let isNested = false;
             let currentParent = chunkNode.parent;
             while (currentParent && currentParent.parent !== null) {
@@ -458,7 +435,6 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             }
             if (isNested) continue;
 
-            // 🥇 ROBUST NAME EXTRACTION (JS logic)
             let nameText = "anonymous";
             const nameNode = chunkNode.childForFieldName?.("name");
 
@@ -577,12 +553,9 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             // cap. For chunks whose body fits the cap, node text == snippet, so the hash
             // is unchanged (no needless re-embed); BM25 and code_snippet are untouched.
             const hash = generateChunkHash(docstring + chunkNode.text);
-            // Receiver-aware call sites (bounded for index size); the legacy
-            // name-only `calls` list is derived from them so they never diverge.
             const callSites = extractCallSites(chunkNode).slice(0, 256);
             const outgoingCalls = Array.from(new Set(callSites.map(s => s.name)));
 
-            // 🥇 PARAMETER / TYPE / CLASS CONTEXT ENRICHMENT (improves recall on undocumented code)
             const params = extractParams(chunkNode, ext);
             const returnType = extractReturnType(chunkNode, ext);
             const classContext = extractClassContext(chunkNode);
@@ -604,8 +577,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
             });
         }
     } catch (e) {
-        // Visible protective log for developers
-        process.stderr.write(`\n[parser-utils] 💥 Query Error in ${relPath}: ${e.message}\n`);
+        process.stderr.write(`\n[parse/extractor] 💥 Query Error in ${relPath}: ${e.message}\n`);
     }
 
     // ── Python public re-exports ────────────────────────────────────────────────

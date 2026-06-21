@@ -13,7 +13,6 @@ export const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 
 const paint = (code) => (s) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : `${s}`);
 
-/** Colour helpers — no-ops when colour is disabled. */
 export const c = {
     bold: paint('1'),
     dim: paint('2'),
@@ -25,30 +24,24 @@ export const c = {
     cyan: paint('36'),
 };
 
-/** Status glyphs used across both CLIs. */
 export const glyph = {
-    ok: c.green('✓'),       // created / success
-    upd: c.cyan('↻'),       // updated / refreshed
-    keep: c.dim('•'),       // already present, left untouched
-    move: c.yellow('↪'),    // migrated / relocated
-    skip: c.dim('–'),       // skipped / not applicable
-    warn: c.yellow('⚠'),    // warning
-    err: c.red('✗'),        // error
-    run: c.green('●'),      // running
-    stop: c.dim('○'),       // stopped
+    ok: c.green('✓'),
+    upd: c.cyan('↻'),
+    keep: c.dim('•'),
+    move: c.yellow('↪'),
+    skip: c.dim('–'),
+    warn: c.yellow('⚠'),
+    err: c.red('✗'),
+    run: c.green('●'),
+    stop: c.dim('○'),
     arrow: c.cyan('→'),
 };
 
 export const log = (msg = '') => process.stdout.write(msg + '\n');
 
-/** A horizontal rule of box-drawing dashes. */
 export const rule = (width = 60) => c.dim('─'.repeat(width));
 
-/**
- * Render a rounded box around one or more lines (used for CLI banners).
- * Width adapts to the longest visible line; ANSI codes are excluded from the
- * length measurement so colour never breaks the alignment.
- */
+/** ANSI escape codes are stripped before measuring line width so colour never breaks box alignment. */
 export function box(lines, { pad = 1, color = c.cyan } = {}) {
     const visibleLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').length;
     const inner = Math.max(...lines.map(visibleLen)) + pad * 2;
