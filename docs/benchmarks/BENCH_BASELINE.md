@@ -4,7 +4,7 @@ Frozen baseline captured **before any code change**, against which every work-it
 delta is measured. Regenerated from real runs — never hand-edited per number.
 
 - **Captured:** 2026-06-17 (commit `13daaff`, branch `feat/prompts`, v1.3.0)
-- **Host:** darwin, Node v24.16.0
+- **Host:** Apple M2 Mac mini (24 GB), macOS (darwin), Node v24.16.0. Indexing throughput (chunks/s) is hardware-dependent — expect different figures on other chips.
 - **Ollama:** reachable at `http://localhost:11434` — models present:
   `nomic-embed-text`, `qwen2.5-coder:1.5b`, `qwen2.5-coder:7b`, `qwen3:8b`,
   `qwen2.5:14b-instruct`, `gemma4`.

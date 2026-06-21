@@ -68,7 +68,7 @@ Embeddings remain **off by default**. The index stamps the resolved `{ provider,
 
 New `--embed-provider <auto|ollama|local|off>` flag and `INDEXER_EMBED_PROVIDER` env variable to override provider selection.
 
-New `mlx` provider uses a dedicated Python virtualenv (`embedders/venv-mlx/`) and the `mlx_embeddings` library to embed via the Apple Metal GPU as a persistent subprocess — no Ollama daemon required. Measured throughput (~40 ch/s on M-series) versus in-process Xenova (~17 ch/s). Note: on Apple Silicon, Ollama also uses the Metal GPU internally; the `mlx` provider's advantage is a smaller 4-bit model and no HTTP round-trip, not GPU vs CPU.
+New `mlx` provider uses a dedicated Python virtualenv (`embedders/venv-mlx/`) and the `mlx_embeddings` library to embed via the Apple Metal GPU as a persistent subprocess — no Ollama daemon required. Measured throughput on an **Apple M2 Mac mini (24 GB)**, `express-js` fixture, median of 3 cold builds: `mlx` **~42 ch/s** vs in-process Xenova **~18 ch/s** vs Ollama/nomic **~14 ch/s** (throughput is hardware-dependent — expect different figures on other chips). Note: on Apple Silicon, Ollama also uses the Metal GPU internally; the `mlx` provider's advantage is a smaller 4-bit model and no HTTP round-trip, not GPU vs CPU.
 
 **Bug fix:** `indexer.mjs` (and the eval harness) now calls `_resetSubprocesses()` after encoding completes so the MLX Python subprocess is killed and the Node.js event loop can drain. Previously `npx idx-index --embed-provider mlx` would hang indefinitely after building a correct index.
 
@@ -199,7 +199,7 @@ New end-to-end agent benchmark that drives real MCP tools and traces an agent's 
 ### Documentation
 
 - **README.md** — rewritten to roughly a third its previous length (~700 → ~310 lines). Focused on the quick start, MCP tool reference, configuration trade-offs table, CLI flags, and environment variables. Benchmark numbers verifiable via `npm run test:eval`.
-- **`docs/benchmarks/`** — new directory with detailed benchmark reports: `BENCH_BASELINE.md`, `BENCH_FULL_SUITE.md`, `BENCH_LANGUAGES.md`, `BENCH_SUMMARY.md`, `BENCH_AGENT.md`, `BENCH_TIER1_BASELINE.md`, `BENCH_TIER1_RESULTS.md`, `FIXTURES.md`.
+- **`docs/benchmarks/`** — new directory with detailed benchmark reports: `BENCH_BASELINE.md`, `BENCH_FULL_SUITE.md`, `BENCH_LANGUAGES.md`, `BENCH_SUMMARY.md`, `BENCH_AGENT.md`, `FIXTURES.md`.
 - **`docs/internals/IMPROVEMENT_STEMMING.md`** — internal design note for the Porter stemming bridge.
 - **SECURITY.md** — updated to document the git-signals subprocess, the one-time model-weight download for the local embedding provider, and the strengthened symlink path guard.
 

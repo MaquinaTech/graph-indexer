@@ -158,11 +158,11 @@ Set the backend with `--embed-provider` (or `INDEXER_EMBED_PROVIDER`). `mlx` is 
 | Backend | `--embed-provider` | Platform | Throughput¹ | Setup |
 |---------|--------------------|----------|-------------|-------|
 | Auto (Ollama → local → off) | `auto` (default) | any | varies | none |
-| In-process (Xenova) | `local` | any | ~17 ch/s | `npm i @huggingface/transformers` |
-| **Apple Metal (MLX)** | **`mlx`** | **macOS Apple Silicon** | **~40 ch/s** | `npm run embed:setup:mlx` |
-| Ollama daemon | `ollama` | any | ~15-30 ch/s² | `ollama serve` + `ollama pull` |
+| In-process (Xenova) | `local` | any | ~18 ch/s | `npm i @huggingface/transformers` |
+| **Apple Metal (MLX)** | **`mlx`** | **macOS Apple Silicon** | **~42 ch/s** | `npm run embed:setup:mlx` |
+| Ollama daemon | `ollama` | any | ~14 ch/s² | `ollama serve` + `ollama pull` |
 
-¹ Measured on an M-series Mac with `node bench/cell.mjs express-js E0_MLX`; reproduce with any fixture. Throughput varies with system load and model warm state.
+¹ **Throughput is hardware-dependent.** These figures are the median of 3 cold builds on an **Apple M2 Mac mini (24 GB)** indexing the `express-js` fixture (389 chunks): `node bench/cell.mjs express-js <E0|E0_MLX|O0>`. Expect different numbers on other chips; reproduce on your own machine. Throughput also varies with system load, model warm state, and corpus size — larger repos amortize cold-start better (e.g. Ollama/nomic reaches ~32 ch/s on the larger `gin` corpus).
 
 ² On Apple Silicon, Ollama already uses the Metal GPU internally (via llama.cpp). The `mlx` provider's advantage comes from a smaller model (all-MiniLM-L6-v2-4bit, 22M params, 384-dim) and no HTTP round-trip, not from GPU vs CPU.
 

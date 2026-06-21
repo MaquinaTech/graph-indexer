@@ -6,7 +6,7 @@ semantic-channel strength, honest accuracy (strict scoring + inflation gap), ind
 overhead, and query latency.
 
 - **Captured:** 2026-06-17 (branch `feat/prompts`)
-- **Host:** darwin, Node v24.16.0; Ollama at `http://localhost:11434`
+- **Host:** Apple M2 Mac mini (24 GB), macOS (darwin), Node v24.16.0; Ollama at `http://localhost:11434`. Throughput (chunks/s) is hardware-dependent — expect different figures on other chips.
 - **Models:** `qwen3-embedding:4b` (2560-dim), `qwen2.5-coder:7b` (enrich + rerank),
   `qwen2.5-coder:1.5b`, `nomic-embed-text` (768-dim, pulled for V0), in-process
   `Xenova/all-MiniLM-L6-v2` (384-dim, no daemon).

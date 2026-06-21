@@ -18,6 +18,10 @@ trail for the README "best achievable" table and for the `<best_configuration>` 
 in `prompts/frameworks/*.md`. Every number here is produced by the unmodified ranking
 engine via `bench/cell.mjs` / `bench/repeat-score.mjs` and stored under `bench/results/`.
 
+> **Host:** Apple M2 Mac mini (24 GB), macOS. Any throughput / build-cost figure (chunks/s)
+> is **hardware-dependent** — expect different figures on other chips. Accuracy metrics are
+> hardware-independent.
+
 ## What changed in v2 — higher statistical power
 
 The previous run used a **held-out split of n=3** (symfony n=4). With a binary success
