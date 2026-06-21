@@ -27,7 +27,7 @@ import { CONFIGS } from './configs.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { SqliteGraphStore } from '../engine/sqlite.mjs';
-import { createEmbedder, readEmbedMeta, needsNomicPrefix } from '../embeddings.mjs';
+import { createEmbedder, readEmbedMeta, needsNomicPrefix, _resetSubprocesses } from '../embeddings.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -246,6 +246,10 @@ if (queries.length) {
     try { record.latency = await measureLatency(dir, db, queries, Boolean(cfg.score.embeddings)); }
     catch (e) { record.latency = { error: e.message }; }
 }
+// Kill any subprocess-based embedder (MLX) spawned by measureLatency before the
+// synchronous score() call — otherwise its readline interface keeps this process
+// alive after score() returns (same issue fixed in indexer.mjs + evaluate.mjs).
+_resetSubprocesses();
 
 const tmp = path.join(RESULTS_DIR, `_eval_${fixture}__${configId}.json`);
 const sc = score(fixture, cfg, tmp);

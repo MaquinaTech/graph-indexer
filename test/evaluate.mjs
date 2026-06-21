@@ -49,7 +49,7 @@ import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery } from '../search-core.mjs';
 import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
 import { artifactPaths } from '../layout.mjs';
-import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL } from '../embeddings.mjs';
+import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL, _resetSubprocesses } from '../embeddings.mjs';
 import { hydeQueryVector } from '../mcp/topology.mjs';
 
 import * as axiosSuite from './suites/axios.mjs';
@@ -522,3 +522,6 @@ if (outPath) {
     fs.writeFileSync(out, JSON.stringify({ generatedAt: new Date().toISOString(), results }, null, 2));
     console.log(`📄  JSON report saved to: ${path.relative(process.cwd(), out)}\n`);
 }
+
+// Kill any subprocess-based embedder (MLX) so the event loop can drain.
+_resetSubprocesses();

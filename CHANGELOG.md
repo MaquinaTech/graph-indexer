@@ -68,6 +68,10 @@ Embeddings remain **off by default**. The index stamps the resolved `{ provider,
 
 New `--embed-provider <auto|ollama|local|off>` flag and `INDEXER_EMBED_PROVIDER` env variable to override provider selection.
 
+New `mlx` provider uses a dedicated Python virtualenv (`embedders/venv-mlx/`) and the `mlx_embeddings` library to embed via the Apple Metal GPU as a persistent subprocess — no Ollama daemon required. Measured throughput (~40 ch/s on M-series) versus in-process Xenova (~17 ch/s). Note: on Apple Silicon, Ollama also uses the Metal GPU internally; the `mlx` provider's advantage is a smaller 4-bit model and no HTTP round-trip, not GPU vs CPU.
+
+**Bug fix:** `indexer.mjs` (and the eval harness) now calls `_resetSubprocesses()` after encoding completes so the MLX Python subprocess is killed and the Node.js event loop can drain. Previously `npx idx-index --embed-provider mlx` would hang indefinitely after building a correct index.
+
 ### Git signals (`git-signals.mjs`)
 
 New module that computes three per-file ranking signals from the local git log (no network, no remote):

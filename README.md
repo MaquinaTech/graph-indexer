@@ -159,10 +159,12 @@ Set the backend with `--embed-provider` (or `INDEXER_EMBED_PROVIDER`). `mlx` is 
 |---------|--------------------|----------|-------------|-------|
 | Auto (Ollama → local → off) | `auto` (default) | any | varies | none |
 | In-process (Xenova) | `local` | any | ~17 ch/s | `npm i @huggingface/transformers` |
-| **Apple Metal (MLX)** | **`mlx`** | **macOS Apple Silicon** | **~150 ch/s** | `npm run embed:setup:mlx` |
-| Ollama daemon | `ollama` | any | ~35 ch/s | `ollama serve` + `ollama pull` |
+| **Apple Metal (MLX)** | **`mlx`** | **macOS Apple Silicon** | **~40 ch/s** | `npm run embed:setup:mlx` |
+| Ollama daemon | `ollama` | any | ~15-30 ch/s² | `ollama serve` + `ollama pull` |
 
-¹ Indicative chunks/sec on a developer laptop; measure your own with `node bench/cell.mjs <fixture> E0_MLX`.
+¹ Measured on an M-series Mac with `node bench/cell.mjs express-js E0_MLX`; reproduce with any fixture. Throughput varies with system load and model warm state.
+
+² On Apple Silicon, Ollama already uses the Metal GPU internally (via llama.cpp). The `mlx` provider's advantage comes from a smaller model (all-MiniLM-L6-v2-4bit, 22M params, 384-dim) and no HTTP round-trip, not from GPU vs CPU.
 
 The index records which provider/model built it (in the `code-index.embeddings.bin.meta.json` sidecar) and queries with the same one, so vectors never get mixed across models. Switching providers or the MLX model between builds is detected and triggers a clean re-embed.
 

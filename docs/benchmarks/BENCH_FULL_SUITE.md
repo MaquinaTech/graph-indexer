@@ -166,8 +166,8 @@ on **real indexing payloads** (code + dependency context) it is **~1.4 chunks/s*
 
 | Config | embed build time (gin / express) | dim | chunks/s | notes |
 |---|---|---|---|---|
-| Nomic (V0) | 34.0 s / 15.3 s | 768 | ~32 | Ollama, small model |
-| MiniLM (V1) | 56.8 s / 18.3 s | 384 | ~19 (CPU) | in-process, no daemon |
+| Nomic (V0) | 34.0 s / 15.3 s | 768 | ~32 (this run) | Ollama; varies 13–32 ch/s with system load (on Apple Silicon, Ollama uses Metal GPU) |
+| MiniLM (V1) | 56.8 s / 18.3 s | 384 | ~17 (CPU) | in-process Xenova, no daemon |
 | qwen3 (V2) | **12 m 21 s / 5 m 36 s** | 2560 | **~1.4** | real payloads (deps context) slower than the 2.5 bare-text probe |
 | qwen3+enrich (V3/V5) | **14 m 08 s / 6 m 15 s** embed + enrichment | 2560 | ~1.3 | enrichment: gin 268 + express 89 core chunks @ ~3.7 s/chunk, 0 failures |
 
@@ -235,7 +235,7 @@ actively harmful with a strong embedder, not merely neutral.**
 **What qwen3 actually buys (the real, robust win):** *recall* and *symbolic* ranking, not
 semantic rank-1. Gin semantic s@5 0.60→0.80, MRR 0.30→0.48; gin symbolic rank-1 0.85→0.92,
 MRR 0.90→0.94; overall rank-1 0.67→0.69. It gets the right answer into the top-5 far more
-often and breaks symbolic ties better. The cost is throughput (~1.4 c/s vs nomic's ~32) and a
+often and breaks symbolic ties better. The cost is throughput (~1.4 c/s vs nomic's ~15–32, which varies with system load) and a
 3.3× larger `.bin`. For a one-time index amortized over many queries, that trade is sound —
 **qwen3 is a justified default** (per the user's request), with nomic/MiniLM as faster fallbacks.
 
