@@ -1,0 +1,5 @@
+# Apple Silicon only (macOS darwin).
+# Install:  pip install -r requirements-mlx.txt --break-system-packages
+mlx>=0.21.0
+mlx-embeddings>=0.0.3
+numpy>=1.24.0
