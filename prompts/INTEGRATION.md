@@ -15,7 +15,10 @@ prompts/
 │   ├── CSHARP.md
 │   ├── RUBY.md
 │   ├── PHP.md
-│   └── CSS_SCSS.md
+│   ├── CSS_SCSS.md
+│   ├── BASH.md
+│   ├── C.md
+│   └── SWIFT.md
 ├── frameworks/                      Layer 2 — pick the ones matching your stack
 │   ├── REACT.md
 │   ├── NODE_EXPRESS_NESTJS.md
