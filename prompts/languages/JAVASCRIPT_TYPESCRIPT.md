@@ -21,4 +21,6 @@
 
     <playbook question="explain service/module X" calls="2-3">resolve_symbol("X") → get_chunk_summary(id, expand_calls: true) → answer with the Used by: list; ≤1 consumer chunk as example.</playbook>
 
+    <playbook question="explain React/UI component X — full ecosystem" calls="1-2">get_subgraph("X", depth: 2): ONE call returns direct deps + their deps + callers + type users — the full component ecosystem without reading files. Use this instead of get_chunk_summary when the question asks "what does it use", "what depends on it", "how does it fit in the system", or when expand_calls would truncate at 6 callees. If usage sites matter, read Used by: from the subgraph result — no extra find_references call needed.</playbook>
+
 </environment_prompt>
