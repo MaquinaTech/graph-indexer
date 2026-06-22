@@ -11,6 +11,11 @@ import path from 'path';
 import { getParserForFile, EXTENSIONS } from './languages.mjs';
 import { truncateForEmbedding } from '../search-core.mjs';
 
+// JS-family import-specifier extensions. Under TS node16/nodenext these appear in
+// specifiers (`./x.js`) while the source on disk is `.ts`/`.tsx` — so when the literal
+// path is missing we strip one of these and re-probe the real source extensions.
+const JS_FAMILY_EXT = new Set(['.js', '.jsx', '.mjs', '.cjs']);
+
 // ─── Ollama host / model resolution ──────────────────────────────────────────
 // Priority: caller override → OLLAMA_HOST env var → PROJECT .graph-indexer.json
 // (MCP_PROJECT_ROOT or cwd — NOT the package directory: when graph-indexer is
@@ -157,13 +162,21 @@ export function resolveLocalImports(rawImports, fromFileRelPath, projectRoot) {
             if (existingExt && EXTENSIONS.has(existingExt) && fs.existsSync(absResolved)) {
                 finalAbs = absResolved;
             } else {
+                // TypeScript ESM convention (node16/nodenext moduleResolution): the import
+                // specifier carries a JS-family extension (`./Fade.js`) but the source file on
+                // disk is `.ts`/`.tsx`. The literal path doesn't exist, so strip that extension
+                // and re-probe the candidate source extensions — otherwise EVERY relative import
+                // in such a project drops and the file gets empty Deps:/Used by: topology.
+                const probeBase = (existingExt && JS_FAMILY_EXT.has(existingExt))
+                    ? absResolved.slice(0, -existingExt.length)
+                    : absResolved;
                 for (const e of EXTENSIONS) {
-                    if (fs.existsSync(absResolved + e)) { finalAbs = absResolved + e; break; }
-                    const idx = path.join(absResolved, 'index' + e);
+                    if (fs.existsSync(probeBase + e)) { finalAbs = probeBase + e; break; }
+                    const idx = path.join(probeBase, 'index' + e);
                     if (fs.existsSync(idx)) { finalAbs = idx; break; }
                     // Python: also try __init__.py for package directories
                     if (e === '.py') {
-                        const init = path.join(absResolved, '__init__.py');
+                        const init = path.join(probeBase, '__init__.py');
                         if (fs.existsSync(init)) { finalAbs = init; break; }
                     }
                 }

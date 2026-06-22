@@ -21,22 +21,43 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { BENCHMARKS } from './benchmark.config.mjs';
 
 const BUDGET = 4;
+
+// Per (fixture,task) expected/forbidden discovery tools — the archetype tool-fit signal.
+// A clean answer uses ≥1 expect tool and 0 avoid tools (e.g. references→find_references,
+// refactor→get_call_graph, flow→get_subgraph, an import-composition ecosystem must NOT
+// reach for get_subgraph). Sourced from the config so the two stay in lock-step.
+const TOOL_FIT = {};
+for (const b of BENCHMARKS) {
+    for (const [task, t] of Object.entries(b.tasks)) {
+        TOOL_FIT[`${b.fixture}/${task}`] = { expect: t.expect || [], avoid: t.avoid || [] };
+    }
+}
 const DISCOVERY_TOOLS = new Set([
     'search_code', 'resolve_symbol', 'get_repo_map', 'get_file_skeleton',
     'get_call_graph', 'get_chunk', 'get_chunk_summary', 'list_index_stats',
 ]);
-const FIRST_MOVE_OK = new Set(['search_code', 'resolve_symbol', 'get_repo_map', 'list_index_stats']);
+// Valid first discovery moves: those that take a name / no prior ID. The new archetypes
+// legitimately OPEN with these — refactor→get_call_graph, references→find_references,
+// flow→get_subgraph, routes→find_routes (all per the CORE.md playbooks). Only the
+// ID/locate-dependent tools (get_chunk, get_chunk_summary, get_file_skeleton) are a bad
+// first move because they presuppose a located target.
+const FIRST_MOVE_OK = new Set([
+    'search_code', 'resolve_symbol', 'get_repo_map', 'list_index_stats',
+    'get_call_graph', 'find_references', 'find_routes', 'get_subgraph',
+]);
 
 const readTrace = (file) =>
     fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 
-function scoreSegment(calls) {
+function scoreSegment(calls, fit = null) {
     const n = calls.length;
     const counts = {};
     for (const c of calls) counts[c.tool] = (counts[c.tool] || 0) + 1;
     const totalTokens = calls.reduce((s, c) => s + (c.tokens || 0), 0);
+    const toolsUsed = new Set(calls.map(c => c.tool));
 
     const searches = calls.filter(c => c.tool === 'search_code');
     const detailUse = { signatures: 0, smart: 0, full: 0 };
@@ -57,30 +78,44 @@ function scoreSegment(calls) {
     if (firstTool && !FIRST_MOVE_OK.has(firstTool)) violations.push(`first move was ${firstTool}`);
     if (searches.length && searches[0].args?.detail === 'full') violations.push(`detail:"full" on first search`);
 
+    // Archetype tool-fit: did the agent reach for the RIGHT tool for this question type?
+    let toolFit = null;
+    if (fit && (fit.expect.length || fit.avoid.length)) {
+        const usedExpect = fit.expect.length === 0 || fit.expect.some(t => toolsUsed.has(t));
+        const usedAvoid = fit.avoid.filter(t => toolsUsed.has(t));
+        if (usedAvoid.length) violations.push(`tool-fit: used ${usedAvoid.join(',')} (wrong tool here)`);
+        if (!usedExpect) violations.push(`tool-fit: never used expected ${fit.expect.join('/')}`);
+        toolFit = { ok: usedExpect && usedAvoid.length === 0, usedExpect, usedAvoid };
+    }
+
     return {
         calls: n, within_budget: n <= BUDGET, tokens: totalTokens, tool_counts: counts,
         used_search: searches.length > 0, used_call_graph: (counts.get_call_graph || 0) > 0,
         detail_use: detailUse, first_tool: firstTool || '—',
         errors: calls.filter(c => c.is_error).length,
         non_discovery: calls.filter(c => !DISCOVERY_TOOLS.has(c.tool)).length,
+        tool_fit: toolFit,
         violations, clean: violations.length === 0,
     };
 }
 
 function analyzeFile(file) {
+    const fixture = path.basename(file).replace(/\.jsonl$/, '');
     const calls = readTrace(file);
     const segments = {};
     for (const c of calls) (segments[c.task || 'all'] ||= []).push(c);
-    const perTask = Object.fromEntries(Object.entries(segments).map(([k, v]) => [k, scoreSegment(v)]));
-    return { file: path.basename(file).replace(/\.jsonl$/, ''), perTask, total_calls: calls.length };
+    const perTask = Object.fromEntries(Object.entries(segments).map(
+        ([k, v]) => [k, scoreSegment(v, TOOL_FIT[`${fixture}/${k}`] || null)]));
+    return { file: fixture, perTask, total_calls: calls.length };
 }
 
 function fmtFile(r) {
     const lines = [`▸ ${r.file}`];
     for (const [task, s] of Object.entries(r.perTask)) {
         const ok = s.clean ? '✅' : '⚠️';
+        const fitTag = s.tool_fit ? ` fit:${s.tool_fit.ok ? 'y' : 'n'}` : '';
         lines.push(`   ${ok} ${task.padEnd(10)} ${String(s.calls).padStart(2)}/${BUDGET} calls · ${String(s.tokens).padStart(5)} tok · ` +
-            `search:${s.used_search ? 'y' : 'n'} callgraph:${s.used_call_graph ? 'y' : 'n'} · ` +
+            `search:${s.used_search ? 'y' : 'n'} callgraph:${s.used_call_graph ? 'y' : 'n'}${fitTag} · ` +
             `tools[${Object.entries(s.tool_counts).map(([k, v]) => `${k.replace('get_', '')}×${v}`).join(' ')}]`);
         for (const v of s.violations) lines.push(`        ✗ ${v}`);
     }
@@ -108,6 +143,8 @@ const segs = results.flatMap(r => Object.entries(r.perTask).map(([task, s]) => (
 const clean = segs.filter(s => s.clean).length;
 const within = segs.filter(s => s.within_budget).length;
 const usedSearch = segs.filter(s => s.used_search).length;
+const fitSegs = segs.filter(s => s.tool_fit);
+const fitOk = fitSegs.filter(s => s.tool_fit.ok).length;
 const avgCalls = (segs.reduce((a, s) => a + s.calls, 0) / segs.length).toFixed(1);
 const avgTok = Math.round(segs.reduce((a, s) => a + s.tokens, 0) / segs.length);
 process.stdout.write(
@@ -115,4 +152,5 @@ process.stdout.write(
     `SUMMARY: ${segs.length} task-runs across ${results.length} fixtures\n` +
     `  clean: ${clean}/${segs.length} · within-budget: ${within}/${segs.length} · ` +
     `used search_code: ${usedSearch}/${segs.length}\n` +
+    `  tool-fit: ${fitOk}/${fitSegs.length} task-runs used the right tool for the archetype\n` +
     `  avg ${avgCalls} calls · avg ${avgTok} discovery tok/task\n`);

@@ -14,7 +14,7 @@ import { buildIgnoreFilter, extractSemanticChunks } from '../parse/extractor.mjs
 import { getParserForFile, EXTENSIONS } from '../parse/languages.mjs';
 import { extractDecorators, extractHeritage } from '../parse/metadata.mjs';
 import { extractRoutes } from '../parse/routes.mjs';
-import { buildEmbeddingPayload } from '../parse/imports.mjs';
+import { buildEmbeddingPayload, resolveLocalImports } from '../parse/imports.mjs';
 import { assessConfidence, buildHydePrompt, blendVectors, hydeQueryVector } from '../mcp/topology.mjs';
 import { computeFreshness } from '../git-signals.mjs';
 import { amortizedTokenSavings } from './metrics.mjs';
@@ -77,6 +77,46 @@ test('buildEmbeddingPayload excludes decorators/heritage from the retrieval chan
     const payload = buildEmbeddingPayload(chunk, []);
     assert.ok(!/Decorators:/.test(payload), 'decorators leaked into embedding payload');
     assert.ok(!/Inherits From:/.test(payload), 'heritage leaked into embedding payload');
+});
+
+// ─── resolveLocalImports (TS ESM .js-extension convention) ───────────────────
+// Regression: under TS node16/nodenext moduleResolution the import specifier
+// carries a .js extension (`import Fade from './Fade.js'`) while the source on
+// disk is Fade.tsx. The resolver must strip the JS-family extension and re-probe
+// the real source extensions — otherwise EVERY relative import in such a project
+// drops and the file gets empty Deps:/Used by: topology (observed: react-bootstrap
+// fixture had 0 non-empty dependency entries before the fix).
+test('resolveLocalImports remaps a .js specifier to its .tsx/.ts source (TS ESM)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-imports-'));
+    try {
+        fs.writeFileSync(path.join(root, 'Fade.tsx'), 'export default function Fade(){}');
+        fs.writeFileSync(path.join(root, 'manager.ts'), 'export const m = 1;');
+        // index.tsx barrel + a plain .js sibling that genuinely exists
+        fs.writeFileSync(path.join(root, 'real.js'), 'module.exports = {};');
+        const resolved = resolveLocalImports(
+            ['./Fade.js', './manager.js', './real.js', './missing.js'],
+            'Modal.tsx', root,
+        );
+        assert.ok(resolved.includes('Fade.tsx'), `.js→.tsx remap failed: ${resolved.join(',')}`);
+        assert.ok(resolved.includes('manager.ts'), `.js→.ts remap failed: ${resolved.join(',')}`);
+        assert.ok(resolved.includes('real.js'), `existing .js must still resolve: ${resolved.join(',')}`);
+        assert.ok(!resolved.some(r => /missing/.test(r)), 'nonexistent import must not resolve');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('resolveLocalImports leaves extensionless + non-JS specifiers unchanged', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-imports-'));
+    try {
+        fs.writeFileSync(path.join(root, 'PillCluster.tsx'), 'export default 1;');
+        fs.writeFileSync(path.join(root, 'styles.css'), '.a{}');
+        const resolved = resolveLocalImports(['./PillCluster', './styles.css'], 'a.tsx', root);
+        assert.ok(resolved.includes('PillCluster.tsx'), `extensionless must resolve: ${resolved.join(',')}`);
+        assert.ok(resolved.includes('styles.css'), `.css must resolve as-is: ${resolved.join(',')}`);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 // ─── extractDecorators ──────────────────────────────────────────────────────
