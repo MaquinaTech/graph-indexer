@@ -162,6 +162,8 @@ registerTools(server, db, {
     rerank: config.rerank,
     hyde: config.hyde,
     ollamaHost: config.ollamaHost,
+    llmProvider: config.llmProvider,
+    mlxLmHost: config.mlxLmHost,
     gitSignals,
     gitRankBoost: config.gitRankBoost,
 });

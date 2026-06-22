@@ -12,7 +12,7 @@ import { computePageRank, isNaturalLanguageQuery } from '../search-core.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
-import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
+import { rerankResults, ollamaGenerate, mlxLmGenerate } from '../enrichment.mjs';
 import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '../git-signals.mjs';
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
 import {
@@ -116,7 +116,7 @@ function refCard({ chunk, recvHint, reason, confidence }) {
  * @param {object|null} [opts.gitSignals] Loaded git-signals sidecar (churn/recency/co-change), or null.
  * @param {number} [opts.gitRankBoost]    0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged).
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', gitSignals = null, gitRankBoost = 0 }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', llmProvider = 'ollama', mlxLmHost = 'http://localhost:8080', gitSignals = null, gitRankBoost = 0 }) {
 
     // Scoped here (not module-level) so multiple servers in one process don't cross-contaminate.
     // `undefined` = not yet detected; `null` = unknown (→ generic prompt).
@@ -211,11 +211,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     }
                     queryVector = await hydeQueryVector(fullQuery, queryVector, {
                         embedder,
-                        generate: (prompt) => ollamaGenerate(prompt, {
-                            model: hyde?.model || 'qwen2.5-coder:1.5b',
-                            ollamaHost, timeoutMs: 20000,
-                            options: { temperature: 0.2, num_predict: 220 },
-                        }),
+                        generate: llmProvider === 'mlx'
+                            ? (prompt) => mlxLmGenerate(prompt, { mlxLmHost, timeoutMs: 20000 })
+                            : (prompt) => ollamaGenerate(prompt, {
+                                model: hyde?.model || 'qwen2.5-coder:1.5b',
+                                ollamaHost, timeoutMs: 20000,
+                                options: { temperature: 0.2, num_predict: 220 },
+                            }),
                         lang: _repoLang,
                     });
                 }
@@ -242,11 +244,13 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     try {
                         matches = await rerankResults(fullQuery, matches, {
                             topM: Math.min(rerank?.topM ?? 12, matches.length),
-                            generate: (prompt) => ollamaGenerate(prompt, {
-                                model: rerank?.model || 'qwen2.5-coder:7b',
-                                ollamaHost, timeoutMs: 60000,
-                                options: { temperature: 0, num_predict: 40 },
-                            }),
+                            generate: llmProvider === 'mlx'
+                                ? (prompt) => mlxLmGenerate(prompt, { mlxLmHost, timeoutMs: 60000 })
+                                : (prompt) => ollamaGenerate(prompt, {
+                                    model: rerank?.model || 'qwen2.5-coder:7b',
+                                    ollamaHost, timeoutMs: 60000,
+                                    options: { temperature: 0, num_predict: 40 },
+                                }),
                         });
                     } catch {
                         // An unreachable or slow judge must degrade gracefully — never

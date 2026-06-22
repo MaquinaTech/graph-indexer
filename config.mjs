@@ -33,6 +33,9 @@ export const DEFAULTS = Object.freeze({
                                        // Override with --mlx-embed-model / INDEXER_MLX_EMBED_MODEL;
                                        // must be an mlx_embeddings-compatible sentence model.
     ollamaHost: 'http://localhost:11434',
+    llmProvider: 'ollama',               // LLM backend for enrichment, reranking, HyDE: 'ollama' | 'mlx'
+                                         // 'mlx' requires mlx_lm.server running (mlx_lm.server --model <name>)
+    mlxLmHost: 'http://localhost:8080',  // mlx_lm.server endpoint (default port 8080)
     gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
     gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
     enrichment: Object.freeze({
@@ -119,6 +122,12 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
 
     const ollamaHost = env.OLLAMA_HOST || file.ollamaHost || DEFAULTS.ollamaHost;
 
+    // LLM provider for enrichment / reranking / HyDE: env > flag > config > default.
+    // 'mlx' routes generation through a local mlx_lm.server (OpenAI-compatible).
+    const llmProviderRaw = env.INDEXER_LLM_PROVIDER || flagValue(argv, '--llm-provider') || file.llmProvider || DEFAULTS.llmProvider;
+    const llmProvider = ['ollama', 'mlx'].includes(llmProviderRaw) ? llmProviderRaw : DEFAULTS.llmProvider;
+    const mlxLmHost = env.INDEXER_MLX_LM_HOST || flagValue(argv, '--mlx-lm-host') || file.mlxLmHost || DEFAULTS.mlxLmHost;
+
     // Embeddings are OFF by default (lexical + stemming need zero dependencies).
     // Enable with --embeddings or INDEXER_EMBEDDINGS=on; INDEXER_EMBEDDINGS=off always wins.
     const embeddingsEnabled = env.INDEXER_EMBEDDINGS === 'off'
@@ -158,6 +167,8 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         languages: Array.isArray(file.languages) ? file.languages : null, // null = all
 
         ollamaHost,
+        llmProvider,
+        mlxLmHost,
         embeddingsEnabled,
         embedProvider,
         // Embed model: --embed-model flag > EMBED_MODEL env > config > nomic default.
@@ -228,8 +239,8 @@ export function describeConfig(config, { backend = config.storage } = {}) {
     return [
         `storage     : ${backend}`,
         `embeddings  : ${emb}`,
-        `enrichment  : ${config.enrichment.enabled ? `on · model=${config.enrichment.model}` : 'off'}`,
-        `reranker    : ${config.rerank.enabled ? `on · model=${config.rerank.model}` : 'off'}`,
+        `enrichment  : ${config.enrichment.enabled ? `on · model=${config.enrichment.model} · provider=${config.llmProvider}` : 'off'}`,
+        `reranker    : ${config.rerank.enabled ? `on · model=${config.rerank.model} · provider=${config.llmProvider}` : 'off'}`,
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
     ];
 }

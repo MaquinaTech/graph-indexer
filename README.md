@@ -19,6 +19,14 @@
 
 Graph Indexer is a local [Model Context Protocol](https://modelcontextprotocol.io) server that builds an AST-precise index of your repository with Tree-sitter and serves it to AI coding agents. Instead of grepping text or embedding whole files, it indexes *semantic chunks* — functions, classes, methods — and the call graph and import topology that connect them, so an agent can find the right symbol, see every caller and dependency that would be affected by a change, and resolve references across files. It runs entirely on your machine: the default search path is lexical (BM25 + morphological stemming) and needs no model, no daemon, and no network. Dense vector embeddings, LLM enrichment, and an LLM reranker are all available but off by default — you opt into each one when you have a measured reason to.
 
+**Why it matters for AI coding agents:**
+
+- **Pinpoint retrieval, not file dumps.** Results are the exact functions, classes, and methods — ranked — so the agent reads the symbol it needs instead of grepping or loading whole files.
+- **Blast radius before every edit.** `get_call_graph` and `find_references` surface every caller, subclass, and dependency a change would touch, so the agent reasons about impact on code it never opened.
+- **Fewer tokens, faster runs.** Returning small ranked chunks instead of whole files keeps the agent's context tight — less to read, lower cost, quicker turns.
+- **Private by default.** Everything runs locally; the default path makes zero network calls and needs no model — your code never leaves your machine.
+- **One command, any language.** Guided setup wires your editors in seconds, and the zero-dependency lexical engine indexes 14 languages out of the box.
+
 ## Quick start
 
 The default path works with zero external dependencies — just Node.js (18+ for the in-memory index; 22+ if you use the optional SQLite backend). It works in **any** repository — Python, Go, Rust, Java, and so on — not only Node projects.
@@ -27,7 +35,7 @@ The default path works with zero external dependencies — just Node.js (18+ for
 npx graph-indexer /path/to/your/repo
 ```
 
-That runs the guided setup against that repo: it detects your stack, wires your installed editors to the MCP server (merging into existing configs, never clobbering), assembles the agent prompt suite, and offers to build the index — so it finishes ready to use. Useful flags: `--yes` (non-interactive/CI), `--dry-run` (preview the file actions), `--all-languages`, `--help`.
+That runs the [guided setup](#guided-setup) against that repo: it detects your stack, wires your installed editors to the MCP server (merging into existing configs, never clobbering), assembles the agent prompt suite, and offers to build the index — so it finishes ready to use. The walkthrough below covers every step; for CI, `--yes` accepts all defaults with no prompts.
 
 To point an agent at the server manually (the setup above already wires VS Code, Cursor, and Claude Code), use `idx-mcp` via `npx -p` so the correct bin runs:
 
@@ -72,6 +80,40 @@ Once connected, the agent can call `search_code`. A query like `search_code("rat
 ```
 
 The agent can then call `get_call_graph("rateLimiter")` to see what calls it (the blast radius) before changing it.
+
+## Guided setup
+
+`npx graph-indexer <path>` runs an interactive wizard that leaves the repo ready to use. It is **idempotent** — re-run it whenever you add a language or change a setting; it merges into what you already have and never clobbers another tool's config. Every generated file lands in `.graph-indexer/` (git-ignored), so your repo root stays clean.
+
+Before the steps, it scans the repo to pre-select your stack — languages from a bounded file walk, frameworks from your manifests (`package.json`, `pyproject.toml`, `composer.json`, `pom.xml`, `Gemfile`, `*.csproj`, …) — and, if it finds a pre-v1.4 layout, tidies those stray artifacts into `.graph-indexer/` first. Then six steps:
+
+| Step | You choose | What happens |
+|------|------------|--------------|
+| **1 · Languages** | Languages to index | Detected languages are pre-checked — press Enter to accept. Selecting none indexes **all** supported languages. |
+| **2 · Frameworks** | Prompt add-ons | Filtered to your languages and pre-checked from detection. Sharpens the agent prompt for React, Express/NestJS, FastAPI/Django, Spring, Rails, Laravel/Symfony, ASP.NET, or Android. |
+| **3 · Search engine & LLM** | Retrieval engine | **Press Enter for the recommended default** — lexical search, no LLM, no network. Everything heavier is opt-in (see below). |
+| **4 · Editors & MCP wiring** | *(automatic)* | Detects and wires VS Code, Cursor, Claude Desktop, and Claude Code. **Merge-safe**: your other MCP servers and keys are preserved. |
+| **5 · Project files & daemon** | *(automatic)* | Adds `mcp:*` npm scripts (index + daemon control), a managed `.gitignore` block, and `.graph-indexer/config.json`. |
+| **6 · Agent instructions** | *(automatic)* | Writes the layered prompt (`GRAPH_INDEXER_PROMPT.md`), a `GRAPH_INDEXER_DOMAIN.md` template for your own rules, a Cursor rule, and `@`-imports in `CLAUDE.md`. |
+
+It finishes with a grouped summary (created / updated / kept / skipped / warnings), offers to **build the index now**, and prints your next steps.
+
+**Most repos need nothing past step 3's default** — the lexical engine has zero dependencies and works in any language. Step 3 only branches when you decline the defaults:
+
+- **Storage** — `auto` (in-memory, promoting to SQLite past ~15k chunks), or force in-memory / SQLite.
+- **Embeddings** — `off` (default), `auto`, **Ollama**, **local** (in-process MiniLM, ~25 MB on first index), or **Apple Metal (MLX)** on macOS. Ollama is probed only when you actually pick it; choosing MLX offers to provision its Python venv on the spot.
+- **Enrichment / reranker** — off by default. A measured per-language note is shown before the reranker prompt (it helps Go/Python, regresses JS/TS). Model pickers are provider-aware, and if you select MLX the wizard verifies `mlx_lm.server` end-to-end — installing `mlx-lm`, starting the server, and pre-loading the model — so your first index can't fail against a server that isn't up.
+
+### Non-interactive & preview
+
+| Flag | Effect |
+|------|--------|
+| `--yes`, `-y` | Accept all detected/default selections — no prompts (CI). |
+| `--dry-run` | Print every file action without writing anything. |
+| `--all-languages` | Index every supported language (implies `--yes`). |
+| `--help`, `-h` | Show usage. |
+
+Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it behaves like `--yes`.
 
 ## How it works
 
@@ -179,129 +221,52 @@ npx idx-index --repo . --embeddings --embed-provider mlx
 
 Choose a different MLX model with `--mlx-embed-model <id>` (or `INDEXER_MLX_EMBED_MODEL`); it must be an `mlx_embeddings`-compatible sentence model, and the default `mlx-community/all-MiniLM-L6-v2-4bit` is the proven option. Tune batch size with `INDEXER_MLX_BATCH_SIZE` (default 32; lower to 16 on 8 GB machines, raise to 64 on M-series Max/Ultra). `mlx` is macOS-only; requesting it elsewhere fails fast with the alternative to use.
 
-## Known limitations
+## Benchmarks
 
-- Semantic rank-1 on the default path is **0.30** (held-out: 95 validation queries across the 5 core suites — reproduce with `npm run test:eval` and read the `HELD-OUT` block). Closing the remaining gap is bounded by the embedding/reranker channel, not lexical reweighting (the per-fixture table below shows exactly where the heavy stack does and does not close it).
-- The LLM reranker is language- and repo-dependent (measured per fixture at n=17–20 held-out): it lifts held-out on **8 fixtures** (nestjs, fastapi, react, django, rails, laravel, cjson, alamofire), but **taxes the tuning symbolic set on JS (express-js) and spring** — enable it only where measured to help (see [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md)). (The earlier "rerank regresses rails 0.67→0.33" was a small-sample artifact — at n=20 rerank *helps* rails, 0.40→0.50.)
-- Enrichment helped **only rust** in the per-fixture sweep (held-out success@5 0.39→0.61, as part of the full `R2` stack); on laravel it left held-out flat and **dropped the tuning split** — a core-chunk-selection coverage miscalibration (budget spent on Http controllers, starving Services/), flagged in [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md), not yet fixed.
-- The *typed* reference channel is uneven across languages. `find_references`' "subclassed by" / "used as a type by" dimensions are precise for **TypeScript/JavaScript/Python**, ride a shared `type_identifier` heuristic for **Java/PHP/Kotlin/Swift/Rust/Go/C**, use a dedicated field-precise branch for **C#** (params/fields/properties/returns/base list — ~54% of C# chunks on the aspnet fixture), and are **empty for Ruby, Express.js, Django, Bash, SCSS** (dynamic types or no type annotations in scope). AST chunking and lexical search cover all supported languages; the typed cross-reference channel is narrower.
-- Call-graph callers reached through a dynamically-typed or unresolved receiver (e.g. `const s = getStore(); s.save()`) are reported in the lower-confidence **name-only** bucket — they are not statically disambiguated by class.
-- Java (Spring) is chunked at *class* granularity (god-class split only fires ≥200 lines), so `get_call_graph` attributes at class level, not method level. SCSS has 6 trivial `@include` edges that resolve to no indexed definition — effectively no call graph.
+Every number here is produced by the eval harness on cold, isolated builds — never hand-edited — with **strict scoring** (exact symbol match, no file-path fallback) against a **held-out** split (~20–25% per language, never used to tune). Reproduce it all with `npm run test:eval`.
 
-## Benchmark results
+What the measurements say, across 18 real-world fixtures spanning every supported language:
 
-All numbers are generated by the eval harness on cold, isolated builds — not hand-edited. Scoring is strict (exact symbol match, no file-path fallback). Each language has a held-out validation split (~20–25%) that was never used to tune.
+- **The zero-dependency lexical default is the right starting point.** It wins the held-out metric outright on 2 fixtures, and 6 more need only a cheap in-process embedder — so **8 of 18 run with no Ollama and no network**. Most repos never need more.
+- **Symbolic lookups are strong** (mean rank-1 ≈ 0.70). Behavioural, natural-language queries are harder (≈ 0.30 on the default path) — that's where the optional embedding and reranker channels earn their keep.
+- **Optional features are measured, not assumed.** Dense embeddings lift recall on larger repos; the LLM reranker is language- and repo-dependent (it lifts 8 fixtures but taxes JavaScript and Spring); enrichment helps only where proven (just rust). Setup surfaces each trade-off before you enable it.
+- **Backend parity:** the in-memory and SQLite backends return byte-identical top-5 on all 18 fixtures (gated by `test/sqlite.mjs`).
 
-**Configs:** `L1` lexical+stemming (shipped default, zero deps) · `E0` in-process MiniLM · `O0` Ollama nomic-embed-text · `O2` Ollama qwen3-embedding:4b · `R0`/`R1`/`R2` qwen3 + rerank / enrichment / both · `O0R`/`O0HR` nomic + rerank / + HyDE+rerank. Full catalog, 3× spreads, and copy-paste enable flags: [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md).
+Per-fixture best configs, 3× spreads, and copy-paste enable flags live in **[docs/benchmarks/BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md)**.
 
-### Per-fixture best achievable quality (selected on held-out)
+### Structural coverage by language
 
-For each fixture, the configuration that maximizes the **held-out** strict metric — `success@5` first, then rank-1, then *lowest cost* (a fixture whose cheap default already maxes held-out keeps that cheap default; a heavier config that merely ties is not chosen). HyDE and the LLM reranker are nondeterministic, so every config using them was reproduced **3×** and reports the stable (median) value; rank-1 carries its min–max spread in [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md). `s@5`/`r1` = held-out strict success@5 / rank-1.
+`get_call_graph` and `find_references` are richest for typed languages. Every verdict is confirmed by invocation on the real index, not by reading field counts:
 
-> **Held-out splits are now n=17–20 per fixture** (raised from n=3; tuning n=22–24). At n≈19 the 95% Wilson CI half-width on held success@5 is ≈ **±0.16** (was ±0.34 at n=3 — 52% tighter), so a ≥0.15 gap is real and a 0.05 gap is noise. 18 fixtures are measured; express-ts is omitted (its upstream fixture repo is gone). **13 of 18 winners changed vs the n=3 run** — see [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md) for what did not survive the larger sample.
+| Capability | Strong | Limited |
+|---|---|---|
+| **Call graph** (callers/callees) | resolves on every supported language | Java/Spring is class-granular; SCSS effectively none |
+| **Caller precision** | receiver-aware: TS/JS, Python, C#, Swift, PHP | name-only: Go, Rust, Kotlin, Ruby, Bash, C |
+| **Typed `find_references`** | precise: TS/JS, Python · field-precise: C# | heuristic: Java/PHP/Kotlin/Swift/Rust/Go/C · empty: Ruby, Bash, SCSS, dynamic JS/Python |
 
-| Language | Fixture | Default `L1` (s@5/r1) | Best config | Best (s@5/r1) | Ollama | Why this config wins |
-|---|---|---|---|---|---|---|
-| JavaScript | axios | 0.89 / 0.74 | **E0 · MiniLM (in-proc)** | 0.95 / 0.74 | no | Cheap in-process embeddings edge lexical on held s@5; exact-name JS. (n=3 saw L1 "saturate" at 1.00.) |
-| JavaScript | express-js | 0.84 / 0.53 | **L1 · lexical (default)** | 0.84 / 0.53 | no | All configs tie held s@5 0.84; O0R's rank-1 gain **taxes the tuning set** (rerank tax on JS) → lexical wins. |
-| TypeScript | nestjs | 0.70 / 0.45 | **O0HR · nomic+HyDE+rerank** | 0.75 / 0.65 | yes | nomic+HyDE+rerank is the **only** lift past the 0.70 held-s@5 ceiling (→0.75); qwen3:4b ties at far higher cost. |
-| Python | fastapi | 0.70 / 0.55 | **O0R · nomic+rerank** | 0.80 / 0.70 | yes | nomic+rerank lifts held s@5 0.70→0.80, rank-1 →0.70. (n=3 saw L1 "saturate" at 1.00.) |
-| Go | gin | 0.88 / 0.71 | **E0 · MiniLM (in-proc)** | 0.94 / 0.76 | no | Cheap in-process embeddings lift held s@5 0.88→0.94; **qwen3:4b regresses it** to 0.88. |
-| TS/React | react | 0.75 / 0.50 | **O0R · nomic+rerank** | 0.85 / 0.70 | yes | nomic+rerank lifts held s@5 0.75→0.85 and rank-1 0.50→0.70. |
-| Python/Django | django | 0.79 / 0.47 | **O0R · nomic+rerank** | 0.95 / 0.53 | yes | nomic+rerank lifts held s@5 0.79→0.95; **qwen3:4b regresses** to 0.89. |
-| Rust | rust | 0.39 / 0.22 | **R2 · qwen3+enrich+rerank** | 0.61 / 0.39 | yes | The **only** fixture needing the full heavy stack: held s@5 0.39→0.61 (enrichment + rerank). |
-| Java/Spring | spring | 0.84 / 0.53 | **L1 · lexical (default)** | 0.84 / 0.53 | no | Cheap and heavy tie at 0.84; R2's 0.89 taxes the tuning set → lexical wins. (n=3 "heavy-needed" collapsed.) |
-| Kotlin/Android | android | 0.90 / 0.55 | **E0 · MiniLM (in-proc)** | 0.95 / 0.55 | no | Cheap in-process embeddings edge lexical on held s@5. |
-| C#/ASP.NET | aspnet | 0.85 / 0.65 | **E0 · MiniLM (in-proc)** | 0.95 / 0.70 | no | Cheap in-process embeddings lift held s@5 0.85→0.95 — **no Ollama** (n=3 crowned nomic). |
-| Ruby/Rails | rails | 0.35 / 0.25 | **O0HR · nomic+HyDE+rerank** | 0.50 / 0.45 | yes | nomic+HyDE+rerank lifts held s@5 0.40→0.50 — **rerank HELPS rails** (n=3 said it regresses). Lowest ceiling. |
-| PHP/Laravel | laravel | 0.89 / 0.33 | **O0R · nomic+rerank** | 0.89 / 0.61 | yes | nomic+rerank sharpens held rank-1 0.33→0.61 at s@5 0.89; **qwen3:4b/enrichment don't help**. |
-| PHP/Symfony | symfony | 0.95 / 0.60 | **E0 · MiniLM (in-proc)** | 0.95 / 0.70 | no | Held s@5 **0.95** (n=3's "0.75 ceiling no channel closes" was a small-sample artifact); MiniLM sharpens rank-1. |
-| SCSS | css | 1.00 / 0.70 | **O0 · nomic** | 1.00 / 0.85 | yes | The **lone** held s@5 1.00 saturator; nomic sharpens held rank-1 0.70→0.85. |
-| C | cjson | 0.72 / 0.44 | **O0R · nomic+rerank** | 0.89 / 0.72 | yes | nomic+rerank lifts held s@5 0.72→0.89 and rank-1 0.44→0.72 (n=3 saw rank-1 stuck at 0.00). |
-| Bash | nvm | 0.84 / 0.74 | **E0 · MiniLM (in-proc)** | 0.95 / 0.68 | no | Cheap in-process embeddings lift held s@5 0.84→0.95 (trading a little rank-1). |
-| Swift | alamofire | 0.70 / 0.55 | **O0R · nomic+rerank** | 0.80 / 0.70 | yes | nomic+rerank lifts held s@5 0.70→0.80 and rank-1 0.55→0.70, helps tuning too. |
+AST chunking and lexical search cover **every** supported language; only the typed cross-reference channel narrows for dynamic ones.
 
-**How to read it.** "Ollama: no" means the best config runs with zero network or daemon — `L1` (pure lexical) or `E0` (in-process MiniLM). **Two** fixtures are maxed by the lexical default alone (express-js, spring); **seven** more want only a cheap embedding channel (axios, gin, android, aspnet, symfony, nvm via in-process `E0`; css via nomic `O0`) — so **8 fixtures need nothing beyond the in-process default**. **Eight** fixtures are best with nomic embeddings + LLM rerank/HyDE (no qwen3 embedder): nestjs, fastapi, react, django, rails, laravel, cjson, alamofire. **One** fixture (rust) genuinely needs the full qwen3:4b + enrichment + rerank stack.
+### Where it's weakest (honestly)
 
-**Enabling a winning config.** `L1` is the shipped default (nothing to set). `E0`: `--embeddings` (in-process MiniLM, used when no Ollama daemon is up). `O0`: `--embeddings --embed-model nomic-embed-text`. **Rerank**: `--rerank` (or `RERANK_MODEL=qwen2.5-coder:7b`) at serve time, or per call `search_code(query, rerank: true)`. **HyDE**: `{"hyde":{"enabled":true}}` in `.graph-indexer/config.json`, or per call `search_code(query, hyde: true)`. **Enrichment**: `--enrichment` at index time.
+- Behavioural, natural-language recall on the default path (rank-1 ≈ 0.30) — closing it needs the embedding/reranker channel, not lexical tuning.
+- The hardest fixtures stay below 0.65 held-out success@5 even with the full stack (rails 0.50, rust 0.61).
+- Java/Spring `get_call_graph` reports at class granularity (the god-class split only fires ≥200 lines); SCSS has no meaningful call graph.
+- LLM enrichment without reranking regresses precision — enable it only paired with `--rerank`.
 
-**What did *not* reproduce (honest negatives).** The heavier `qwen3-embedding:4b` embedder is **never a sole winner** and **regresses** held-out success@5 on gin (0.94→0.88) and django (0.95→0.89) — confirmed at high power; the only place a qwen3 build earns its keep is rust's `R2` (and there the lift is from enrichment+rerank, not the embedder). Enrichment helps **only rust** and actively hurts laravel (drops its tuning split 0.82→0.55 — the known core-chunk coverage miscalibration). The residual hard cases no config solves are now stated at the higher n: **rails** (held s@5 capped at 0.50, the lowest ceiling), **rust** (0.61, even with the full stack), **nestjs** (0.75), **fastapi/alamofire** (0.80) — bounded by the embedding/reranker channel, not lexical reweighting. **Several n=3 conclusions did not survive the larger sample** (symfony's "0.75 ceiling no channel closes" → 0.95; spring's "heavy stack needed" → cheap ties; "rerank regresses rails" → rerank helps it; cjson's "rank-1 0.00 for every config" → 0.72) — see [BENCH_PER_FIXTURE.md](docs/benchmarks/BENCH_PER_FIXTURE.md).
-
-### Structural coverage — call graph and references (invocation-verified)
-
-Every verdict below was confirmed by calling `get_call_graph` and `find_references` on the real index, not by reading a field count.
-
-| Language | Fixture | `get_call_graph` | `type_refs` channel | Callers resolution | Inheritance (`extends`) |
-|---|---|---|---|---|---|
-| JavaScript | axios | yes | populated (26.7%) | receiver-aware (80.2%) | yes (0.2%) |
-| JavaScript | express-js | yes | **empty** | receiver-aware (74.2%) | n/a |
-| TypeScript | nestjs | yes | populated (86%) | receiver-aware (73%) | yes (11%) |
-| TS/React | react | yes | populated (85.8%) | mixed (33.5%) | yes (0.3%) |
-| Python | fastapi | yes | populated (17.8%) | receiver-aware (64.7%) | yes (10.9%) |
-| Python/Django | django | yes | **empty** | receiver-aware (73.9%) | yes (47.7%) |
-| Go | gin | yes | populated (87.9%) | name-only | yes (0.6%) |
-| Rust | rust | yes | populated (86%) | name-only | yes (26.1%) |
-| Java/Spring | spring | **degraded** (class-granular) | populated (3.6%) | receiver-aware (87.7%) | yes (1.1%) |
-| Kotlin/Android | android | yes | populated (100%) | name-only | yes (18.1%) |
-| C#/ASP.NET | aspnet | yes | populated (53.6%) | receiver-aware (91.1%) | yes (32.2%) |
-| Ruby/Rails | rails | yes | **empty** | name-only | yes (11.9%) |
-| PHP/Laravel | laravel | yes | populated (73.1%) | receiver-aware (83.6%) | yes (65.9%) |
-| PHP/Symfony | symfony | yes | populated (35.2%) | receiver-aware (86%) | yes (23.2%) |
-| SCSS | css | **degraded** (6 trivial edges) | **empty** | none | n/a |
-| C | cjson | yes | populated (9.3%) | name-only | n/a |
-| Bash | nvm | yes | **empty** | name-only | n/a |
-| Swift | alamofire | yes | populated (97.7%) | receiver-aware (53.4%) | yes (23.9%) |
-
-**Legend.** `get_call_graph`: **yes** = callers resolve correctly · **degraded** = edges exist but callee method is not its own chunk (Java class-granular) · **none** = zero call edges, tool returns nothing. `type_refs`: **populated** = ≥1 chunk carries type-usage refs · **empty** = `find_references` degrades to callers + `extends` only. `callers resolution`: **receiver-aware** = high-confidence per-class caller classification · **name-only** = call sites carry no receiver (Go/Rust/Kotlin/Ruby/Bash/C).
-
-**Backend parity: memory vs SQLite top-5 is byte-identical on all 18 fixtures** — enforced by `test/sqlite.mjs`.
-
-### File-hit metric
-
-In addition to strict symbol-level scoring, the eval harness now tracks **file hit@k**: did any result in the top-k land on the correct file, even if the exact symbol wasn't rank-1? This is computed independently of the strict metric — a query with `file hit@1 = 1` and `sym r1 = 0` means the agent landed in the right file but fetched the wrong chunk within it.
-
-```
-npm run test:eval -- --suite aspnet --verbose   # shows fileR (file rank) per query
-npm run test:eval                               # OVERALL section shows file hit@1 / @5
-```
-
-File-hit metrics across 11 fixtures (L1 default path, **tuning split**). `sym r1` here is the *symbolic-query* rank-1 on the tuning split — a different slice from the held-out, all-query rank-1 in the per-fixture table above, so the two `r1` columns are not meant to match. Reproduce any row with `npm run test:eval -- --suite <fixture>` and read the per-suite `file hit@1 / @5` line plus the symbolic rank-1 in the breakdown.
-
-| Fixture | sym r1 | file hit@1 | file hit@5 |
-|---|---|---|---|
-| axios | 89% | 75% | 92% |
-| express-js | 75% | 74% | 91% |
-| fastapi | 76% | 63% | 71% |
-| gin | 88% | 64% | 86% |
-| react | 63% | 64% | 86% |
-| rails | 44% | 29% | 63% |
-| django | 78% | 71% | 92% |
-| css | 53% | 70% | 91% |
-| aspnet | 67% | 65% | 96% |
-| laravel | 47% | 41% | 77% |
-| symfony | 83% | 71% | 88% |
-| Mean | 69% | 62% | 85% |
-
-The gap between `sym r1` and `file hit@1` shows how often the agent lands in the right file but on a sibling chunk rather than the exact definition. A wide gap means the retrieval granularity is right (file-level) while within-file ranking has room to improve (typically closed by `get_file_skeleton` + `get_chunk`). For example, rails lands in the correct file 63% of the time at @5 but only 29% at rank-1 — worth exploring via `--verbose` to diagnose within-file ranking.
-
-## Contributing / reproducing the benchmarks
-
-The benchmark numbers in this README are generated by the eval harness, not hand-edited. The harness lives in [test/evaluate.mjs](test/evaluate.mjs); reproduce commands are documented in [docs/benchmarks/BENCH_BASELINE.md](docs/benchmarks/BENCH_BASELINE.md), [docs/benchmarks/BENCH_FULL_SUITE.md](docs/benchmarks/BENCH_FULL_SUITE.md), and [docs/internals/IMPROVEMENT_STEMMING.md](docs/internals/IMPROVEMENT_STEMMING.md).
+## Reproducing the benchmarks
 
 ```bash
 npm run test:all                   # full unit + integration suite
 npm run test:setup                 # index the benchmark fixtures
-npm run test:eval                  # lexical default-path eval over the 5 core suites (axios/express/nestjs/fastapi/gin)
+npm run test:eval                  # default lexical path — prints the HELD-OUT block
 npm run test:eval -- --suite css   # any single fixture (18 authored suites)
 npm run test:eval -- --embeddings  # hybrid eval (requires Ollama)
-npm run test:eval -- --verbose     # per-query breakdown including file rank column
-node test/sqlite.mjs               # backend-parity gate (memory ↔ SQLite identical top-5)
+npm run test:eval -- --verbose     # per-query breakdown incl. file-rank column
+node test/sqlite.mjs               # backend-parity gate (memory ↔ SQLite top-5)
 node bench/cell.mjs <fixture> L1   # cold rebuild + score one fixture
-bash bench/run-focused.sh          # reproduce the per-fixture best-config grid (per-fixture, resumable)
-node bench/synth-best.mjs --md     # regenerate the matrix table → bench/results/_matrix.md (pasted into the per-fixture doc)
 ```
 
-To verify the 5 core suites on the default path: `npm run test:eval` and read the `HELD-OUT` block (the `OVERALL` block also prints `file hit@1 / @5`). The full per-fixture / file-hit tables span more fixtures — reproduce a single one with `npm run test:eval -- --suite <fixture>`, or the whole best-config grid with the `bench/` harness above.
+The harness is [test/evaluate.mjs](test/evaluate.mjs); deeper reproduction notes live in [docs/benchmarks/BENCH_BASELINE.md](docs/benchmarks/BENCH_BASELINE.md) and [docs/benchmarks/BENCH_FULL_SUITE.md](docs/benchmarks/BENCH_FULL_SUITE.md).
 
 ---
 

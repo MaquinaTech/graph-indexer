@@ -24,7 +24,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import readline from 'readline';
-import { spawnSync } from 'child_process';
+import { spawnSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { c, glyph, log, rule, box } from './cli-ui.mjs';
 import {
@@ -32,12 +32,29 @@ import {
     migrateLegacyLayout, hasLegacyLayout,
 } from './layout.mjs';
 import { readPid, isAlive } from './daemon-lock.mjs';
-import { ensureMlxEnv, mlxEnvReady } from './embedders/setup-mlx.mjs';
+import { ensureMlxEnv, mlxEnvReady, mlxVenvPython, mlxVenvDir } from './embedders/setup-mlx.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Default MLX embed model offered in onboarding (mirrors config.mjs DEFAULTS.mlxEmbedModel).
 const MLX_MODEL_DEFAULT = 'mlx-community/all-MiniLM-L6-v2-4bit';
+
+// Curated MLX LLM models for enrichment / reranking, so the user picks from a short
+// proven list instead of typing a long `mlx-community/…` id. "Other…" always escapes.
+const MLX_LLM_MODELS = {
+    enrichment: [
+        { key: 'mlx-community/Qwen2.5-Coder-1.5B-Instruct-4bit', label: 'Qwen2.5-Coder 1.5B (4-bit)', desc: 'recommended · fast summaries' },
+        { key: 'mlx-community/Qwen2.5-Coder-3B-Instruct-4bit', label: 'Qwen2.5-Coder 3B (4-bit)', desc: 'richer · a little slower' },
+    ],
+    reranker: [
+        { key: 'mlx-community/Qwen2.5-Coder-7B-Instruct-4bit', label: 'Qwen2.5-Coder 7B (4-bit)', desc: 'recommended · sharpest judgment' },
+        { key: 'mlx-community/Qwen2.5-Coder-14B-Instruct-4bit', label: 'Qwen2.5-Coder 14B (4-bit)', desc: 'sharper · needs ~12 GB RAM' },
+    ],
+};
+const MLX_LLM_DEFAULTS = {
+    enrichment: MLX_LLM_MODELS.enrichment[0].key,
+    reranker: MLX_LLM_MODELS.reranker[0].key,
+};
 
 // ─── Subcommand dispatch ─────────────────────────────────────────────────────
 // package.json maps the `graph-indexer` bin to THIS file, so `npx graph-indexer
@@ -432,7 +449,8 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
         const onKeypress = (str, key) => {
             if (key.ctrl && key.name === 'c') {
                 cleanup();
-                process.exit(0);
+                stdout.write('\n');
+                process.exit(130);
             }
 
             if (key.name === 'up' || (key.name === 'tab' && key.shift)) {
@@ -503,7 +521,7 @@ function interactiveSelect({ title, items, selectedKey }) {
         };
 
         const onKeypress = (str, key) => {
-            if (key.ctrl && key.name === 'c') { cleanup(); process.exit(0); }
+            if (key.ctrl && key.name === 'c') { cleanup(); stdout.write('\n'); process.exit(130); }
             if (key.name === 'up' || (key.name === 'tab' && key.shift)) {
                 cursor = (cursor - 1 + items.length) % items.length; render();
             } else if (key.name === 'down' || (key.name === 'tab' && !key.shift)) {
@@ -573,6 +591,165 @@ async function listOllamaModels(host) {
     } catch { return null; }
 }
 
+/** GET {host}/v1/models → { running, loadedModel } for mlx_lm.server. */
+async function probeMlxLmServer(host, timeoutMs = 3000) {
+    try {
+        const res = await fetch(`${host}/v1/models`, { signal: AbortSignal.timeout(timeoutMs) });
+        if (!res.ok) return { running: false, loadedModel: null };
+        const data = await res.json();
+        const first = (data.data || [])[0];
+        return { running: true, loadedModel: first?.id || first?.name || null };
+    } catch { return { running: false, loadedModel: null }; }
+}
+
+/** True iff `import mlx_lm` succeeds under the given interpreter. */
+function pythonHasMlxLm(py) {
+    const r = spawnSync(py, ['-c', 'import mlx_lm'], { stdio: 'ignore', timeout: 8000 });
+    return r.status === 0;
+}
+
+/** First interpreter with mlx_lm importable (shared MLX venv first), or null. */
+function findMlxLmPython() {
+    for (const py of [mlxVenvPython(), 'python3', 'python']) {
+        if (pythonHasMlxLm(py)) return py;
+    }
+    return null;
+}
+
+/**
+ * Install mlx-lm into the shared MLX venv (creating the venv if absent). We install
+ * ONLY mlx-lm here — an LLM-only user shouldn't pull the full embeddings stack.
+ * Returns { ok, py?, error? }.
+ */
+function installMlxLm({ log: logFn }) {
+    const py = path.join(mlxVenvDir, 'bin', 'python3');
+    if (!fs.existsSync(py)) {
+        const base = ['python3.12', 'python3.11', 'python3.10', 'python3']
+            .find(b => spawnSync(b, ['--version'], { stdio: 'ignore' }).status === 0);
+        if (!base) return { ok: false, error: 'no python3 found on PATH to create the venv' };
+        logFn(`creating MLX venv  (${base} -m venv embedders/venv-mlx)`);
+        const mk = spawnSync(base, ['-m', 'venv', mlxVenvDir], { stdio: 'inherit' });
+        if (mk.status !== 0) return { ok: false, error: 'virtualenv creation failed' };
+        spawnSync(py, ['-m', 'pip', 'install', '-q', '--upgrade', 'pip'], { stdio: 'inherit' });
+    }
+    logFn('installing mlx-lm  (pip install mlx-lm — this may take a few minutes)');
+    const pip = spawnSync(py, ['-m', 'pip', 'install', 'mlx-lm'], { stdio: 'inherit' });
+    if (pip.status !== 0) return { ok: false, error: 'pip install mlx-lm failed' };
+    return pythonHasMlxLm(py) ? { ok: true, py } : { ok: false, error: 'mlx-lm installed but still not importable' };
+}
+
+/** Fire one tiny completion to force the model to load/download. Best-effort. */
+async function warmMlxLmModel(host, model) {
+    try {
+        const res = await fetch(`${host}/v1/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, prompt: 'ok', max_tokens: 1, temperature: 0 }),
+            signal: AbortSignal.timeout(600000), // up to 10 min for a first-time model download
+        });
+        return res.ok;
+    } catch { return false; }
+}
+
+/**
+ * After MLX LLM provider + models are chosen: verify the path end-to-end so the
+ * first index run can't fail with "generator unreachable". Warns about the
+ * single-model constraint, then — if the server is down — offers to install
+ * mlx-lm (into the shared venv), start the server, and warm up the model.
+ */
+async function checkMlxLmSetup({ mlxLmHost, enrichModel, rerankModel }) {
+    const targetModel = enrichModel || rerankModel;
+    if (!targetModel) return null;
+
+    // mlx_lm.server serves exactly one model at a time — warn when both features
+    // request different models so the user knows only one will actually be used.
+    if (enrichModel && rerankModel && enrichModel !== rerankModel) {
+        log('');
+        log(`  ${glyph.warn} ${c.yellow('mlx_lm.server loads one model at a time.')}`);
+        log(c.dim(`       Enrichment : ${enrichModel}`));
+        log(c.dim(`       Reranker   : ${rerankModel}`));
+        log(c.dim('       Both features will use whichever model the server has loaded.'));
+        log(c.dim('       Tip: use the same model for both (the larger one is usually better).'));
+        log('');
+    }
+
+    const probe = await probeMlxLmServer(mlxLmHost);
+    if (probe.running) {
+        if (probe.loadedModel && probe.loadedModel !== targetModel) {
+            log('');
+            log(`  ${glyph.warn} ${c.yellow('mlx_lm.server is running but has a different model loaded.')}`);
+            log(c.dim(`       Loaded   : ${probe.loadedModel}`));
+            log(c.dim(`       Expected : ${targetModel}`));
+            log(c.dim(`       Restart it with: ${c.cyan(`mlx_lm.server --model ${targetModel}`)}`));
+            log('');
+        } else {
+            line(glyph.ok, 'mlx_lm.server', `running${probe.loadedModel ? ` · ${probe.loadedModel}` : ''} at ${mlxLmHost}`);
+        }
+        return true;
+    }
+
+    // Server not running — offer to provision and start it end-to-end.
+    log('');
+    log(`  ${glyph.warn} ${c.yellow(`mlx_lm.server is not reachable at ${mlxLmHost}.`)}`);
+    log(c.dim('       It must be running for MLX enrichment / reranking to work.'));
+
+    let mlxPy = findMlxLmPython();
+    if (!mlxPy) {
+        log(c.dim('       mlx-lm is not installed yet.'));
+        if (await confirm({ label: 'Install mlx-lm into embedders/venv-mlx now?', def: true })) {
+            const res = installMlxLm({ log: (s) => log(c.dim('       ' + s)) });
+            if (res.ok) { mlxPy = res.py; line(glyph.ok, 'mlx-lm', 'installed (embedders/venv-mlx)'); }
+            else line(glyph.warn, 'mlx-lm', `install failed: ${res.error}`);
+        }
+    }
+
+    const port = mlxLmHost.match(/:(\d+)/)?.[1] || '8080';
+    if (!mlxPy) {
+        log(c.dim('       Install it, then start the server manually before indexing:'));
+        log(c.dim(`         ${c.cyan('pip install mlx-lm')}`));
+        log(c.dim(`         ${c.cyan(`mlx_lm.server --model ${targetModel} --port ${port}`)}`));
+        log('');
+        return false;
+    }
+
+    if (!await confirm({ label: 'Start mlx_lm.server now?  (runs in the background)', def: true })) {
+        line(glyph.skip, 'mlx_lm.server', 'start it before indexing');
+        log(c.dim(`       ${c.cyan(`${mlxPy} -m mlx_lm.server --model ${targetModel} --port ${port}`)}`));
+        return false;
+    }
+
+    const child = spawn(mlxPy, ['-m', 'mlx_lm.server', '--model', targetModel, '--port', port], {
+        detached: true, stdio: 'ignore',
+    });
+    child.unref();
+    log(c.dim(`       started (PID ${child.pid}) — stop later with ${c.cyan(`kill ${child.pid}`)}`));
+    log(c.dim('       waiting for the server to accept connections…'));
+
+    let ready = false;
+    for (let i = 0; i < 12 && !ready; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        if ((await probeMlxLmServer(mlxLmHost)).running) { ready = true; break; }
+        if (i < 11) log(c.dim(`       still starting… (${(i + 1) * 5}s)`));
+    }
+
+    if (!ready) {
+        log(`  ${glyph.warn} ${c.yellow('Server did not respond within 60 s — it may still be starting.')}`);
+        log(c.dim(`       Check: ${c.cyan(`curl ${mlxLmHost}/v1/models`)}`));
+        return false;
+    }
+    line(glyph.ok, 'mlx_lm.server', `running at ${mlxLmHost}`);
+
+    // Warm up so the (potentially large) model is downloaded/loaded before indexing,
+    // turning a slow, failure-prone first index into a fast one. Opt-in — the download
+    // can take minutes, and the first index run would otherwise trigger it anyway.
+    if (await confirm({ label: `Pre-load ${targetModel} now?  (downloads weights — avoids a slow first index)`, def: true })) {
+        log(c.dim('       loading the model (first run downloads weights, please wait)…'));
+        if (await warmMlxLmModel(mlxLmHost, targetModel)) line(glyph.ok, 'Model', `${targetModel} loaded and ready`);
+        else log(`  ${glyph.warn} ${c.yellow('Warm-up did not finish — the first index run will complete the download.')}`);
+    }
+    return true;
+}
+
 /**
  * Pick a model. With Ollama reachable: an arrow-select over the installed models
  * (the default is always listed and pre-highlighted) plus an "Other…" escape
@@ -609,6 +786,20 @@ async function selectMlxModel(def) {
     return await promptText({ label: 'MLX model id', def, hint: '· e.g. an mlx-community/* sentence model' });
 }
 
+/**
+ * Pick an MLX LLM model for enrichment / reranking from a curated list (so the user
+ * isn't forced to type a long id), plus an "Other…" escape for any instruct model.
+ */
+async function selectMlxLlmModel({ purpose, def }) {
+    const presets = MLX_LLM_MODELS[purpose] || [];
+    const items = presets.map(m => ({ key: m.key, label: m.label, desc: c.dim(m.desc) }));
+    items.push({ key: CUSTOM_MODEL, label: 'Other (type a model id)…', desc: c.dim('any mlx-community/* instruct model') });
+    const selectedKey = presets.some(m => m.key === def) ? def : presets[0]?.key;
+    const choice = await interactiveSelect({ title: `MLX model for ${purpose}`, items, selectedKey });
+    if (choice !== CUSTOM_MODEL) return choice;
+    return await promptText({ label: `${purpose} model id`, def, hint: '· model name as loaded in mlx_lm.server' });
+}
+
 // ─── Stack config persistence (.graph-indexer/config.json) ───────────────────
 
 function saveStackConfig({ languages, frameworks, engine, interactive }) {
@@ -632,6 +823,8 @@ function saveStackConfig({ languages, frameworks, engine, interactive }) {
         existing.embeddings = engine.embeddings;
         if (engine.embedProvider) existing.embedProvider = engine.embedProvider;
         existing.ollamaHost = engine.ollamaHost;
+        if (engine.llmProvider) existing.llmProvider = engine.llmProvider;
+        if (engine.mlxLmHost) existing.mlxLmHost = engine.mlxLmHost;
         existing.embedModel = engine.embedModel;
         if (engine.localEmbedModel) existing.localEmbedModel = engine.localEmbedModel;
         if (engine.mlxEmbedModel) existing.mlxEmbedModel = engine.mlxEmbedModel;
@@ -1005,6 +1198,10 @@ if (availableFrameworks.length === 0) {
 stepHeader(3, 'Search engine & LLM features');
 
 let engineConfig = null;
+// MLX LLM readiness, surfaced to the "Build the index now?" step so we don't
+// kick off an index that will fail enrichment/reranking against a down server.
+// null = not applicable, true = confirmed running, false = configured but not ready.
+let mlxServerReady = null;
 {
     const existing = readJsonSafe(PATHS.configPath) || {};
     const exEnrich = existing.enrichment || {};
@@ -1054,18 +1251,27 @@ let engineConfig = null;
         });
         const embeddingsEnabled = embedProvider !== 'off';
 
-        const ollamaHost = normalizeHost(await promptText({
-            label: 'Ollama host', hint: '(URL or port)',
-            def: existing.ollamaHost || 'http://localhost:11434',
-        }));
-        log(c.dim('      probing Ollama…'));
-        const models = await listOllamaModels(ollamaHost);
-        if (models) line(glyph.ok, 'Ollama', `${models.length} model(s) at ${ollamaHost}`);
-        else line(glyph.warn, 'Ollama', `not reachable at ${ollamaHost} — you can still name models to pull later`);
+        // Ollama is probed lazily — only when something actually needs it (embeddings
+        // via ollama/auto, or an Ollama LLM provider chosen later). "Lexical only",
+        // "Local", and "Apple Metal" users are never asked for an Ollama URL.
+        let ollamaHost = existing.ollamaHost || 'http://localhost:11434';
+        let models = null;
+        let ollamaProbed = false;
+        const ensureOllamaProbed = async () => {
+            if (ollamaProbed) return;
+            ollamaProbed = true;
+            ollamaHost = normalizeHost(await promptText({ label: 'Ollama host', hint: '(URL or port)', def: ollamaHost }));
+            log(c.dim('      probing Ollama…'));
+            models = await listOllamaModels(ollamaHost);
+            if (models) line(glyph.ok, 'Ollama', `${models.length} model(s) at ${ollamaHost}`);
+            else line(glyph.warn, 'Ollama', `not reachable at ${ollamaHost} — you can still name models to pull later`);
+        };
 
-        const embedModel = (embedProvider === 'ollama' || embedProvider === 'auto')
-            ? await selectModel({ purpose: 'embeddings', def: existing.embedModel || 'nomic-embed-text', models })
-            : (existing.embedModel || 'nomic-embed-text');
+        let embedModel = existing.embedModel || 'nomic-embed-text';
+        if (embedProvider === 'ollama' || embedProvider === 'auto') {
+            await ensureOllamaProbed();
+            embedModel = await selectModel({ purpose: 'embeddings', def: embedModel, models });
+        }
         const localEmbedModel = existing.localEmbedModel || 'Xenova/all-MiniLM-L6-v2';
 
         // MLX (Apple Metal): let the user pick the model, then offer to provision the
@@ -1086,26 +1292,84 @@ let engineConfig = null;
         }
 
         const enrichEnabled = await confirm({ label: 'Enable LLM enrichment?  (richer semantics, slower indexing)', def: Boolean(exEnrich.enabled) });
-        const enrichment = { enabled: enrichEnabled };
-        if (enrichEnabled) {
-            enrichment.model = await selectModel({ purpose: 'enrichment', def: exEnrich.model || 'qwen2.5-coder:1.5b', models });
-            if (await confirm({ label: 'Tune enrichment limits?', def: false })) {
-                enrichment.maxChunks = await promptInt({ label: 'Max LLM calls per index run', def: exEnrich.maxChunks || 500 });
-                enrichment.concurrency = await promptInt({ label: 'Parallel Ollama requests', def: exEnrich.concurrency || 4 });
-            }
+
+        // Show a data-driven warning before the reranker question when the detected
+        // stack is outside the languages where reranking is known to help.
+        const hasGoOrPython = detectedLanguages.has('go') || detectedLanguages.has('python');
+        if (!hasGoOrPython && detectedLanguages.size > 0) {
+            log('');
+            log(`  ${glyph.warn} ${c.yellow('Reranker note — measured impact varies by language:')}`);
+            log(c.dim('       · Helps Go and Python repos (gin rank-1: 0.20 → 0.40)'));
+            log(c.dim('       · Regressions on JavaScript / TypeScript (express rank-1: 0.43 → 0.29)'));
+            log(c.dim(`       · Detected: ${Array.from(detectedLanguages).join(', ')} — measure before enabling`));
+            log('');
         }
 
         const rerankEnabled = await confirm({ label: 'Enable LLM reranker?  (one LLM call per query, sharper top hits)', def: Boolean(exRerank.enabled) });
+
+        // LLM provider: asked before model selection so the picker is provider-aware.
+        // MLX is macOS-only — on other platforms Ollama is the only backend, so we
+        // skip the question rather than offer an option that can't run.
+        const isMac = process.platform === 'darwin';
+        let llmProvider = (existing.llmProvider === 'mlx' && isMac) ? 'mlx' : 'ollama';
+        let mlxLmHost = existing.mlxLmHost || 'http://localhost:8080';
+        if (enrichEnabled || rerankEnabled) {
+            if (isMac) {
+                llmProvider = await interactiveSelect({
+                    title: 'LLM backend for enrichment / reranking',
+                    items: [
+                        { key: 'ollama', label: 'Ollama', desc: c.dim('local daemon · any pulled model') },
+                        { key: 'mlx', label: 'Apple MLX', desc: c.dim('mlx_lm.server · fastest on Apple Silicon') },
+                    ],
+                    selectedKey: llmProvider,
+                });
+            }
+            if (llmProvider === 'mlx') {
+                mlxLmHost = await promptText({ label: 'mlx_lm.server URL', def: mlxLmHost, hint: '· e.g. http://localhost:8080' });
+            } else {
+                await ensureOllamaProbed(); // the model pickers below need the installed list
+            }
+        }
+
+        // Model selection is provider-aware: Ollama → installed list / pull-by-name;
+        // MLX → a curated list of proven coder models (or any id you type).
+        const enrichment = { enabled: enrichEnabled };
+        if (enrichEnabled) {
+            if (llmProvider === 'mlx') {
+                enrichment.model = await selectMlxLlmModel({ purpose: 'enrichment', def: exEnrich.model || MLX_LLM_DEFAULTS.enrichment });
+            } else {
+                enrichment.model = await selectModel({ purpose: 'enrichment', def: exEnrich.model || 'qwen2.5-coder:1.5b', models });
+            }
+            if (await confirm({ label: 'Tune enrichment limits?', def: false })) {
+                enrichment.maxChunks = await promptInt({ label: 'Max LLM calls per index run', def: exEnrich.maxChunks || 500 });
+                enrichment.concurrency = await promptInt({ label: 'Parallel LLM requests', def: exEnrich.concurrency || 4 });
+            }
+        }
+
         const rerank = { enabled: rerankEnabled };
         if (rerankEnabled) {
-            rerank.model = await selectModel({ purpose: 'reranker', def: exRerank.model || 'qwen2.5-coder:7b', models });
+            if (llmProvider === 'mlx') {
+                rerank.model = await selectMlxLlmModel({ purpose: 'reranker', def: exRerank.model || MLX_LLM_DEFAULTS.reranker });
+            } else {
+                rerank.model = await selectModel({ purpose: 'reranker', def: exRerank.model || 'qwen2.5-coder:7b', models });
+            }
             if (await confirm({ label: 'Tune reranker limits?', def: false })) {
                 rerank.topM = await promptInt({ label: 'Candidates shown to the judge', def: exRerank.topM || 12 });
                 rerank.poolSize = await promptInt({ label: 'Over-fetch pool size', def: exRerank.poolSize || 15 });
             }
         }
 
-        engineConfig = { storage, embeddings: embeddingsEnabled, embedProvider, ollamaHost, embedModel, localEmbedModel, mlxEmbedModel, enrichment, rerank };
+        // For MLX: verify the server is reachable and models are consistent, and
+        // remember whether it's ready so the build step can warn before failing.
+        if (llmProvider === 'mlx' && (enrichEnabled || rerankEnabled)) {
+            mlxServerReady = await checkMlxLmSetup({
+                mlxLmHost,
+                enrichModel: enrichEnabled ? enrichment.model : null,
+                rerankModel: rerankEnabled ? rerank.model : null,
+            });
+        }
+
+        engineConfig = { storage, embeddings: embeddingsEnabled, embedProvider, ollamaHost, embedModel, localEmbedModel, mlxEmbedModel, llmProvider, mlxLmHost, enrichment, rerank };
 
         const embedSummary = embedProvider === 'off' ? 'lexical only'
             : embedProvider === 'local' ? `local · ${localEmbedModel}`
@@ -1115,8 +1379,9 @@ let engineConfig = null;
         line(glyph.ok, 'Backend', storage === 'sqlite' ? 'SQLite (large repos)'
             : storage === 'memory' ? 'In-memory (forced)' : 'Auto (in-memory → SQLite past 15k chunks)');
         line(embedProvider === 'off' ? glyph.skip : glyph.ok, 'Embeddings', embedSummary);
-        line(enrichEnabled ? glyph.ok : glyph.skip, 'Enrichment', enrichEnabled ? enrichment.model : 'disabled (default)');
-        line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? rerank.model : 'disabled (default)');
+        const llmProviderLabel = llmProvider === 'mlx' ? `MLX · ${mlxLmHost}` : `Ollama · ${ollamaHost}`;
+        line(enrichEnabled ? glyph.ok : glyph.skip, 'Enrichment', enrichEnabled ? `${enrichment.model} via ${llmProviderLabel}` : 'disabled (default)');
+        line(rerankEnabled ? glyph.ok : glyph.skip, 'Reranker', rerankEnabled ? `${rerank.model} via ${llmProviderLabel}` : 'disabled (default)');
     }
 
     // Warn (never fail): 'auto' can promote to SQLite past ~15k chunks, so flag
@@ -1224,7 +1489,12 @@ if (layersUsed.length > 0) log(`\n  ${c.dim('Prompt layers')}  ${layersUsed.join
 let indexBuilt = false;
 if (isInteractive && !isDryRun) {
     log('');
-    if (await confirm({ label: 'Build the index now?', def: true })) {
+    // If MLX enrichment/reranking is configured but the server isn't confirmed up,
+    // building now would fail those LLM steps — warn and don't default to yes.
+    if (mlxServerReady === false) {
+        log(`  ${glyph.warn} ${c.yellow('mlx_lm.server is not confirmed running — enrichment / reranking will fail until it is.')}`);
+    }
+    if (await confirm({ label: 'Build the index now?', def: mlxServerReady !== false })) {
         log('\n  ' + c.dim('Running the indexer…') + '\n');
         const res = spawnSync(process.execPath, [path.join(__dirname, 'indexer.mjs'), '--repo', PROJECT_ROOT], { stdio: 'inherit' });
         indexBuilt = res.status === 0;
@@ -1243,7 +1513,10 @@ log(`    ${c.cyan(nextStep++ + '.')} Control the daemon     ${c.dim('→')} ${c.
 log(`    ${c.cyan(nextStep++ + '.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
 log(c.dim(`       Other agents (.clinerules, .windsurfrules, …): prompts/INTEGRATION.md`));
 if (engineConfig && (engineConfig.enrichment.enabled || engineConfig.rerank.enabled)) {
-    log(c.dim(`       LLM features on — first index run calls Ollama at ${engineConfig.ollamaHost}`));
+    const llmLabel = engineConfig.llmProvider === 'mlx'
+        ? `mlx_lm.server at ${engineConfig.mlxLmHost}`
+        : `Ollama at ${engineConfig.ollamaHost}`;
+    log(c.dim(`       LLM features on — first index run calls ${llmLabel}`));
 }
 
 log('\n' + rule());

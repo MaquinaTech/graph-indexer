@@ -143,6 +143,27 @@ export async function ollamaGenerate(prompt, { model, ollamaHost, timeoutMs = 30
 }
 
 /**
+ * MLX-LM generator: calls a local mlx_lm.server (OpenAI-compatible /v1/completions).
+ * Start the server with: mlx_lm.server --model <model-name> [--port 8080]
+ * Returns the completion text, or null on any failure.
+ */
+export async function mlxLmGenerate(prompt, { mlxLmHost = 'http://localhost:8080', timeoutMs = 60000 } = {}) {
+    try {
+        const res = await fetch(`${mlxLmHost}/v1/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, max_tokens: 150, temperature: 0.1 }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return (data.choices?.[0]?.text || '').trim() || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Parse the SUMMARY + TAGS response into { summary, concepts, hyde }.
  *
  * Concepts are domain terms only (stopwords scrubbed) so every token has
@@ -314,16 +335,22 @@ export function selectCoreChunks(chunks, graph, { coreRatio = 1.0, maxChunks = 5
 export async function enrichCoreChunks(chunks, graph, config, { generate, concurrency, cachePath } = {}) {
     const { coreRatio, maxChunks } = config.enrichment;
     const ollamaHost = config.ollamaHost;
+    const mlxLmHost = config.mlxLmHost;
+    const useMlx = config.llmProvider === 'mlx';
     // Resolve "auto" → the strongest code model the local Ollama has (1.5B floor).
     // A pinned generate (tests) skips the network probe — model is only used to
     // build the default generator and to stamp cache provenance.
-    const model = generate ? config.enrichment.model : await resolveEnrichModel(config.enrichment.model, ollamaHost);
+    const model = generate ? config.enrichment.model
+        : (useMlx ? config.enrichment.model : await resolveEnrichModel(config.enrichment.model, ollamaHost));
     // 60 s timeout: a larger judge model on a busy/CPU-bound local Ollama can take
     // 10–25 s per generation; the old 20 s cap made every call fail there and aborted
     // enrichment entirely. Concurrency defaults low for the same reason — parallel
     // requests to one local model thrash and slow each other (set higher only when
     // OLLAMA_NUM_PARALLEL and the hardware support it).
-    const gen = generate || ((prompt) => ollamaGenerate(prompt, { model, ollamaHost, timeoutMs: 60000 }));
+    const gen = generate
+        || (useMlx
+            ? (prompt) => mlxLmGenerate(prompt, { mlxLmHost, timeoutMs: 60000 })
+            : (prompt) => ollamaGenerate(prompt, { model, ollamaHost, timeoutMs: 60000 }));
     const slots = concurrency ?? config.enrichment.concurrency ?? 12;
     const cacheFile = cachePath === false ? null : (cachePath || config.enrichmentCachePath || null);
     const cache = cacheFile ? loadEnrichmentCache(cacheFile) : new Map();
@@ -343,17 +370,17 @@ export async function enrichCoreChunks(chunks, graph, config, { generate, concur
 
     const core = selectCoreChunks(chunks, graph, { coreRatio, maxChunks });
     if (core.length === 0 && cached === 0) {
-        console.log('🧠 LLM enrichment: no core chunks selected (empty graph) — skipping.');
+        console.log('\n   🧠 LLM enrichment: no core chunks selected (empty graph) — skipping.');
         return { enriched: 0, attempted: 0, cached: 0 };
     }
     const pending = core.filter(c => !c.summary && !(c.concepts?.length > 0));
 
     if (pending.length === 0) {
-        console.log(`🧠 LLM enrichment: all ${cached} core chunks served from cache.`);
+        console.log(`\n   🧠 LLM enrichment: all ${cached} core chunks served from cache.`);
         return { enriched: cached, attempted: 0, cached };
     }
 
-    console.log(`🧠 LLM enrichment: ${pending.length} chunks via ${model} (${cached} from cache, concurrency: ${slots}) …`);
+    console.log(`\n   🧠 LLM enrichment: ${pending.length} chunks via ${model} (${cached} from cache, concurrency: ${slots}) …`);
     let enriched = 0, attempted = 0, failures = 0;
     let aborted = false;
 
