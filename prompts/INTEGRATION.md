@@ -47,16 +47,26 @@ Layer 1 (CORE)  →  Layer 2 (language)  →  Layer 2 (framework)  →  Layer 3 
 npx graph-indexer init
 ```
 
-`init` asks for your languages and frameworks, then assembles the correct layers for you:
+`init` asks for your languages and frameworks, then lets you **multi-select which agents/IDEs to wire** (Claude Code/Desktop, Cursor, VS Code/Copilot, Windsurf, Cline/Roo, JetBrains Junie, Codex/AGENTS.md, Gemini CLI). The choice is pre-checked from what's detected (or your last run) and remembered in `.graph-indexer/config.json`, so only the agents you pick get files — the two `GRAPH_INDEXER_*.md` source files are always written. For each selected agent it generates:
 
-| File | Contents | Ownership |
+| File | Agent | Ownership |
 | :--- | :--- | :--- |
-| `GRAPH_INDEXER_PROMPT.md` | Layers 1 + 2, assembled for your selection | Generated — re-run `init` to regenerate; do not edit |
-| `GRAPH_INDEXER_DOMAIN.md` | Layer 3 template | **Yours** — fill it in; `init` never overwrites it |
-| `CLAUDE.md` | `@GRAPH_INDEXER_PROMPT.md` / `@GRAPH_INDEXER_DOMAIN.md` import lines | Appended once, idempotent |
-| `.cursor/rules/graph-indexer.mdc` | Same assembled layers as an always-on Cursor rule | Generated — regenerated on re-run |
+| `GRAPH_INDEXER_PROMPT.md` | source of truth (Layers 1 + 2, assembled for your selection) | Generated — re-run `init` to regenerate; do not edit |
+| `GRAPH_INDEXER_DOMAIN.md` | source of truth (Layer 3 template) | **Yours** — fill it in; `init` never overwrites it |
+| `CLAUDE.md` | Claude Code (`@`-import lines) | Appended once, idempotent |
+| `.cursor/rules/graph-indexer.mdc` | Cursor (always-on rule) | Generated — regenerated on re-run |
+| `.windsurf/rules/graph-indexer.md` | Windsurf (always-on rule) | Generated — regenerated on re-run |
+| `.clinerules/graph-indexer.md` | Cline / Roo Code (rule) | Generated — regenerated on re-run |
+| `.github/copilot-instructions.md` | GitHub Copilot (managed block) | Shared — your text outside the markers is preserved |
+| `.junie/guidelines.md` | JetBrains Junie (managed block) | Shared — your text outside the markers is preserved |
+| `AGENTS.md` | AGENTS.md standard: Codex, Zed, Jules, … (managed block) | Shared — your text outside the markers is preserved |
+| `GEMINI.md` | Gemini CLI (`@`-import) | Shared — references the canonical files (no duplication); your text outside the markers is preserved |
+
+**Why some files reference and others embed.** `CLAUDE.md` and `GEMINI.md` use `@`-import (Claude Code imports, Gemini CLI's Memory Import Processor), so they just point at the canonical `GRAPH_INDEXER_*.md` — zero duplication. The Cursor/Windsurf/Cline rule files hold the assembled prompt verbatim, and the Copilot/Junie/AGENTS.md managed blocks embed it inline, because those tools read the file **literally** — they have no reliable import mechanism, so an `@`-reference would appear as plain text and the rules would silently not apply. (AGENTS.md embeds because its main reader, OpenAI Codex, does not yet honour `@` imports.) Embedded blocks are wrapped in `<!-- >>> graph-indexer >>> -->` … `<!-- <<< graph-indexer <<< -->` markers, so your own instructions around them survive re-runs.
 
 ## Manual setup
+
+`init` already wires Claude Code, Cursor, Windsurf, Cline/Roo, Copilot, Junie, the AGENTS.md ecosystem, and Gemini (see the table above). Reach for the steps below only for a legacy format (`.cursorrules`, `.clauderc`), a raw-system-prompt config, or an agent not in that list.
 
 ### Claude Code (`CLAUDE.md` or `.clauderc`)
 

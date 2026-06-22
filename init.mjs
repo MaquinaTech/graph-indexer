@@ -141,7 +141,15 @@ function graphIndexerIsLocalDep(root) {
 }
 const localDep = graphIndexerIsLocalDep(PROJECT_ROOT);
 
-const TOTAL_STEPS = 6;
+// Special case: setting up the graph-indexer repo on ITSELF (the maintainer
+// dogfooding the tool). It is not its own dependency, so the npx path would
+// otherwise fetch the PUBLISHED package from npm instead of this working tree —
+// we wire the local mcp-server.mjs directly so it runs the code under edit.
+const selfHost = !localDep
+    && readJsonSafe(path.join(PROJECT_ROOT, 'package.json'))?.name === 'graph-indexer'
+    && fs.existsSync(path.join(PROJECT_ROOT, 'mcp-server.mjs'));
+
+const TOTAL_STEPS = 7;
 
 // ─── Action ledger (drives the grouped end-of-run summary) ───────────────────────
 
@@ -215,30 +223,63 @@ const LANGUAGE_PROMPTS = {
 };
 
 // ─── MCP Server config blocks (self-contained when not a local dependency) ────
-// `npx -p graph-indexer idx-mcp` runs the real idx-mcp bin regardless of language
-// or whether graph-indexer is installed, and `--repo` carries the absolute root.
-// The `-p` form is required: `npx graph-indexer idx-mcp` would run the package's
-// same-named (init) bin instead. MCP_PROJECT_ROOT is kept as a belt-and-suspenders
-// fallback for the npm form (which has no --repo).
-const NPX_MCP_ARGS = ['-y', '-p', 'graph-indexer', 'idx-mcp', '--repo', PROJECT_ROOT];
+// Resolve mcp-server.mjs relative to this file — works whether graph-indexer is
+// npm-installed (node_modules/graph-indexer/mcp-server.mjs), globally symlinked,
+// or run from the dev tree. Using `node <absolute-path>` avoids the npx cache
+// entirely, so stale cached versions can never shadow the currently-installed one.
+const PACKAGE_MCP_SERVER = fileURLToPath(new URL('mcp-server.mjs', import.meta.url));
 
-const SERVER_CONFIG = localDep
-    ? { command: 'npm', args: ['run', 'mcp:start'], env: { MCP_PROJECT_ROOT: PROJECT_ROOT } }
-    : { command: 'npx', args: NPX_MCP_ARGS, env: { MCP_PROJECT_ROOT: PROJECT_ROOT } };
-
-// Global clients (Claude Desktop) launch from outside the project. With a local
-// dep, `npm run --prefix <root>` resolves the bin from the project; otherwise the
-// npx form already carries the absolute --repo, so it doubles as the global form.
-const SERVER_CONFIG_GLOBAL = localDep
-    ? { command: 'npm', args: ['run', '--prefix', PROJECT_ROOT, 'mcp:start'], env: { MCP_PROJECT_ROOT: PROJECT_ROOT } }
-    : { command: 'npx', args: NPX_MCP_ARGS, env: { MCP_PROJECT_ROOT: PROJECT_ROOT } };
-
-// Display commands for "Next steps" — adapt to the same local-dep vs npx decision.
-const q = (p) => (/\s/.test(p) ? `"${p}"` : p);
-const CMD = {
-    index: localDep ? 'npm run mcp:index' : `npx -y -p graph-indexer idx-index --repo ${q(PROJECT_ROOT)}`,
-    daemonStatus: localDep ? 'npm run mcp:daemon:status' : `npx -y -p graph-indexer idx-daemon status --repo ${q(PROJECT_ROOT)}`,
+// Editors launched from the GUI (Dock/Finder/Spotlight) do NOT inherit the shell
+// PATH, so a bare `npx`/`npm` command makes the MCP host fail with `spawn npx
+// ENOENT`. We resolve the absolute binary that sits next to the `node` running
+// init (true for nvm/Homebrew/fnm/volta/system installs) and write THAT as the
+// command. We also bake the current PATH (prefixed with that bin dir) into the
+// server env, so the server and its children — the daemon, its `git`/`node`
+// subprocesses — resolve their tools too. These configs are already machine-
+// specific (absolute --repo / MCP_PROJECT_ROOT), so absolute paths fit. Re-run
+// init after switching Node versions to refresh them.
+const NODE_BIN_DIR = path.dirname(process.execPath);
+const IS_WIN = process.platform === 'win32';
+function resolveNodeSibling(name) {
+    const exe = IS_WIN ? `${name}.cmd` : name;
+    const abs = path.join(NODE_BIN_DIR, exe);
+    return fs.existsSync(abs) ? abs : name; // fall back to bare name if not a sibling
+}
+const NPX_BIN = resolveNodeSibling('npx');
+const NPM_BIN = resolveNodeSibling('npm');
+const SERVER_ENV = {
+    MCP_PROJECT_ROOT: PROJECT_ROOT,
+    PATH: NODE_BIN_DIR + path.delimiter + (process.env.PATH || ''),
 };
+
+// Self-host runs the working tree's own server with absolute node — already
+// global-safe (absolute script + --repo), so it doubles as both forms.
+const SELF_HOST_CONFIG = { command: process.execPath, args: [path.join(PROJECT_ROOT, 'mcp-server.mjs'), '--repo', PROJECT_ROOT], env: SERVER_ENV };
+
+const SERVER_CONFIG = selfHost
+    ? SELF_HOST_CONFIG
+    : localDep
+    ? { command: NPM_BIN, args: ['run', 'mcp:start'], env: SERVER_ENV }
+    : { command: process.execPath, args: [PACKAGE_MCP_SERVER, '--repo', PROJECT_ROOT], env: SERVER_ENV };
+
+// Global clients (Claude Desktop) launch from outside the project; same approach.
+const SERVER_CONFIG_GLOBAL = selfHost
+    ? SELF_HOST_CONFIG
+    : localDep
+    ? { command: NPM_BIN, args: ['run', '--prefix', PROJECT_ROOT, 'mcp:start'], env: SERVER_ENV }
+    : { command: process.execPath, args: [PACKAGE_MCP_SERVER, '--repo', PROJECT_ROOT], env: SERVER_ENV };
+
+// Display commands for "Next steps" — adapt to the self-host / local-dep / npx decision.
+const q = (p) => (/\s/.test(p) ? `"${p}"` : p);
+const CMD = selfHost
+    ? {
+        index: `node ${q(path.join(PROJECT_ROOT, 'indexer.mjs'))} --repo ${q(PROJECT_ROOT)}`,
+        daemonStatus: `node ${q(path.join(PROJECT_ROOT, 'daemon-ctl.mjs'))} status`,
+    }
+    : {
+        index: localDep ? 'npm run mcp:index' : `npx -y -p graph-indexer idx-index --repo ${q(PROJECT_ROOT)}`,
+        daemonStatus: localDep ? 'npm run mcp:daemon:status' : `npx -y -p graph-indexer idx-daemon status --repo ${q(PROJECT_ROOT)}`,
+    };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -400,6 +441,34 @@ function findCsprojContent(root) {
     return candidates.slice(0, 8).map(f => readTextSafe(f, 65536)).join('\n');
 }
 
+// ─── Interactive Menu Rendering Helpers ──────────────────────────────────────
+
+const ANSI_RE = /\x1B\[[0-9;]*m/g;
+/** Visible width of a string, ignoring SGR color escapes (which take no space). */
+const visibleLen = (s) => s.replace(ANSI_RE, '').length;
+
+/**
+ * Clip one rendered line to the terminal width so it NEVER wraps. A wrapped line
+ * occupies >1 physical row, which desyncs the `moveCursor(-lineCount)` redraw and
+ * makes the menu repeat/grow on every keystroke. Color escapes are copied
+ * verbatim (zero width); if we cut inside a colored span we close it with a reset
+ * and mark the truncation with a dim ellipsis. One logical line ⇒ one screen row.
+ */
+function clipLine(str) {
+    const max = Math.max(1, (process.stdout.columns || 80) - 1);
+    if (visibleLen(str) <= max) return str;
+    const budget = max - 1; // reserve a column for the ellipsis
+    let out = '', width = 0, i = 0, sawAnsi = false;
+    while (i < str.length && width < budget) {
+        if (str[i] === '\x1B') {
+            const m = str.slice(i).match(/^\x1B\[[0-9;]*m/);
+            if (m) { out += m[0]; i += m[0].length; sawAnsi = true; continue; }
+        }
+        out += str[i++]; width++;
+    }
+    return out + (sawAnsi ? '\x1B[0m' : '') + c.dim('…');
+}
+
 // ─── Interactive Multi-Select Menu ────────────────────────────────────────────
 
 /**
@@ -407,7 +476,7 @@ function findCsprojContent(root) {
  * whose key is in `preselected` start checked. Resolves to the selected keys
  * (possibly empty — callers decide what an empty selection means).
  */
-function interactiveMultiSelect({ title, items, preselected = new Set() }) {
+function interactiveMultiSelect({ title, items, preselected = new Set(), detected = preselected }) {
     return new Promise((resolve) => {
         const { stdin, stdout } = process;
         readline.emitKeypressEvents(stdin);
@@ -428,15 +497,15 @@ function interactiveMultiSelect({ title, items, preselected = new Set() }) {
             }
             hasRendered = true;
 
-            stdout.write(`  ${title} ${c.dim('(↑↓/Tab move · Space toggle · Enter confirm)')}\n\n`);
+            stdout.write(clipLine(`  ${title} ${c.dim('(↑↓/Tab move · Space toggle · Enter confirm)')}`) + '\n\n');
 
             items.forEach((item, i) => {
                 const isHovered = i === cursorIndex;
                 const prefix = isHovered ? '❯' : ' ';
                 const checkbox = selected.has(i) ? c.green('◉') : '◯';
-                const detected = preselected.has(item.key) ? c.dim('  · detected') : '';
+                const detectedTag = detected.has(item.key) ? c.dim('  · detected') : '';
                 const label = isHovered ? c.cyan(item.label.padEnd(28)) : item.label.padEnd(28);
-                stdout.write(`  ${c.cyan(prefix)} ${checkbox} ${label} ${item.desc}${detected}\n`);
+                stdout.write(clipLine(`  ${c.cyan(prefix)} ${checkbox} ${label} ${item.desc}${detectedTag}`) + '\n');
             });
         };
 
@@ -505,12 +574,12 @@ function interactiveSelect({ title, items, selectedKey }) {
                 readline.clearScreenDown(stdout);
             }
             hasRendered = true;
-            stdout.write(`  ${title} ${c.dim('(↑↓ move · Enter select)')}\n\n`);
+            stdout.write(clipLine(`  ${title} ${c.dim('(↑↓ move · Enter select)')}`) + '\n\n');
             items.forEach((item, i) => {
                 const hovered = i === cursor;
                 const radio = hovered ? c.green('◉') : '◯';
                 const label = hovered ? c.cyan(item.label.padEnd(26)) : item.label.padEnd(26);
-                stdout.write(`  ${c.cyan(hovered ? '❯' : ' ')} ${radio} ${label} ${item.desc || ''}\n`);
+                stdout.write(clipLine(`  ${c.cyan(hovered ? '❯' : ' ')} ${radio} ${label} ${item.desc || ''}`) + '\n');
             });
         };
 
@@ -581,13 +650,19 @@ function normalizeHost(raw) {
     return v.replace('://0.0.0.0', '://localhost');
 }
 
-/** GET {host}/api/tags → array of installed model names, or null if unreachable. */
+/** GET {host}/api/tags → array of installed model names, or null if unreachable.
+ *  Deduplicates `:latest` variants — `nomic-embed-text:latest` and `nomic-embed-text`
+ *  are the same model; keep only the short canonical form. */
 async function listOllamaModels(host) {
     try {
         const res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(2500) });
         if (!res.ok) return null;
         const data = await res.json();
-        return (data.models || []).map(m => m.name).filter(Boolean);
+        const raw = (data.models || []).map(m => m.name).filter(Boolean);
+        // Canonical name = strip trailing `:latest` (Ollama's implicit default tag).
+        // If both `foo` and `foo:latest` appear, keep `foo` and drop the tagged form.
+        const canonical = raw.map(n => n.endsWith(':latest') ? n.slice(0, -7) : n);
+        return [...new Set(canonical)];
     } catch { return null; }
 }
 
@@ -802,7 +877,7 @@ async function selectMlxLlmModel({ purpose, def }) {
 
 // ─── Stack config persistence (.graph-indexer/config.json) ───────────────────
 
-function saveStackConfig({ languages, frameworks, engine, interactive }) {
+function saveStackConfig({ languages, frameworks, agents, engine, interactive }) {
     if (isDryRun) { log(c.dim(`    [dry-run] would write ${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`)); return 'skipped'; }
     ensureDataDir(PROJECT_ROOT);
     const existing = readJsonSafe(PATHS.configPath) || {};
@@ -811,9 +886,12 @@ function saveStackConfig({ languages, frameworks, engine, interactive }) {
     if (interactive) {
             if (languages) existing.languages = languages; else delete existing.languages;
         if (frameworks && frameworks.length) existing.frameworks = frameworks; else delete existing.frameworks;
+        // Always persist the explicit agent choice (an empty array means "none").
+        if (agents) existing.agents = agents; else delete existing.agents;
     } else {
         if (languages && !existing.languages) existing.languages = languages;
         if (frameworks && frameworks.length && !existing.frameworks) existing.frameworks = frameworks;
+        if (agents && !existing.agents) existing.agents = agents;
     }
 
     // Merge nested objects so power-user knobs we didn't prompt for (coreRatio,
@@ -1077,22 +1155,156 @@ function ensureClaudeMdImports() {
     return existing.trim().length > 0 ? 'updated' : 'created';
 }
 
-/** Writes the always-on Cursor rule mirroring the assembled prompt. Regenerated each run. */
-function writeCursorRule(assembled) {
-    const p = path.join(PROJECT_ROOT, '.cursor', 'rules', 'graph-indexer.mdc');
+const RULE_TAIL = '\n<!-- Layer 3 (project-specific rules): see GRAPH_INDEXER_DOMAIN.md at the repo root. -->\n';
+
+// ─── Per-agent prompt writers (driven by the AGENTS registry below) ──────────
+// A "rule" file is fully owned by graph-indexer: the assembled prompt is written
+// verbatim, with optional YAML frontmatter to make the rule always-on where the
+// agent supports it.
+function writeRuleFile(spec, assembled) {
+    const p = path.join(PROJECT_ROOT, ...spec.rel);
     const existed = fs.existsSync(p);
-    const frontmatter = [
-        '---',
-        'description: graph-indexer usage rules for AI agents (generated — re-run `npx graph-indexer init` to regenerate)',
-        'alwaysApply: true',
-        '---',
-        '',
-    ].join('\n');
-    const tail = '\n<!-- Layer 3 (project-specific rules): see GRAPH_INDEXER_DOMAIN.md at the repo root. -->\n';
-    const content = frontmatter + '\n' + assembled.content + tail;
+    const fm = spec.frontmatter
+        ? ['---',
+           'description: graph-indexer usage rules for AI agents (generated — re-run `npx graph-indexer init` to regenerate)',
+           ...spec.frontmatter,
+           '---', '', ''].join('\n')
+        : '';
+    const content = fm + assembled.content + RULE_TAIL;
     if (existed && readTextSafe(p) === content) return 'kept';
     writeFile(p, content);
     return existed ? 'updated' : 'created';
+}
+
+// ─── Shared instruction files (marker-delimited managed block) ───────────────
+// Agents that read a single shared markdown file as custom instructions. The file
+// is shared with the user's own instructions, so our prompt lives in a marker
+// block — regenerated each run, everything around the markers left untouched.
+//
+// `mode` decides what goes INSIDE the block:
+//   'embed'  — the full assembled prompt is inlined (the only correct option for
+//              agents with no transclusion: Copilot, Junie, Windsurf — they read
+//              the file literally, so an `@import` would show as plain text and the
+//              rules would silently not apply. AGENTS.md is embedded too: its main
+//              reader (OpenAI Codex) does not yet honour `@` imports.)
+//   'import' — only `@./…` references to the canonical GRAPH_INDEXER_*.md files, so
+//              there is no duplication. Used ONLY where the agent has a documented,
+//              reliable import processor (Gemini CLI's Memory Import Processor).
+const BLOCK_BEGIN = '<!-- >>> graph-indexer >>> -->';
+const BLOCK_END = '<!-- <<< graph-indexer <<< -->';
+// Gemini's import processor resolves `@./` relative to the file; both targets sit
+// at the repo root next to GEMINI.md. (Claude Code's CLAUDE.md uses the bare `@`.)
+const IMPORT_BODY = '@./GRAPH_INDEXER_PROMPT.md\n@./GRAPH_INDEXER_DOMAIN.md';
+
+function writeManagedBlockFile(spec, assembled) {
+    const p = path.join(PROJECT_ROOT, ...spec.rel);
+    const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : '';
+
+    const block = [
+        BLOCK_BEGIN,
+        '<!-- graph-indexer agent prompt suite — generated by `npx graph-indexer init`.',
+        '     Do not edit inside these markers; re-run init to regenerate. Project-specific',
+        '     rules (Layer 3) belong in GRAPH_INDEXER_DOMAIN.md at the repo root. -->',
+        '',
+        spec.mode === 'import' ? IMPORT_BODY : assembled.content.trim(),
+        BLOCK_END,
+    ].join('\n');
+
+    // Strip any prior managed block, then re-append the fresh one (markers contain
+    // no regex-special characters, so they need no escaping — same as .gitignore).
+    const body = existing.replace(
+        new RegExp(`\\n?${BLOCK_BEGIN}[\\s\\S]*?${BLOCK_END}\\n?`, 'g'), '\n'
+    );
+    const next = body.trimEnd() + (body.trim() ? '\n\n' : '') + block + '\n';
+    if (next === existing) return 'kept';
+    writeFile(p, next);
+    return existing.trim() ? 'updated' : 'created';
+}
+
+// ─── Unified agent / IDE registry ────────────────────────────────────────────
+// One row per supported coding agent, tying together its (optional) MCP-server
+// wiring and its (optional) prompt-instruction file. The "Agents & IDEs" step
+// lets the user multi-select from this list; the MCP-wiring and Agent-instruction
+// steps then act ONLY on the chosen rows — so deselecting an agent generates
+// nothing for it (no MCP entry, no prompt file). `detect()` (read-only) decides
+// which rows are pre-checked on first run. `prompt.kind`: 'claude' = CLAUDE.md
+// @-imports · 'rule' = owned rule file · 'shared' = managed block ('embed' inline
+// or 'import' @-references where the agent has a reliable import processor).
+const agentPath = (...p) => path.join(PROJECT_ROOT, ...p);
+const AGENTS = [
+    {
+        key: 'claude-code', label: 'Claude Code', hint: 'CLAUDE.md · .mcp.json',
+        detect: () => fs.existsSync(agentPath('.claude')) || fs.existsSync(agentPath('CLAUDE.md')) || fs.existsSync(agentPath('.mcp.json')),
+        mcp: { name: 'Claude Code', fn: () => configureClaudeCode() },
+        prompt: { kind: 'claude' },
+    },
+    {
+        key: 'claude-desktop', label: 'Claude Desktop', hint: 'global MCP config',
+        detect: () => fs.existsSync(path.dirname(claudeDesktopConfigPath())),
+        mcp: { name: 'Claude Desktop', fn: () => configureClaudeDesktop() },
+        prompt: null,
+    },
+    {
+        key: 'cursor', label: 'Cursor', hint: '.cursor/rules · .cursor/mcp.json',
+        detect: () => fs.existsSync(agentPath('.cursor')),
+        mcp: { name: 'Cursor', fn: () => configureCursor() },
+        prompt: { kind: 'rule', rel: ['.cursor', 'rules', 'graph-indexer.mdc'], label: 'always-on Cursor rule', frontmatter: ['alwaysApply: true'] },
+    },
+    {
+        key: 'vscode-copilot', label: 'VS Code / Copilot', hint: '.vscode/mcp.json · copilot-instructions.md',
+        detect: () => fs.existsSync(agentPath('.vscode')) || fs.existsSync(agentPath('.github', 'copilot-instructions.md')),
+        mcp: { name: 'VS Code', fn: () => configureVSCode() },
+        prompt: { kind: 'shared', rel: ['.github', 'copilot-instructions.md'], label: 'GitHub Copilot', mode: 'embed' },
+    },
+    {
+        key: 'windsurf', label: 'Windsurf', hint: '.windsurf/rules',
+        detect: () => fs.existsSync(agentPath('.windsurf')),
+        mcp: null,
+        prompt: { kind: 'rule', rel: ['.windsurf', 'rules', 'graph-indexer.md'], label: 'always-on Windsurf rule', frontmatter: ['trigger: always_on'] },
+    },
+    {
+        key: 'cline', label: 'Cline / Roo Code', hint: '.clinerules',
+        detect: () => fs.existsSync(agentPath('.clinerules')) || fs.existsSync(agentPath('.roo')),
+        mcp: null,
+        prompt: { kind: 'rule', rel: ['.clinerules', 'graph-indexer.md'], label: 'Cline / Roo Code rule', frontmatter: null },
+    },
+    {
+        key: 'junie', label: 'JetBrains Junie', hint: '.junie/guidelines.md',
+        detect: () => fs.existsSync(agentPath('.junie')) || fs.existsSync(agentPath('.idea')),
+        mcp: null,
+        prompt: { kind: 'shared', rel: ['.junie', 'guidelines.md'], label: 'JetBrains Junie', mode: 'embed' },
+    },
+    {
+        key: 'codex', label: 'Codex / AGENTS.md', hint: 'AGENTS.md (Codex · Zed · Jules)',
+        detect: () => fs.existsSync(agentPath('AGENTS.md')) || fs.existsSync(agentPath('.codex')),
+        mcp: null,
+        prompt: { kind: 'shared', rel: ['AGENTS.md'], label: 'AGENTS.md standard (Codex · Zed · Jules · …)', mode: 'embed' },
+    },
+    {
+        key: 'gemini', label: 'Gemini CLI', hint: 'GEMINI.md',
+        detect: () => fs.existsSync(agentPath('GEMINI.md')) || fs.existsSync(agentPath('.gemini')),
+        mcp: null,
+        prompt: { kind: 'shared', rel: ['GEMINI.md'], label: 'Gemini CLI', mode: 'import' },
+    },
+];
+
+/**
+ * Writes the prompt file(s) for one selected agent, dispatching on prompt.kind.
+ * Returns { action, rel, detail } for the summary ledger, or null if the agent
+ * has no prompt integration (e.g. Claude Desktop — MCP only).
+ */
+function writeAgentPrompt(agent, assembled) {
+    const p = agent.prompt;
+    if (!p) return null;
+    if (p.kind === 'claude') {
+        const res = ensureClaudeMdImports();
+        return { action: res || 'kept', rel: 'CLAUDE.md', detail: res ? '@-imports for Claude Code' : 'imports already present' };
+    }
+    if (p.kind === 'rule') {
+        return { action: writeRuleFile(p, assembled), rel: p.rel.join('/'), detail: p.label };
+    }
+    const detail = p.mode === 'import' ? `@-imports for ${p.label} (no duplication)` : `managed block for ${p.label}`;
+    return { action: writeManagedBlockFile(p, assembled), rel: p.rel.join('/'), detail };
 }
 
 // ─── Pre-flight: migrate any pre-v1.4 root layout into .graph-indexer/ ────────
@@ -1399,28 +1611,69 @@ let mlxServerReady = null;
 }
 
 
-stepHeader(4, 'Editors & MCP wiring');
+stepHeader(4, 'Agents & IDEs');
 
-const ides = [
-    { name: 'VS Code', fn: configureVSCode },
-    { name: 'Cursor', fn: configureCursor },
-    { name: 'Claude Desktop', fn: configureClaudeDesktop },
-    { name: 'Claude Code', fn: configureClaudeCode },
-];
+// Which agents to wire up. Pre-checked default = your saved choice (a previous
+// init), else the agents detected in this repo, else all supported. The chosen
+// set drives BOTH the MCP wiring (step 5) and the agent prompts (step 7), so you
+// pick your tools once and graph-indexer generates nothing for the rest.
+const detectedAgents = new Set(
+    AGENTS.filter(a => { try { return a.detect(); } catch { return false; } }).map(a => a.key)
+);
+const savedAgentsRaw = readJsonSafe(PATHS.configPath)?.agents;
+const savedAgents = Array.isArray(savedAgentsRaw)
+    ? savedAgentsRaw.filter(k => AGENTS.some(a => a.key === k))
+    : null;
+const defaultAgents = savedAgents
+    ? new Set(savedAgents)
+    : detectedAgents.size ? new Set(detectedAgents)
+    : new Set(AGENTS.map(a => a.key));
+const defaultSource = savedAgents ? 'from your saved config'
+    : detectedAgents.size ? 'detected in this repo'
+    : 'all supported (default)';
 
-for (const { name, fn } of ides) {
-    try {
-        const result = fn();
-        if (result === false) { act('skipped', name, 'not installed'); continue; }
-        const { action, rel, detected } = result;
-        act(action, name, detected ? `${rel} · detected` : `${rel} · ready if you use ${name}`);
-    } catch (e) {
-        act('warn', name, 'error: ' + e.message);
+let selectedAgentKeys;
+if (isInteractive) {
+    const picked = await interactiveMultiSelect({
+        title: 'Select the agents / IDEs to wire up',
+        items: AGENTS.map(a => ({ key: a.key, label: a.label, desc: c.dim(a.hint) })),
+        preselected: defaultAgents,
+        detected: detectedAgents,
+    });
+    selectedAgentKeys = new Set(picked);
+} else {
+    selectedAgentKeys = defaultAgents;
+}
+const selectedAgents = AGENTS.filter(a => selectedAgentKeys.has(a.key));
+
+if (selectedAgents.length === 0) {
+    line(glyph.skip, 'Agents', 'none selected — no MCP wiring or agent prompts will be generated');
+} else {
+    line(glyph.ok, 'Agents', selectedAgents.map(a => a.label).join(', '));
+    log(c.dim(`      ${defaultSource}`));
+}
+
+
+stepHeader(5, 'MCP server wiring');
+
+const mcpAgents = selectedAgents.filter(a => a.mcp);
+if (mcpAgents.length === 0) {
+    line(glyph.skip, 'MCP wiring', selectedAgents.length ? 'no selected agent uses an MCP config' : 'no agents selected');
+} else {
+    for (const { mcp } of mcpAgents) {
+        try {
+            const result = mcp.fn();
+            if (result === false) { act('skipped', mcp.name, 'not installed'); continue; }
+            const { action, rel, detected } = result;
+            act(action, mcp.name, detected ? `${rel} · detected` : `${rel} · ready if you use ${mcp.name}`);
+        } catch (e) {
+            act('warn', mcp.name, 'error: ' + e.message);
+        }
     }
 }
 
 
-stepHeader(5, 'Project files & daemon control');
+stepHeader(6, 'Project files & daemon control');
 
 const scriptRes = addPackageScripts();
 if (scriptRes.skipped) {
@@ -1435,13 +1688,13 @@ if (scriptRes.skipped) {
 const gi = updateGitignore();
 act(gi, '.gitignore', `${DATA_DIR_NAME}/ (config.json shared)`);
 
-const cfg = saveStackConfig({ languages: selectedLanguages, frameworks: selectedFrameworks, engine: engineConfig, interactive: isInteractive });
-if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack + engine settings');
+const cfg = saveStackConfig({ languages: selectedLanguages, frameworks: selectedFrameworks, agents: Array.from(selectedAgentKeys), engine: engineConfig, interactive: isInteractive });
+if (cfg !== 'skipped') act(cfg, `${DATA_DIR_NAME}/${CONFIG_FILE_NAME}`, 'stack + engine + agent selection');
 
 if (!isDryRun) ensureDataDir(PROJECT_ROOT);
 
 
-stepHeader(6, 'Agent instructions');
+stepHeader(7, 'Agent instructions');
 
 const assembled = assembleAgentPrompt(promptLanguages, selectedFrameworks);
 let layersUsed = [];
@@ -1452,18 +1705,24 @@ if (!assembled) {
     layersUsed = assembled.layers;
     log(c.dim(`      layers: ${layersUsed.join(' + ')}`));
 
+    // Canonical source files — ALWAYS written (they're the single source of truth
+    // every agent file points at), independent of the agent selection.
     const promptAction = writeAssembledPrompt(assembled);
     act(promptAction, 'GRAPH_INDEXER_PROMPT.md', 'Layers 1+2 (regenerated each init)');
 
     if (ensureDomainFile()) act('created', 'GRAPH_INDEXER_DOMAIN.md', 'Layer 3 — yours to edit, never overwritten');
     else act('kept', 'GRAPH_INDEXER_DOMAIN.md', 'exists — left untouched');
 
-    const claudeRes = ensureClaudeMdImports();
-    if (claudeRes) act(claudeRes, 'CLAUDE.md', '@-imports for Claude Code');
-    else act('kept', 'CLAUDE.md', 'imports already present');
-
-    const ruleAction = writeCursorRule(assembled);
-    act(ruleAction, '.cursor/rules/graph-indexer.mdc', 'always-on Cursor rule');
+    // Per-agent files — only for the agents chosen in step 4.
+    const promptAgents = selectedAgents.filter(a => a.prompt);
+    if (promptAgents.length === 0) {
+        line(glyph.skip, 'Agent files', selectedAgents.length ? 'no selected agent needs a prompt file' : 'no agents selected');
+    } else {
+        for (const agent of promptAgents) {
+            const r = writeAgentPrompt(agent, assembled);
+            if (r) act(r.action, r.rel, r.detail);
+        }
+    }
 }
 
 
@@ -1511,7 +1770,8 @@ if (!indexBuilt) log(`    ${c.cyan(nextStep++ + '.')} Build the index        ${c
 log(`    ${c.cyan(nextStep++ + '.')} Restart your editor    ${c.dim('→')} loads the MCP server (auto-starts the daemon)`);
 log(`    ${c.cyan(nextStep++ + '.')} Control the daemon     ${c.dim('→')} ${c.cyan(CMD.daemonStatus)} ${c.dim('| start | stop | restart | logs')}`);
 log(`    ${c.cyan(nextStep++ + '.')} Add project rules      ${c.dim('→')} edit ${c.cyan('GRAPH_INDEXER_DOMAIN.md')} (Layer 3)`);
-log(c.dim(`       Other agents (.clinerules, .windsurfrules, …): prompts/INTEGRATION.md`));
+if (selectedAgents.length) log(c.dim(`       Wired: ${selectedAgents.map(a => a.label).join(' · ')} — re-run init to change; more in prompts/INTEGRATION.md`));
+else log(c.dim(`       No agents wired — re-run init to choose; see prompts/INTEGRATION.md`));
 if (engineConfig && (engineConfig.enrichment.enabled || engineConfig.rerank.enabled)) {
     const llmLabel = engineConfig.llmProvider === 'mlx'
         ? `mlx_lm.server at ${engineConfig.mlxLmHost}`

@@ -92,9 +92,10 @@ Before the steps, it scans the repo to pre-select your stack — languages from 
 | **1 · Languages** | Languages to index | Detected languages are pre-checked — press Enter to accept. Selecting none indexes **all** supported languages. |
 | **2 · Frameworks** | Prompt add-ons | Filtered to your languages and pre-checked from detection. Sharpens the agent prompt for React, Express/NestJS, FastAPI/Django, Spring, Rails, Laravel/Symfony, ASP.NET, or Android. |
 | **3 · Search engine & LLM** | Retrieval engine | **Press Enter for the recommended default** — lexical search, no LLM, no network. Everything heavier is opt-in (see below). |
-| **4 · Editors & MCP wiring** | *(automatic)* | Detects and wires VS Code, Cursor, Claude Desktop, and Claude Code. **Merge-safe**: your other MCP servers and keys are preserved. |
-| **5 · Project files & daemon** | *(automatic)* | Adds `mcp:*` npm scripts (index + daemon control), a managed `.gitignore` block, and `.graph-indexer/config.json`. |
-| **6 · Agent instructions** | *(automatic)* | Writes the layered prompt (`GRAPH_INDEXER_PROMPT.md`), a `GRAPH_INDEXER_DOMAIN.md` template for your own rules, a Cursor rule, and `@`-imports in `CLAUDE.md`. |
+| **4 · Agents & IDEs** | Your coding tools | Multi-select which agents to wire: Claude Code/Desktop, Cursor, VS Code/Copilot, Windsurf, Cline/Roo, JetBrains Junie, Codex (AGENTS.md), Gemini CLI. Pre-checked from your saved choice, else what's detected, else all. Drives steps 5 **and** 7 — deselect a tool and graph-indexer generates nothing for it. |
+| **5 · MCP server wiring** | *(automatic)* | Wires the MCP server for each **selected** editor (VS Code, Cursor, Claude Desktop, Claude Code). **Merge-safe**: your other MCP servers and keys are preserved. |
+| **6 · Project files & daemon** | *(automatic)* | Adds `mcp:*` npm scripts (index + daemon control), a managed `.gitignore` block, and `.graph-indexer/config.json` (which remembers your agent selection). |
+| **7 · Agent instructions** | *(automatic)* | Always writes the canonical layered prompt (`GRAPH_INDEXER_PROMPT.md`) + a `GRAPH_INDEXER_DOMAIN.md` template for your own rules. Then, for each **selected** agent: `@`-imports (no duplication) in `CLAUDE.md` and `GEMINI.md`; rule files for Cursor, Windsurf, and Cline/Roo; and managed blocks in `.github/copilot-instructions.md`, `.junie/guidelines.md`, and `AGENTS.md` (Codex/Zed/Jules) — preserving anything already there. |
 
 It finishes with a grouped summary (created / updated / kept / skipped / warnings), offers to **build the index now**, and prints your next steps.
 

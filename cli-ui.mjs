@@ -39,16 +39,39 @@ export const glyph = {
 
 export const log = (msg = '') => process.stdout.write(msg + '\n');
 
-export const rule = (width = 60) => c.dim('─'.repeat(width));
+/** A horizontal rule, capped to the terminal width so it never wraps. */
+export const rule = (width = Math.min(60, (process.stdout.columns || 80))) => c.dim('─'.repeat(Math.max(1, width)));
 
-/** ANSI escape codes are stripped before measuring line width so colour never breaks box alignment. */
+const visibleLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').length;
+
+/** ANSI-aware truncate to `limit` visible columns; closes any open colour + adds an ellipsis. */
+function clipVisible(s, limit) {
+    if (limit < 1) return '';
+    if (visibleLen(s) <= limit) return s;
+    let out = '', w = 0, i = 0, ansi = false;
+    while (i < s.length && w < limit - 1) {
+        if (s[i] === '\x1b') {
+            const m = s.slice(i).match(/^\x1b\[[0-9;]*m/);
+            if (m) { out += m[0]; i += m[0].length; ansi = true; continue; }
+        }
+        out += s[i++]; w++;
+    }
+    return out + (ansi ? '\x1b[0m' : '') + '…';
+}
+
+/**
+ * Draws a bordered box. ANSI escapes are stripped before measuring width so colour
+ * never breaks alignment, and the box (plus each line) is capped to the terminal
+ * width so the border stays intact on narrow terminals instead of wrapping.
+ */
 export function box(lines, { pad = 1, color = c.cyan } = {}) {
-    const visibleLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').length;
-    const inner = Math.max(...lines.map(visibleLen)) + pad * 2;
+    const maxInner = Math.max(1, (process.stdout.columns || 80) - 2); // 2 border columns
+    const shown = lines.map((line) => clipVisible(line, maxInner - pad * 2));
+    const inner = Math.min(maxInner, Math.max(...shown.map(visibleLen)) + pad * 2);
     const top = color('╭' + '─'.repeat(inner) + '╮');
     const bot = color('╰' + '─'.repeat(inner) + '╯');
-    const body = lines.map((line) => {
-        const gap = ' '.repeat(inner - visibleLen(line) - pad);
+    const body = shown.map((line) => {
+        const gap = ' '.repeat(Math.max(0, inner - visibleLen(line) - pad));
         return color('│') + ' '.repeat(pad) + line + gap + color('│');
     });
     return [top, ...body, bot].join('\n');
