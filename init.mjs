@@ -231,9 +231,33 @@ function writeFile(filePath, content) {
     fs.writeFileSync(filePath, content, 'utf-8');
 }
 
+function stripJsonComments(str) {
+    let result = '';
+    let inString = false;
+    let i = 0;
+    while (i < str.length) {
+        if (inString) {
+            if (str[i] === '\\') { result += str[i++]; result += str[i++]; continue; }
+            if (str[i] === '"') inString = false;
+            result += str[i++];
+        } else {
+            if (str[i] === '"') { inString = true; result += str[i++]; continue; }
+            if (str[i] === '/' && str[i + 1] === '/') { while (i < str.length && str[i] !== '\n') i++; continue; }
+            if (str[i] === '/' && str[i + 1] === '*') {
+                i += 2;
+                while (i < str.length && !(str[i] === '*' && str[i + 1] === '/')) i++;
+                i += 2;
+                continue;
+            }
+            result += str[i++];
+        }
+    }
+    return result;
+}
+
 function readJsonSafe(filePath) {
     try {
-        if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (fs.existsSync(filePath)) return JSON.parse(stripJsonComments(fs.readFileSync(filePath, 'utf-8')));
     } catch { /* malformed JSON — start fresh */ }
     return null;
 }
@@ -679,7 +703,11 @@ function configureClaudeCode() {
     const detected = fs.existsSync(path.join(PROJECT_ROOT, '.claude'))
         || fs.existsSync(path.join(PROJECT_ROOT, 'CLAUDE.md'))
         || fs.existsSync(path.join(PROJECT_ROOT, '.mcp.json'));
-    return { ...upsertMcpServer(path.join(PROJECT_ROOT, '.mcp.json'), 'mcpServers', SERVER_CONFIG), detected };
+    const mcpJsonPath = path.join(PROJECT_ROOT, '.mcp.json');
+    // Honour whichever container key the user already has; fall back to 'mcpServers'.
+    const existing = readJsonSafe(mcpJsonPath) || {};
+    const containerKey = existing.servers && typeof existing.servers === 'object' ? 'servers' : 'mcpServers';
+    return { ...upsertMcpServer(mcpJsonPath, containerKey, SERVER_CONFIG), detected };
 }
 
 // ─── package.json scripts (index + daemon control) ───────────────────────────
