@@ -6,6 +6,7 @@
         <fact priority="critical">ONLY FUNCTIONS ARE CHUNKED. Top-level command sequences (script glue) have NO chunk — a script that runs purely at top level with no functions is INVISIBLE to search_code. Use get_file_skeleton(path) to read its structure; never conclude "nothing here" from an empty search.</fact>
         <fact>`source x` / `. x` ARE tracked, so Deps:/Used by: reflect sourced libraries (relative paths resolve). A function you can't find in the current file is often DEFINED in a sourced lib — follow Deps:.</fact>
         <fact>Every command is a potential call edge. Builtins and ubiquitous coreutils (echo, cd, grep, sed, awk, find…) are filtered; project functions and notable external tools (docker, git, npm, kubectl…) are kept as callees.</fact>
+        <fact>find_references returns caller signal only (no type annotations, no inheritance in shell). Call it only to find who calls a specific function; for non-call usage search, use exact_tokens instead.</fact>
     </index_facts>
 
     <rules>

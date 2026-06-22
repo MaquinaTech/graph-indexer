@@ -7,6 +7,7 @@
         <fact priority="critical">Topology WEAK: only require/require_relative tracked, and most apps autoload — Deps:/Used by: are sparse/empty and mean NOTHING about usage. Map consumers by name search: bodies are indexed, so chunks mentioning "ClassName" surface in the same search as its definition.</fact>
         <fact>Reopened classes produce MULTIPLE chunks for one name — reopening, not duplication; treat them together, read only the one matching your concern.</fact>
         <fact>Blocks (`do...end`, `{ }`) have no symbol — logic passed to each/map/DSL methods belongs to the enclosing chunk; find it behaviourally.</fact>
+        <fact>find_references: callers + extends/includes channels only; type_refs (annotation-usage) channel is EMPTY — Ruby is dynamically typed, no annotation tracking. "Where is this class used as a type" must be answered by name search, not find_references.</fact>
     </index_facts>
 
     <rules>

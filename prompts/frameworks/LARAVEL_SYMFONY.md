@@ -12,6 +12,7 @@
         <rule name="container-bindings">Interface→implementation wiring lives in service providers (bind/singleton) or services config — ONE exact_tokens search on the INTERFACE name surfaces binding site and implementation together.</rule>
         <rule name="implicit-runners">Middleware, policies, form requests, events/listeners, subscribers run implicitly around controllers. Registrations (kernel/provider/route/attributes) name them; events connect dispatch site to listeners by the EVENT CLASS NAME — ONE exact_tokens search finds both ends. Read at most ONE such body.</rule>
         <rule name="templates">Blade/Twig templates are content, not symbols: the controller chunk's view(...)/render(...) call names the template; reading the template file is fallback condition 3.</rule>
+        <rule name="symfony-test-noise">In Symfony projects, callable-object patterns in DI can cause test-class methods (from capitalized `Tests/` directories) to escape the test filter and appear as indexed symbols. If search results include unexpected `Tests\` namespace entries, treat them as index noise and filter by file path.</rule>
         <rule name="query-style">URL fragments, event class names, config keys are the highest-precision tokens. exact_tokens on a class name REPLACES the missing Used by: — the default usage-mapping move here.</rule>
     </rules>
 

@@ -19,6 +19,6 @@
         <rule name="query-style">camelCase/PascalCase split well so partial-name keyword queries work; for async flows describe behaviour ("retries the fetch with exponential backoff"), never the keyword "async".</rule>
     </rules>
 
-    <playbook question="explain service/module X" calls="2-3">resolve_symbol("X") → get_chunk_summary(id, expand_calls: true) → answer with the Used by: list; ≤1 consumer chunk as example. Several names? ONE batched search (limit 2).</playbook>
+    <playbook question="explain service/module X" calls="2-3">resolve_symbol("X") → get_chunk_summary(id, expand_calls: true) → answer with the Used by: list; ≤1 consumer chunk as example.</playbook>
 
 </environment_prompt>

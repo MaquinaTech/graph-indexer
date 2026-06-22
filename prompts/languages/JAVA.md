@@ -5,7 +5,7 @@
     <index_facts>
         <fact>Chunks: classes, interfaces, enums, constructors, methods. Annotations are part of the chunk — summaries surface @Override, validation, and framework annotations that frequently carry the real behaviour.</fact>
         <fact>Topology RELIABLE — imports tracked. One public class per file means path ≈ FQN: resolve_symbol("InvoiceService") is extremely reliable.</fact>
-        <fact>Note: classes chunk at CLASS granularity (god-class split only ≥200 lines), so get_call_graph may attribute at class level — for one method's callers, name it and confirm by class context on the cards.</fact>
+        <fact>Chunking is CLASS-GRANULAR (god-class split only ≥200 lines) — methods are NOT their own chunks in small classes. get_call_graph on a method name returns callers at class level, not method level; name the method explicitly and confirm by class context on the cards.</fact>
         <fact>Anonymous inner classes and lambdas have no named symbol — a Runnable defined inline lives in its enclosing method's chunk; find it by behavioural search.</fact>
     </index_facts>
 

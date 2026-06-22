@@ -14,7 +14,7 @@
         <rule name="query-style">URL fragments, route helper names (order_path), macro symbols (:before_save, :orders) are the highest-precision tokens. For "where does X get validated/transformed", name the FIELD and behaviour — validation macro, callback, or form object, one behavioural search covers all.</rule>
     </rules>
 
-    <playbook question="explain models A, B, C (and where used)" calls="1-2">ONE batched search (limit 2) — the macro lines (has_many, validates, scope) in the smart bodies ARE the schema and behaviour; consumers (controllers, jobs) surface in the same results because require topology is absent. Never one call per model.</playbook>
+    <playbook question="explain models A, B, C (and where used)" calls="1-2">ONE batched search — the macro lines (has_many, validates, scope) in the smart bodies ARE the schema and behaviour; consumers (controllers, jobs) surface in the same results because require topology is absent. Never one call per model.</playbook>
     <playbook question="what happens on POST /orders" calls="3-4">search_code(exact_tokens: "orders") → get_chunk(OrdersController create action or class) → get_chunk_summary(Order model — macros reveal callbacks/validations) → answer; ONE callback/concern/job hop only if the question demands it.</playbook>
 
 </environment_prompt>

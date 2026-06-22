@@ -18,6 +18,6 @@
         <rule name="query-style">snake_case splits perfectly ("parse_request_body" matches "parse request body") and docstrings are indexed — query with docstring vocabulary. For duck-typed behaviour use a behavioural sentence, not the method name.</rule>
     </rules>
 
-    <playbook question="explain function/class X" calls="2-3">resolve_symbol("X") (decorators visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by: list; ≤1 consumer OR the ONE behaviour-defining decorator. Several names? ONE batched search (limit 2).</playbook>
+    <playbook question="explain function/class X" calls="2-3">resolve_symbol("X") (decorators visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by: list; ≤1 consumer OR the ONE behaviour-defining decorator.</playbook>
 
 </environment_prompt>

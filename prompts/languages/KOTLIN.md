@@ -7,6 +7,7 @@
         <fact>Topology RELIABLE — imports tracked.</fact>
         <fact>Top-level functions/properties live directly in files: get_file_skeleton(path) is the fastest view of free functions. Lambdas and `let`/`apply`/`run`/`also` blocks have no symbol — that logic belongs to the enclosing chunk; find it behaviourally.</fact>
         <fact>Data classes auto-generate copy/equals/hashCode/componentN with NO chunks — a "missing" method matching that list means the data-class declaration IS the answer.</fact>
+        <fact>Caller resolution is NAME-ONLY (no receiver class): get_call_graph mixes callers across every class sharing that method name — always verify receivers from card signatures before drawing conclusions. This is the same WEAK precision as Go/Rust/Ruby, not the receiver-aware precision of JS/TS/Python/C#.</fact>
     </index_facts>
 
     <rules>
@@ -18,6 +19,6 @@
         <rule name="query-style">DSL/builder code has generic names — search behaviourally. Sealed hierarchies: ONE exact_tokens search on the SEALED PARENT name returns all variants and every `when` over them.</rule>
     </rules>
 
-    <playbook question="explain class/use-case X" calls="2-3">resolve_symbol("X") (annotations + companion visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:; ≤1 delegate/interface hop. Several types? ONE batched search (limit 2).</playbook>
+    <playbook question="explain class/use-case X" calls="2-3">resolve_symbol("X") (annotations + companion visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:; ≤1 delegate/interface hop.</playbook>
 
 </environment_prompt>

@@ -13,6 +13,6 @@
         <rule name="query-style">Component names are PascalCase and unique — exact_tokens with the component name is the highest-precision query here. For visual/behavioural questions ("the dropdown that closes on outside click"), use a behavioural sentence — handler names vary too much.</rule>
     </rules>
 
-    <playbook question="explain component X and where it renders" calls="2-3">resolve_symbol("X") → get_chunk(id) — a component's body IS its behaviour (hooks + JSX), so the full chunk replaces two summary calls → answer citing Used by: as the render sites; ≤1 consumer chunk as a render example. Do NOT resolve every child component in its JSX. Several components? ONE batched search (limit 2).</playbook>
+    <playbook question="explain component X and where it renders" calls="2-3">resolve_symbol("X") → get_chunk(id) — a component's body IS its behaviour (hooks + JSX), so the full chunk replaces two summary calls → answer citing Used by: as the render sites; ≤1 consumer chunk as a render example. Do NOT resolve every child component in its JSX.</playbook>
 
 </environment_prompt>

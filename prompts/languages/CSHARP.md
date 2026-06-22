@@ -7,6 +7,7 @@
         <fact>Topology RELIABLE — `using` directives tracked.</fact>
         <fact>`partial` classes split one type across files: resolve_symbol("OrderService") may return several chunks of the SAME type — treat as one class; read the relevant part, list the rest.</fact>
         <fact>Auto-properties, record positional members, compiler-generated members (Equals, Deconstruct) have no bodies anywhere — the type declaration IS the answer.</fact>
+        <fact>find_references on a type is FIELD-PRECISE: tracks usage as parameter types, field types, property types, return types, and base-list entries (~54% of chunks carry at least one type_ref) — the most complete type-usage channel in the suite. Prefer it over a name search when the question is "what code depends on this type".</fact>
     </index_facts>
 
     <rules>
@@ -18,6 +19,6 @@
         <rule name="query-style">XML doc comments are indexed — behavioural queries match them. Exception flow: ONE exact_tokens search on the exception type finds throw sites and handlers together.</rule>
     </rules>
 
-    <playbook question="explain service X" calls="2-3">resolve_symbol("X") (attributes + partials visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:; ≤1 caller/implementation hop. Several types? ONE batched search (limit 2).</playbook>
+    <playbook question="explain service X" calls="2-3">resolve_symbol("X") (attributes + partials visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:; ≤1 caller/implementation hop.</playbook>
 
 </environment_prompt>

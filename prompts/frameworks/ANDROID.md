@@ -12,6 +12,6 @@
         <rule name="query-style">Screen names, state property names, resource identifiers, DI types are the highest-precision tokens. Intent actions and navigation route strings trace inter-screen flow better than any graph.</rule>
     </rules>
 
-    <playbook question="explain screen X" calls="2-4">resolve_symbol("XViewModel" or "XScreen") → get_chunk(the one whose logic is in question — ViewModel for behaviour, composable for UI) → ONE exact_tokens search for the launcher or the state property → answer. Several screens/types? ONE batched search (limit 2).</playbook>
+    <playbook question="explain screen X" calls="2-4">resolve_symbol("XViewModel" or "XScreen") → get_chunk(the one whose logic is in question — ViewModel for behaviour, composable for UI) → ONE exact_tokens search for the launcher or the state property → answer.</playbook>
 
 </environment_prompt>
