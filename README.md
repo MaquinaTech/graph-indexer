@@ -21,31 +21,45 @@ Graph Indexer is a local [Model Context Protocol](https://modelcontextprotocol.i
 
 **Why it matters for AI coding agents:**
 
-- **Pinpoint retrieval, not file dumps.** Results are the exact functions, classes, and methods — ranked — so the agent reads the symbol it needs instead of grepping or loading whole files.
+- **Up to 98.2% Token Savings:** Delivers the exact AST chunk needed instead of dumping 1M token context files.
 - **Blast radius before every edit.** `get_call_graph` and `find_references` surface every caller, subclass, and dependency a change would touch, so the agent reasons about impact on code it never opened.
-- **Fewer tokens, faster runs.** Returning small ranked chunks instead of whole files keeps the agent's context tight — less to read, lower cost, quicker turns.
 - **Private by default.** Everything runs locally; the default path makes zero network calls and needs no model — your code never leaves your machine.
 - **One command, any language.** Guided setup wires your editors in seconds, and the zero-dependency lexical engine indexes 14 languages out of the box.
 
+## 📦 Prerequisites
+
+* **Node.js** 18+ (22+ recommended if you hit >15k chunks for automatic SQLite scaling).
+* **OS:** Agnostic. macOS Apple Silicon required only for the optional MLX GPU acceleration.
+* **Optional:** Ollama for embeddings, enrichment, and reranking (see [Ollama setup](#ollama-setup)).
+* **Optional:** Python 3.10+ for the MLX embedder (macOS Apple Silicon only).
+
 ## Quick start
 
-The default path works with zero external dependencies — just Node.js (18+ for the in-memory index; 22+ if you use the optional SQLite backend). It works in **any** repository — Python, Go, Rust, Java, and so on — not only Node projects.
+### 1. Run the Interactive Indexer
+Go to your project root (works for Python, Go, Rust, TS/JS, C#, and 9 more languages) and run:
 
 ```bash
 npx graph-indexer /path/to/your/repo
 ```
 
-That runs the [guided setup](#guided-setup) against that repo: it detects your stack, wires your installed editors to the MCP server (merging into existing configs, never clobbering), assembles the agent prompt suite, and offers to build the index — so it finishes ready to use. The walkthrough below covers every step; for CI, `--yes` accepts all defaults with no prompts.
+That runs the [guided setup](#guided-setup) against that repo, which leaves it ready to use. It is idempotent — re-run it whenever you add a language or change a setting; it merges into what you already have and never clobbers another tool's config. Every generated file lands in `.graph-indexer/` (git-ignored), so your repo root stays clean.
 
-To point an agent at the server manually (the setup above already wires VS Code, Cursor, and Claude Code), use `idx-mcp` via `npx -p` so the correct bin runs:
+### 2. Connect Your Agent
 
-**Claude Code**
+**If you ran the guided setup and selected your agent in step 4, this is already done — skip ahead.**
+
+The guided setup writes the MCP config automatically (with absolute paths that survive GUI launches) for **Claude Code** (`.mcp.json`), **Claude Desktop**, **Cursor** (`.cursor/mcp.json`), and **VS Code** (`.vscode/mcp.json`). Re-run `npx graph-indexer /path/to/your/repo` at any time to add or refresh a client.
+
+<details>
+<summary>Manual wiring (if you skipped setup or use a client not listed above)</summary>
+
+#### Claude Code — CLI
 
 ```bash
 claude mcp add graph-indexer -- npx -y -p graph-indexer idx-mcp --repo /path/to/your/repo
 ```
 
-**Cursor / Cody / any MCP client** — add to the client's MCP config:
+#### Cursor — `.cursor/mcp.json`
 
 ```json
 {
@@ -58,7 +72,35 @@ claude mcp add graph-indexer -- npx -y -p graph-indexer idx-mcp --repo /path/to/
 }
 ```
 
-> The `-p graph-indexer idx-mcp` form is required: `npx graph-indexer idx-mcp` would run the package's same-named (setup) bin, not the MCP server. If graph-indexer is a local dependency of a Node project, `npm run mcp:start` (wired by `init`) works too.
+#### VS Code — `.vscode/mcp.json`
+
+```json
+{
+  "servers": {
+    "graph-indexer": {
+      "command": "npx",
+      "args": ["-y", "-p", "graph-indexer", "idx-mcp", "--repo", "/path/to/your/repo"]
+    }
+  }
+}
+```
+
+#### Claude Desktop — `claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "graph-indexer": {
+      "command": "npx",
+      "args": ["-y", "-p", "graph-indexer", "idx-mcp", "--repo", "/path/to/your/repo"]
+    }
+  }
+}
+```
+
+> **Note:** The `-p graph-indexer idx-mcp` form is required — `npx graph-indexer` runs the setup wizard, not the MCP server. If `npx` isn't on your GUI PATH (common on macOS when launching editors from Finder/Dock), run the guided setup instead — it writes absolute paths that always work.
+
+</details>
 
 Once connected, the agent can call `search_code`. A query like `search_code("rate limiting middleware")` returns ranked semantic chunks, not whole files:
 
@@ -172,6 +214,8 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--rerank` | off | Enable the LLM reranker (one call per NL query). |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
+| `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |
+| `--mlx-lm-host <url>` | `http://localhost:8080` | Endpoint for the `mlx_lm.server` when `--llm-provider mlx` is set. |
 
 ### All environment variables
 
@@ -189,6 +233,8 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `RERANK_MODEL` | (unset) | Naming a model enables the reranker and selects it. |
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
+| `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |
+| `INDEXER_MLX_LM_HOST` | `http://localhost:8080` | Endpoint for the `mlx_lm.server` when `INDEXER_LLM_PROVIDER=mlx`. |
 | `INDEXER_EMBED_CONCURRENCY` | 4 | Parallel embedding batches; lower to 1 for large models on modest hardware. |
 | `INDEXER_EMBED_TIMEOUT_MS` | 120000 | Per-batch embedding timeout; raise for very large models. |
 
