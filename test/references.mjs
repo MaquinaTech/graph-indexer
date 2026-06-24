@@ -185,3 +185,83 @@ test('find_references tool returns typed structuredContent for json format', asy
     assert.ok(sc.used_as_type_by.some(r => r.name === 'summarize' && r.confidence === 'name-only'));
     assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
 });
+
+// ── Fixture (C5/D1): a symbol exercised by a test, called by a non-test, so the
+//    test→code mapping must surface only the TEST chunk. The test body is an
+//    `expression_statement` chunk (test('…', () => { … })) whose calls include the
+//    symbol. ───────────────────────────────────────────────────────────────────────
+const TC_FILES = {
+    'auth.ts': `
+export function validateToken(token) {
+  const ok = verify(token);
+  return ok;
+}
+`,
+    'service.ts': `
+import { validateToken } from './auth';
+export function handleRequest(req) {
+  const v = validateToken(req.token);
+  return v;
+}
+`,
+    'auth.test.ts': `
+import { validateToken } from './auth';
+test('validateToken accepts a good token', () => {
+  const r = validateToken('good');
+  expect(r).toBe(true);
+});
+`,
+};
+const TC_IMPORTS = { 'service.ts': ['auth.ts'], 'auth.test.ts': ['auth.ts'] };
+
+function parseTCFixture() {
+    const parser = getParserForFile('.ts');
+    if (!parser) return null;
+    const idx = new MemoryGraphIndex(path.join(os.tmpdir(), `tc-${process.pid}.json`), { cacheEmbeddings: false });
+    for (const [file, src] of Object.entries(TC_FILES)) {
+        const tree = parser.parse((offset) => (offset < src.length ? src.slice(offset, offset + 4096) : null));
+        const chunks = extractSemanticChunks(tree.rootNode, file, src, '.ts');
+        idx.applyFileUpdate(file, { chunks, imports: TC_IMPORTS[file] || [] });
+        if (idx._saveTimer) { clearTimeout(idx._saveTimer); idx._saveTimer = null; }
+    }
+    return idx;
+}
+
+test('tests_for surfaces only the test chunks that exercise a symbol', async () => {
+    const idx = parseTCFixture();
+    if (!idx) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+    const tools = captureTools(idx);
+
+    const res = await tools.get('tests_for')({ symbol: 'validateToken', response_format: 'json' });
+    const sc = res.structuredContent;
+    assert.equal(sc.symbol, 'validateToken');
+    assert.equal(sc.test_count, 1, 'only the auth.test.ts chunk — not the service.ts caller');
+    assert.match(sc.tests[0].file_path, /auth\.test\.ts/, 'the mapped test is in the test file');
+    assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
+
+    const md = await tools.get('tests_for')({ symbol: 'validateToken' });
+    assert.match(md.content[0].text, /auth\.test\.ts/, 'markdown lists the test');
+
+    const none = await tools.get('tests_for')({ symbol: 'handleRequest', response_format: 'json' });
+    assert.equal(none.structuredContent.test_count, 0, 'a symbol with no tests reports zero');
+});
+
+test('explain_symbol composes definition, callees, callers and tests in one call', async () => {
+    const idx = parseTCFixture();
+    if (!idx) return;
+    const tools = captureTools(idx);
+
+    const res = await tools.get('explain_symbol')({ symbol: 'validateToken', response_format: 'json' });
+    const sc = res.structuredContent;
+    assert.equal(sc.definition_count, 1, 'one definition');
+    assert.ok(sc.callees.includes('verify'), 'callees = what the symbol calls');
+    const callerNames = [...sc.called_by.high, ...sc.called_by.name_only].map(c => c.name);
+    assert.ok(callerNames.includes('handleRequest'), 'the non-test caller is in the blast radius');
+    assert.equal(sc.tests.length, 1, 'the exercising test is surfaced');
+    assert.match(sc.tests[0].file_path, /auth\.test\.ts/);
+    assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
+
+    const md = await tools.get('explain_symbol')({ symbol: 'validateToken' });
+    assert.match(md.content[0].text, /validateToken/);
+    assert.match(md.content[0].text, /Tests/, 'markdown has a tests section');
+});

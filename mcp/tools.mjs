@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import fs from 'fs';
 import path, { resolve } from 'path';
-import { computePageRank, isNaturalLanguageQuery } from '../search-core.mjs';
+import { computePageRank, isNaturalLanguageQuery, TEST_FILE_RE } from '../search-core.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
@@ -154,6 +154,25 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             ? '⚠️ STALE — results may miss recent edits; run `npm run mcp:index`'
             : 'daemon syncing…');
         return bits.join(' · ');
+    };
+
+    // ── test → code mapping (C5) ──────────────────────────────────────────────
+    // The test chunks that exercise a symbol: a test/spec chunk (TEST_FILE_RE) that
+    // either CALLS the symbol or REFERENCES it (type/inheritance). Deduped by id,
+    // deterministically ordered (file, line, id). Shared by tests_for + explain_symbol.
+    const testsForSymbol = (symbol) => {
+        const seen = new Set();
+        const out = [];
+        for (const c of [...db.findCallers(symbol), ...db.findReferers(symbol)]) {
+            if (!c || !TEST_FILE_RE.test(c.file_path) || seen.has(c.id)) continue;
+            seen.add(c.id);
+            out.push(c);
+        }
+        out.sort((a, b) =>
+            (a.file_path < b.file_path ? -1 : a.file_path > b.file_path ? 1 : 0)
+            || (a.start_line - b.start_line)
+            || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        return out;
     };
 
     // ─── search_code ────────────────────────────────────────────────────────────
@@ -1157,6 +1176,141 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     ...Array.from(s.extCounts.entries()).sort((a, b) => b[1] - a[1]).map(([e, n]) => `- .${e}: ${n} chunks`),
                 ];
                 if (s.chunks === 0) lines.push('', `⚠️ Index empty. Run \`npm run mcp:index\`.`);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── tests_for ────────────────────────────────────────────────────────────────
+    server.tool(
+        'tests_for',
+        'Find the tests that exercise a symbol — the test/spec chunks that call or reference it. '
+        + 'Use it to see how a function/class is meant to behave, or which tests to run (or update) '
+        + 'before changing it. Returns each test chunk + id (call get_chunk for the body).',
+        {
+            symbol: z.string().describe("Exact symbol name (function, class, method) to find tests for."),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { tests: [...] })."
+            ),
+        },
+        async ({ symbol, response_format }) => {
+            try {
+                const tests = testsForSymbol(symbol);
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
+
+                if (response_format === 'json') {
+                    return jsonResult({ symbol, test_count: tests.length, tests: tests.map(chunkCard), index: fresh });
+                }
+                if (tests.length === 0) {
+                    const known = db.resolveSymbol(symbol).length > 0;
+                    const parts = [known
+                        ? `🧪 No tests found that reference \`${symbol}\`. It may be untested, or its tests are dynamic/indirect (the test calls a wrapper, not the symbol directly).`
+                        : `Symbol \`${symbol}\` is not in the index. Try search_code(query="${symbol}").`];
+                    if (note) parts.push(note);
+                    return { content: [{ type: 'text', text: parts.join('\n') }] };
+                }
+                const lines = [`# 🧪 Tests for \`${symbol}\` — ${tests.length}`];
+                for (const t of tests) {
+                    lines.push(`- \`${t.class_context ? t.class_context + '.' : ''}${t.name}\` [${t.node_type}]`
+                        + ` in \`${t.file_path}\` (lines ${t.start_line}–${t.end_line}) · id \`${t.id}\``);
+                }
+                if (note) lines.push('', note);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── explain_symbol ─────────────────────────────────────────────────────────────
+    server.tool(
+        'explain_symbol',
+        'One-call overview of a symbol before you edit it: its signature(s), what it calls (callees), '
+        + 'who calls it (callers / blast radius), subclasses and type users, the HTTP routes it handles, '
+        + 'the tests that exercise it, and git recency/co-change. Composes resolve_symbol + '
+        + 'find_references + find_routes + tests_for + git signals so an agent gets the full context in '
+        + 'a single round-trip instead of four.',
+        {
+            symbol: z.string().describe("Exact symbol name (function, class, interface, method)."),
+            target_class: z.string().optional().describe(
+                "Optional owning class/type to scope the caller/reference dimensions when several symbols share the name."
+            ),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { definitions, callees, called_by, subclassed_by, used_as_type_by, routes, tests, recent_changes, co_changes })."
+            ),
+        },
+        async ({ symbol, target_class, response_format }) => {
+            try {
+                const defs = db.resolveSymbol(symbol);
+                if (defs.length === 0) {
+                    const indexEmpty = db.chunkCount() === 0;
+                    const emptyHint = 'Index is empty — run `npm run mcp:index` (or `idx-index --repo <path>`) to build it.';
+                    return response_format === 'json'
+                        ? jsonResult({ symbol, found: false, ...(indexEmpty ? { index_status: 'empty', hint: emptyHint } : {}), definitions: [] })
+                        : { content: [{ type: 'text', text: indexEmpty ? `⚠️ ${emptyHint}` : `Symbol \`${symbol}\` not in index. Try search_code(query="${symbol}").` }] };
+                }
+
+                const { targetDefs, ambiguous, calls, inherits, types } =
+                    findReferences(db, symbol, { targetClass: target_class || null });
+                const callees = [...new Set(defs.flatMap(d => d.calls || []))].sort();
+                const tests = testsForSymbol(symbol);
+                const defIds = new Set(defs.map(d => d.id));
+                const routes = findRoutes(db, {}).filter(r => r.handler_name === symbol || (r.id && defIds.has(r.id)));
+                const files = [...new Set(targetDefs.map(d => d.file_path))];
+                const coChanges = coChangeFiles(gitSignals, files);
+                const recentChanges = files
+                    .map(f => ({ file: f, hotness: Number(gitBoostScore(gitSignals, f).toFixed(3)) }))
+                    .filter(r => r.hotness > 0)
+                    .sort((a, b) => b.hotness - a.hotness || a.file.localeCompare(b.file));
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        symbol,
+                        target_class: target_class || null,
+                        ambiguous,
+                        definition_count: defs.length,
+                        definitions: defs.map(d => ({ ...chunkCard(d), signature: extractSignatureLine(d.code_snippet) })),
+                        callees,
+                        called_by: {
+                            high: calls.high.map(h => refCard({ ...h, confidence: 'high' })),
+                            name_only: calls.nameOnly.map(n => refCard({ ...n, confidence: 'name-only' })),
+                        },
+                        subclassed_by: inherits.map(refCard),
+                        used_as_type_by: types.map(refCard),
+                        routes,
+                        tests: tests.map(chunkCard),
+                        recent_changes: recentChanges,
+                        co_changes: coChanges,
+                        index: fresh,
+                    });
+                }
+
+                const callerTotal = calls.high.length + calls.nameOnly.length;
+                const lines = [`# 🔎 \`${target_class ? target_class + '.' : ''}${symbol}\``];
+                if (ambiguous) lines.push(`> ⚠️ ${defs.length} symbols named \`${symbol}\`${target_class ? '' : ' — pass target_class to scope callers/references'}.`);
+                for (const d of defs) {
+                    lines.push('', `**${d.class_context ? d.class_context + '.' : ''}${d.name}** [${d.node_type}] · \`${d.file_path}\`:${d.start_line}–${d.end_line} · id \`${d.id}\``);
+                    lines.push('```', extractSignatureLine(d.code_snippet), '```');
+                }
+                if (callees.length) lines.push('', `**Calls (${callees.length}):** ${callees.slice(0, 20).join(', ')}${callees.length > 20 ? ' …' : ''}`);
+                lines.push('', `**Called by (${callerTotal}):** ${calls.high.length} high-confidence` + (calls.nameOnly.length ? `, ${calls.nameOnly.length} name-only` : ''));
+                for (const h of calls.high.slice(0, 10)) lines.push(`  - ✅ \`${h.chunk.class_context ? h.chunk.class_context + '.' : ''}${h.chunk.name}\` in \`${h.chunk.file_path}\`${h.recvHint ? ` · via ${h.recvHint}` : ''}`);
+                if (inherits.length) lines.push('', `**Subclassed/implemented by (${inherits.length}):** ` + inherits.slice(0, 10).map(r => `\`${r.chunk.name}\``).join(', '));
+                if (types.length) lines.push('', `**Used as a type by (${types.length}):** ` + types.slice(0, 10).map(r => `\`${r.chunk.name}\``).join(', '));
+                if (routes.length) {
+                    lines.push('', `**Routes (${routes.length}):**`);
+                    for (const r of routes) lines.push(`  - **${r.method}** \`${r.path}\``);
+                }
+                lines.push('', tests.length ? `**Tests (${tests.length}):**` : `**Tests:** none found`);
+                for (const t of tests.slice(0, 10)) lines.push(`  - 🧪 \`${t.name}\` in \`${t.file_path}\` · id \`${t.id}\``);
+                if (recentChanges.length) lines.push('', `**Recent activity:** ` + recentChanges.map(r => `\`${r.file}\` (hotness ${r.hotness})`).join(', '));
+                if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (note) lines.push('', note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

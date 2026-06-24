@@ -180,6 +180,8 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `get_subgraph` | A bounded connected subgraph around a seed symbol — its callees, high-confidence callers, and type/inheritance users, in one call. |
 | `get_repo_map` | A high-level map of the repository's modules and topology. |
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
+| `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
+| `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, and git recency/co-change. |
 
 ## Configuration
 

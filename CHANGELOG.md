@@ -76,6 +76,24 @@ memory↔sqlite top-5 parity.
   fixpoint, the conflict guard holds, and `resolveReturnTypes` is order-independent. Write-up:
   `docs/internals/IMPROVEMENT_INTERPROCEDURAL.md`.
 
+### Test→code mapping + two compound MCP tools (C5 + D1)
+
+The MCP tool surface grows from 11 to 13. Both new tools are read-only and compose existing
+store primitives — no ranking, parity, or default-path impact.
+
+- **`tests_for(symbol)`** — the test/spec chunks that exercise a symbol: a chunk under a
+  test path (`TEST_FILE_RE`) that calls or references it. Reuses `findCallers` + `findReferers`
+  filtered to tests, deterministically ordered (file, line, id). Tells an agent which tests to
+  run or update before a change, and how the symbol is meant to behave.
+- **`explain_symbol(symbol, target_class?)`** — a single-round-trip overview that previously took
+  four tool calls: signature(s) (`resolve_symbol`), callees (the symbol's `calls`), callers /
+  blast radius + subclasses + type users (`find_references` / `classifyCallers`), the HTTP routes
+  it handles (`find_routes`), the tests that exercise it (`tests_for`), and git recency/co-change.
+  Both `markdown` and `json` (`structuredContent`) formats.
+- `test/mcp.mjs` asserts the 13-tool surface; `test/references.mjs` adds a test→code fixture
+  proving `tests_for` returns only the test chunk (not the production caller) and `explain_symbol`
+  composes definition + callees + callers + tests, in both response formats.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.
