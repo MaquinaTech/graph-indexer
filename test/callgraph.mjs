@@ -21,6 +21,7 @@ import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { classifyCallers, buildSubgraph } from '../mcp/topology.mjs';
+import { applyInterprocedural, resolveReturnTypes } from '../parse/interprocedural.mjs';
 
 // ── Fixture: two modules export a same-named free function `save`. Callers that
 //    import one of them are real callers of an indexed save; a caller that hits a
@@ -296,4 +297,128 @@ test('scope-aware receiver types promote dynamic-receiver callers (new / factory
     for (const h of high) assert.equal(h.reason, 'OrderRepo.save()', `${h.chunk.name} promoted via the resolved receiver type`);
     assert.deepEqual(nameOnly.map(n => n.chunk.name), ['withUnknown'],
         'an unresolvable receiver type is NOT fabricated into confidence');
+});
+
+// ── Fixture 3 (A3): a TWO-HOP, UNANNOTATED factory chain that single-hop receiver
+//    resolution cannot reach. makeRepoBare() returns `new OrderRepo()` (no annotation);
+//    makeRepoBareIndirect() returns makeRepoBare() (no annotation). Only the index-time
+//    inter-procedural fixpoint, propagating return types along the call edges, can resolve
+//    a caller through makeRepoBareIndirect() to OrderRepo. makeConflict() returns two
+//    different factories → must stay unresolved (conservative). ────────────────────────
+const CHAIN_FILES = {
+    'repo.ts': `
+export class OrderRepo {
+  save(order) {
+    writeRow(order);
+    return order;
+  }
+${GOD_PADDING}
+}
+`,
+    'free.ts': `
+export function save(thing) {
+  writeRow(thing);
+  return thing;
+}
+`,
+    // NEITHER factory is annotated, so each one's recorded return_type is '' — the 1-hop
+    // query-time path (which reads return_type) resolves nothing.
+    'factory.ts': `
+function makeRepoBare() {
+  const x = 1;
+  return new OrderRepo();
+}
+function makeRepoBareIndirect() {
+  const y = 2;
+  return makeRepoBare();
+}
+function makeOther() {
+  const z = 3;
+  return new FreeThing();
+}
+function makeConflict(flag) {
+  if (flag) { return makeRepoBare(); }
+  return makeOther();
+}
+`,
+    'callers.ts': `
+export function withChain(o) {
+  const m = makeRepoBareIndirect();
+  m.save(o);
+  return m;
+}
+export function withConflict(o) {
+  const c = makeConflict(o);
+  c.save(o);
+  return c;
+}
+`,
+};
+
+function parseChainFixture({ interprocedural }) {
+    const parser = getParserForFile('.ts');
+    if (!parser) return null;
+    const perFile = {};
+    const all = [];
+    for (const [file, src] of Object.entries(CHAIN_FILES)) {
+        const tree = parser.parse((offset) => (offset < src.length ? src.slice(offset, offset + 4096) : null));
+        const chunks = extractSemanticChunks(tree.rootNode, file, src, '.ts', { interprocedural });
+        perFile[file] = chunks;
+        all.push(...chunks);
+    }
+    // The fixpoint is a whole-program pass — run it across all chunks before loading.
+    if (interprocedural) applyInterprocedural(all);
+    const idx = new MemoryGraphIndex(path.join(os.tmpdir(), `cgc-${process.pid}.json`), { cacheEmbeddings: false });
+    for (const [file, chunks] of Object.entries(perFile)) {
+        idx.applyFileUpdate(file, { chunks, imports: [] });
+        if (idx._saveTimer) { clearTimeout(idx._saveTimer); idx._saveTimer = null; }
+    }
+    return idx;
+}
+
+test('inter-procedural fixpoint resolves a 2-hop factory chain that single-hop cannot', () => {
+    const off = parseChainFixture({ interprocedural: false });
+    if (!off) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+
+    // Precondition: the indirect factory carries NO return type, so the 1-hop path is blind.
+    assert.equal(off.resolveSymbol('makeRepoBareIndirect')[0]?.return_type, '',
+        'the indirect factory has no annotation — single-hop resolution cannot see through it');
+
+    // Negative control: without the fixpoint, the 2-hop caller is name-only.
+    const offCls = classifyCallers(off, 'save');
+    assert.ok(offCls.nameOnly.some(n => n.chunk.name === 'withChain'),
+        'without the fixpoint, the 2-hop factory caller is name-only');
+    assert.ok(!offCls.high.some(h => h.chunk.name === 'withChain'),
+        'without the fixpoint, the 2-hop caller is NOT high-confidence');
+
+    // With the fixpoint: withChain promotes to high via the transitively-resolved OrderRepo.
+    const on = parseChainFixture({ interprocedural: true });
+    const onCls = classifyCallers(on, 'save');
+    const chain = onCls.high.find(h => h.chunk.name === 'withChain');
+    assert.ok(chain, 'the 2-hop factory caller is promoted to high by the inter-procedural fixpoint');
+    assert.equal(chain.reason, 'OrderRepo.save()', 'reason shows the resolved class');
+
+    // Conflict guard: a factory returning two different types stays unresolved (no fabrication).
+    assert.ok(onCls.nameOnly.some(n => n.chunk.name === 'withConflict'),
+        'a divergent-return factory does not resolve to a single type → caller stays name-only');
+    assert.ok(!onCls.high.some(h => h.chunk.name === 'withConflict'),
+        'the conflict caller is not promoted');
+});
+
+test('resolveReturnTypes is deterministic, transitive, and conflict-safe', () => {
+    const parser = getParserForFile('.ts');
+    if (!parser) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+    const all = [];
+    for (const [file, src] of Object.entries(CHAIN_FILES)) {
+        const tree = parser.parse((offset) => (offset < src.length ? src.slice(offset, offset + 4096) : null));
+        all.push(...extractSemanticChunks(tree.rootNode, file, src, '.ts', { interprocedural: true }));
+    }
+    const r1 = resolveReturnTypes(all);
+    assert.equal(r1.get('makerepobare'), 'OrderRepo', 'direct: return new OrderRepo()');
+    assert.equal(r1.get('makerepobareindirect'), 'OrderRepo', 'transitive: 2-hop chain resolves');
+    assert.equal(r1.get('makeother'), 'FreeThing', 'direct: return new FreeThing()');
+    assert.ok(!r1.has('makeconflict'), 'divergent returns → omitted (conservative)');
+    // Determinism: re-running yields an identical map (order-independent fixpoint).
+    const r2 = resolveReturnTypes(all.slice().reverse());
+    assert.deepEqual([...r2.entries()].sort(), [...r1.entries()].sort(), 'result independent of chunk order');
 });

@@ -16,7 +16,7 @@ const { Query } = Parser;
 import { getParserForFile, LANGUAGE_MAP, EXTENSIONS } from './languages.mjs';
 import {
     extractParams, extractReturnType, extractClassContext,
-    extractDecorators, extractHeritage, extractTypeAnnotations, extractCallSites,
+    extractDecorators, extractHeritage, extractTypeAnnotations, extractCallSites, extractReturnVia,
 } from './metadata.mjs';
 
 export const MAX_FILE_SIZE_BYTES = 500000;
@@ -330,7 +330,7 @@ function _cDeclaratorName(node) {
     return null;
 }
 
-export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
+export function extractSemanticChunks(rootNode, relPath, sourceCode, ext, { interprocedural = false } = {}) {
     const chunks = [];
     const parser = getParserForFile(ext);
     if (!parser) return chunks;
@@ -567,14 +567,23 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext) {
                 .update(`${relPath}::${chunkNode.startPosition.row}::${chunkNode.startPosition.column}`)
                 .digest('hex').slice(0, 24);
 
-            chunks.push({
+            const chunk = {
                 id, file_path: relPath, node_type: chunkNode.type, name: nameText,
                 docstring: docstring, code_snippet: snippet, content_hash: hash,
                 start_line: chunkNode.startPosition.row + 1, end_line: chunkNode.endPosition.row + 1,
                 calls: outgoingCalls, call_sites: callSites,
                 params, return_type: returnType, class_context: classContext,
                 type_refs: typeRefs, decorators, extends: heritage,
-            });
+            };
+            // Opt-in inter-procedural fixpoint: capture what this function returns so the
+            // indexer can propagate return types along factory chains. Transient — stripped
+            // before serialization (parse/interprocedural.mjs::applyInterprocedural). Off by
+            // default → the chunk is byte-identical to before.
+            if (interprocedural) {
+                const rv = extractReturnVia(chunkNode);
+                if (rv) chunk._return_via = rv;
+            }
+            chunks.push(chunk);
         }
     } catch (e) {
         process.stderr.write(`\n[parse/extractor] 💥 Query Error in ${relPath}: ${e.message}\n`);

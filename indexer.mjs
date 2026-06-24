@@ -116,7 +116,7 @@ async function main() {
             const imports = resolveLocalImports(rawImports, relPath, PROJECT_ROOT);
             indexData.graph.dependencies[relPath] = imports;
 
-                    const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext);
+                    const fileChunks = extractSemanticChunks(tree.rootNode, relPath, content, ext, { interprocedural: config.interprocedural });
             for (const chunk of fileChunks) {
                 const fullBody = fullBodyForEmbedding(chunk, content);
                 if (fullBody) fullBodies.set(chunk.id, fullBody);
@@ -129,6 +129,17 @@ async function main() {
         } catch (err) {
             console.error(`\n💥 Error in ${relPath}: ${err.message}`);
         }
+    }
+
+    // Opt-in inter-procedural receiver-type fixpoint (--interprocedural): propagate return
+    // types along factory call chains so multi-hop receivers resolve. Runs ONCE over the whole
+    // program here, while every chunk's return_via / call_sites are known, and writes
+    // recv_resolved_type into call_sites (serialized identically by both backends). Strips the
+    // transient _return_via. Off by default → chunks/index byte-identical.
+    if (config.interprocedural) {
+        const { applyInterprocedural } = await import('./parse/interprocedural.mjs');
+        applyInterprocedural(pendingChunks);
+        console.log('🔗 Inter-procedural receiver types resolved (factory return-type propagation).');
     }
 
     // Enrichment runs before embedding so hypothetical questions share the same vector space.

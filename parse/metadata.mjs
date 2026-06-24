@@ -534,6 +534,52 @@ function _inferReceiverType(objNode, bindings) {
     return _classifyValueNode(objNode); // inline: new Repo().save(), getStore().save()
 }
 
+const _FN_NODE_TYPES = new Set([
+    'function_declaration', 'function_definition', 'method_definition', 'method_declaration',
+    'arrow_function', 'function', 'function_expression', 'lambda', 'method', 'singleton_method',
+    'generator_function', 'generator_function_declaration',
+]);
+
+/**
+ * Classify what a function chunk RETURNS, for the opt-in inter-procedural fixpoint
+ * (parse/interprocedural.mjs). Looks at this function's own return expression(s):
+ *   • { type }    — returns `new Repo()` (a concrete type, no annotation needed).
+ *   • { viaCall } — returns a bare factory call `makeRepo()` whose type is resolved
+ *                   later by propagating along the call graph.
+ *   • null        — nothing safe (no return, mixed returns, opaque expression).
+ * Does NOT descend into nested functions/lambdas (only THIS function's returns).
+ * This is a transient signal (attached as `_return_via`) consumed at index time and
+ * stripped before serialization — it never persists in the index.
+ */
+export function extractReturnVia(chunkNode) {
+    const found = [];
+    const consider = (expr) => { const v = _classifyValueNode(expr); if (v) found.push(v); };
+
+    // Expression-body arrow / lambda: `() => new Repo()` has no return_statement.
+    if (chunkNode.type === 'arrow_function' || chunkNode.type === 'lambda') {
+        const body = chunkNode.childForFieldName?.('body');
+        if (body && body.type !== 'statement_block' && body.type !== 'block') consider(body);
+    }
+
+    (function walk(node, depth) {
+        for (const child of node.children) {
+            if (depth > 0 && _FN_NODE_TYPES.has(child.type)) continue; // skip nested functions
+            if (child.type === 'return_statement') {
+                consider(child.namedChildren?.[0] || child.childForFieldName?.('argument'));
+            }
+            walk(child, depth + 1);
+        }
+    })(chunkNode, 0);
+
+    if (found.length === 0) return null;
+    const types = new Set(found.filter(f => f.type).map(f => f.type));
+    const vias = new Set(found.filter(f => f.viaCall).map(f => f.viaCall));
+    // Conservative: only a single unambiguous classification is usable.
+    if (types.size === 1 && vias.size === 0) return { type: [...types][0] };
+    if (vias.size === 1 && types.size === 0) return { viaCall: [...vias][0] };
+    return null;
+}
+
 /**
  * Walk a subtree and collect every call site as { name, recv } (receiver hint), plus
  * an optional `recv_type` / `recv_via_call` when the receiver's type is recoverable

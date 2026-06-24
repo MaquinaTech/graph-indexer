@@ -339,8 +339,13 @@ export function classifyCallers(db, targetFunction, { targetClass = null } = {})
         let typeMatch = null;
         if (typeMatchSet.size) {
             for (const s of sites) {
+                // Precedence: intra-procedural receiver type → the opt-in inter-procedural
+                // fixpoint result (recv_resolved_type, written at index time) → the 1-hop
+                // query-time factory return-type fallback. The fixpoint resolves multi-hop /
+                // unannotated factory chains the 1-hop path cannot.
                 const toks = s.recv_type ? _typeMatchTokens(s.recv_type)
-                    : s.recv_via_call ? [...calleeReturnTokens(s.recv_via_call)] : null;
+                    : s.recv_resolved_type ? _typeMatchTokens(s.recv_resolved_type)
+                        : s.recv_via_call ? [...calleeReturnTokens(s.recv_via_call)] : null;
                 const m = toks && toks.find(t => typeMatchSet.has(t));
                 if (m) { typeMatch = m; break; }
             }

@@ -38,6 +38,11 @@ export const DEFAULTS = Object.freeze({
     mlxLmHost: 'http://localhost:8080',  // mlx_lm.server endpoint (default port 8080)
     gitSignals: true,                  // collect local git churn/recency/co-change at index time (air-gapped)
     gitRankBoost: 0,                   // 0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged)
+    interprocedural: false,            // OPT-IN: index-time inter-procedural receiver-type fixpoint —
+                                       // propagate return types along factory call chains so multi-hop
+                                       // receivers resolve in get_call_graph / find_references. Air-gapped,
+                                       // deterministic; default index is byte-identical. Enable with
+                                       // --interprocedural / INDEXER_INTERPROCEDURAL.
     enrichment: Object.freeze({
         enabled: false,
         model: 'qwen2.5-coder:1.5b',   // smallest coder model; quality sufficient for summaries.
@@ -155,6 +160,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         ?? (Number.isFinite(file.gitRankBoost) ? file.gitRankBoost : DEFAULTS.gitRankBoost);
     const gitRankBoost = Math.min(1, Math.max(0, Number(gitRankBoostRaw) || 0));
 
+    // Opt-in inter-procedural receiver-type fixpoint (index-time, air-gapped).
+    const interprocedural = argv.includes('--interprocedural')
+        || env.INDEXER_INTERPROCEDURAL === 'on'
+        || file.interprocedural === true;
+
     const paths = artifactPaths(projectRoot);
 
     return Object.freeze({
@@ -186,6 +196,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
             || file.mlxEmbedModel || DEFAULTS.mlxEmbedModel,
         gitSignals,
         gitRankBoost,
+        interprocedural,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
@@ -260,6 +271,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
                 : `on · provider=generative · model=${config.rerank.model} · llm=${config.llmProvider}`)
             : 'off'}`,
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
+        `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
     ];
 }
 
@@ -274,6 +286,13 @@ export function describeConfig(config, { backend = config.storage } = {}) {
  */
 export function configNotices(config) {
     const out = [];
+    if (config.interprocedural) {
+        out.push('Inter-procedural receiver types are resolved at index time (a whole-program pass). '
+            + 'The watch daemon updates one file at a time and does NOT re-run the fixpoint, so '
+            + 'cross-file factory chains refresh on the next full `idx-index`; until then they fall '
+            + 'back to single-hop resolution (never worse than the default). It only sharpens '
+            + 'get_call_graph / find_references — search ranking is unaffected.');
+    }
     if (config.enrichment.enabled && !config.rerank.enabled) {
         out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '
             + 'regress semantic precision (measured: gin MRR 0.48→0.39 on qwen3 embeddings).');

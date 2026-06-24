@@ -52,6 +52,30 @@ memory↔sqlite top-5 parity.
   `generative`, reranker off) is byte-identical; memory↔sqlite parity unaffected. New
   `test/unit.mjs` tests inject the scorer (no model in CI).
 
+### Inter-procedural receiver-type fixpoint (A3)
+
+- **`--interprocedural`** (`INDEXER_INTERPROCEDURAL` / `interprocedural` config) adds an
+  index-time, whole-program fixpoint that propagates function return types along **factory call
+  chains**, so a call-site receiver whose type comes from a multi-hop or unannotated factory
+  resolves to its concrete class. Example: `makeRepoIndirect()` returns `makeRepo()` returns
+  `new OrderRepo()` — the indirect factory has no return type to read, but the fixpoint resolves
+  the chain, so `const m = makeRepoIndirect(); m.save()` is now a **high-confidence** caller of
+  `OrderRepo.save` in `get_call_graph` / `find_references` instead of a name-only match.
+- **Design:** a new `parse/interprocedural.mjs` runs a bounded (`MAX_ITERS = 8`), monotone,
+  deterministic worklist over a per-symbol return-type lattice (conflicts — ≥2 distinct types —
+  are conservatively dropped). It writes `recv_resolved_type` onto the relevant call sites;
+  because `call_sites` is serialized identically by both backends, the resolved data is
+  **parity-free**. `classifyCallers` prefers `recv_resolved_type` and keeps the existing 1-hop
+  `recv_via_call` fallback, so an index built without the pass (or a per-file daemon update) is
+  never worse. The transient capture (`_return_via`) is stripped before serialization.
+- **Invariants:** OFF by default → the index and `get_call_graph` output are byte-identical, and
+  `npm run test:eval` is unchanged (search ranking never reads receiver types). Air-gapped,
+  zero new runtime deps. **Residual limitation (documented):** the watch daemon re-indexes one
+  file at a time and does not re-run the whole-program pass, so cross-file chains refresh on the
+  next full `idx-index`. New `test/callgraph.mjs` tests prove a 2-hop chain promotes only with the
+  fixpoint, the conflict guard holds, and `resolveReturnTypes` is order-independent. Write-up:
+  `docs/internals/IMPROVEMENT_INTERPROCEDURAL.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

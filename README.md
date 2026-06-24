@@ -219,6 +219,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--enrich-concurrency <n>` | 4 | Parallel Ollama requests during enrichment. |
 | `--rerank` | off | Enable the reranker (reorders the over-fetched pool on NL queries). |
 | `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
+| `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 | `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |
@@ -241,6 +242,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `RERANK_PROVIDER` | `generative` | `generative` (LLM judge) or `cross-encoder` (local air-gapped); setting it enables reranking. |
 | `RERANK_CROSS_ENCODER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model id (downloaded on first use). |
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
+| `INDEXER_INTERPROCEDURAL` | (off) | `on` enables the index-time inter-procedural receiver-type fixpoint (`--interprocedural`). |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
 | `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |
 | `INDEXER_MLX_LM_HOST` | `http://localhost:8080` | Endpoint for the `mlx_lm.server` when `INDEXER_LLM_PROVIDER=mlx`. |
@@ -303,6 +305,8 @@ Per-fixture best configs, 3× spreads, and copy-paste enable flags live in **[do
 | **Typed `find_references`** | precise: TS/JS, Python · field-precise: C# | heuristic: Java/PHP/Kotlin/Swift/Rust/Go/C · empty: Ruby, Bash, SCSS, dynamic JS/Python |
 
 AST chunking and lexical search cover **every** supported language; only the typed cross-reference channel narrows for dynamic ones.
+
+**Multi-hop receivers (`--interprocedural`).** Caller precision relies on resolving a call's receiver type. Intra-procedurally, graph-indexer already resolves `const r = makeRepo(); r.save()` one hop (reading `makeRepo`'s recorded return type). The opt-in `--interprocedural` flag adds an index-time fixpoint that propagates return types *along factory call chains*, so a receiver whose type comes from a multi-hop or unannotated factory (`makeRepoIndirect()` → `makeRepo()` → `new OrderRepo()`) still resolves to its concrete class — promoting those callers from *name-only* to *high-confidence* in `get_call_graph` / `find_references`. It is air-gapped and deterministic, the result is serialized into the index (both backends identical), and it leaves search ranking and the default index byte-identical. Note: the watch daemon updates one file at a time and does not re-run the whole-program pass, so cross-file chains refresh on the next full `idx-index` (degrading to single-hop until then, never worse).
 
 ### Where it's weakest (honestly)
 
