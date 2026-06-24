@@ -190,7 +190,7 @@ Everything beyond the lexical default is opt-in. The server, indexer, and daemon
 | Option | Default | When to enable | Cost |
 |--------|---------|----------------|------|
 | `--embeddings` | off | Larger repos where recall matters; lifts success@5 | Requires Ollama or the in-process MiniLM model; slower indexing |
-| `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | Better code recall + symbolic precision | slower indexing; requires Ollama |
+| `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | A code-specialized embedder — lifts agent-style recall on Go (and some code-heavy repos); measure first | slower indexing; requires Ollama; neutral on JS/Python in our tests |
 | `--enrichment` | off | Only useful paired with `--rerank`; alone it regresses | slowest indexing |
 | `--rerank` | off | Go/Python repos with weak semantic recall; regresses JS repos | Requires an Ollama 7B model; adds query latency |
 | `--use-sqlite` | `auto` | Repos past ~15k chunks or memory-constrained environments | Slightly higher query latency; needs Node 22+ |
@@ -256,6 +256,8 @@ Set the backend with `--embed-provider` (or `INDEXER_EMBED_PROVIDER`). `mlx` is 
 ² On Apple Silicon, Ollama already uses the Metal GPU internally (via llama.cpp). The `mlx` provider's advantage comes from a smaller model (all-MiniLM-L6-v2-4bit, 22M params, 384-dim) and no HTTP round-trip, not from GPU vs CPU.
 
 The index records which provider/model built it (in the `code-index.embeddings.bin.meta.json` sidecar) and queries with the same one, so vectors never get mixed across models. Switching providers or the MLX model between builds is detected and triggers a clean re-embed.
+
+**Code-specialized embedding models.** The default `nomic-embed-text` is a general-purpose embedder. Models trained on code — `qwen3-embedding`, `nomic-embed-code`, `jina-embeddings-v2-base-code` — embed code semantics more faithfully and can lift agent-style (natural-language) recall. Select one with `--embed-model <name>` (Ollama); it is stamped into the index meta and queried with the same model so vectors never get mixed. **Measure before adopting** — in our benchmarks `qwen3-embedding` lifted Go (gin) semantic rank-1 0.20 → 0.40 but was neutral on Python (django) and JavaScript (express), and it indexes substantially slower than `nomic-embed-text`. Run `npm run test:eval -- --embeddings` on your own repo to confirm the trade-off. We also evaluated *re-weighting the vector channel upward* for these stronger embedders and found **no measurable recall@5 gain** (it regressed rank-1/symbolic at higher weights) — the existing default weighting already extracts the benefit, so there is no separate "code weight" knob. `jina-embeddings-v2-base-code` remains opt-in only: it helped some fixtures, regressed others, and indexes far slower, so it is never a default.
 
 **macOS Apple Silicon (recommended):**
 

@@ -4,6 +4,32 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+Frontier upgrade — Phase 1. Every item is **opt-in**: the default path stays lexical-only,
+in-memory, zero-dependency, with byte-identical `npm run test:eval` output and byte-identical
+memory↔sqlite top-5 parity.
+
+### Code-specialized embedding models — documented; NL vector-weight re-tune evaluated and rejected (B1)
+
+- **Code-specialized embedders are now documented as a first-class opt-in.** `qwen3-embedding`,
+  `nomic-embed-code`, and `jina-embeddings-v2-base-code` embed code semantics more faithfully than
+  the general-purpose `nomic-embed-text` default. They are selected with `--embed-model <name>`
+  (no new code — Ollama models are chosen by name) and stamped into the index meta so query and
+  document vectors always share a space. **Measured (honest):** on a clean `qwen3-embedding:16k`
+  re-embed, semantic rank-1 lifted on Go (`gin` 0.20 → 0.40, MRR 0.41 → 0.67) but was neutral on
+  Python (`django` rank-1 0.33 → 0.33) and JavaScript (`express-js` 0.43 → 0.43); it also indexes
+  substantially slower. So a code embedder is a *measure-first* opt-in, not a default.
+- **Rejected: re-weighting the NL vector channel upward for code embedders.** We implemented an
+  opt-in weight profile and swept the natural-language vector weight from 0.4 → 1.2 on
+  `gin`/`django` with `qwen3-embedding`. There was **no recall@5 gain at any weight** (gin s@5 flat
+  at 1.00, django at 0.83); rank-1 was flat-to-negative and symbolic regressed at higher weights
+  (`django` symbolic rank-1 0.72 → 0.61). The existing default weighting (`NL_VECTOR_WEIGHT_PLAIN
+  = 0.4`) is already optimal even for the stronger embedder — the vector channel's job here is
+  low-weight *rescue*, and recall is already saturated. The profile was therefore **not shipped**
+  (no placebo knob); the ranking core is unchanged. Full write-up:
+  `docs/internals/IMPROVEMENT_CODE_EMBED.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.
