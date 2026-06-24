@@ -51,9 +51,14 @@ export const DEFAULTS = Object.freeze({
 
     }),
     rerank: Object.freeze({
-        enabled: false,                // opt-in: one LLM call per natural-language query
-        model: 'qwen2.5-coder:7b',     // judge quality matters: 7B measured +50% semantic rank-1, 1.5B ~nil
-        topM: 12,                      // candidates shown to the judge to reorder
+        enabled: false,                // opt-in: one rerank pass per natural-language query
+        provider: 'generative',        // 'generative' = LLM judge (default) | 'cross-encoder' =
+                                       // local air-gapped MS-MARCO cross-encoder (no Ollama/daemon,
+                                       // deterministic, fast). Set with --rerank-provider / RERANK_PROVIDER.
+        model: 'qwen2.5-coder:7b',     // generative judge model: 7B measured +50% semantic rank-1, 1.5B ~nil
+        crossEncoderModel: 'Xenova/ms-marco-MiniLM-L-6-v2', // cross-encoder provider model
+                                       // (optional @huggingface/transformers; downloaded on first use)
+        topM: 12,                      // candidates the reranker reorders
         poolSize: 15,                  // over-fetch depth when reranking, so a correct-but-deep
                                        // hit can be RESCUED into top_k (then truncated to top_k)
     }),
@@ -194,14 +199,23 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
                 : (Number(fileEnrich.concurrency) > 0 ? Number(fileEnrich.concurrency) : DEFAULTS.enrichment.concurrency),
         }),
 
-        rerank: Object.freeze({
-            // OFF unless requested: --rerank flag, RERANK_MODEL env (naming a model
-            // implies enabling it), or the project config.
-            enabled: argv.includes('--rerank') || Boolean(env.RERANK_MODEL) || Boolean((file.rerank || {}).enabled),
-            model: env.RERANK_MODEL || (file.rerank || {}).model || DEFAULTS.rerank.model,
-            topM: Number.isInteger((file.rerank || {}).topM) ? (file.rerank || {}).topM : DEFAULTS.rerank.topM,
-            poolSize: Number.isInteger((file.rerank || {}).poolSize) ? (file.rerank || {}).poolSize : DEFAULTS.rerank.poolSize,
-        }),
+        rerank: (() => {
+            // Provider: env > --rerank-provider flag > config; validated to a known provider.
+            const provRaw = env.RERANK_PROVIDER || flagValue(argv, '--rerank-provider') || (file.rerank || {}).provider;
+            const provider = ['generative', 'cross-encoder'].includes(provRaw) ? provRaw : DEFAULTS.rerank.provider;
+            return Object.freeze({
+                // OFF unless requested: --rerank flag, RERANK_MODEL env (naming a model implies
+                // enabling it), an explicit provider (env/flag), or the project config.
+                enabled: argv.includes('--rerank') || Boolean(env.RERANK_MODEL) || Boolean(provRaw)
+                    || Boolean((file.rerank || {}).enabled),
+                provider,
+                model: env.RERANK_MODEL || (file.rerank || {}).model || DEFAULTS.rerank.model,
+                crossEncoderModel: env.RERANK_CROSS_ENCODER_MODEL || (file.rerank || {}).crossEncoderModel
+                    || DEFAULTS.rerank.crossEncoderModel,
+                topM: Number.isInteger((file.rerank || {}).topM) ? (file.rerank || {}).topM : DEFAULTS.rerank.topM,
+                poolSize: Number.isInteger((file.rerank || {}).poolSize) ? (file.rerank || {}).poolSize : DEFAULTS.rerank.poolSize,
+            });
+        })(),
 
         hyde: Object.freeze({
             enabled: Boolean((file.hyde || {}).enabled),
@@ -240,7 +254,11 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `storage     : ${backend}`,
         `embeddings  : ${emb}`,
         `enrichment  : ${config.enrichment.enabled ? `on · model=${config.enrichment.model} · provider=${config.llmProvider}` : 'off'}`,
-        `reranker    : ${config.rerank.enabled ? `on · model=${config.rerank.model} · provider=${config.llmProvider}` : 'off'}`,
+        `reranker    : ${config.rerank.enabled
+            ? (config.rerank.provider === 'cross-encoder'
+                ? `on · provider=cross-encoder · model=${config.rerank.crossEncoderModel}`
+                : `on · provider=generative · model=${config.rerank.model} · llm=${config.llmProvider}`)
+            : 'off'}`,
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
     ];
 }
@@ -260,7 +278,14 @@ export function configNotices(config) {
         out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '
             + 'regress semantic precision (measured: gin MRR 0.48→0.39 on qwen3 embeddings).');
     }
-    if (config.rerank.enabled) {
+    if (config.rerank.enabled && config.rerank.provider === 'cross-encoder') {
+        out.push('Cross-encoder reranker scores (query, candidate) pairs locally and air-gapped — '
+            + 'no LLM/daemon, deterministic, ~tens of ms per natural-language query. It needs the '
+            + "optional '@huggingface/transformers' package (first run downloads the model). It sees "
+            + 'only a candidate signature/summary line, not full code, so it sharpens near-ties rather '
+            + 'than reasoning about behaviour. Measure on your repo (`npm run test:eval -- --rerank '
+            + '--rerank-provider cross-encoder`) before adopting.');
+    } else if (config.rerank.enabled) {
         out.push('Reranker improves rank-1 for Go/Python repositories (gin: 0.20→0.40) but has shown '
             + 'regressions on JavaScript repositories (express: 0.43→0.29). Behaviour depends on '
             + 'repository language. See README for per-language benchmark data.');

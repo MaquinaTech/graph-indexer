@@ -530,7 +530,7 @@ test('vector sketch matches the exact scan top results and survives appends', ()
 });
 
 // ─── LLM rerank helpers ──────────────────────────────────────────────────────
-const { buildRerankPrompt, parseRerankResponse, rerankResults } = await import('../enrichment.mjs');
+const { buildRerankPrompt, parseRerankResponse, rerankResults, rerankCrossEncoder, crossEncoderCandidateText } = await import('../enrichment.mjs');
 
 test('parseRerankResponse extracts a clean permutation and rejects garbage', () => {
     assert.deepEqual(parseRerankResponse('3, 1, 2', 3), [2, 0, 1]);
@@ -552,6 +552,52 @@ await test('rerankResults reorders the head and keeps the tail; failures preserv
     const unchanged = await rerankResults('q', results, { topM: 3, generate: async () => null });
     assert.deepEqual(unchanged.map(r => r.chunk.name), ['a', 'b', 'c', 'd']);
 });
+
+// ─── B2: cross-encoder reranker (injectable scorer — no model in CI) ──────────
+{
+    // Distinct ids so the score-DESC / id-ASC tie-break is observable.
+    const mk = (id, fused) => ({ score: fused, chunk: { id, name: id, node_type: 'function', file_path: `src/${id}.ts`, code_snippet: `function ${id}(){}` } });
+
+    await test('B2 rerankCrossEncoder sorts by score DESC, breaks ties on id ASC, keeps the tail', async () => {
+        const results = [mk('a', 0.9), mk('b', 0.8), mk('c', 0.7), mk('d', 0.6), mk('z', 0.5)];
+        // Scorer favours c, then a tie between b and a (broken by id → 'a' before 'b'), then d.
+        const scorer = async () => [/*a*/0.5, /*b*/0.5, /*c*/0.9, /*d*/0.1];
+        const out = await rerankCrossEncoder('q', results, { topM: 4, scorer });
+        assert.deepEqual(out.map(r => r.chunk.id), ['c', 'a', 'b', 'd', 'z'],
+            'head reordered by score desc + id tie-break; unscored tail (z) preserved');
+        // Determinism: same inputs → same output.
+        const out2 = await rerankCrossEncoder('q', results, { topM: 4, scorer });
+        assert.deepEqual(out2.map(r => r.chunk.id), out.map(r => r.chunk.id));
+    });
+
+    await test('B2 rerankCrossEncoder never mutates the fused score (git-boost invariant)', async () => {
+        const results = [mk('a', 0.9), mk('b', 0.8), mk('c', 0.7)];
+        const before = results.map(r => r.score);
+        await rerankCrossEncoder('q', results, { topM: 3, scorer: async () => [0.1, 0.2, 0.3] });
+        assert.deepEqual(results.map(r => r.score), before, 'result.score must be untouched by rerank');
+    });
+
+    await test('B2 rerankCrossEncoder degrades gracefully on bad scorer output', async () => {
+        const results = [mk('a', 0.9), mk('b', 0.8), mk('c', 0.7)];
+        const orig = results.map(r => r.chunk.id);
+        const cases = [
+            async () => { throw new Error('model unreachable'); }, // throws
+            async () => [0.1, 0.2],                                 // wrong length
+            async () => [0.1, NaN, 0.3],                            // non-finite
+            async () => 'not-an-array',                             // wrong type
+        ];
+        for (const scorer of cases) {
+            const out = await rerankCrossEncoder('q', results, { topM: 3, scorer });
+            assert.deepEqual(out.map(r => r.chunk.id), orig, 'malformed scorer output preserves original order');
+        }
+    });
+
+    test('B2 crossEncoderCandidateText prefers summary → docstring → snippet', () => {
+        assert.match(crossEncoderCandidateText({ name: 'foo', class_context: 'Bar', summary: 'does the thing' }), /^Bar\.foo — does the thing/);
+        assert.match(crossEncoderCandidateText({ name: 'foo', docstring: 'doc line\nmore' }), /foo — doc line/);
+        assert.match(crossEncoderCandidateText({ name: 'foo', code_snippet: 'function foo(){\n return 1\n}' }), /foo — function foo/);
+    });
+}
 
 // ─── embeddingKeyFor ─────────────────────────────────────────────────────────
 test('embeddingKeyFor separates enriched from plain vectors deterministically', () => {

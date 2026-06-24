@@ -193,9 +193,15 @@ Everything beyond the lexical default is opt-in. The server, indexer, and daemon
 | `--embed-model qwen3-embedding:4b` | `nomic-embed-text` | A code-specialized embedder — lifts agent-style recall on Go (and some code-heavy repos); measure first | slower indexing; requires Ollama; neutral on JS/Python in our tests |
 | `--enrichment` | off | Only useful paired with `--rerank`; alone it regresses | slowest indexing |
 | `--rerank` | off | Go/Python repos with weak semantic recall; regresses JS repos | Requires an Ollama 7B model; adds query latency |
+| `--rerank --rerank-provider cross-encoder` | `generative` | Want a reranker's semantic lift with **no LLM/daemon** — air-gapped, deterministic, fast | Optional `@huggingface/transformers`; smaller lift than the 7B judge |
 | `--use-sqlite` | `auto` | Repos past ~15k chunks or memory-constrained environments | Slightly higher query latency; needs Node 22+ |
 
 For most repos, the default (lexical + stemming, no embeddings) is the right starting point. Enable embeddings when you notice the agent missing chunks it should find. Enable the reranker only on Go or Python repos after measuring whether it helps — it is known to regress JavaScript repositories.
+
+**Reranker providers.** The reranker reorders the over-fetched candidate pool on natural-language queries; two providers are available (`--rerank-provider`):
+
+- **`generative`** (default) — a local LLM judge (Ollama 7B). The strongest reranker in our benchmarks (agent-style semantic rank-1 0.19 → 0.42 across the core suites; no symbolic regression), but it needs a running model and its output is non-deterministic.
+- **`cross-encoder`** — a local MS-MARCO cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`, via the optional `@huggingface/transformers`). It scores each (query, candidate) pair and sorts. **Air-gapped, deterministic, and fast** (no Ollama/daemon; the model downloads once). It captures part of the lift — agent-style semantic rank-1 0.19 → 0.26, and notably Go (gin) 0.20 → 0.40 and Python (fastapi) 0.14 → 0.29 — but less than the 7B judge, and like all rerankers it is mixed on JavaScript. Pick it when you want a reranker without an LLM in the loop. Measure on your repo: `npm run test:eval -- --rerank --rerank-provider cross-encoder`.
 
 ### All CLI flags
 
@@ -211,7 +217,8 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--enrich-model <model>` | `qwen2.5-coder:1.5b` | Model used for enrichment. |
 | `--enrich-max <n>` | 500 | Cap on new LLM calls per index run. |
 | `--enrich-concurrency <n>` | 4 | Parallel Ollama requests during enrichment. |
-| `--rerank` | off | Enable the LLM reranker (one call per NL query). |
+| `--rerank` | off | Enable the reranker (reorders the over-fetched pool on NL queries). |
+| `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 | `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |
@@ -230,7 +237,9 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `INDEXER_MLX_BATCH_SIZE` | 32 | Texts per batch sent to the MLX subprocess (raise on large unified memory). |
 | `INDEXER_STORAGE` | `auto` | `auto` \| `memory` \| `sqlite`. |
 | `ENRICH_MODEL` | (unset) | Naming a model enables enrichment and selects it. |
-| `RERANK_MODEL` | (unset) | Naming a model enables the reranker and selects it. |
+| `RERANK_MODEL` | (unset) | Naming a model enables the (generative) reranker and selects it. |
+| `RERANK_PROVIDER` | `generative` | `generative` (LLM judge) or `cross-encoder` (local air-gapped); setting it enables reranking. |
+| `RERANK_CROSS_ENCODER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model id (downloaded on first use). |
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
 | `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |

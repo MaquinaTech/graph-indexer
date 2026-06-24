@@ -280,6 +280,100 @@ export async function rerankResults(queryText, results, { generate, topM = 8 } =
     return [...picked, ...rest, ...results.slice(topM)];
 }
 
+// ─── Cross-encoder reranker (local, air-gapped, deterministic) ───────────────
+// A second, opt-in reranker provider (rerank.provider === 'cross-encoder'). Unlike the
+// generative judge — which prompts an LLM for a permutation — a cross-encoder SCORES each
+// (query, candidate) PAIR with a small sequence-classification model and sorts by score.
+// It is local (runs through the optional @huggingface/transformers package, the same dep as
+// the in-process 'local' embedder), needs no Ollama/daemon, is deterministic, and is fast
+// (~tens of ms for a top-12 pool on CPU). It sees only a candidate's signature/summary line,
+// not full code — so it sharpens lexical-vs-semantic near-ties rather than reasoning about
+// behaviour the way a 7B judge can. The generative judge stays as the higher-reasoning tier.
+
+/**
+ * One-line textual representation of a chunk to pair against the query. Mirrors the
+ * generative judge's candidate line (name + class + summary→docstring→snippet) so both
+ * rerankers judge comparable evidence.
+ */
+export function crossEncoderCandidateText(chunk) {
+    const ctx = chunk.class_context ? `${chunk.class_context}.` : '';
+    const desc = chunk.summary
+        || (chunk.docstring || '').split('\n')[0]
+        || (chunk.code_snippet || '').split('\n').slice(0, 3).join(' ');
+    return `${ctx}${chunk.name || ''} — ${(desc || '').slice(0, 300)}`;
+}
+
+// Lazy, module-level singleton model+tokenizer (mirrors embeddings.mjs:_localPipeline). The
+// import is inside the function so the default path never loads @huggingface/transformers.
+let _xenc = null, _xencModel = null;
+async function _crossEncoderPipeline(model) {
+    if (_xenc && _xencModel === model) return _xenc;
+    let mod;
+    try { mod = await import('@huggingface/transformers'); }
+    catch {
+        throw new Error(
+            "Cross-encoder rerank needs the optional '@huggingface/transformers' package. "
+            + "Install it (`npm i @huggingface/transformers`) or set rerank.provider to 'generative'."
+        );
+    }
+    const m = await mod.AutoModelForSequenceClassification.from_pretrained(model, { quantized: true });
+    const t = await mod.AutoTokenizer.from_pretrained(model);
+    _xenc = { model: m, tokenizer: t };
+    _xencModel = model;
+    return _xenc;
+}
+
+/** Reset the cached cross-encoder pipeline (tests). */
+export function _resetCrossEncoderPipeline() { _xenc = null; _xencModel = null; }
+
+/**
+ * Score each candidate text against the query with the cross-encoder. Returns one
+ * relevance float per text, in input order (higher = more relevant).
+ *
+ * @param {string} query
+ * @param {string[]} texts
+ * @param {object} [opts]
+ * @param {string} [opts.model]  HF model id (default a MS-MARCO MiniLM cross-encoder).
+ * @returns {Promise<number[]>}
+ */
+export async function crossEncoderScore(query, texts, { model = 'Xenova/ms-marco-MiniLM-L-6-v2' } = {}) {
+    if (!texts || texts.length === 0) return [];
+    const { model: m, tokenizer: t } = await _crossEncoderPipeline(model);
+    const inputs = t(Array(texts.length).fill(query), { text_pair: texts, padding: true, truncation: true });
+    const { logits } = await m(inputs);
+    return logits.tolist().map(row => row[0]);
+}
+
+/**
+ * Cross-encoder rerank: score the leading topM candidates as (query, text) pairs, sort
+ * DESC by score with ties broken on chunk id (so the reorder is deterministic and both
+ * backends rank identically), and preserve the unscored tail. Best-effort — any scorer
+ * failure or malformed output returns the original order untouched. Never mutates the
+ * fused `score` on a result (the git-boost branch downstream relies on that).
+ *
+ * @param {string} queryText
+ * @param {Array<{score:number, chunk:object}>} results  Fused results (copy returned).
+ * @param {object} opts
+ * @param {(query:string, texts:string[])=>Promise<number[]>} opts.scorer  Injectable (tests).
+ * @param {number} [opts.topM]  How many leading results to rerank (default 12).
+ * @returns {Promise<Array<{score:number, chunk:object}>>}
+ */
+export async function rerankCrossEncoder(queryText, results, { scorer, topM = 12 } = {}) {
+    const head = results.slice(0, topM);
+    if (head.length < 2) return results;
+    let scores;
+    try { scores = await scorer(queryText, head.map(r => crossEncoderCandidateText(r.chunk))); }
+    catch { return results; }
+    if (!Array.isArray(scores) || scores.length !== head.length || scores.some(s => !Number.isFinite(s))) {
+        return results;
+    }
+    const order = head
+        .map((r, i) => ({ i, s: scores[i], id: r.chunk.id }))
+        .sort((a, b) => (b.s - a.s) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map(x => x.i);
+    return [...order.map(i => head[i]), ...results.slice(topM)];
+}
+
 /**
  * Select the chunks worth enriching.
  *

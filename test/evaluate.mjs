@@ -47,7 +47,7 @@ import { FIXTURES_DIR } from './setup.mjs';
 import { loadIndex } from './harness.mjs';
 import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery } from '../search-core.mjs';
-import { rerankResults, ollamaGenerate } from '../enrichment.mjs';
+import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate } from '../enrichment.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL, _resetSubprocesses } from '../embeddings.mjs';
 import { hydeQueryVector } from '../mcp/topology.mjs';
@@ -72,6 +72,11 @@ const verbose = args.includes('--verbose') || args.includes('-v');
 const useEmbeddings = args.includes('--embeddings');
 const useSqlite = args.includes('--use-sqlite');
 const useRerank = args.includes('--rerank');
+// Rerank provider for measurement: 'generative' (LLM judge, default) | 'cross-encoder'
+// (local air-gapped MS-MARCO cross-encoder). Mirrors config.rerank.provider.
+const rerankProvider = args.includes('--rerank-provider')
+    ? args[args.indexOf('--rerank-provider') + 1] : 'generative';
+const CROSS_ENCODER_MODEL = process.env.RERANK_CROSS_ENCODER_MODEL || 'Xenova/ms-marco-MiniLM-L-6-v2';
 // Query-side HyDE (WI3): blend a hypothetical-snippet embedding into each NL query
 // vector before fusion. Off by default → results are byte-identical to no-HyDE.
 const useHyde = args.includes('--hyde');
@@ -278,13 +283,18 @@ async function evaluateSuite(suite) {
         // Mirrors the production gate in mcp-tools: rerank only natural-language
         // queries, best-effort, original order on any failure.
         if (useRerank && isNaturalLanguageQuery(q.query)) {
-            results = await rerankResults(q.query, results, {
-                topM: RERANK_TOPM,
-                generate: (prompt) => ollamaGenerate(prompt, {
-                    model: RERANK_MODEL, ollamaHost: OLLAMA_HOST, timeoutMs: 60000,
-                    options: { temperature: 0, num_predict: 40 },
-                }),
-            });
+            results = rerankProvider === 'cross-encoder'
+                ? await rerankCrossEncoder(q.query, results, {
+                    topM: RERANK_TOPM,
+                    scorer: (qq, texts) => crossEncoderScore(qq, texts, { model: CROSS_ENCODER_MODEL }),
+                })
+                : await rerankResults(q.query, results, {
+                    topM: RERANK_TOPM,
+                    generate: (prompt) => ollamaGenerate(prompt, {
+                        model: RERANK_MODEL, ollamaHost: OLLAMA_HOST, timeoutMs: 60000,
+                        options: { temperature: 0, num_predict: 40 },
+                    }),
+                });
         }
         const names = q.expected_names || [];
         const files = q.expected_files || [];

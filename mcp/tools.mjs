@@ -12,7 +12,7 @@ import { computePageRank, isNaturalLanguageQuery } from '../search-core.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
-import { rerankResults, ollamaGenerate, mlxLmGenerate } from '../enrichment.mjs';
+import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate, mlxLmGenerate } from '../enrichment.mjs';
 import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '../git-signals.mjs';
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
 import {
@@ -242,18 +242,27 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 let rerankFailed = false;
                 if (willRerank && matches.length > 1) {
                     try {
-                        matches = await rerankResults(fullQuery, matches, {
-                            topM: Math.min(rerank?.topM ?? 12, matches.length),
-                            generate: llmProvider === 'mlx'
-                                ? (prompt) => mlxLmGenerate(prompt, { mlxLmHost, timeoutMs: 60000 })
-                                : (prompt) => ollamaGenerate(prompt, {
-                                    model: rerank?.model || 'qwen2.5-coder:7b',
-                                    ollamaHost, timeoutMs: 60000,
-                                    options: { temperature: 0, num_predict: 40 },
-                                }),
-                        });
+                        if (rerank?.provider === 'cross-encoder') {
+                            // Local air-gapped cross-encoder: scores (query, candidate) pairs and
+                            // sorts. Reuses the same over-fetched pool; deterministic; no LLM call.
+                            matches = await rerankCrossEncoder(fullQuery, matches, {
+                                topM: Math.min(rerank?.topM ?? 12, matches.length),
+                                scorer: (q, texts) => crossEncoderScore(q, texts, { model: rerank?.crossEncoderModel }),
+                            });
+                        } else {
+                            matches = await rerankResults(fullQuery, matches, {
+                                topM: Math.min(rerank?.topM ?? 12, matches.length),
+                                generate: llmProvider === 'mlx'
+                                    ? (prompt) => mlxLmGenerate(prompt, { mlxLmHost, timeoutMs: 60000 })
+                                    : (prompt) => ollamaGenerate(prompt, {
+                                        model: rerank?.model || 'qwen2.5-coder:7b',
+                                        ollamaHost, timeoutMs: 60000,
+                                        options: { temperature: 0, num_predict: 40 },
+                                    }),
+                            });
+                        }
                     } catch {
-                        // An unreachable or slow judge must degrade gracefully — never
+                        // An unreachable or slow reranker must degrade gracefully — never
                         // turn the whole search into an error. `matches` retains its
                         // pre-rerank order because the throwing await never reassigned it.
                         rerankFailed = true;

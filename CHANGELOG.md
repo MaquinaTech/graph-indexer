@@ -30,6 +30,28 @@ memory↔sqlite top-5 parity.
   (no placebo knob); the ranking core is unchanged. Full write-up:
   `docs/internals/IMPROVEMENT_CODE_EMBED.md`.
 
+### Local cross-encoder reranker provider (B2)
+
+- **`--rerank-provider cross-encoder`** (`RERANK_PROVIDER` / `rerank.provider` config) adds a
+  second, **air-gapped** reranker alongside the generative LLM judge. It scores each
+  (query, candidate) pair with a local MS-MARCO cross-encoder
+  (`Xenova/ms-marco-MiniLM-L-6-v2`, via the optional `@huggingface/transformers` — the same dep
+  as the in-process embedder) and sorts by score. No Ollama, no daemon, **deterministic**, fast
+  (~tens of ms per NL query); the model downloads once on first use.
+- **Measured (honest), core suites, lexical channel:** agent-style semantic rank-1 0.19 → 0.26
+  (held-out 0.30 → 0.35; held-out s@5 0.48 → 0.52), strongest on Go (gin 0.20 → 0.40) and Python
+  (fastapi 0.14 → 0.29). It is **weaker than the generative 7B judge** (0.42 agent-style rank-1)
+  and shows the usual reranker behaviour on JavaScript (mixed) plus a small symbolic wobble (long
+  symbolic queries that pass the NL gate). The generative judge stays the higher-reasoning tier;
+  the cross-encoder is the no-LLM-in-the-loop option. Full write-up:
+  `docs/internals/IMPROVEMENT_CROSS_ENCODER.md`.
+- Implementation: `rerankCrossEncoder` / `crossEncoderScore` in `enrichment.mjs` (sibling to the
+  generative `rerankResults`, lazy-loads transformers, deterministic score-desc/id-asc sort,
+  never mutates the fused score, degrades gracefully); dispatched in `mcp/tools.mjs` on
+  `rerank.provider`, reusing the existing over-fetch pool unchanged. Default path (provider
+  `generative`, reranker off) is byte-identical; memory↔sqlite parity unaffected. New
+  `test/unit.mjs` tests inject the scorer (no model in CI).
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.
