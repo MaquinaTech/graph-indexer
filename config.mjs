@@ -89,9 +89,11 @@ export const DEFAULTS = Object.freeze({
     }),
     rerank: Object.freeze({
         enabled: false,                // opt-in: one rerank pass per natural-language query
-        provider: 'generative',        // 'generative' = LLM judge (default) | 'cross-encoder' =
-                                       // local air-gapped MS-MARCO cross-encoder (no Ollama/daemon,
-                                       // deterministic, fast). Set with --rerank-provider / RERANK_PROVIDER.
+        provider: 'generative',        // 'generative' = LLM judge (default) | 'cross-encoder' = local
+                                       // air-gapped MS-MARCO cross-encoder (no Ollama/daemon) |
+                                       // 'late-interaction' = ColBERT-style multi-vector MaxSim (B4,
+                                       // reuses the embedder + stored doc vectors; needs --embeddings).
+                                       // Set with --rerank-provider / RERANK_PROVIDER.
         model: 'qwen2.5-coder:7b',     // generative judge model: 7B measured +50% semantic rank-1, 1.5B ~nil
         crossEncoderModel: 'Xenova/ms-marco-MiniLM-L-6-v2', // cross-encoder provider model
                                        // (optional @huggingface/transformers; downloaded on first use)
@@ -291,7 +293,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         rerank: (() => {
             // Provider: env > --rerank-provider flag > config; validated to a known provider.
             const provRaw = env.RERANK_PROVIDER || flagValue(argv, '--rerank-provider') || (file.rerank || {}).provider;
-            const provider = ['generative', 'cross-encoder'].includes(provRaw) ? provRaw : DEFAULTS.rerank.provider;
+            const provider = ['generative', 'cross-encoder', 'late-interaction'].includes(provRaw) ? provRaw : DEFAULTS.rerank.provider;
             return Object.freeze({
                 // OFF unless requested: --rerank flag, RERANK_MODEL env (naming a model implies
                 // enabling it), an explicit provider (env/flag), or the project config.
@@ -351,7 +353,9 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `reranker    : ${config.rerank.enabled
             ? (config.rerank.provider === 'cross-encoder'
                 ? `on · provider=cross-encoder · model=${config.rerank.crossEncoderModel}`
-                : `on · provider=generative · model=${config.rerank.model} · llm=${config.llmProvider}`)
+                : config.rerank.provider === 'late-interaction'
+                    ? 'on · provider=late-interaction · ColBERT-style multi-vector MaxSim (needs --embeddings)'
+                    : `on · provider=generative · model=${config.rerank.model} · llm=${config.llmProvider}`)
             : 'off'}`,
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
@@ -451,6 +455,14 @@ export function configNotices(config) {
             + 'only a candidate signature/summary line, not full code, so it sharpens near-ties rather '
             + 'than reasoning about behaviour. Measure on your repo (`npm run test:eval -- --rerank '
             + '--rerank-provider cross-encoder`) before adopting.');
+    } else if (config.rerank.enabled && config.rerank.provider === 'late-interaction') {
+        out.push('Late-interaction (ColBERT-style) reranker scores the query MULTI-vectors against '
+            + 'each candidate\'s stored document sub-vectors with MaxSim — air-gapped (the same local '
+            + 'embedder), deterministic, parity-safe, with NO storage blow-up (it reuses the vectors '
+            + '--embeddings already stores). It REQUIRES --embeddings (no doc vectors ⇒ no-op) and '
+            + 'approximates true token-level ColBERT with a sentence embedder over query sub-units. '
+            + 'Measure on your repo (`npm run test:eval -- --embeddings --rerank '
+            + '--rerank-provider late-interaction`) before adopting.');
     } else if (config.rerank.enabled) {
         out.push('Reranker improves rank-1 for Go/Python repositories (gin: 0.20→0.40) but has shown '
             + 'regressions on JavaScript repositories (express: 0.43→0.29). Behaviour depends on '

@@ -509,6 +509,9 @@ export class SqliteGraphStore {
     /** Whether opt-in learned-sparse associations (B3 --learned-sparse) are loaded. */
     hasSparseModel() { return this._hasSparseModel; }
 
+    /** Path to the shared `.embeddings.bin` (B4 late-interaction reranker reads candidate vectors from it). */
+    embeddingBinPath() { return this._embeddingPath; }
+
     /** Parse the single learned-sparse payload once, then memoize. Mirrors MemoryGraphIndex._sparseModel. */
     _loadSparseModel() {
         if (!this._hasSparseModel) return null;

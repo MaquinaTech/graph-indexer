@@ -614,6 +614,9 @@ export class MemoryGraphIndex {
     /** Whether opt-in learned-sparse associations (B3 --learned-sparse) are loaded. */
     hasSparseModel() { return this._sparseModel != null; }
 
+    /** Path to the shared `.embeddings.bin` (B4 late-interaction reranker reads candidate vectors from it). */
+    embeddingBinPath() { return this._embeddingPath; }
+
     // ─── Persistence ───────────────────────────────────────────────────────────
 
     async save() {

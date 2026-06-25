@@ -13,6 +13,7 @@ import { getParserForFile } from '../parse/languages.mjs';
 import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
 import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate, mlxLmGenerate } from '../enrichment.mjs';
+import { encodeMultiVector, rerankLateInteraction } from '../colbert.mjs';
 import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '../git-signals.mjs';
 import { egressGuardActive } from '../seal.mjs';
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
@@ -285,6 +286,17 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                             matches = await rerankCrossEncoder(fullQuery, matches, {
                                 topM: Math.min(rerank?.topM ?? 12, matches.length),
                                 scorer: (q, texts) => crossEncoderScore(q, texts, { model: rerank?.crossEncoderModel }),
+                            });
+                        } else if (rerank?.provider === 'late-interaction') {
+                            // B4 ColBERT-style late interaction: encode the query into multi-vectors
+                            // with the SAME local embedder, then MaxSim-rerank against each candidate's
+                            // stored doc sub-vectors. Air-gapped, deterministic, parity-safe; a no-op
+                            // (original order) without --embeddings (no embedder / no doc vectors).
+                            const qVecs = embedder ? await encodeMultiVector(embedder, fullQuery) : [];
+                            matches = rerankLateInteraction(matches, {
+                                qVecs,
+                                binPath: db.embeddingBinPath?.(),
+                                topM: Math.min(rerank?.topM ?? 12, matches.length),
                             });
                         } else {
                             matches = await rerankResults(fullQuery, matches, {

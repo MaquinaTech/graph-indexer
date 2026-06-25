@@ -66,6 +66,44 @@ export function readEmbeddingBinary(filePath) {
 }
 
 /**
+ * B4 — read ONLY the requested keys' vectors from an `.embeddings.bin` in ONE pass, materialising a
+ * Float32Array only for matched keys (so it never holds the whole corpus in memory — but it does read
+ * the file once and scans until every requested key is found, which for sparsely-present keys means
+ * to end-of-file). The late-interaction reranker uses this to fetch a small candidate set's stored
+ * sub-vectors IDENTICALLY for both backends (same file, same keys) → parity-by-construction. Returns
+ * the matches as Map<key, Float32Array>; missing keys are simply absent.
+ *
+ * @param {string} filePath  the `.embeddings.bin` path
+ * @param {Set<string>} keys  the exact keys to extract (base / `|s` / `|wN` embedding keys)
+ * @returns {Map<string, Float32Array>}
+ */
+export function collectVectorsByKey(filePath, keys) {
+    const out = new Map();
+    if (!keys || keys.size === 0 || !fs.existsSync(filePath)) return out;
+    const buf = fs.readFileSync(filePath);
+    if (buf.length < 4) return out;
+    // A corrupt (not merely truncated) bin can push `off` past the buffer; any decode error returns
+    // the partial Map so callers honour the "missing keys are simply absent / never throws" contract.
+    try {
+        let off = 0;
+        const count = buf.readUInt32LE(off); off += 4;
+        for (let i = 0; i < count && out.size < keys.size; i++) {
+            const hashLen = buf.readUInt32LE(off); off += 4;
+            const hash = buf.subarray(off, off + hashLen).toString('utf8'); off += hashLen;
+            const dim = buf.readUInt32LE(off); off += 4;
+            if (keys.has(hash)) {
+                const vec = new Float32Array(dim);
+                for (let d = 0; d < dim; d++) { vec[d] = buf.readFloatLE(off); off += 4; }
+                out.set(hash, vec);
+            } else {
+                off += dim * 4;   // skip the float payload
+            }
+        }
+    } catch { /* corrupt framing — return whatever was decoded cleanly */ }
+    return out;
+}
+
+/**
  * Append embedding entries to an `.embeddings.bin` file in place (creating it if
  * absent) and return the absolute float-data offset of each appended entry.
  * The leading uint32 entry count is updated so readEmbeddingBinary stays valid.

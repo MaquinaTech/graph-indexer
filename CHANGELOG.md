@@ -15,9 +15,11 @@ symbol-level **centrality** (A4/A5), a **precise resolver** + cross-file **SCIP*
 with a runtime egress guard and **signed attestation** (F1), **taint analysis** (`trace_taint` /
 `find_tainted_sinks`) with index-time serialization across JS/TS/Python/Java/Go (C2), an opt-in
 **learned ranker** (D3, measured a tie — RRF stays the default), **SCIP-backed precise cross-file
-references** for `find_references` (A2 v2), and an opt-in **learned-sparse** vocabulary-expansion
-channel (B3, measured net-neutral — lexical stays the default). Every capability ships behind a
-flag + env + config key with the trade-off printed at startup; nothing changes the default path.
+references** for `find_references` (A2 v2), an opt-in **learned-sparse** vocabulary-expansion
+channel (B3, measured net-neutral — lexical stays the default), and a **ColBERT-style
+late-interaction reranker** (B4, measured helps-Go / neutral-JS at production depth — opt-in, default
+off). Every capability ships behind a flag + env + config key with the trade-off printed at startup;
+nothing changes the default path.
 
 ### Code-specialized embedding models — documented; NL vector-weight re-tune evaluated and rejected (B1)
 
@@ -292,6 +294,35 @@ store primitives — no ranking, parity, or default-path impact.
   a repo with genuine query/code vocabulary mismatch (which the benchmark fixtures lack) may see the
   recall win — *measure on your own repo*. Full write-up:
   `docs/internals/IMPROVEMENT_LEARNED_SPARSE.md`.
+
+### ColBERT-style late-interaction reranker — opt-in, measured helps-Go / neutral-JS (B4)
+
+- **`--rerank-provider late-interaction`** adds a third reranker provider (sibling to the generative
+  judge and the B2 cross-encoder): the multi-vector **MaxSim** idea from ColBERT, deployed as a
+  reranker over the over-fetched pool. It keeps MULTIPLE vectors per side and scores
+  `Σ_qi max_dj cos(qi, dj)`, so each query sub-vector finds its best document sub-vector — the
+  compositional-query win single-vector pooling loses. New module `colbert.mjs` (`maxSimScore`,
+  `encodeMultiVector`, `loadChunkVectors`, `rerankLateInteraction`) + `collectVectorsByKey` in
+  `engine/binary.mjs` + `embeddingBinPath()` on both engines; `test/colbert.mjs` (6 tests).
+- **No storage blow-up** (ColBERT's canonical cost): it reuses the document sub-vectors the engine
+  ALREADY stores (base + `|s` summary + `|wN` windows), reading a candidate's vectors from the shared
+  `.embeddings.bin` in one pass. **Air-gapped** (query multi-vectors from the same local embedder, no
+  new model/network), **parity-by-construction** (both backends read the same bin; MaxSim is
+  order-independent → identical re-order), and a post-retrieval re-order that **never mutates
+  `r.score`** and degrades to the original order on any shortfall → **default path byte-identical**.
+- **Honest measurement (at production retrieval depth):** a reranker can only re-order the pool it is
+  handed, so the measurement uses production's over-fetch (pool 15 / topM 12; the harness default of
+  10/8 manufactured a *false* JS regression that vanishes at the right depth). On real Ollama indexes,
+  `gin` (Go) improves — semantic rank-1 **0.00 → 0.40**, overall **0.68 → 0.77**, with **no symbolic
+  regression** (0.88 → 0.88) — while `express-js` (JS) is **neutral** (every metric unchanged: overall
+  0.65, semantic rank-1 0.43, s@5 0.57). **At production depth B4 helps Go and is neutral on
+  JavaScript — the "helps Go/Python" half of the known reranker profile without the JS regression the
+  other rerankers show.** Small-n (gin semantic n=5), so directional. It still needs a query-time
+  model and does not uniformly win across languages, so it stays opt-in (default off), the trade-off
+  is printed at startup, and the default path is byte-identical. Requires `--embeddings` (a no-op
+  without it). Approximates true token-level ColBERT with a sentence embedder over query sub-units; a
+  token-level model is a clean future drop-in behind `encodeMultiVector`. Full write-up:
+  `docs/internals/IMPROVEMENT_LATE_INTERACTION.md`.
 
 ### Taint analysis hardening — index-time serialization + Java/Go (C2)
 

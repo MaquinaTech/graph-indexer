@@ -203,10 +203,11 @@ Everything beyond the lexical default is opt-in. The server, indexer, and daemon
 
 For most repos, the default (lexical + stemming, no embeddings) is the right starting point. Enable embeddings when you notice the agent missing chunks it should find. Enable the reranker only on Go or Python repos after measuring whether it helps — it is known to regress JavaScript repositories.
 
-**Reranker providers.** The reranker reorders the over-fetched candidate pool on natural-language queries; two providers are available (`--rerank-provider`):
+**Reranker providers.** The reranker reorders the over-fetched candidate pool on natural-language queries; three providers are available (`--rerank-provider`):
 
 - **`generative`** (default) — a local LLM judge (Ollama 7B). The strongest reranker in our benchmarks (agent-style semantic rank-1 0.19 → 0.42 across the core suites; no symbolic regression), but it needs a running model and its output is non-deterministic.
 - **`cross-encoder`** — a local MS-MARCO cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`, via the optional `@huggingface/transformers`). It scores each (query, candidate) pair and sorts. **Air-gapped, deterministic, and fast** (no Ollama/daemon; the model downloads once). It captures part of the lift — agent-style semantic rank-1 0.19 → 0.26, and notably Go (gin) 0.20 → 0.40 and Python (fastapi) 0.14 → 0.29 — but less than the 7B judge, and like all rerankers it is mixed on JavaScript. Pick it when you want a reranker without an LLM in the loop. Measure on your repo: `npm run test:eval -- --rerank --rerank-provider cross-encoder`.
+- **`late-interaction`** (B4) — a **ColBERT-style multi-vector MaxSim** reranker. It encodes the query into several vectors (the whole query + content sub-units, via the same local embedder) and scores `Σ_qi max_dj cos(qi, dj)` against each candidate's stored document sub-vectors — **no storage blow-up** (it reuses the base/summary/window vectors `--embeddings` already writes), air-gapped, deterministic, parity-safe. **Requires `--embeddings`** (a no-op without it). Measured at production retrieval depth: **helps Go** (gin semantic rank-1 0.00 → 0.40, overall 0.68 → 0.77, no symbolic regression) and **neutral on JavaScript** (express unchanged) — the "helps Go/Python" half of the reranker profile without the JS regression. Approximates true token-level ColBERT with a sentence embedder. Measure on your repo: `npm run test:eval -- --embeddings --rerank --rerank-provider late-interaction`.
 
 ### All CLI flags
 
@@ -223,7 +224,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--enrich-max <n>` | 500 | Cap on new LLM calls per index run. |
 | `--enrich-concurrency <n>` | 4 | Parallel Ollama requests during enrichment. |
 | `--rerank` | off | Enable the reranker (reorders the over-fetched pool on NL queries). |
-| `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
+| `--rerank-provider <generative\|cross-encoder\|late-interaction>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama); `late-interaction` = ColBERT-style multi-vector MaxSim over the stored doc vectors (needs `--embeddings`; air-gapped, deterministic, no storage blow-up; measured helps-Go / neutral-JS at production depth). |
 | `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Also computes symbol-level centrality (confidence-weighted PageRank over the edges), surfaced by `explain_symbol` and `get_repo_map`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--taint` | off | Precompute and serialize the taint flow set (C2) at index time, so `trace_taint` / `find_tainted_sinks` answer instantly instead of walking the call graph per query. Computed against the symbol-graph edges when `--symbol-graph` is on (cross-function precision), else `chunk.calls`. Both backends serve byte-identical flows; default index byte-identical; air-gapped. |
@@ -254,7 +255,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `INDEXER_STORAGE` | `auto` | `auto` \| `memory` \| `sqlite`. |
 | `ENRICH_MODEL` | (unset) | Naming a model enables enrichment and selects it. |
 | `RERANK_MODEL` | (unset) | Naming a model enables the (generative) reranker and selects it. |
-| `RERANK_PROVIDER` | `generative` | `generative` (LLM judge) or `cross-encoder` (local air-gapped); setting it enables reranking. |
+| `RERANK_PROVIDER` | `generative` | `generative` (LLM judge), `cross-encoder` (local air-gapped), or `late-interaction` (ColBERT-style MaxSim, needs embeddings); setting it enables reranking. |
 | `RERANK_CROSS_ENCODER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model id (downloaded on first use). |
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_INTERPROCEDURAL` | (off) | `on` enables the index-time inter-procedural receiver-type fixpoint (`--interprocedural`). |

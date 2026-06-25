@@ -48,6 +48,7 @@ import { loadIndex } from './harness.mjs';
 import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
 import { isNaturalLanguageQuery, learnedRerank, DEFAULT_RANKER_MODEL } from '../search-core.mjs';
 import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate } from '../enrichment.mjs';
+import { encodeMultiVector, rerankLateInteraction } from '../colbert.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL, _resetSubprocesses } from '../embeddings.mjs';
 import { hydeQueryVector } from '../mcp/topology.mjs';
@@ -237,6 +238,8 @@ async function evaluateSuite(suite) {
     // dims mismatch and the vector channel silently no-ops to lexical-only.
     let queryVectors = null;
     let queryProvider = null;
+    // B4 late-interaction reranker: a query-side multi-vector embedder, created once per suite.
+    let lateEmbedder = null;
     if (useEmbeddings) {
         if (db.vectorCount() === 0) {
             return { META: suite.META, error: 'no embeddings in index — re-index with INDEXER_EMBEDDINGS=on' };
@@ -270,6 +273,13 @@ async function evaluateSuite(suite) {
                 if (raw) queryVectors.set(q.id, await hydeQueryVector(q.query, raw, { embedder, generate: gen }));
             }
         }
+        if (useRerank && rerankProvider === 'late-interaction') {
+            const { provider, model } = queryProvider;
+            lateEmbedder = await createEmbedder(
+                { ollamaHost: OLLAMA_HOST, localEmbedModel: model, embedModel: model },
+                { provider, model },
+            );
+        }
     }
 
     // Sweep knobs (harness only): retrieve deeper than 10 so the reranker can
@@ -297,6 +307,12 @@ async function evaluateSuite(suite) {
                 ? await rerankCrossEncoder(q.query, results, {
                     topM: RERANK_TOPM,
                     scorer: (qq, texts) => crossEncoderScore(qq, texts, { model: CROSS_ENCODER_MODEL }),
+                })
+                : rerankProvider === 'late-interaction'
+                ? rerankLateInteraction(results, {
+                    qVecs: lateEmbedder ? await encodeMultiVector(lateEmbedder, q.query) : [],
+                    binPath: db.embeddingBinPath?.(),
+                    topM: RERANK_TOPM,
                 })
                 : await rerankResults(q.query, results, {
                     topM: RERANK_TOPM,
