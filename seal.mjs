@@ -80,6 +80,14 @@ export function egressingFeatures(config) {
                 target: 'model CDN (first-run download)',
                 remedy: 'pre-warm the model cache offline, or drop --embeddings under sealed mode',
             });
+        } else if (p === 'code-local') {
+            // Same in-process @huggingface/transformers path as 'local' — the code model is
+            // fetched from the model CDN on the FIRST run (air-gapped only once cached).
+            out.push({
+                feature: 'embeddings (code-local code-specialized)', reach: 'remote',
+                target: 'model CDN (first-run download)',
+                remedy: 'pre-warm the code model cache offline, or drop --embeddings under sealed mode',
+            });
         } else if (p === 'mlx') {
             out.push({
                 feature: 'embeddings (mlx subprocess)', reach: 'loopback',

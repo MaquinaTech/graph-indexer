@@ -31,6 +31,16 @@ const PYTHON_DIR = join(__dirname, 'embedders', 'python');
 
 export const LOCAL_EMBED_MODEL_DEFAULT = 'Xenova/all-MiniLM-L6-v2';
 export const LOCAL_EMBED_DIM = 384;
+// Code-specialized in-process embedder (provider 'code-local'). Same optional
+// @huggingface/transformers feature-extraction path as the general-purpose 'local'
+// MiniLM, but a model trained on code semantics (identifiers, call patterns, type
+// names) where MiniLM is weakest. jina-embeddings-v2-base-code is 768-dim, MIT, ships
+// first-party ONNX (transformers.js reads it directly, no trust_remote_code), supports
+// an 8192-token context, and is ~160 MB (q8 quantized) on first download (air-gapped thereafter).
+// Override with --code-embed-model / INDEXER_CODE_EMBED_MODEL (e.g. the Xenova mirror
+// `Xenova/jina-embeddings-v2-base-code`, or `Xenova/codet5p-110m-embedding`).
+export const CODE_EMBED_MODEL_DEFAULT = 'jinaai/jina-embeddings-v2-base-code';
+export const CODE_EMBED_DIM = 768; // informational only — dim is derived lazily from the first vector.
 // Passed to the Python server at spawn time (argv) AND stamped into the .meta.json
 // sidecar so index time and query time always agree; the indexer's model-change
 // detection forces a clean re-embed when this differs. Override via config.mlxEmbedModel.
@@ -80,12 +90,13 @@ export async function localEmbedAvailable() {
 /**
  * Decide which provider to use for THIS index/run.
  *   • INDEXER_EMBEDDINGS=off / embedProvider 'off' → no vectors (lexical-only).
- *   • 'ollama' / 'local' / 'mlx'                    → forced (mlx is a native Python
- *     embedder on the Apple Metal GPU; macOS-only).
+ *   • 'ollama' / 'local' / 'code-local' / 'mlx'     → forced (code-local is the
+ *     in-process code-specialized embedder; mlx is a native Python embedder on the
+ *     Apple Metal GPU, macOS-only).
  *   • 'auto' (default) → running Ollama, else the bundled local model, else off.
  * Probes are injectable for deterministic tests.
  *
- * @returns {Promise<{provider:'ollama'|'local'|'mlx'|'off', model:(string|null)}>}
+ * @returns {Promise<{provider:'ollama'|'local'|'code-local'|'mlx'|'off', model:(string|null)}>}
  */
 export async function resolveEmbedProvider(config, { probe = probeOllama, hasLocal = localEmbedAvailable, hasModel = ollamaHasModel } = {}) {
     if (config.embeddingsEnabled === false) return { provider: 'off', model: null };
@@ -94,6 +105,9 @@ export async function resolveEmbedProvider(config, { probe = probeOllama, hasLoc
     if (want === 'off') return { provider: 'off', model: null };
     if (want === 'ollama') return { provider: 'ollama', model: config.embedModel };
     if (want === 'local') return { provider: 'local', model: localModel };
+    // code-local: forced, in-process, code-specialized. Never reached by `auto` (it
+    // is an explicit opt-in — `auto` stays MiniLM so the no-config path is unchanged).
+    if (want === 'code-local') return { provider: 'code-local', model: config.codeEmbedModel || CODE_EMBED_MODEL_DEFAULT };
     if (want === 'mlx') { assertProviderPlatform('mlx'); return { provider: 'mlx', model: config.mlxEmbedModel || MLX_EMBED_MODEL }; }
     // Prefer Ollama only when it actually HAS the configured model pulled — otherwise
     // the indexer would crash on the first batch. Fall back to in-process, then off.
@@ -172,6 +186,66 @@ async function _localEmbedMany(model, texts) {
 
 /** Reset the cached local pipeline (tests). */
 export function _resetLocalPipeline() { _pipe = null; _pipeModel = null; }
+
+// Code-specialized in-process embedder (provider 'code-local'). A SEPARATE lazy
+// singleton from _localPipeline so a code-local and a plain-local run in the same
+// process don't evict each other's model. The import lives inside the function, so
+// the default path (lexical / `auto` → MiniLM) NEVER loads the code model — it is
+// pulled only when 'code-local' is actually selected and a vector is requested.
+// `_codeLoads` lets tests prove that lazy-load contract without a network call.
+let _codePipe = null, _codePipeModel = null, _codeLoads = 0;
+async function _codeLocalPipeline(model) {
+    if (_codePipe && _codePipeModel === model) return _codePipe;
+    let mod;
+    try { mod = await import('@huggingface/transformers'); }
+    catch {
+        throw new Error(
+            "The code-local embedder needs the optional '@huggingface/transformers' package. "
+            + "Install it (`npm i @huggingface/transformers`) or set embedProvider to 'ollama'/'local'/'off'."
+        );
+    }
+    // q8 quantized weights: a 161M-param code model is ~4× faster on CPU at q8 with
+    // negligible recall loss (the same quantized-ONNX choice the cross-encoder makes),
+    // which is what makes an in-process code embedder practical on a laptop. transformers.js
+    // falls back to fp32 automatically if a model ships no quantized ONNX.
+    _codePipe = await mod.pipeline('feature-extraction', model, { dtype: 'q8' });
+    _codePipeModel = model;
+    _codeLoads++;
+    return _codePipe;
+}
+async function _codeLocalEmbedMany(model, texts) {
+    const pipe = await _codeLocalPipeline(model);
+    // jina-code is symmetric (no nomic-style query/document prefixes); mean-pool +
+    // normalize, identical handling to the MiniLM path, so cache keys / windowing are
+    // unchanged. The 8000-char cap matches search-core's EMBEDDING_CONTEXT_LIMIT.
+    const out = await pipe(
+        texts.map(t => (t.length > DOC_CHAR_LIMIT ? t.slice(0, DOC_CHAR_LIMIT) : t)),
+        { pooling: 'mean', normalize: true }
+    );
+    return out.tolist();
+}
+/** Reset the cached code-local pipeline (tests). */
+export function _resetCodeLocalPipeline() { _codePipe = null; _codePipeModel = null; }
+/** Number of times the code-local model has been lazy-loaded (tests: lazy-load contract). */
+export function _codeLocalPipelineLoads() { return _codeLoads; }
+
+/**
+ * Should the cached vectors be discarded before this run? True only when the previous
+ * build's embed-meta records a DIFFERENT model than the embedder about to run. Vectors
+ * of different models/dims must never be mixed in one `.bin` — a 768-dim code-local
+ * vector and a 384-dim MiniLM vector under the same cache would silently no-op the
+ * dense channel for the mismatched dim (scan/sketch skip a wrong-dim entry). Model name
+ * is the pre-embed signal (the actual dim is unknown until the first vector returns), so
+ * switching `--embed-provider local` → `code-local` forces a clean re-embed rather than a
+ * silent half-empty index.
+ *
+ * @param {object|null} prevMeta  The prior `.embeddings.bin.meta.json` ({ provider, model, dim }).
+ * @param {string|null} model     The model the current embedder will use.
+ * @returns {boolean}
+ */
+export function embedModelChanged(prevMeta, model) {
+    return Boolean(prevMeta?.model && model && prevMeta.model !== model);
+}
 
 // ─── Native Python embedder (mlx) ────────────────────────────────────────────
 // MLX (Apple Metal) is Python-first with no Node bindings, so it runs as a long-lived
@@ -400,6 +474,7 @@ export function _resetSubprocesses() {
 /** Canonical model id for a forced provider when no explicit model is supplied. */
 function defaultModelForProvider(provider, config) {
     if (provider === 'local') return config.localEmbedModel || LOCAL_EMBED_MODEL_DEFAULT;
+    if (provider === 'code-local') return config.codeEmbedModel || CODE_EMBED_MODEL_DEFAULT;
     if (provider === 'mlx') return config.mlxEmbedModel || MLX_EMBED_MODEL;
     return config.embedModel;
 }
@@ -411,10 +486,11 @@ function defaultModelForProvider(provider, config) {
  *
  * @param {object} config
  * @param {object} [opts]
- * @param {'ollama'|'local'|'mlx'|'off'} [opts.provider]  Force a provider (e.g.
- *        the one stamped in the index meta). When omitted, resolveEmbedProvider decides.
+ * @param {'ollama'|'local'|'code-local'|'mlx'|'off'} [opts.provider]  Force a provider
+ *        (e.g. the one stamped in the index meta). When omitted, resolveEmbedProvider decides.
  * @param {string} [opts.model]
- * @param {object} [opts.backends]  Inject { ollamaEmbedOne, ollamaEmbedMany, localEmbedMany } (tests).
+ * @param {object} [opts.backends]  Inject { ollamaEmbedOne, ollamaEmbedMany, localEmbedMany,
+ *        codeLocalEmbedMany } (tests).
  * @returns {Promise<{provider:string, model:(string|null), dim:(number|null),
  *                     embedQuery:(t:string)=>Promise<number[]|null>,
  *                     embedDocuments:(t:string[])=>Promise<number[][]|null>}>}
@@ -429,6 +505,7 @@ export async function createEmbedder(config, opts = {}) {
     const ollamaOne = b.ollamaEmbedOne || _ollamaEmbedOne;
     const ollamaMany = b.ollamaEmbedMany || _ollamaEmbedMany;
     const localMany = b.localEmbedMany || _localEmbedMany;
+    const codeLocalMany = b.codeLocalEmbedMany || _codeLocalEmbedMany;
     // Derive dim lazily from the first returned vector. Pre-setting LOCAL_EMBED_DIM=384
     // mis-stamps models whose dim isn't 384 (e.g. jina-embeddings-v2-base-code = 768)
     // into the .meta.json before the first embed call.
@@ -443,7 +520,8 @@ export async function createEmbedder(config, opts = {}) {
                 if (v && dim == null) dim = v.length;
                 return v ?? null;
             }
-            const [v] = await localMany(model, [text]);
+            const many = provider === 'code-local' ? codeLocalMany : localMany;
+            const [v] = await many(model, [text]);
             if (v && dim == null) dim = v.length;
             return v ?? null;
         } catch { return null; } // graceful: caller drops to lexical
@@ -454,6 +532,7 @@ export async function createEmbedder(config, opts = {}) {
         let vecs;
         if (provider === 'ollama') vecs = await _withRetry(() => ollamaMany(host, model, texts));
         else if (provider === 'mlx') vecs = await _subprocessEmbedMany(provider, texts, model);
+        else if (provider === 'code-local') vecs = await codeLocalMany(model, texts);
         else vecs = await localMany(model, texts);
         if (vecs && vecs[0] && dim == null) dim = vecs[0].length;
         return vecs;
@@ -484,6 +563,7 @@ export function writeEmbedMeta(embeddingPath, meta) {
 export function describeEmbedder({ provider, model } = {}) {
     if (provider === 'ollama') return `🧠 Ollama · ${model}`;
     if (provider === 'local') return `🧠 Local (in-process) · ${model}`;
+    if (provider === 'code-local') return `🧠 Code-local (in-process, code-specialized) · ${model}`;
     if (provider === 'mlx') return `🧠 MLX (Apple Metal) · ${model}`;
     return '🔤 Lexical only';
 }

@@ -21,15 +21,20 @@ export const DEFAULTS = Object.freeze({
     embeddings: false,                 // OFF by default — lexical + stemming need zero dependencies.
                                        // Opt in with --embeddings or INDEXER_EMBEDDINGS=on.
     embedProvider: 'auto',
-    // 'auto'   → Ollama (if running w/ the model) → in-process local → lexical-only
-    // 'ollama' → force Ollama daemon   (requires: ollama serve + pulled model)
-    // 'local'  → in-process Xenova     (requires: npm i @huggingface/transformers)
-    // 'mlx'    → Apple Metal GPU       (requires: npm run embed:setup:mlx; macOS only)
-    // 'off'    → lexical-only, no vectors
+    // 'auto'      → Ollama (if running w/ the model) → in-process local → lexical-only
+    // 'ollama'    → force Ollama daemon   (requires: ollama serve + pulled model)
+    // 'local'     → in-process Xenova MiniLM (requires: npm i @huggingface/transformers)
+    // 'code-local'→ in-process code-specialized embedder (jina-code; same optional dep as
+    //               'local'; ~160 MB q8 first download, air-gapped after) — sharper code recall
+    // 'mlx'       → Apple Metal GPU       (requires: npm run embed:setup:mlx; macOS only)
+    // 'off'       → lexical-only, no vectors
     embedModel: 'nomic-embed-text',    // default Ollama embed model when embeddings are enabled.
                                        // qwen3-embedding:4b is a documented opt-in upgrade
                                        // (--embed-model / EMBED_MODEL), never a hardcoded default.
     localEmbedModel: 'Xenova/all-MiniLM-L6-v2', // in-process model (optional @huggingface/transformers)
+    codeEmbedModel: 'jinaai/jina-embeddings-v2-base-code', // in-process CODE-specialized model for
+                                       // provider 'code-local' (768-dim, MIT, 8192-token context).
+                                       // Override with --code-embed-model / INDEXER_CODE_EMBED_MODEL.
     mlxEmbedModel: 'mlx-community/all-MiniLM-L6-v2-4bit', // MLX embedder model (provider 'mlx').
                                        // Override with --mlx-embed-model / INDEXER_MLX_EMBED_MODEL;
                                        // must be an mlx_embeddings-compatible sentence model.
@@ -264,6 +269,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         // This is the model `auto`/`ollama` providers pull (e.g. qwen3-embedding:4b).
         embedModel: flagValue(argv, '--embed-model') || env.EMBED_MODEL || file.embedModel || DEFAULTS.embedModel,
         localEmbedModel: file.localEmbedModel || DEFAULTS.localEmbedModel,
+        // Code-specialized in-process model (provider 'code-local'): --code-embed-model flag >
+        // INDEXER_CODE_EMBED_MODEL env > config > jina-code default. Stamped into the embed-meta
+        // so query time and index time agree, and a model switch forces a clean re-embed.
+        codeEmbedModel: flagValue(argv, '--code-embed-model') || env.INDEXER_CODE_EMBED_MODEL
+            || file.codeEmbedModel || DEFAULTS.codeEmbedModel,
         // MLX embedder model: --mlx-embed-model flag > INDEXER_MLX_EMBED_MODEL env >
         // config > pinned MiniLM default. Passed to the Python server + stamped in meta.
         mlxEmbedModel: flagValue(argv, '--mlx-embed-model') || env.INDEXER_MLX_EMBED_MODEL
@@ -339,10 +349,11 @@ export function getConfig() {
  * @returns {string[]}
  */
 export function describeConfig(config, { backend = config.storage } = {}) {
-    // Show the model that the chosen provider actually loads (mlx/local use their own).
+    // Show the model that the chosen provider actually loads (mlx/local/code-local use their own).
     const provModel = config.embedProvider === 'mlx' ? config.mlxEmbedModel
         : config.embedProvider === 'local' ? config.localEmbedModel
-            : config.embedModel;
+            : config.embedProvider === 'code-local' ? config.codeEmbedModel
+                : config.embedModel;
     const emb = config.embeddingsEnabled
         ? `on · provider=${config.embedProvider}, model=${provModel}`
         : 'off (lexical + stemming only)';
@@ -388,6 +399,17 @@ export function configNotices(config) {
             + 'The build refused to start if any enabled feature would egress beyond the tier. '
             + 'The in-process guard (sockets/http/fetch) is airtight; the child_process denylist is '
             + 'best-effort. Run `idx-index --attest` for the signed-able manifest.');
+    }
+    if (config.embeddingsEnabled && config.embedProvider === 'code-local') {
+        out.push(`Code-specialized embedder (code-local): the dense channel is built in-process by `
+            + `${config.codeEmbedModel} — a CODE-trained model (identifiers, call patterns, type names) `
+            + 'that sharpens semantic recall on typed languages where the general-purpose MiniLM is '
+            + 'weakest. It needs the optional \'@huggingface/transformers\' package; the quantized '
+            + '(q8) model is ~160 MB on the FIRST run (downloaded once, then fully air-gapped — no daemon, no network). '
+            + 'It is slower per chunk than MiniLM and produces 768-dim vectors — switching to it from '
+            + 'another provider forces a clean re-embed (vectors of different models must not be mixed). '
+            + 'Pair with the persistent embed cache to pay the embedding cost only once. Measure on '
+            + 'YOUR repo (`npm run test:eval -- --embeddings --embed-provider code-local`) before adopting.');
     }
     if (config.interprocedural) {
         out.push('Inter-procedural receiver types are resolved at index time (a whole-program pass). '

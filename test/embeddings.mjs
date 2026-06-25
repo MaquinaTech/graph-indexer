@@ -20,6 +20,8 @@ import {
     readEmbedMeta, writeEmbedMeta, embedMetaPath, describeEmbedder,
     LOCAL_EMBED_DIM, _resetLocalPipeline,
     MLX_EMBED_MODEL,
+    CODE_EMBED_MODEL_DEFAULT, CODE_EMBED_DIM, embedModelChanged,
+    _resetCodeLocalPipeline, _codeLocalPipelineLoads,
 } from '../embeddings.mjs';
 import {
     embeddingWindows, baseEmbeddingKey, EMBEDDING_CONTEXT_LIMIT, EMBEDDING_MAX_WINDOWS,
@@ -106,6 +108,84 @@ test('platform guard: mlx is macOS-only', async () => {
 test('embeddings disabled forces off even for mlx (before the platform guard)', async () => {
     // off short-circuits first, so this holds on every platform without an override.
     assert.equal((await resolveEmbedProvider({ ...baseConfig, embeddingsEnabled: false, embedProvider: 'mlx' })).provider, 'off');
+});
+
+// ── Code-specialized in-process embedder: code-local ─────────────────────────
+// Deterministic (no model download): provider resolution, the model id, routing
+// isolation, the meta the indexer stamps, and the model-switch re-embed signal.
+// A final gated test embeds with the REAL code model when the optional dep is present.
+
+test('forced code-local resolves to the code model id (default + user override)', async () => {
+    // The resolved model is passed to the in-process pipeline AND stamped into the
+    // embed-meta sidecar, so switching it must trigger a clean re-embed.
+    assert.deepEqual(
+        await resolveEmbedProvider({ ...baseConfig, embedProvider: 'code-local' }, { probe: down, hasLocal: down }),
+        { provider: 'code-local', model: CODE_EMBED_MODEL_DEFAULT });
+    assert.deepEqual(
+        await resolveEmbedProvider({ ...baseConfig, embedProvider: 'code-local', codeEmbedModel: 'Xenova/codet5p-110m-embedding' }, { probe: down, hasLocal: down }),
+        { provider: 'code-local', model: 'Xenova/codet5p-110m-embedding' });
+});
+
+test('code-local skips probing and never reached by auto', async () => {
+    // forced: resolves even with Ollama up and no local dep (it has its own backend).
+    assert.equal((await resolveEmbedProvider({ ...baseConfig, embedProvider: 'code-local' }, { probe: up, hasLocal: down })).provider, 'code-local');
+    // auto stays MiniLM-or-Ollama — code-local is an explicit opt-in, never auto-selected.
+    assert.equal((await resolveEmbedProvider({ ...baseConfig, embedProvider: 'auto' }, { probe: down, hasLocal: up })).provider, 'local');
+});
+
+test('embeddings disabled forces off even for code-local (default path never loads the code model)', async () => {
+    assert.equal((await resolveEmbedProvider({ ...baseConfig, embeddingsEnabled: false, embedProvider: 'code-local' })).provider, 'off');
+});
+
+test('createEmbedder routes code-local to the code backend, learns its 768-dim, and isolates it from local', async () => {
+    _resetCodeLocalPipeline();
+    const loadsBefore = _codeLocalPipelineLoads();
+    const calls = { code: 0, local: 0 };
+    const backends = {
+        // Inject both backends; assert ONLY the code backend is exercised for code-local.
+        codeLocalEmbedMany: async (m, texts) => { calls.code++; return texts.map(() => new Array(768).fill(0.1)); },
+        localEmbedMany: async () => { calls.local++; throw new Error('local backend must not be called for code-local'); },
+    };
+    const e = await createEmbedder(baseConfig, { provider: 'code-local', model: CODE_EMBED_MODEL_DEFAULT, backends });
+    assert.equal(e.provider, 'code-local');
+    assert.equal(e.model, CODE_EMBED_MODEL_DEFAULT);
+    const q = await e.embedQuery('parse a JWT');
+    assert.equal(q.length, 768);
+    const docs = await e.embedDocuments(['a', 'b']);
+    assert.equal(docs.length, 2);
+    assert.equal(e.dim, CODE_EMBED_DIM, 'dim learned lazily from the first code-local vector (768)');
+    assert.equal(calls.local, 0, 'local backend never touched by code-local');
+    assert.ok(calls.code >= 1);
+    // Injected backend means the REAL @huggingface/transformers pipeline never loaded.
+    assert.equal(_codeLocalPipelineLoads(), loadsBefore, 'no real code model load when a backend is injected');
+});
+
+test('code-local meta is what the indexer stamps (provider/model/dim)', async () => {
+    // Mirrors indexer.mjs:writeEmbedMeta — { provider, model, dim } off the embedder.
+    const backends = { codeLocalEmbedMany: async (m, texts) => texts.map(() => new Array(768).fill(0.2)) };
+    const e = await createEmbedder(baseConfig, { provider: 'code-local', backends });
+    await e.embedDocuments(['x']); // learn dim
+    const tmp = path.join(os.tmpdir(), `codemeta-${process.pid}.bin`);
+    writeEmbedMeta(tmp, { provider: e.provider, model: e.model, dim: e.dim });
+    assert.deepEqual(readEmbedMeta(tmp), { provider: 'code-local', model: CODE_EMBED_MODEL_DEFAULT, dim: 768 });
+    fs.rmSync(tmp + '.meta.json', { force: true });
+});
+
+test('embedModelChanged: a prior local (384-dim) build re-embeds under code-local; same model reuses cache', () => {
+    const prevLocal = { provider: 'local', model: 'Xenova/all-MiniLM-L6-v2', dim: 384 };
+    // local → code-local: model name differs → discard cache (avoids a silent dim no-op).
+    assert.equal(embedModelChanged(prevLocal, CODE_EMBED_MODEL_DEFAULT), true);
+    // same model on both runs → cache reused (byte-identical incremental path).
+    assert.equal(embedModelChanged({ model: CODE_EMBED_MODEL_DEFAULT }, CODE_EMBED_MODEL_DEFAULT), false);
+    // no prior build, or unknown current model → never force a needless re-embed.
+    assert.equal(embedModelChanged(null, CODE_EMBED_MODEL_DEFAULT), false);
+    assert.equal(embedModelChanged(prevLocal, null), false);
+});
+
+test('describeEmbedder labels code-local distinctly from local', () => {
+    assert.match(describeEmbedder({ provider: 'code-local', model: 'jinaai/jina-embeddings-v2-base-code' }), /Code-local/);
+    // not confusable with the general-purpose local label
+    assert.doesNotMatch(describeEmbedder({ provider: 'code-local', model: 'x' }), /^🧠 Local \(in-process\)/);
 });
 
 test('createEmbedder routes to the resolved backend and learns dim', async () => {
@@ -262,4 +342,33 @@ test('real local model embeds with the expected dim and sane geometry', async ()
     ]);
     const cos = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * b[i]; return d; };
     assert.ok(cos(q, related) > cos(q, unrelated), 'auth query is closer to the auth doc than the math doc');
+});
+
+// ── Real code-local model (gated on the optional dependency + cached weights) ──
+// Proves the LAZY-LOAD contract end-to-end: the code model loads ONLY here (when
+// code-local is actually selected and a vector is requested), produces code-specialized
+// 768-dim vectors with sane geometry, and is a SEPARATE singleton from the MiniLM path.
+test('real code-local model: lazy-loads on first use, 768-dim, sane code geometry', async () => {
+    if (!(await localEmbedAvailable())) { console.log('  ⚠️  @huggingface/transformers not installed — skipping real code-local test'); return; }
+    _resetCodeLocalPipeline();
+    const before = _codeLocalPipelineLoads();
+    // Creating the embedder must NOT load the model (lazy): no vector requested yet.
+    const e = await createEmbedder(baseConfig, { provider: 'code-local', model: CODE_EMBED_MODEL_DEFAULT });
+    assert.equal(_codeLocalPipelineLoads(), before, 'code model not loaded until a vector is requested');
+
+    let q;
+    try { q = await e.embedQuery('validate a JWT bearer token in an HTTP middleware'); }
+    catch (err) { console.log(`  ⚠️  code model unavailable offline (${err.message}) — skipping`); return; }
+    if (!q) { console.log('  ⚠️  code model returned no vector (offline?) — skipping'); return; }
+
+    assert.equal(q.length, CODE_EMBED_DIM, 'code model produces 768-dim vectors');
+    assert.equal(e.dim, CODE_EMBED_DIM);
+    assert.equal(_codeLocalPipelineLoads(), before + 1, 'model lazy-loaded exactly once on first use');
+
+    const [code, math] = await e.embedDocuments([
+        'function authenticate(req) { return verifyJwt(req.headers.authorization); }',
+        'def median(xs): xs = sorted(xs); return xs[len(xs)//2]',
+    ]);
+    const cos = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * b[i]; return d; };
+    assert.ok(cos(q, code) > cos(q, math), 'auth query closer to the auth code than to the math code');
 });

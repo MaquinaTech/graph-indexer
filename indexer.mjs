@@ -18,7 +18,7 @@ import { extractRoutes } from './parse/routes.mjs';
 import { resolveLocalImports, buildEmbeddingPayload, fullBodyForEmbedding } from './parse/imports.mjs';
 import { readEmbeddingBinary, writeEmbeddingBinary } from './engine/binary.mjs';
 import { embeddingKeyFor, summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows } from './search-core.mjs';
-import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta, _resetSubprocesses } from './embeddings.mjs';
+import { createEmbedder, describeEmbedder, readEmbedMeta, writeEmbedMeta, embedModelChanged, _resetSubprocesses } from './embeddings.mjs';
 import { resolveConfig, describeConfig, configNotices } from './config.mjs';
 import { AUTO_SQLITE_CHUNK_THRESHOLD } from './storage.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
@@ -157,9 +157,10 @@ async function main() {
 
     let existingCache = readEmbeddingBinary(EMBEDDINGS_PATH);
     // A model switch invalidates the cached vectors — vectors of different models
-    // (and dims) must never be mixed in one bin. Re-embed from scratch.
+    // (and dims) must never be mixed in one bin. Re-embed from scratch. (e.g. switching
+    // `--embed-provider local` → `code-local`: 384-dim MiniLM → 768-dim jina-code.)
     const prevMeta = readEmbedMeta(EMBEDDINGS_PATH);
-    if (prevMeta?.model && embedder.model && prevMeta.model !== embedder.model) {
+    if (embedModelChanged(prevMeta, embedder.model)) {
         console.log(`⚠️  Embedding model changed (${prevMeta.model} → ${embedder.model}); re-embedding from scratch.`);
         existingCache = new Map();
     }
