@@ -11,6 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import { artifactPaths, CONFIG_FILE_NAME, DATA_DIR_NAME } from './layout.mjs';
+import { assertSealCompatible } from './seal.mjs';
 
 export const DEFAULTS = Object.freeze({
     // 'auto' keeps the index in memory below AUTO_SQLITE_CHUNK_THRESHOLD chunks and
@@ -48,6 +49,11 @@ export const DEFAULTS = Object.freeze({
                                        // findReferers read it when present (identical sets, fall back to scan).
                                        // Air-gapped, deterministic; default index byte-identical; search
                                        // ranking unaffected. Enable with --symbol-graph / INDEXER_SYMBOL_GRAPH.
+    sealed: 'off',                     // Sealed mode (F1): 'off' (default) | 'local' (loopback only) |
+                                       // 'strict' (zero network egress; lexical-only). Fail-closed:
+                                       // refuses to start if an enabled feature would egress beyond the
+                                       // tier, and installs a deny-by-default runtime egress guard.
+                                       // --sealed [strict|local] / INDEXER_SEALED.
     resolver: 'heuristic',             // Resolver provider for the symbol graph (A1). 'heuristic' (default):
                                        // edges stay { high, name_only } — byte-identical. 'precise': lift
                                        // provably-unambiguous edges (sole definition / type-pinned receiver)
@@ -184,10 +190,22 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
     const resolverRaw = flagValue(argv, '--resolver') || env.INDEXER_RESOLVER || file.resolver || DEFAULTS.resolver;
     const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic') ? resolverRaw : 'heuristic';
 
+    // Sealed mode (F1). flag > env > file > default. A bare `--sealed` (no value, or followed by
+    // another flag) means strict; `--sealed local` opts into the loopback tier; env 'on' → strict.
+    const sealedFlagPresent = argv.includes('--sealed');
+    const sealedFlagVal = sealedFlagPresent ? flagValue(argv, '--sealed') : undefined;
+    let sealedRaw;
+    if (sealedFlagPresent) sealedRaw = (sealedFlagVal && !sealedFlagVal.startsWith('--')) ? sealedFlagVal : 'strict';
+    else if (env.INDEXER_SEALED) sealedRaw = env.INDEXER_SEALED;
+    else sealedRaw = typeof file.sealed === 'string' ? file.sealed : DEFAULTS.sealed;
+    const sealed = sealedRaw === 'on' ? 'strict'
+        : (['strict', 'local', 'off'].includes(sealedRaw) ? sealedRaw : 'off');
+
     const paths = artifactPaths(projectRoot);
 
-    return Object.freeze({
+    const resolved = Object.freeze({
         projectRoot,
+        sealed,
         storage,
         dataDir: paths.dataDir,
         indexPath: paths.indexPath,
@@ -254,6 +272,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
             model: (file.hyde || {}).model || DEFAULTS.hyde.model,
         }),
     });
+
+    // F1: fail-closed. If --sealed was requested and an enabled feature would egress beyond the
+    // tier, throw here so a sealed-incompatible config can never be constructed (no-op when off).
+    assertSealCompatible(resolved);
+    return resolved;
 }
 
 // Memoised singleton for import-time consumers (e.g. parse/languages.mjs language loading).
@@ -295,6 +318,8 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
         `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier' : 'heuristic (default)'}`,
+        `sealed mode : ${config.sealed === 'strict' ? '🔒 strict · zero network egress (enforced)'
+            : config.sealed === 'local' ? '🔒 local · loopback only (enforced)' : 'off'}`,
     ];
 }
 
@@ -309,6 +334,13 @@ export function describeConfig(config, { backend = config.storage } = {}) {
  */
 export function configNotices(config) {
     const out = [];
+    if (config.sealed === 'strict' || config.sealed === 'local') {
+        out.push(`Sealed mode (${config.sealed}): a deny-by-default egress guard is installed — `
+            + `${config.sealed === 'strict' ? 'NO network connections are permitted' : 'only loopback connections are permitted'}. `
+            + 'The build refused to start if any enabled feature would egress beyond the tier. '
+            + 'The in-process guard (sockets/http/fetch) is airtight; the child_process denylist is '
+            + 'best-effort. Run `idx-index --attest` for the signed-able manifest.');
+    }
     if (config.interprocedural) {
         out.push('Inter-procedural receiver types are resolved at index time (a whole-program pass). '
             + 'The watch daemon updates one file at a time and does NOT re-run the fixpoint, so '

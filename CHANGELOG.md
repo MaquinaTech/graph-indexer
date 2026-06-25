@@ -188,6 +188,29 @@ store primitives — no ranking, parity, or default-path impact.
   require a Rust CLI sidecar (rejected for v1). `test/edges.mjs` adds 5 tests; full write-up:
   `docs/internals/IMPROVEMENT_PRECISE_RESOLVER.md`.
 
+### Sealed mode (F1) — Phase 3
+
+- **`--sealed [strict|local]`** (`INDEXER_SEALED`) turns graph-indexer's air-gapped default from a
+  behaviour you *trust* into a guarantee you can *verify and enforce*. Two tiers: **`strict`** =
+  zero network egress (lexical-only); **`local`** = loopback only (local Ollama/MLX on this box are
+  allowed, nothing leaves it). Bare `--sealed` = `strict`.
+- **Fail-closed**: `resolveConfig` refuses to construct a sealed config whose enabled features would
+  egress beyond the tier — the build exits 2 with a message naming each offending feature
+  (embeddings/enrichment/rerank/hyde), its reach (loopback vs off-box), and the remedy. No silent
+  downgrade.
+- **Runtime egress guard**: a deny-by-default hook on the in-process network paths (`net`/`tls`
+  sockets, `http(s)`, `fetch`) installed before any provider loads, so even an *accidental* call is
+  caught — turning "we don't call out" into "we *can't*." A best-effort `child_process` denylist
+  covers the obvious out-of-process egress tools (documented limitation: a child has its own socket
+  layer). `list_index_stats` reports `sealed` + `egress_guard: active`.
+- **Attestation**: `idx-index --attest` prints a deterministic manifest (tier, providers, egress
+  posture, any egressing features) — an auditor/CI artifact for regulated/air-gapped deployments.
+- **Opt-in, zero default impact**: `sealed: 'off'` default; sealing only *removes* capability
+  (fail-closed), never changes the store or ranking. The default lexical path is already
+  strict-compatible. New module `seal.mjs`; `test/seal.mjs` adds 11 tests (loopback classifier,
+  per-tier validation, guard block/permit/restore, child denylist, manifest, resolveConfig
+  fail-close). Design: `docs/internals/PHASE3_SEALED_MODE.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

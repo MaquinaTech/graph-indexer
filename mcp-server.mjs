@@ -23,8 +23,19 @@ import { createStore } from './storage.mjs';
 import { registerTools } from './mcp/tools.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import { loadGitSignals } from './git-signals.mjs';
+import { installEgressGuard } from './seal.mjs';
 
-const config = resolveConfig();
+let config;
+try {
+    config = resolveConfig();
+} catch (err) {
+    if (err && err.name === 'SealViolation') { process.stderr.write(`🔒 ${err.message}\n`); process.exit(2); }
+    throw err;
+}
+// F1: install the deny-by-default egress guard before the store / embedder / providers load.
+if (config.sealed !== 'off') {
+    installEgressGuard({ allow: config.sealed === 'local' ? ['loopback'] : [] });
+}
 const PROJECT_ROOT = config.projectRoot;
 const PID_FILE = config.pidFile;
 const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -166,6 +177,7 @@ registerTools(server, db, {
     mlxLmHost: config.mlxLmHost,
     gitSignals,
     gitRankBoost: config.gitRankBoost,
+    sealed: config.sealed,
 });
 
 const transport = new StdioServerTransport();

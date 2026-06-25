@@ -1,7 +1,10 @@
-# Phase 3 design — F1: Sealed Mode
+# Phase 3 — F1: Sealed Mode
 
-> **Status: DESIGN ONLY. Nothing here is implemented.** Interface stubs are illustrative
-> signatures, not code. This is a forward-looking spec to be planned + approved before any work.
+> **Status: IMPLEMENTED** (`seal.mjs`, `config.mjs`, `indexer.mjs`, `mcp-server.mjs`,
+> `mcp/tools.mjs`; `test/seal.mjs`). This doc is the original design; it matches what shipped.
+> Two notes vs the first sketch: (1) the `local` tier forbids the cross-encoder and local-MiniLM
+> embedders because both reach a model CDN off-box on first run; (2) `--attest` is implemented as
+> an `idx-index` flag (no separate binary).
 
 ## One line
 

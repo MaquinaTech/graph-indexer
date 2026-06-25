@@ -24,8 +24,30 @@ import { AUTO_SQLITE_CHUNK_THRESHOLD } from './storage.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { enrichCoreChunks } from './enrichment.mjs';
 import { collectGitSignals, writeGitSignals } from './git-signals.mjs';
+import { installEgressGuard, sealManifest } from './seal.mjs';
 
-const config = resolveConfig();
+// resolveConfig fail-closes on a sealed-incompatible config (throws SealViolation); surface it
+// as a clean exit rather than an unhandled rejection.
+let config;
+try {
+    config = resolveConfig();
+} catch (err) {
+    if (err && err.name === 'SealViolation') { console.error(`🔒 ${err.message}`); process.exit(2); }
+    throw err;
+}
+
+// `idx-index --attest`: print the deterministic seal manifest and exit (no indexing).
+if (process.argv.includes('--attest')) {
+    console.log(JSON.stringify(sealManifest(config), null, 2));
+    process.exit(0);
+}
+
+// F1: install the deny-by-default egress guard BEFORE any provider (embedder/enricher) loads, so
+// even provider initialisation cannot reach the network under a sealed tier.
+if (config.sealed !== 'off') {
+    installEgressGuard({ allow: config.sealed === 'local' ? ['loopback'] : [] });
+}
+
 const PROJECT_ROOT = config.projectRoot;
 const INDEX_PATH = config.indexPath;
 const EMBEDDINGS_PATH = config.embeddingPath;

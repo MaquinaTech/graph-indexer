@@ -14,6 +14,7 @@ import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
 import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate, mlxLmGenerate } from '../enrichment.mjs';
 import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '../git-signals.mjs';
+import { egressGuardActive } from '../seal.mjs';
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
 import {
     assessConfidence, hydeQueryVector, buildHydePrompt, detectRepoLanguage,
@@ -116,7 +117,7 @@ function refCard({ chunk, recvHint, reason, confidence }) {
  * @param {object|null} [opts.gitSignals] Loaded git-signals sidecar (churn/recency/co-change), or null.
  * @param {number} [opts.gitRankBoost]    0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged).
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', llmProvider = 'ollama', mlxLmHost = 'http://localhost:8080', gitSignals = null, gitRankBoost = 0 }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', llmProvider = 'ollama', mlxLmHost = 'http://localhost:8080', gitSignals = null, gitRankBoost = 0, sealed = 'off' }) {
 
     // Scoped here (not module-level) so multiple servers in one process don't cross-contaminate.
     // `undefined` = not yet detected; `null` = unknown (→ generic prompt).
@@ -1167,6 +1168,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         embeddings_enabled: Boolean(embeddingsEnabled),
                         embedder: embedder ? { provider: embedder.provider, model: embedder.model, dim: embedder.dim ?? null } : null,
                         lazy_mode: s.lazyMode,
+                        sealed: sealed,
+                        egress_guard: sealed === 'off' ? 'off' : (egressGuardActive() ? 'active' : 'requested'),
                         daemon_running: daemonRunning,
                         index_age_seconds: ageSeconds,
                         freshness: {
@@ -1190,6 +1193,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     `| **Vector entries** | ${s.vectors} |`,
                     `| **Search mode** | ${searchMode} |`,
                     `| **Lazy vec mode** | ${s.lazyMode ? '✅ Yes (enterprise scale)' : '❌ No (small corpus)'} |`,
+                    ...(sealed !== 'off' ? [`| **Sealed mode** | 🔒 ${sealed} · egress guard ${egressGuardActive() ? 'active' : 'requested'} |`] : []),
                     `| **Daemon** | ${daemonStatus} |`,
                     `| **Index age** | ${indexAge} |`,
                     `| **Built at commit** | ${fresh.indexedCommit || '—'}${fresh.commitMoved ? ` (HEAD now ${fresh.currentCommit})` : ''} |`,
