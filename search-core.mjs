@@ -295,6 +295,43 @@ export function bm25Score(idf, tf, docLen, avgdl, k1 = BM25_K1, b = BM25_B) {
     return idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * docLen / avgdl));
 }
 
+/**
+ * B3 — score the learned-sparse expansion channel: a weighted-term retrieval over the EXISTING BM25
+ * postings, used identically by both backends so the channel is parity-by-construction.
+ *
+ * PARITY INVARIANT (do not break): each chunk receives EXACTLY ONE addend per associate term, so a
+ * chunk's final float sum is the cross-term accumulation in `termWeights`' iteration order — which is
+ * deterministic and identical across backends (expandSparseQuery rebuilds the Map sorted: weight desc,
+ * term asc). The INNER getPostings(term) order legitimately differs between backends (memory Map vs
+ * SQL rows) and is parity-IRRELEVANT precisely because the keys within one term are distinct (one
+ * scores.set per chunk per term). Never accumulate within a term, or emit a chunk twice for one term.
+ *
+ * The backends differ only in HOW postings are reached (in-memory Map vs SQL), injected as accessors:
+ *   getDf(term)            → document frequency (0 ⇒ skip the term)
+ *   getPostings(term)      → iterable of [chunkId, tf]
+ *   getDocLen(chunkId)     → that chunk's BM25 doc length (falls back to avgdl)
+ *
+ * @param {Iterable<[string, number]>} termWeights  associate term → fusion weight (ordered)
+ * @param {{docCount:number, avgdl:number, getDf:Function, getPostings:Function, getDocLen:Function}} acc
+ * @returns {Array<{id:string, score:number, rank:number}>}  ranked, capped, id-tie-broken
+ */
+export function scoreSparseExpanded(termWeights, { docCount, avgdl, getDf, getPostings, getDocLen }) {
+    const scores = new Map();
+    for (const [term, weight] of termWeights) {
+        const dfreq = getDf(term);
+        if (!dfreq) continue;
+        const idf = okapiIdf(docCount, dfreq);
+        for (const [chunkId, tf] of getPostings(term)) {
+            const dl = getDocLen(chunkId) ?? avgdl;
+            scores.set(chunkId, (scores.get(chunkId) || 0) + weight * bm25Score(idf, tf, dl, avgdl));
+        }
+    }
+    return Array.from(scores.entries())
+        .sort((a, b) => (b[1] - a[1]) || (a[0] < b[0] ? -1 : 1))   // id tie-break: backend parity
+        .slice(0, LEXICAL_FUSION_CAP)
+        .map(([id, score], rank) => ({ id, score, rank: rank + 1 }));
+}
+
 // ─── Hybrid fusion (RRF + boost ladder) ────────────────────────────────────────
 
 // Lexical candidates handed to fusion — shared by BOTH backends. An asymmetric
@@ -368,6 +405,20 @@ const NL_LEXICAL_WEIGHT = 1.5;
 const NL_VECTOR_WEIGHT_PLAIN = 0.4;
 const NL_VECTOR_WEIGHT_ENRICHED = 0.6;
 
+// B3 learned-sparse channel weight. The sparse channel is the corpus-learned vocabulary EXPANSION
+// view (associate terms the literal query never mentions); it only fires for NL queries on a
+// --learned-sparse index, so it never touches symbolic lookups or the default path.
+//
+// HONEST MEASUREMENT (strict test:eval, 5 core suites, in-process A/B — see the weight sweep in
+// IMPROVEMENT_LEARNED_SPARSE.md): the channel does NOT beat the lexical baseline at any weight.
+// Higher weights (0.5/0.3) REGRESS semantic s@5 (the co-occurrence associates add noise that buries
+// correct hits); the best case is ≈neutral at 0.2 (semantic + symbolic rank-1 both unchanged,
+// overall s@5 −0.5). Like BM25F / AST / the code-embedding NL weight before it, this measured
+// net-neutral-to-negative, so the DEFAULT stays lexical (B3 ships opt-in via --learned-sparse only).
+// 0.2 is the measured least-harmful active setting for users who opt in / whose corpus has the
+// vocabulary mismatch the benchmark fixtures lack.
+const NL_SPARSE_WEIGHT = 0.2;
+
 const QUERY_STOPWORDS = new Set([
     'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'for', 'on', 'with', 'at',
     'by', 'from', 'that', 'this', 'is', 'are', 'was', 'were', 'be', 'how', 'what',
@@ -424,7 +475,7 @@ export const EXAMPLE_DIR_RE = /^(?:[^/\\]+[/\\])?(?:examples?|samples?|demos?|tu
 export function fuseAndRank({
     lexicalResults, vectorResults, getChunk, getPathTokens, getDf,
     docCount, rrfK, topK, queryText, exactBoostName = null, resolveExact = null,
-    corpusEnriched = false,
+    corpusEnriched = false, sparseResults = [],
 }) {
     const rrfScores = new Map();
     const K = rrfK;
@@ -501,9 +552,12 @@ export function fuseAndRank({
     const queryIsStyle = exactBoostName != null ||
         /[.#]|css|scss|stylesheet|selector|\bstyle\b|\bclass\b|color|margin|padding|font|border|background|hover|keyframe|animation|mixin|breakpoint|responsive|\bwidth\b|\bheight\b/.test(queryLower);
 
+    // B3 learned-sparse channel (opt-in, presence + NL gated by the caller). When the caller passes
+    // no sparse candidates the spread contributes nothing → byte-identical to the default path.
     const allResults = [
         ...vectorResults.map(r => ({ ...r, _w: wVec })),
         ...lexicalResults.map(r => ({ ...r, _w: wLex })),
+        ...sparseResults.map(r => ({ ...r, _w: NL_SPARSE_WEIGHT })),
     ];
 
     for (const { id, rank, _w } of allResults) {

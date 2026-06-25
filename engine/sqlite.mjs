@@ -29,8 +29,9 @@ import fs from 'fs';
 import {
     tokenize, okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
-    isNaturalLanguageQuery, baseEmbeddingKey,
+    isNaturalLanguageQuery, baseEmbeddingKey, scoreSparseExpanded,
 } from '../search-core.mjs';
+import { expandSparseQuery } from '../search-sparse.mjs';
 import {
     writeEmbeddingBinary, appendEmbeddingBinary, scanEmbeddingBinary,
     updateVectorSketch, searchVectorSketch, SKETCH_THRESHOLD,
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS edges (from_chunk_id TEXT, to_chunk_id TEXT, kind TEX
 CREATE TABLE IF NOT EXISTS centrality (chunk_id TEXT, score REAL, rank INTEGER);
 CREATE TABLE IF NOT EXISTS taint (id INTEGER PRIMARY KEY, payload TEXT);
 CREATE TABLE IF NOT EXISTS scip_refs (id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE IF NOT EXISTS sparse_model (id INTEGER PRIMARY KEY, payload TEXT);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
 CREATE TABLE IF NOT EXISTS routes (
   id INTEGER PRIMARY KEY,
@@ -143,6 +145,8 @@ export class SqliteGraphStore {
         this._hasTaint = false; // C2: serialized taint flows present (opt-in --taint)
         this._hasScipRefs = false; // A2 v2: SCIP precise references present (opt-in --resolver scip)
         this._scipRefsObj = null;  // lazily-parsed `{ defId: [refId,…] }` payload (memoized)
+        this._hasSparseModel = false; // B3: learned-sparse model present (opt-in --learned-sparse)
+        this._sparseModelObj = null;  // lazily-parsed `{ assoc: {…} }` payload (memoized)
     }
 
     get backend() { return 'sqlite'; }
@@ -195,6 +199,7 @@ export class SqliteGraphStore {
         this._refreshHasCentrality();
         this._refreshHasTaint();
         this._refreshHasScipRefs();
+        this._refreshHasSparseModel();
         this._dataVersion = this._readDataVersion();
         return this;
     }
@@ -229,6 +234,15 @@ export class SqliteGraphStore {
             this._hasScipRefs = Boolean(row && row.n > 0);
         } catch { this._hasScipRefs = false; }
         this._scipRefsObj = null;   // drop any memoized payload — the row may have changed
+    }
+
+    /** Whether opt-in learned-sparse associations (B3 --learned-sparse) are present. */
+    _refreshHasSparseModel() {
+        try {
+            const row = this.db.prepare('SELECT COUNT(*) AS n FROM sparse_model').get();
+            this._hasSparseModel = Boolean(row && row.n > 0);
+        } catch { this._hasSparseModel = false; }
+        this._sparseModelObj = null;   // drop any memoized payload — the row may have changed
     }
 
     _openVecFd() {
@@ -376,6 +390,7 @@ export class SqliteGraphStore {
         // C2 serialized taint flows — a single JSON payload row (id = 0).
         this._stmtTaint = this.db.prepare('SELECT payload FROM taint WHERE id = 0');
         this._stmtScipRefs = this.db.prepare('SELECT payload FROM scip_refs WHERE id = 0');
+        this._stmtSparseModel = this.db.prepare('SELECT payload FROM sparse_model WHERE id = 0');
     }
 
     _prepareWrite() {
@@ -490,6 +505,20 @@ export class SqliteGraphStore {
 
     /** How many definitions carry SCIP precise references (A2 v2). 0 when not loaded. */
     scipRefCount() { return this._hasScipRefs ? Object.keys(this._loadScipRefs()).length : 0; }
+
+    /** Whether opt-in learned-sparse associations (B3 --learned-sparse) are loaded. */
+    hasSparseModel() { return this._hasSparseModel; }
+
+    /** Parse the single learned-sparse payload once, then memoize. Mirrors MemoryGraphIndex._sparseModel. */
+    _loadSparseModel() {
+        if (!this._hasSparseModel) return null;
+        if (!this._sparseModelObj) {
+            const row = this._stmtSparseModel.get();
+            try { this._sparseModelObj = row && row.payload ? JSON.parse(row.payload) : null; }
+            catch { this._sparseModelObj = null; }
+        }
+        return this._sparseModelObj;
+    }
 
     /**
      * Symbol centrality (A5) for one chunk. Mirrors MemoryGraphIndex.getCentrality — same
@@ -679,6 +708,11 @@ export class SqliteGraphStore {
             .slice(0, LEXICAL_FUSION_CAP)
             .map(([id, score], i) => ({ id, score, rank: i + 1 }));
 
+        // B3 learned-sparse channel: opt-in (model present) + NL-asymmetric. Shares scoreSparseExpanded
+        // with the in-memory engine over identically-ordered terms → byte-identical to memory. [] when
+        // inert (no model / symbolic query / no association) → fusion byte-identical to the default path.
+        const sparseResults = this._searchSparseExpanded(queryText);
+
         // Stream the FULL embeddings bin (bounded buffers) so conceptual queries
         // that share no tokens with the code can still match — scoring only lexical
         // candidates silently disabled semantic search where it mattered most.
@@ -740,10 +774,33 @@ export class SqliteGraphStore {
         };
 
         return fuseAndRank({
-            lexicalResults, vectorResults, getChunk, getPathTokens, getDf,
+            lexicalResults, vectorResults, sparseResults, getChunk, getPathTokens, getDf,
             docCount: this._docCount, rrfK: this.rrfK, topK, queryText, exactBoostName,
             corpusEnriched: this._corpusEnriched,
             resolveExact: (term) => this._stmtIdByName.all(term).map(r => r.id),
+        });
+    }
+
+    /**
+     * B3 — the learned-sparse expansion channel (NL queries, model present). Mirrors
+     * MemoryGraphIndex._searchSparseExpanded: identical expansion + the shared scoreSparseExpanded
+     * scorer over identically-ordered terms → byte-identical to memory. Returns [] when inert.
+     */
+    _searchSparseExpanded(queryText) {
+        if (!this._hasSparseModel || !isNaturalLanguageQuery(queryText)) return [];
+        const model = this._loadSparseModel();
+        const termWeights = model && expandSparseQuery(queryText, model);
+        if (!termWeights) return [];
+        const avgdl = this._avgdl;
+        const docLenCache = new Map();
+        return scoreSparseExpanded(termWeights, {
+            docCount: this._docCount,
+            avgdl,
+            getDf: (t) => { const r = this._stmtDf.get(t); return r ? r.df : 0; },
+            // .map() materialises the postings AND populates the doc-len cache before scoring iterates,
+            // so getDocLen always resolves without a second query.
+            getPostings: (t) => this._stmtPosting.all(t).map(r => { docLenCache.set(r.id, r.doc_len); return [r.id, r.tf]; }),
+            getDocLen: (id) => docLenCache.get(id) ?? avgdl,
         });
     }
 
@@ -830,6 +887,7 @@ export class SqliteGraphStore {
             if (this._hasCentrality) { this.db.exec('DELETE FROM centrality'); this._hasCentrality = false; this._centralityTotal = 0; }
             if (this._hasTaint) { this.db.exec('DELETE FROM taint'); this._hasTaint = false; }
             if (this._hasScipRefs) { this.db.exec('DELETE FROM scip_refs'); this._hasScipRefs = false; this._scipRefsObj = null; }
+            if (this._hasSparseModel) { this.db.exec('DELETE FROM sparse_model'); this._hasSparseModel = false; this._sparseModelObj = null; }
 
             // Capture reusable vector offsets BEFORE deleting old rows, which may
             // be the only rows that hold those offsets.
@@ -923,7 +981,7 @@ export class SqliteGraphStore {
      * @param {{dependencies:Object<string,string[]>}} payload.graph
      * @param {Map<string,Float32Array>|object} [payload.embeddingCache]  Keyed by embeddingKeyFor(chunk).
      */
-    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null, taint = null, scipRefs = null }) {
+    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null, taint = null, scipRefs = null, sparseModel = null }) {
         this._open();
         this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
@@ -957,7 +1015,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
             DROP TABLE IF EXISTS routes; DROP TABLE IF EXISTS edges;
             DROP TABLE IF EXISTS centrality; DROP TABLE IF EXISTS taint;
-            DROP TABLE IF EXISTS scip_refs;
+            DROP TABLE IF EXISTS scip_refs; DROP TABLE IF EXISTS sparse_model;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -1052,6 +1110,12 @@ export class SqliteGraphStore {
         // exactly like taint. find_references reads it for the cross-file `resolved` reference tier.
         if (scipRefs && typeof scipRefs === 'object' && Object.keys(scipRefs).length) {
             this.db.prepare('INSERT INTO scip_refs (id, payload) VALUES (0, ?)').run(JSON.stringify(scipRefs));
+        }
+
+        // B3 learned-sparse model (opt-in --learned-sparse). A single JSON payload (id = 0); both
+        // backends parse identical bytes → parity-free, exactly like taint/scip_refs.
+        if (sparseModel && typeof sparseModel === 'object' && sparseModel.assoc) {
+            this.db.prepare('INSERT INTO sparse_model (id, payload) VALUES (0, ?)').run(JSON.stringify(sparseModel));
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');

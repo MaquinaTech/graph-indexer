@@ -13,8 +13,10 @@ inter-procedural receiver-type fixpoint (A3), a **persistent resolved symbol gra
 symbol-level **centrality** (A4/A5), a **precise resolver** + cross-file **SCIP** resolution
 (A1/A2), `impact_of_edit` / `explain_symbol` / `tests_for` MCP tools (C1/C4/C5/D1), **sealed mode**
 with a runtime egress guard and **signed attestation** (F1), **taint analysis** (`trace_taint` /
-`find_tainted_sinks`) with index-time serialization across JS/TS/Python/Java/Go (C2), and an opt-in
-**learned ranker** (D3, measured a tie — RRF stays the default). Every capability ships behind a
+`find_tainted_sinks`) with index-time serialization across JS/TS/Python/Java/Go (C2), an opt-in
+**learned ranker** (D3, measured a tie — RRF stays the default), **SCIP-backed precise cross-file
+references** for `find_references` (A2 v2), and an opt-in **learned-sparse** vocabulary-expansion
+channel (B3, measured net-neutral — lexical stays the default). Every capability ships behind a
 flag + env + config key with the trade-off printed at startup; nothing changes the default path.
 
 ### Code-specialized embedding models — documented; NL vector-weight re-tune evaluated and rejected (B1)
@@ -262,6 +264,34 @@ store primitives — no ranking, parity, or default-path impact.
   measures **byte-identical to RRF** on the benchmark (a safe, never-regressing opt-in), and the
   trainer lets users fit a *repo-specific* model where their call structure does carry signal. Full
   write-up: `docs/internals/IMPROVEMENT_LEARNED_RANKER.md`.
+
+### Learned-sparse vocabulary expansion — opt-in, measured net-neutral, lexical stays default (B3)
+
+- **`--learned-sparse` / `INDEXER_LEARNED_SPARSE`** adds an opt-in, **zero-dependency, air-gapped**
+  learned-sparse channel (SPLADE / uniCOIL family): a model expands an NL query into a *weighted term
+  set* — the literal terms plus learned associates — fused as an extra sparse channel via RRF, to
+  close lexical-gap misses the Porter-stemming bridge cannot (stemming normalises morphology; it
+  cannot connect `auth` → `credential`/`token`). Rather than a neural MLM (which needs a downloaded
+  model + `@huggingface/transformers` and can't be measured air-gapped), the shipped provider **learns
+  the associations FROM THE CORPUS** at index time via positive PMI over chunk co-occurrence — genuine
+  learned-sparse, zero new dependency, deterministic. New module `search-sparse.mjs`
+  (`buildSparseModel`, `expandSparseQuery`) + a shared `scoreSparseExpanded` in `search-core.mjs`; the
+  model serialises as an **isolated `sparse_model` artifact** (memory JSON key / single-row sqlite
+  table) so it cannot perturb the lexical postings; `test/sparse.mjs` (7 tests).
+- **Presence-gated + NL-asymmetric + parity-by-construction.** A default index has no model → the
+  channel is inert → `test:eval` **byte-identical**. The channel fires only for natural-language
+  queries with a real expansion, so symbolic/exact lookups are byte-identical. Both backends score
+  through the *same* `scoreSparseExpanded` over identically-ordered terms → memory↔sqlite byte-identical.
+- **Honest measurement (the headline):** in-process A/B over the five core eval suites, swept across
+  the fusion weight — **the learned-sparse channel does not beat the lexical baseline at any weight.**
+  Higher weights regress semantic s@5 (the co-occurrence associates add noise: axios semantic s@5
+  90.9→72.7, gin 83.3→33.3 at 0.5); the best case is ≈neutral at the shipped weight 0.2 (semantic +
+  symbolic rank-1 both exactly preserved). Like BM25F / AST / the code-embedding NL weight before it,
+  this measured net-neutral-to-negative, so **lexical stays the default and B3 is opt-in only.** What
+  ships is the air-gapped infrastructure + the seam for a neural SPLADE provider + the honest finding;
+  a repo with genuine query/code vocabulary mismatch (which the benchmark fixtures lack) may see the
+  recall win — *measure on your own repo*. Full write-up:
+  `docs/internals/IMPROVEMENT_LEARNED_SPARSE.md`.
 
 ### Taint analysis hardening — index-time serialization + Java/Go (C2)
 

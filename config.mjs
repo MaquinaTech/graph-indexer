@@ -57,6 +57,10 @@ export const DEFAULTS = Object.freeze({
                                        // BYTE-IDENTICAL to before. 'learned': a post-fusion linear re-rank over
                                        // RRF score + A5 centrality + resolved/SCIP in-degree + git (zero-dep dot
                                        // product; lift is on --symbol-graph indexes). --ranker / INDEXER_RANKER.
+    learnedSparse: false,              // OPT-IN: learn a corpus co-occurrence (PMI) association model (B3) at
+                                       // index time and serialize it, adding an NL-only vocabulary-EXPANSION
+                                       // channel at query time (zero new dep, fully air-gapped). Default off →
+                                       // no model → byte-identical. --learned-sparse / INDEXER_LEARNED_SPARSE.
     sealed: 'off',                     // Sealed mode (F1): 'off' (default) | 'local' (loopback only) |
                                        // 'strict' (zero network egress; lexical-only). Fail-closed:
                                        // refuses to start if an enabled feature would egress beyond the
@@ -203,6 +207,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_TAINT === 'on'
         || file.taint === true;
 
+    // Opt-in learned-sparse model (B3): learn + persist the corpus association model at index time.
+    const learnedSparse = argv.includes('--learned-sparse')
+        || env.INDEXER_LEARNED_SPARSE === 'on'
+        || file.learnedSparse === true;
+
     // Search ranker (D3). Unknown values fall back to the default 'rrf' (byte-identical fusion).
     const rankerRaw = flagValue(argv, '--ranker') || env.INDEXER_RANKER || file.ranker || DEFAULTS.ranker;
     const ranker = (rankerRaw === 'learned' || rankerRaw === 'rrf') ? rankerRaw : 'rrf';
@@ -265,6 +274,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         ranker,
         resolver,
         scipIndex,
+        learnedSparse,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
@@ -348,6 +358,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
         `taint       : ${config.taint ? 'on · precomputed flows (trace_taint / find_tainted_sinks)' : 'off (query-time)'}`,
         `ranker      : ${config.ranker === 'learned' ? 'learned · post-fusion linear re-rank (opt-in)' : 'rrf (default)'}`,
+        `sparse      : ${config.learnedSparse ? 'on · learned-sparse vocabulary expansion (NL-only channel)' : 'off'}`,
         `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier'
             : config.resolver === 'scip' ? `scip · cross-file SCIP bindings → \`resolved\` (${config.scipIndex || '⚠️ no --scip-index'})`
             : 'heuristic (default)'}`,
@@ -400,6 +411,14 @@ export function configNotices(config) {
             + 'daemon does NOT rebuild them — flows refresh on the next full `idx-index`; until then the '
             + 'tools fall back to a query-time scan (never worse). It only affects the security tools; '
             + 'search ranking is unaffected. Pair with --symbol-graph for cross-function precision.');
+    }
+    if (config.learnedSparse) {
+        out.push('Learned-sparse (B3): a corpus co-occurrence (PMI) association model is learned + '
+            + 'serialized at index time, adding a vocabulary-EXPANSION channel that fires ONLY for '
+            + 'natural-language queries (symbolic/exact lookups stay byte-identical). Zero new dependency, '
+            + 'fully air-gapped, parity-safe. The whole-program model refreshes on the next full '
+            + '`idx-index` (the daemon drops it on a per-file edit). Measure on YOUR repo (`test:eval`) — '
+            + 'it is a recall aid that helps lexical-gap semantic queries and is ≈neutral elsewhere.');
     }
     if ((config.resolver === 'precise' || config.resolver === 'scip') && !config.symbolGraph) {
         out.push(`--resolver ${config.resolver} has no effect without --symbol-graph (the resolver runs only `

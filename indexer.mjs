@@ -422,6 +422,22 @@ async function main() {
         }
     }
 
+    // B3: opt-in learned-sparse model. Learn the corpus co-occurrence (PMI) association model once
+    // and serialize it (isolated artifact, like centrality/taint); searchHybrid then adds an NL-only
+    // vocabulary-expansion channel. Zero new dependency, fully air-gapped; default index
+    // byte-identical (no model unless --learned-sparse).
+    let sparseModel = null;
+    if (config.learnedSparse) {
+        const { buildSparseModel } = await import('./search-sparse.mjs');
+        sparseModel = buildSparseModel(indexData.chunks);
+        if (sparseModel) {
+            console.log(`🧩 Learned-sparse: ${sparseModel.meta.terms} terms · ${sparseModel.meta.pairs} associations `
+                + `(PMI over ${sparseModel.meta.docs} chunks).`);
+        } else {
+            console.log('🧩 Learned-sparse: no association signal in this corpus — model omitted (channel inert).');
+        }
+    }
+
     // Resolve 'auto' now that the true chunk count is known — the threshold is only
     // meaningful after all chunks have been extracted.
     const backend = config.storage === 'auto'
@@ -437,6 +453,7 @@ async function main() {
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
             edges: symbolEdges, centrality, taint: taintPayload, scipRefs: scipReferers,
+            sparseModel,
         });
         store.close?.();
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
@@ -452,6 +469,7 @@ async function main() {
                 ...(centrality ? { centrality } : {}),
                 ...(taintPayload ? { taint: taintPayload } : {}),
                 ...(scipReferers ? { scip_refs: scipReferers } : {}),
+                ...(sparseModel ? { sparse_model: sparseModel } : {}),
             })),
             fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
         ]);

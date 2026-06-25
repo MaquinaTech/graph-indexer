@@ -10,7 +10,9 @@ import {
     tokenize, okapiIdf, bm25Score, fuseAndRank, buildLexicalDocument, embeddingKeyFor,
     SUMMARY_VEC_SUFFIX, LEXICAL_FUSION_CAP, VECTOR_SCAN_RAW_N, finalizeVectorCandidates,
     isNaturalLanguageQuery, WINDOW_VEC_SUFFIX, EMBEDDING_MAX_WINDOWS, baseEmbeddingKey,
+    scoreSparseExpanded,
 } from '../search-core.mjs';
+import { expandSparseQuery } from '../search-sparse.mjs';
 import {
     HierarchicalNSW, HNSW_THRESHOLD, LAZY_VEC_THRESHOLD, SKETCH_THRESHOLD,
     writeEmbeddingBinary, scanEmbeddingBinary, updateVectorSketch, searchVectorSketch,
@@ -96,6 +98,13 @@ export class MemoryGraphIndex {
         //    isolated artifact so it cannot perturb A4 edges / A5 centrality. find_references reads
         //    it for a binding-precise, cross-file `resolved` reference tier. Cleared with the graph.
         this._scipRefs = null;
+
+        // ── B3: learned-sparse association model — `{ assoc: { term: [[assocTerm, weight], …] } }`,
+        //    learned from corpus co-occurrence at index time with --learned-sparse and serialized as
+        //    an isolated artifact. searchHybrid uses it to add an NL-only vocabulary-EXPANSION
+        //    channel; absent on default indexes → channel inert → byte-identical. Whole-program →
+        //    cleared on any incremental file update.
+        this._sparseModel = null;
     }
 
     /** Index the (already deterministically-ordered) edge list by endpoint. */
@@ -128,6 +137,7 @@ export class MemoryGraphIndex {
         this._centralRanked = null;
         this._taint = null;
         this._scipRefs = null;
+        this._sparseModel = null;
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -144,6 +154,8 @@ export class MemoryGraphIndex {
         if (data.taint && typeof data.taint === 'object') this._taint = data.taint;
         // A2 v2 SCIP precise references (opt-in --resolver scip; absent on default indexes → no-op).
         if (data.scip_refs && typeof data.scip_refs === 'object') this._scipRefs = data.scip_refs;
+        // B3 learned-sparse model (opt-in --learned-sparse; absent on default indexes → no-op).
+        if (data.sparse_model && typeof data.sparse_model === 'object') this._sparseModel = data.sparse_model;
         // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
         // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
         // stay a low-weight rescue). Set during the chunk load loop below.
@@ -558,9 +570,14 @@ export class MemoryGraphIndex {
             vectorResults = [];
         }
 
+        // B3 learned-sparse channel: opt-in (model present) + NL-asymmetric (symbolic queries skip
+        // it → byte-identical). expandSparseQuery returns null when nothing fires → no channel.
+        const sparseResults = this._searchSparseExpanded(queryText);
+
         return fuseAndRank({
             lexicalResults,
             vectorResults,
+            sparseResults,
             getChunk:      (id) => this.chunks.get(id),
             getPathTokens: (id) => this.pathTokens.get(id),
             getDf:         (t)  => this.df.get(t) || 0,
@@ -574,6 +591,28 @@ export class MemoryGraphIndex {
             resolveExact:  (term) => this.symbolTable.get(term) || [],
         });
     }
+
+    /**
+     * B3 — the learned-sparse expansion channel: NL queries only, model present only. Returns the
+     * ranked sparse candidates, or [] when the channel is inert (no model / symbolic query / no
+     * association fired) so fusion is byte-identical to the default path.
+     */
+    _searchSparseExpanded(queryText) {
+        if (!this._sparseModel || !isNaturalLanguageQuery(queryText)) return [];
+        const termWeights = expandSparseQuery(queryText, this._sparseModel);
+        if (!termWeights) return [];
+        const avgdl = this.docCount > 0 ? this.totalDocLen / this.docCount : 1;
+        return scoreSparseExpanded(termWeights, {
+            docCount:   this.docCount,
+            avgdl,
+            getDf:      (t) => this.df.get(t) || 0,
+            getPostings:(t) => this.invertedIndex.get(t) || [],
+            getDocLen:  (id) => this.docLens.get(id),
+        });
+    }
+
+    /** Whether opt-in learned-sparse associations (B3 --learned-sparse) are loaded. */
+    hasSparseModel() { return this._sparseModel != null; }
 
     // ─── Persistence ───────────────────────────────────────────────────────────
 
@@ -594,6 +633,7 @@ export class MemoryGraphIndex {
             ...(this._centrality ? { centrality: Object.fromEntries(this._centrality) } : {}),
             ...(this._taint ? { taint: this._taint } : {}),
             ...(this._scipRefs ? { scip_refs: this._scipRefs } : {}),
+            ...(this._sparseModel ? { sparse_model: this._sparseModel } : {}),
         });
         const tmpPath    = `${this.indexPath}.tmp`;
         const tmpBinPath = `${this._embeddingPath}.tmp`;
@@ -646,7 +686,7 @@ export class MemoryGraphIndex {
         // A per-file edit makes the whole-program symbol graph + its centrality stale; drop
         // both so findCallers/findReferers fall back to the always-correct scan until the next
         // full `idx-index` rebuilds them (the daemon never rebuilds the graph).
-        if (this._edges || this._centrality || this._taint || this._scipRefs) this._clearEdges();
+        if (this._edges || this._centrality || this._taint || this._scipRefs || this._sparseModel) this._clearEdges();
         this.updateFileGraph(filePath, imports);
 
         for (const [id, chunk] of Array.from(this.chunks.entries())) {
