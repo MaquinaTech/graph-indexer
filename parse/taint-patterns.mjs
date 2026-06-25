@@ -8,8 +8,8 @@
  *              SINKS   = dangerous operations, grouped by category (rce | sqli | xss | path | ssrf).
  *              SANITIZERS = constructs that neutralise taint (escape/encode/parameterise/validate).
  *
- *              v1 covers the JS/TS family ('js') and Python ('py'); other languages return no
- *              patterns (the analysis simply finds nothing for them).
+ *              Covers the JS/TS family ('js'), Python ('py'), Java ('java'), and Go ('go'); other
+ *              languages return no patterns (the analysis simply finds nothing for them).
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -19,6 +19,8 @@
 export function langKeyForExt(ext) {
     if (['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx'].includes(ext)) return 'js';
     if (ext === '.py') return 'py';
+    if (ext === '.java') return 'java';
+    if (ext === '.go') return 'go';
     return null;
 }
 
@@ -36,6 +38,18 @@ export const SOURCES = {
         { re: /\b(sys\.argv|os\.environ)\b/, kind: 'process-input' },
         { re: /\binput\s*\(/, kind: 'stdin' },
         { re: /\bflask\.request\b|\bself\.get_argument\s*\(/, kind: 'http-request' },
+    ],
+    java: [
+        { re: /\b(request|req)\.(getParameter|getParameterValues|getParameterMap|getHeader|getHeaders|getQueryString|getInputStream|getReader|getCookies)\s*\(/, kind: 'http-request' },
+        { re: /@(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|MatrixVariable|ModelAttribute)\b/, kind: 'http-request' },
+        { re: /\bSystem\.(getenv|getProperty)\s*\(/, kind: 'process-input' },
+        { re: /\bnew\s+Scanner\s*\(\s*System\.in\b/, kind: 'stdin' },
+    ],
+    go: [
+        { re: /\br\.(URL\.Query\s*\(\s*\)|FormValue|PostFormValue|Form\b|PostForm\b|MultipartForm)|\br\.Header\.Get\s*\(|\br\.Cookie\s*\(/, kind: 'http-request' },
+        { re: /\b(mux\.Vars|c\.(Param|Query|PostForm|DefaultQuery)|ctx\.(Query|Param))\s*\(/, kind: 'http-request' },
+        { re: /\b(os\.Args|os\.Getenv\s*\(|flag\.(String|Int|Bool|Parse)\s*\()/, kind: 'process-input' },
+        { re: /\bbufio\.NewReader\s*\(\s*os\.Stdin\b|\bfmt\.Scan\w*\s*\(/, kind: 'stdin' },
     ],
 };
 
@@ -58,6 +72,21 @@ export const SINKS = {
         { re: /\b(open|send_file|os\.path\.join)\s*\(/, category: 'path', label: 'open/send_file' },
         { re: /\brequests\.(get|post|put|delete|request)\s*\(|\burllib\.|\burlopen\s*\(/, category: 'ssrf', label: 'outbound request' },
     ],
+    java: [
+        { re: /\bRuntime\.getRuntime\s*\(\s*\)\s*\.exec\s*\(|\bnew\s+ProcessBuilder\s*\(|\bProcessBuilder\s*\(/, category: 'rce', label: 'Runtime.exec/ProcessBuilder' },
+        { re: /\.(executeQuery|executeUpdate|execute|createQuery|createNativeQuery|createStatement)\s*\(/, category: 'sqli', label: 'jdbc/jpa statement' },
+        { re: /\b(getWriter\s*\(\s*\)\s*\.(print|println|write)|out\.(print|println)\s*\(|\.appendChild\s*\()/, category: 'xss', label: 'servlet/JSP writer' },
+        { re: /\bnew\s+(File|FileInputStream|FileReader|FileOutputStream|FileWriter)\s*\(|\bPaths\.get\s*\(|\bFiles\.(read|write|newInputStream|copy)\w*\s*\(/, category: 'path', label: 'file/path sink' },
+        { re: /\bnew\s+URL\s*\(|\.openConnection\s*\(|\b(RestTemplate|WebClient|HttpClient)\b|\bHttpRequest\.newBuilder\s*\(/, category: 'ssrf', label: 'outbound request' },
+    ],
+    go: [
+        { re: /\bexec\.Command(Context)?\s*\(/, category: 'rce', label: 'exec.Command' },
+        // Negative lookbehind excludes `r.URL.Query()` (the URL parser) from the db-query sink.
+        { re: /(?<!URL)\.(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext)\s*\(/, category: 'sqli', label: 'db query/exec' },
+        { re: /\bw\.Write\s*\(|\bio\.WriteString\s*\(\s*w|\bfmt\.Fprint\w*\s*\(\s*w|\btemplate\.HTML\s*\(/, category: 'xss', label: 'response writer / template.HTML' },
+        { re: /\b(os\.Open|os\.OpenFile|os\.ReadFile|ioutil\.ReadFile|os\.Create|filepath\.Join|http\.ServeFile)\s*\(/, category: 'path', label: 'file/path sink' },
+        { re: /\bhttp\.(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\(|\b\w*[Cc]lient\.Do\s*\(/, category: 'ssrf', label: 'outbound request' },
+    ],
 };
 
 /** Taint-clearing constructs: any match in/around the flow lowers a finding's confidence. */
@@ -71,6 +100,16 @@ export const SANITIZERS = {
         /\b(shlex\.quote|escape|bleach|markupsafe|secure_filename|quote)\b/i,
         /\b(parameteriz|placeholder)\b/i,
         /\bint\s*\(|\bfloat\s*\(/,
+    ],
+    java: [
+        /\b(PreparedStatement|setString|setInt|setLong|NamedParameter)\b|@Param\b/,
+        /\b(URLEncoder\.encode|StringEscapeUtils|HtmlUtils\.htmlEscape|ESAPI|encodeForHTML|Encode\.forHtml|Jsoup\.clean)\b/,
+        /\b(Integer\.parseInt|Long\.parseLong|Double\.parseDouble|UUID\.fromString)\s*\(/,
+    ],
+    go: [
+        /\bstrconv\.(Atoi|ParseInt|ParseFloat|ParseUint|ParseBool)\s*\(/,
+        /\b(template\.HTMLEscapeString|template\.JSEscapeString|html\.EscapeString|url\.QueryEscape|url\.PathEscape)\s*\(/,
+        /\bfilepath\.(Clean|Base)\s*\(|\bsql\.Named\b|\$\d+/,
     ],
 };
 

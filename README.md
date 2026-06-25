@@ -183,7 +183,7 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
 | `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, git recency/co-change, and (with `--symbol-graph`) its symbol-centrality rank. |
 | `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`; `precision: 'strict'` follows only provably-unambiguous (`resolved`) edges (best on a `--resolver precise` or `--resolver scip` index). |
-| `trace_taint` | Security: trace untrusted data from a source (request body/query/params, argv/env, stdin) to a dangerous sink (eval/exec, SQL, fs/path, HTML, outbound request) across the call graph — injection-class risks (rce/sqli/xss/path/ssrf) with the source→sink path. JS/TS + Python; heuristic finder, not a verifier. |
+| `trace_taint` | Security: trace untrusted data from a source (request body/query/params, argv/env, stdin) to a dangerous sink (eval/exec, SQL, fs/path, HTML, outbound request) across the call graph — injection-class risks (rce/sqli/xss/path/ssrf) with the source→sink path. JS/TS, Python, Java, Go; heuristic finder, not a verifier. |
 | `find_tainted_sinks` | Security orientation: every dangerous sink grouped by category, each flagged with whether an untrusted source reaches it — map the attack surface, then `trace_taint` a specific one. |
 
 ## Configuration

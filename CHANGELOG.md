@@ -233,6 +233,19 @@ store primitives — no ranking, parity, or default-path impact.
   `parse/taint-patterns.mjs`, `mcp/taint.mjs`; `test/taint.mjs` adds 9 tests; `test/mcp.mjs` asserts
   the 16-tool surface. Design: `docs/internals/PHASE3_TAINT_ANALYSIS.md`.
 
+### Taint analysis hardening — Java + Go (C2)
+
+- **`trace_taint` / `find_tainted_sinks` now cover Java and Go** in addition to JS/TS and Python.
+  `parse/taint-patterns.mjs` gains `java` and `go` source / sink / sanitizer catalogs: Java —
+  `request.getParameter` / `@RequestParam` / `System.getenv` sources, `Runtime.exec` / `ProcessBuilder`
+  (rce), JDBC/JPA statement execute (sqli), servlet/JSP writers (xss), `File`/`Paths`/`Files` (path),
+  `URL`/`RestTemplate`/`HttpClient` (ssrf), with `PreparedStatement` / `URLEncoder` / `Integer.parseInt`
+  sanitizers; Go — `r.URL.Query()` / `r.FormValue` / gin·gorilla helpers / `os.Getenv` sources,
+  `exec.Command` (rce), `db.Query`/`Exec` (sqli, with a lookbehind so `r.URL.Query()` is not mistaken
+  for a DB call), response-writer / `template.HTML` (xss), `os.Open`/`filepath.Join` (path),
+  `http.Get`/`client.Do` (ssrf), with `strconv.Atoi` / `html.EscapeString` / `filepath.Clean`
+  sanitizers. `test/taint.mjs` adds Java + Go scan + direct-flow + sanitizer tests.
+
 ### SCIP resolver provider (A2) — Phase 3
 
 - **`--resolver scip` + `--scip-index <path>`** (`INDEXER_SCIP_INDEX` / `scipIndex` config)

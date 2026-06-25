@@ -21,15 +21,24 @@ const C = (id, name, file, startLine, code, calls = []) => ({
 });
 
 // c1: direct rce (req.body → eval, same fn).  c2: same but sanitized (Number()).  c3→c4: reachable
-// sqli (handleLogin reads req.body, calls query() which concatenates SQL).  c5: clean.  c6: non-JS.
+// sqli (handleLogin reads req.body, calls query() which concatenates SQL).  c5: clean.  c6: a
+// genuinely UNSUPPORTED language (Ruby) → scans to null.
 const CHUNKS = [
     C('c1', 'runUserCode', 'handler.js', 1, 'function runUserCode(req){\n const code = req.body.code;\n return eval(code);\n}'),
     C('c2', 'safeRun', 'safe.js', 1, 'function safeRun(req){\n const n = Number(req.query.n);\n return eval(String(n));\n}'),
     C('c3', 'handleLogin', 'service.js', 1, 'function handleLogin(req){\n const u = req.body.user;\n return query(u);\n}', ['query']),
     C('c4', 'query', 'service.js', 20, 'function query(u){\n return db.query("SELECT * FROM users WHERE u="+u);\n}'),
     C('c5', 'helper', 'util.js', 1, 'function helper(x){ return x+1; }'),
-    C('c6', 'GoThing', 'main.go', 1, 'func GoThing(r *http.Request){ exec.Command(r.URL.Query()) }'),
+    C('c6', 'ruby_thing', 'main.rb', 1, 'def ruby_thing\n system(params[:cmd])\nend'),
 ];
+
+// Java + Go fixtures (direct rce: an untrusted source and a dangerous sink in one function).
+const JAVA = C('j1', 'handle', 'Ctl.java', 1,
+    'void handle(HttpServletRequest request){\n String cmd = request.getParameter("c");\n Runtime.getRuntime().exec(cmd);\n}');
+const JAVA_SAFE = C('j2', 'safe', 'S.java', 1,
+    'void safe(HttpServletRequest request){\n int n = Integer.parseInt(request.getParameter("n"));\n Runtime.getRuntime().exec("id "+n);\n}');
+const GO = C('g1', 'Handler', 'h.go', 1,
+    'func Handler(w http.ResponseWriter, r *http.Request){\n q := r.URL.Query().Get("q")\n exec.Command(q)\n}');
 
 function fakeDb(chunks = CHUNKS) {
     const byId = new Map(chunks.map(c => [c.id, c]));
@@ -46,7 +55,30 @@ function fakeDb(chunks = CHUNKS) {
 test('taint: langKeyForExt maps the supported families', () => {
     for (const e of ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx']) assert.equal(langKeyForExt(e), 'js');
     assert.equal(langKeyForExt('.py'), 'py');
-    assert.equal(langKeyForExt('.go'), null);
+    assert.equal(langKeyForExt('.java'), 'java');
+    assert.equal(langKeyForExt('.go'), 'go');
+    assert.equal(langKeyForExt('.rb'), null, 'unsupported language → null');
+});
+
+test('taint: Java sources / sinks / sanitizers + a direct rce flow', () => {
+    const s = scanChunk(JAVA);
+    assert.equal(s.lang, 'java');
+    assert.equal(s.sources[0].kind, 'http-request', 'request.getParameter is a source');
+    assert.equal(s.sinks[0].category, 'rce', 'Runtime.exec is an rce sink');
+    assert.equal(s.sanitized, false);
+    assert.equal(scanChunk(JAVA_SAFE).sanitized, true, 'Integer.parseInt is a sanitizer');
+    const { flows } = buildTaintGraph(fakeDb([JAVA]));
+    assert.ok(flows.some(f => f.sink.category === 'rce' && f.confidence === 'high'), 'direct java rce flow');
+    assert.equal(buildTaintGraph(fakeDb([JAVA_SAFE])).flows[0].confidence, 'low', 'sanitized java flow is low');
+});
+
+test('taint: Go sources / sinks + a direct rce flow', () => {
+    const s = scanChunk(GO);
+    assert.equal(s.lang, 'go');
+    assert.equal(s.sources[0].kind, 'http-request', 'r.URL.Query().Get is a source');
+    assert.equal(s.sinks[0].category, 'rce', 'exec.Command is an rce sink');
+    const { flows } = buildTaintGraph(fakeDb([GO]));
+    assert.ok(flows.some(f => f.sink.category === 'rce' && f.confidence === 'high'), 'direct go rce flow');
 });
 
 test('taint: scanChunk detects sources, sinks, and sanitizers', () => {
