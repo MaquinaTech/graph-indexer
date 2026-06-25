@@ -36,6 +36,16 @@ shaped by a few deliberate choices:
   from the local cache. Your source code is never sent anywhere — only model weights
   are fetched. For strictly air-gapped installs, set `embedProvider` to `"ollama"` or
   `"off"`, or pre-populate the model cache on a connected machine.
+- **Sealed mode (opt-in, fail-closed enforcement).** For regulated or strictly
+  air-gapped installs, `--sealed strict` (`INDEXER_SEALED`) enforces **zero** network
+  egress (lexical-only), and `--sealed local` permits **loopback only** (a local
+  Ollama/MLX on this box is allowed, nothing leaves it). It is *fail-closed*: the build
+  refuses to start if any enabled feature (embeddings/enrichment/rerank/HyDE) would
+  egress beyond the tier, and it installs a **deny-by-default runtime egress guard** on
+  the in-process network paths (`net`/`tls` sockets, `http(s)`, `fetch`) so even an
+  accidental call is blocked — turning "we don't call out" into "we *can't*."
+  `idx-index --attest` prints a deterministic attestation manifest (optionally
+  Ed25519/RSA-**signed** and CI-verifiable) of the egress posture. See `seal.mjs`.
 - **No code execution.** Source files are parsed into ASTs with Tree-sitter. The
   indexer never imports, evaluates, or runs the code it indexes. The one subprocess
   it spawns is a local, read-only `git log` (see "git signals" below) — never the
@@ -57,6 +67,13 @@ shaped by a few deliberate choices:
   sensitivity as the repository itself and do not commit or share them.
 - **MCP transport.** The server communicates over stdio with the local MCP client
   (your IDE/agent). It does not open a network socket.
+- **Taint analysis is advisory, not a guarantee.** The opt-in `trace_taint` /
+  `find_tainted_sinks` MCP tools statically trace untrusted sources to dangerous sinks
+  over the call graph using pure regex catalogs + graph traversal (no model, no network,
+  read-only). They are a **finder, not a verifier**: they favour precision and miss flows
+  through dynamic dispatch, reflection, ORM/query-builder indirection, and untyped
+  collections — **"0 findings" is not proof of safety.** Use them for orientation, not as
+  a security gate.
 
 ## Operational guidance
 

@@ -10,7 +10,7 @@
     </index_facts>
 
     <rules>
-        <rule name="name-overmatch">Dispatch binds by NAME and Python is duck-typed: get_call_graph("save") mixes every save repo-wide, and resolve_symbol may return several — pick by file path + class context from the cards, no extra reads.</rule>
+        <rule name="name-overmatch">Dispatch binds by NAME and Python is duck-typed: get_call_graph("save") mixes every save repo-wide, and resolve_symbol may return several — pick by file path + class context from the cards, no extra reads. If your index was built --resolver scip (scip-python), find_references returns a 🎯 SCIP-resolved set that disambiguates the right one — trust it over name-only.</rule>
         <rule name="dunder-magic">Implicit protocol calls have no edges: `obj()`↛__call__, `a+b`↛__add__, attr access↛__getattr__, `with`↛__enter__/__exit__. An empty call graph on a dunder means nothing.</rule>
         <rule name="package-barrels">`__init__.py` re-export hubs produce re_export nodes: internal origin → ONE hop; external dependency → stop.</rule>
         <rule name="decorators-wrap">Call sites point at the DECORATED name even when a decorator wraps it. If runtime behaviour is the question, read the decorator's chunk ONCE — never trace every wrapped function.</rule>

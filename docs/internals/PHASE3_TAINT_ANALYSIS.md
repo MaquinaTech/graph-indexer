@@ -34,29 +34,31 @@ network).
 Two MCP tools over an index built with `--taint`:
 
 ```
-trace_taint({ source?, sink?, category?, max_depth?, response_format })
-   → flows from a tainted source to a sink, each step a chunk + the propagation reason
-find_tainted_sinks({ category?, response_format })
-   → every sink reachable from any source, grouped by category, worst-first
+trace_taint({ source_kind?, category?, max_depth?, max_flows?, response_format })
+   → flows from a tainted source to a sink; the path is the chunk-id chain between them
+find_tainted_sinks({ category?, reachable_only?, max_depth?, response_format })
+   → every dangerous sink grouped by category, each flagged whether a source reaches it
 ```
 
 A `TaintFlow` is the deliverable:
 
 ```
 TaintFlow = {
-  source: { chunk_id, file, line, kind },          // e.g. 'http.req.body'
-  sink:   { chunk_id, file, line, category },       // 'sqli' | 'rce' | 'path' | 'xss' | 'ssrf'
-  path:   [ { chunk_id, via, confidence } ],        // the propagation chain (calls/params/returns)
-  confidence: 'resolved' | 'high',                  // path uses A1 resolved edges → 'resolved'
-  sanitized: false,
-  remediation: 'parameterize the query / use prepared statements'
+  source: { chunk_id, file, line, kind, snippet },             // kind e.g. 'http-request'
+  sink:   { chunk_id, file, line, category, label, snippet },  // category 'sqli'|'rce'|'path'|'xss'|'ssrf'
+  path:   [ chunkId, ... ],                          // the source→sink chunk-id chain
+  via:    'direct' | 'reachable',                    // same-function vs cross-function
+  depth:  2,                                          // call hops from source to sink
+  confidence: 'high' | 'medium' | 'low',             // see below
+  sanitized: false
 }
 ```
 
-Reporting at **two confidence levels** falls straight out of A1: a flow whose every hop is a
-`resolved` edge is `resolved`; a flow that traverses a `high` (import/proximity) edge is `high`.
-Security tools live or die on false-positive rate, so `resolved`-only is the default surface and
-`high` is opt-in ("show me the maybes").
+Reporting at **three confidence levels** (`mcp/taint.mjs`): a same-function source→sink is `high`
+(`via: 'direct'`); a source that transitively reaches a sink across call edges is `medium`
+(`via: 'reachable'`); a sanitizer (escape/encode/parameterize/`Number()`/`int()`…) seen on the path
+drops it to `low`. Security tools live or die on false-positive rate, so flows are emitted ordered by
+category severity → confidence → location, letting a caller triage high-confidence first.
 
 ## Architecture & seams
 
@@ -86,18 +88,21 @@ Security tools live or die on false-positive rate, so `resolved`-only is the def
 6. **Tools** — `mcp/taint.mjs` builds/queries; `mcp/tools.mjs` registers the two tools (16-tool
    surface). Markdown + json, like every other tool.
 
-## Interface stubs (DESIGN — not implemented)
+## Interface (as built)
 
 ```js
-// parse/taint-patterns.mjs — DESIGN SKETCH
-export const SOURCES;     // Record<lang, Pattern[]>
-export const SINKS;       // Record<lang, { pattern, category }[]>
-export const SANITIZERS;  // Record<lang, Pattern[]>
+// parse/taint-patterns.mjs
+export const SOURCES;          // Record<lang, Pattern[]>
+export const SINKS;            // Record<lang, { pattern, category }[]>
+export const SANITIZERS;       // Record<lang, Pattern[]>
+export const CATEGORY_SEVERITY; // deterministic worst-first ordering
+export function langKeyForExt(ext);
 
-// mcp/taint.mjs — DESIGN SKETCH
-export function buildTaintGraph(db, { maxDepth, minConfidence }) { /* → { flows: TaintFlow[], stats } */ }
-export function traceTaint(db, { source, sink, category, maxDepth }) { /* → TaintFlow[] */ }
-export function findTaintedSinks(db, { category }) { /* → TaintFlow[] grouped by category */ }
+// mcp/taint.mjs
+export function buildTaintGraph(db, { maxDepth = 4, maxFlows = 200, category = null, includeReachable = true });  // → { flows, scanned, truncated }
+export function traceTaint(db, { sourceKind = null, sinkCategory = null, maxDepth = 4, maxFlows = 200 });          // → { flows, scanned, truncated }
+export function findTaintedSinks(db, { category = null, reachableOnly = false, maxDepth = 4 });                    // → { byCategory, total, scanned, flowCount }
+export function computeTaintCache(db, { maxDepth = 4 });  // index-time precompute for --taint
 
 // store contract additions: hasTaint() → bool, getTaintFlows(filter) → TaintFlow[]
 ```

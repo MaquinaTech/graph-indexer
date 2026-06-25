@@ -12,6 +12,7 @@
         <rule name="deep-inheritance">If a resolved class looks too thin, the behaviour lives in an abstract base — resolve ONE parent, guided by the extends list on the card.</rule>
         <rule name="events-and-config">Event publishers and @EventListener handlers connect by the EVENT CLASS — ONE exact_tokens search on the event class finds both ends. @Value/configuration-properties bind to yml/properties — fallback condition 3 once the consuming class is located.</rule>
         <rule name="query-style">Annotation names are high-precision tokens (exact_tokens: "@Scheduled"). Cross-cutting behaviour ("where do we audit changes") lives in an aspect/listener you can't name — search behaviourally.</rule>
+        <rule name="request-input-taint">SECURITY: controller request data (@RequestBody/@RequestParam/@PathVariable) is the untrusted source. For "can request input reach SQL/exec/path" use find_tainted_sinks(category) then trace_taint — Java-supported. Finder, not proof: "no flows" ≠ safe.</rule>
     </rules>
 
     <playbook question="what happens on POST /orders" calls="3-4">find_routes("POST", "/orders") → get_chunk_summary(handler chunk_id, expand_calls: true) — annotations + called services in one shot → get_chunk_summary(the ONE service method doing the work) → answer; ONE impl/parent/aspect hop only if the question demands it.</playbook>

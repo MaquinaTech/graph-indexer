@@ -15,6 +15,7 @@
         <rule name="embedded-promotion">A call to a method the outer type doesn't define lives in an EMBEDDED type — check the type-declaration chunk for embedded fields before distrusting the index.</rule>
         <rule name="implicit-execution">init() and `_` blank imports run with no inbound edges — absence of callers is not dead code. `go fn()` and `defer fn()` ARE edges; channel flow is not — trace channels by searching the channel field name.</rule>
         <rule name="first-class-functions">Functions passed as values (http.HandlerFunc(handle), middleware constructors) create no edge to the passed function — find sites with exact_tokens.</rule>
+        <rule name="input-reachability">SECURITY — "can request/CLI input reach a dangerous call" (exec, SQL, fs/path) → trace_taint (Go is supported); find_tainted_sinks first to map the surface. Finder, not proof — "no flows" ≠ safe.</rule>
         <rule name="query-style">Always include package/domain words ("auth middleware token refresh", never bare "Refresh"). To find where an error originates, search its message string literal — the most unique token in the flow.</rule>
     </rules>
 

@@ -113,7 +113,7 @@ Therefore:
   winner/contender (rust, spring, laravel, symfony). The remaining 9 fixtures get the cheap +
   nomic family only — qwen is pruned there with a per-fixture justification (cheap already
   wins and qwen3:4b is a documented negative for those language families; see "did NOT
-  reproduce"). **152 cells total, all validated.**
+  reproduce"). **All cells validated** (the cell count grows as the matrix expands).
 - **Re-evaluated pruning.** The n=3 pass pruned 12 fixtures because their cheap config
   "saturated at held s@5 = 1.00." At n≈19 that saturation collapsed (only css remains at
   1.00), so the prune basis is gone — every fixture's heavy decision is now made on its
@@ -627,4 +627,4 @@ v2 winning config is recorded here so the guidance is not lost:
    The 9 cheap/nomic-tier fixtures without qwen are pruned with per-fixture justification, not
    on a 1.00-saturation basis (which no longer exists).
 5. **The grid survived four power interruptions** mid-run (`bench/_rerun-v2.sh` resumes at
-   segment granularity). All 152 cells were validated for well-formedness before synthesis.
+   segment granularity). All cells were validated for well-formedness before synthesis.

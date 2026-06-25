@@ -17,7 +17,7 @@ compositional-query win ColBERT is known for.
 - **Files:** `colbert.mjs` (new — `maxSimScore`, `loadChunkVectors`, `encodeMultiVector`,
   `rerankLateInteraction`), `engine/binary.mjs` (`collectVectorsByKey`), `engine/{memory,sqlite}.mjs`
   (`embeddingBinPath()`), `config.mjs` (`late-interaction` rerank provider), `mcp/tools.mjs` +
-  `test/evaluate.mjs` (dispatch), `test/colbert.mjs` (6 tests).
+  `test/evaluate.mjs` (dispatch), `test/colbert.mjs` (7 tests).
 
 ## No storage blow-up — it reuses the doc vectors the engine already stores
 

@@ -12,7 +12,7 @@
 - **Strength is symbolic/structural retrieval, not raw semantic recall:** default-path symbolic rank-1 is strong and consistent; semantic (behavioural-query) rank-1 is much lower and highly language-dependent — the known semantic ceiling, now resolved per language (small per-language semantic n=2–7 queries, so read those cells with the count in mind).
 - **Embeddings lift recall more than rank-1:** in-process (E0) and Ollama (O0/O2) embeddings raise semantic s@5 on several languages but rarely move rank-1; the default lexical path is often already at the s@5 ceiling on these small fixtures.
 - **Rerank and enrichment invert by language and do not stack:** LLM rerank is a strong *semantic* rank-1 lever but trades against exact symbolic precision; enrichment inverts oppositely. Both are correctly off by default. (Measured on a 6-language subset — see below.)
-- **Real per-language structural gaps (invocation-verified — see the canonical table in BENCH_LANGUAGES.md):** `get_call_graph` returns nothing for **** (zero call edges) and is **degraded** for **spring, css** (edges exist but coarse/class-granular or trivial); the `type_refs` (type-usage) channel is **empty** for **express-js, django, rails, css, nvm**; Go/Rust/Kotlin/Ruby callers are name-only (no receiver). Details below.
+- **Real per-language structural gaps (invocation-verified — see the canonical table in BENCH_LANGUAGES.md):** `get_call_graph` is **degraded** for **spring, css** (edges exist but coarse/class-granular for Java, or trivial/non-resolving for SCSS) — no fixture has literally zero call edges; the `type_refs` (type-usage) channel is **empty** for **express-js, django, rails, css, nvm**; Go/Rust/Kotlin/Ruby callers are name-only (no receiver). Details below.
 - **qwen3-embedding:4b is accurate but ~0.4–3 chunks/s** — impractical to index large repos with; that is why the costly configs were measured on a subset.
 
 ## Method & invariants
@@ -55,7 +55,7 @@
 | semantic rank-1 | 22% | 0% | 67% |
 | semantic s@5 | 60% | 0% | 100% |
 
-_Averaged over 18 languages. **The semantic means are over small per-language sets (sem n=2–7, 74 semantic queries total)** — the spread is wide and a single mean hides it, which is why the per-language numbers (with their n) exist._
+_Averaged over 18 fixtures (14 languages). **The semantic means are over small per-language sets (sem n=2–7, 74 semantic queries total)** — the spread is wide and a single mean hides it, which is why the per-language numbers (with their n) exist._
 
 ## Where each language is weak
 
@@ -76,7 +76,7 @@ _Structural verdicts below are the canonical, invocation-verified ones (full tab
 
 ## Run metadata & reproduce
 
-- **Cells:** 78 per-(fixture,config) result files in `bench/results/` + parity (18/18) + structural + tokens + agent-trace.
+- **Cells:** per-(fixture,config) result files in `bench/results/` (count grows as the matrix expands) + parity (18/18) + structural + tokens + agent-trace.
 - **Effective parallelism:** ground-truth authoring fanned out 13 sub-agents concurrently; all *indexing/scoring* cells were run **serially** (one at a time) so build-time / throughput / latency are measured without CPU or Ollama contention. Ollama-dependent cells (O*/R*) shared one daemon and were queued behind the lexical/in-process cells.
 - **Wall-clock:** the lexical+in-process matrix + parity is ~30 min; the qwen3:4b costly subset dominates at ~3 h (0.4–3 chunks/s). Total end-to-end ≈ 4 h on this machine.
 ```bash
@@ -101,7 +101,7 @@ graph-indexer is measured per language on a pinned OSS fixture. The default path
 lexical+stemming (zero dependencies). Numbers are strict (exact symbol match), with a
 held-out validation split. See BENCH_SUMMARY.md for the full matrix and what was not run.
 
-Default-path strict rank-1, averaged across 18 languages: symbolic 70% (large n)
+Default-path strict rank-1, averaged across 18 fixtures (14 languages): symbolic 70% (large n)
 vs semantic 22% (small per-language sets, sem n=2–7 — directional).
 Symbol/structure retrieval is the strength; the pure-local semantic channel has a real
 rank-1 ceiling. Per-language semantic numbers must be read with their n (see the table).
@@ -118,9 +118,9 @@ Each correction applied so the three documents state the same facts. Where a pri
 
 | # | Was | Now | Docs changed |
 |---|---|---|---|
-| 1 | Call-graph gap stated two ways: "C# and PHP" (SUMMARY) vs the fixture list "aspnet, laravel, symfony, css" (LANGUAGES, via a <1% threshold). | One **canonical structural-coverage table** (invocation-verified). `get_call_graph` returns **nothing** for aspnet/laravel/symfony (0 edges); **degraded** for spring (Java class-granular, 426 edges) and css (6 trivial edges). | LANGUAGES (table added, authoritative), SUMMARY (refs it), AGENT (refs it). |
+| 1 | Call-graph gap stated two ways: "C# and PHP" (SUMMARY) vs the fixture list "aspnet, laravel, symfony, css" (LANGUAGES, via a <1% threshold). | One **canonical structural-coverage table** (invocation-verified). After the v2.1.0 C#/PHP call-graph fixes, `get_call_graph` **resolves callers** (receiver-aware) for aspnet/laravel/symfony; only **css** is effectively empty (6 trivial edges) and **spring** is **degraded** (Java class-granular, 426 edges). | LANGUAGES (table added, authoritative), SUMMARY (refs it), AGENT (refs it). |
 | 2 | spring shown as having a call-graph (2.7% of chunks carry edges) — not flagged. | Verified **degraded**: 426 method-call edges resolve callers, but Java is chunked at class granularity so the callee method is not its own node (the 2.7% is also SCSS-dilution: 1132/1174 chunks are `rule_set`). | LANGUAGES, SUMMARY. |
-| 3 | css flagged "no call-graph extracted" via the <1% rule, lumped with C#/PHP. | Verified **none (6 trivial)**: 6 `@include`/`@function` edges, none resolving to a definition — distinct from the literal-zero C#/PHP case. | LANGUAGES, SUMMARY. |
+| 3 | css flagged "no call-graph extracted" via the <1% rule, lumped with C#/PHP. | Verified **none (6 trivial)**: 6 `@include`/`@function` edges, none resolving to a definition — css is now the **only** effectively-empty call graph (aspnet/laravel/symfony resolve callers after the v2.1.0 fixes). | LANGUAGES, SUMMARY. |
 | 4 | `type_refs`-empty set described inconsistently (older notes said "C#/Ruby"). | Verified-empty set is **express-js, django, rails, css, nvm** (full-scan: no chunk carries `type_refs`). PHP (laravel/symfony) **does** populate `type_refs` — not empty. fastapi is populated (17.8%) despite a sampled probe missing it. | LANGUAGES, SUMMARY. |
 | 5 | Semantic rank-1 printed without sample size; "Swift 67%" reads as precise (it is 2/3). | Every semantic metric now carries its **n** (`sem n` column + per-language caption + caveat box). Per-language semantic n=2–7. | SUMMARY, AGENT, README proposal. |
 | 6 | "9/18 not pinned … reproducibility gap" with no per-fixture detail. | `bench/FIXTURES.md` records repo+commit+subdir+chunk count for all 18; the 9 unpinned (`.git` stripped) are marked **unpinnable post-hoc** with reason. Count confirmed 9/18 pinned. | SUMMARY, new bench/FIXTURES.md. |

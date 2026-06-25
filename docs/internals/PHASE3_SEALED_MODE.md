@@ -51,11 +51,13 @@ nothing leaves it" — the common air-gapped-with-local-LLM posture.
    - `node:child_process` (`spawn`/`exec`) → block known egress tools (`curl`, `wget`, `git fetch/
      pull/push`, `npm`/`pip` install) under `strict`; under `local` allow only loopback-bound ones.
    - DNS (`node:dns`) lookups to non-loopback names → blocked (defence in depth).
-3. **Attestable manifest** (`sealManifest`): a deterministic JSON document — tier, the exact set of
-   loaded providers, an explicit `egress: "none" | "loopback-only"`, the effective config, and a
-   content hash — printable via `idx-index --attest` and surfaced in `list_index_stats`. An auditor
-   (or CI in the regulated environment) diffs the manifest against policy. Optionally signed with a
-   user-supplied key (out of scope for v1 — the manifest + hash is enough to start).
+3. **Attestable manifest** (`sealManifest`): a deterministic JSON document — tier (`sealed`), an
+   explicit `egress: "none" | "loopback-only"`, the per-channel `providers`
+   (`{ embeddings, enrichment, rerank, llm }`), and any `egressing_features`
+   (`[{ feature, reach, target }]`) — printable via `idx-index --attest` and surfaced in
+   `list_index_stats`. An auditor (or CI in the regulated environment) diffs the manifest against
+   policy. It can be **cryptographically signed** (Ed25519/RSA/EC) via `signManifest` and verified
+   with `verifySignedManifest` (F1 hardening — `node:crypto` only, air-gapped).
 4. **MCP server honours it too**: `idx-mcp --sealed strict` installs the guard before any tool is
    registered and omits/【refuses】tools whose providers egress; `list_index_stats` reports
    `sealed: "strict"`, `egress_guard: "active"`.
@@ -72,24 +74,33 @@ nothing leaves it" — the common air-gapped-with-local-LLM posture.
 - **`embeddings.mjs` / `enrichment.mjs`** — already centralise the network providers; sealed-mode
   validation enumerates them. No change to their logic — sealed mode only *gates* them.
 
-## Interface stubs (DESIGN — not implemented)
+## Interface (as built)
 
 ```js
-// seal.mjs  — DESIGN SKETCH, do not implement yet
-export function resolveSealMode(config) { /* → 'off' | 'local' | 'strict' */ }
+// seal.mjs  (the tier is resolved in config.mjs, not a seal.mjs export)
+export class SealViolation { /* { feature, reason, remedy } */ }
+export function isLoopbackHost(host); export function isLoopbackUrl(url);
+export function egressingFeatures(config);     // → [{ feature, reach, target }]
 
-// Throws SealViolation { feature, reason, remedy } if any enabled feature egresses beyond the tier.
+// Throws SealViolation if any enabled feature egresses beyond the tier.
 export function assertSealCompatible(config) { /* ... */ }
+export function commandWouldEgress(cmd, args, tier);  // child_process denylist helper
 
-// Installs deny-by-default hooks on net/tls/http(s)/fetch/undici/child_process/dns.
-// allow: [] (strict) | ['loopback'] (local). Returns a restore() for tests.
-export function installEgressGuard({ allow }) { /* → { restore() } */ }
+// Installs deny-by-default hooks on net/tls/http(s)/fetch (+ best-effort child_process).
+export function installEgressGuard({ allow }) { /* → restore() */ }
+export function egressGuardActive();
 
-// Deterministic attestation document (no timestamps in the hashed body; stamp outside).
+// Deterministic attestation document (stamp timestamps outside the signed body).
 export function sealManifest(config) {
-  // → { sealed: 'strict'|'local', egress: 'none'|'loopback-only',
-  //     providers: { embed, enrich, rerank, llm }, config: <effective>, hash }
+  // → { sealed, egress, providers: { embeddings, enrichment, rerank, llm },
+  //     egressing_features: [{ feature, reach, target }] }
 }
+
+// F1 hardening — cryptographic attestation (node:crypto only):
+export function canonicalJson(value); export function publicKeyFingerprint(key);
+export function signManifest(manifest, privateKey);         // → { manifest, signature }
+export function verifySignedManifest(envelope, publicKey);  // → { valid, reason }
+export function generateAttestationKeyPair();
 ```
 
 ```

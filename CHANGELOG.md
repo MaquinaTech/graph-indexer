@@ -303,7 +303,7 @@ store primitives — no ranking, parity, or default-path impact.
   `Σ_qi max_dj cos(qi, dj)`, so each query sub-vector finds its best document sub-vector — the
   compositional-query win single-vector pooling loses. New module `colbert.mjs` (`maxSimScore`,
   `encodeMultiVector`, `loadChunkVectors`, `rerankLateInteraction`) + `collectVectorsByKey` in
-  `engine/binary.mjs` + `embeddingBinPath()` on both engines; `test/colbert.mjs` (6 tests).
+  `engine/binary.mjs` + `embeddingBinPath()` on both engines; `test/colbert.mjs` (7 tests).
 - **No storage blow-up** (ColBERT's canonical cost): it reuses the document sub-vectors the engine
   ALREADY stores (base + `|s` summary + `|wN` windows), reading a candidate's vectors from the shared
   `.embeddings.bin` in one pass. **Air-gapped** (query multi-vectors from the same local embedder, no
@@ -410,7 +410,7 @@ store primitives — no ranking, parity, or default-path impact.
   whether the attested manifest still matches the current effective config (policy drift → exit 3).
 - **Zero dependency, air-gapped** (`node:crypto` only — no network, works under `--sealed strict`);
   the default path is untouched (these are pre-indexing CLI actions that exit before any build).
-  `test/seal.mjs` adds 5 tests (canonical JSON, Ed25519 + RSA sign/verify, tamper/wrong-key/alg
+  `test/seal.mjs` adds 4 tests (canonical JSON, Ed25519 + RSA sign/verify, tamper/wrong-key/alg
   rejection, JSON round-trip). Design: `docs/internals/PHASE3_SEALED_MODE.md`.
 
 ## [2.0.0] — 2026-06-21

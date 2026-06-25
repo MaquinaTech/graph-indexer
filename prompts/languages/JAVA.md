@@ -18,6 +18,6 @@
         <rule name="accessor-noise">Never read a POJO/bean body: detail: "signatures" or get_file_skeleton tells you everything a data class can. Exception flow: ONE exact_tokens search on the exception class finds throw sites and handlers together.</rule>
     </rules>
 
-    <playbook question="explain service X / change a method safely" calls="2-4">resolve_symbol("X") (annotations visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:. Signature change: get_call_graph("method") → filter callers by class via paths → ONE caller chunk as template → edit.</playbook>
+    <playbook question="explain service X / change a method safely" calls="2-4">resolve_symbol("X") (annotations visible) → get_chunk_summary(id, expand_calls: true) → answer with Used by:. Signature change: impact_of_edit(symbols:["method"]) — transitive callers+overrides+tests in ONE call, no recursive get_call_graph (class-granular chunks make that painful) → ONE caller chunk as template → edit.</playbook>
 
 </environment_prompt>

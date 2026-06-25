@@ -324,7 +324,7 @@ Per-fixture best configs, 3× spreads, and copy-paste enable flags live in **[do
 | Capability | Strong | Limited |
 |---|---|---|
 | **Call graph** (callers/callees) | resolves on every supported language | Java/Spring is class-granular; SCSS effectively none |
-| **Caller precision** | receiver-aware: TS/JS, Python, C#, Swift, PHP | name-only: Go, Rust, Kotlin, Ruby, Bash, C |
+| **Caller precision** | receiver-aware: TS/JS, Python, C#, Swift, PHP, Java (call-site level — but its call graph is class-granular) | name-only: Go, Rust, Kotlin, Ruby, Bash, C |
 | **Typed `find_references`** | precise: TS/JS, Python · field-precise: C# | heuristic: Java/PHP/Kotlin/Swift/Rust/Go/C · empty: Ruby, Bash, SCSS, dynamic JS/Python |
 
 AST chunking and lexical search cover **every** supported language; only the typed cross-reference channel narrows for dynamic ones.

@@ -11,6 +11,7 @@
         <rule name="container-wiring">WHICH implementation backs an injected token is container wiring, not a call: constructor injection creates no edge. Find the binding with ONE search of the module/provider registration (exact_tokens: "UserService") — never via the constructor's call graph.</rule>
         <rule name="lifecycle-hooks">onModuleInit-style hooks, error handlers, scheduled/cron methods, event/queue consumers have no inbound edges — the decorator in the summary says WHO invokes them; don't hunt for callers.</rule>
         <rule name="query-style">Path strings beat handler names (routes rename rarely, handlers often). Cross-cutting behaviour ("where do we attach the request ID") lives in middleware whose name you can't guess — search behaviourally.</rule>
+        <rule name="request-taint">SECURITY: req.body/query/params is the untrusted source. "Is this endpoint injectable" → find_tainted_sinks(category) to map the surface, then trace_taint one source→sink path (sqli|rce|xss|path|ssrf). Finder, not proof — "no flows" ≠ safe.</rule>
     </rules>
 
     <playbook question="what happens on POST /orders" calls="3-4">find_routes("POST", "/orders") → get_chunk(handler chunk_id) → get_chunk_summary(the service it calls, expand_calls: true) → answer; ONE middleware/guard chunk only if the question is about it.</playbook>

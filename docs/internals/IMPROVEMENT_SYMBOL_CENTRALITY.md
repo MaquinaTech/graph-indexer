@@ -56,7 +56,7 @@ index has no `centrality`, and every tool's output is unchanged.
 - `getCentrality(chunkId)` → `{ score, rank, total } | null` (null for an unranked/isolated chunk).
 - `topCentral(limit)` → `[{ chunk, score, rank }]`, rank-ascending — the program's hubs.
 
-## Surfacing (no new tool — the surface stays at 14)
+## Surfacing (no new tool — the surface stays at 16)
 
 - **`explain_symbol`** attaches centrality to each definition card: JSON gets
   `{ score, rank, total }`; markdown appends `🎯 centrality #R/T`, tagged `(hub)` in the top decile.
