@@ -70,6 +70,34 @@ export class MemoryGraphIndex {
 
         this.rrfK = rrfK;
         this._saveTimer = null;
+
+        // ── A4: persistent resolved symbol graph (opt-in; null when not built) ──
+        // _edges is the serialized edge list; the two maps index it by endpoint for
+        // O(1) getEdges and edge-backed findCallers/findReferers. Cleared on any
+        // incremental update (daemon) so a stale graph never serves wrong callers.
+        this._edges       = null;
+        this._edgesByTo   = new Map();   // to_chunk_id   → edge[]
+        this._edgesByFrom = new Map();   // from_chunk_id → edge[]
+    }
+
+    /** Index the (already deterministically-ordered) edge list by endpoint. */
+    _indexEdges(edges) {
+        this._edges = edges;
+        this._edgesByTo = new Map();
+        this._edgesByFrom = new Map();
+        for (const e of edges) {
+            if (!this._edgesByTo.has(e.to_chunk_id)) this._edgesByTo.set(e.to_chunk_id, []);
+            this._edgesByTo.get(e.to_chunk_id).push(e);
+            if (!this._edgesByFrom.has(e.from_chunk_id)) this._edgesByFrom.set(e.from_chunk_id, []);
+            this._edgesByFrom.get(e.from_chunk_id).push(e);
+        }
+    }
+
+    /** Drop the symbol graph (an incremental update would make it stale). */
+    _clearEdges() {
+        this._edges = null;
+        this._edgesByTo = new Map();
+        this._edgesByFrom = new Map();
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -78,6 +106,8 @@ export class MemoryGraphIndex {
         if (!fs.existsSync(this.indexPath)) return;
         const data = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
         this.graph = data.graph || { dependencies: {}, importedBy: {} };
+        // A4 resolved symbol graph (opt-in; absent on default indexes → no-op).
+        if (Array.isArray(data.edges)) this._indexEdges(data.edges);
         // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
         // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
         // stay a low-weight rescue). Set during the chunk load loop below.
@@ -522,7 +552,10 @@ export class MemoryGraphIndex {
             extends: c.extends || [],
             hyde: c.hyde || '', summary: c.summary || '', concepts: c.concepts || [],
         }));
-        const payload  = JSON.stringify({ chunks: chunksData, graph: this.graph });
+        const payload  = JSON.stringify({
+            chunks: chunksData, graph: this.graph,
+            ...(this._edges ? { edges: this._edges } : {}),
+        });
         const tmpPath    = `${this.indexPath}.tmp`;
         const tmpBinPath = `${this._embeddingPath}.tmp`;
         await Promise.all([
@@ -571,6 +604,10 @@ export class MemoryGraphIndex {
      * @param {Map<string, Float32Array|number[]>} [p.embeddings] New vectors keyed by embeddingKeyFor(chunk).
      */
     applyFileUpdate(filePath, { chunks = [], imports = [], embeddings = null } = {}) {
+        // A per-file edit makes the whole-program symbol graph stale; drop it so
+        // findCallers/findReferers fall back to the always-correct scan until the next
+        // full `idx-index` rebuilds it (the daemon never rebuilds the graph).
+        if (this._edges) this._clearEdges();
         this.updateFileGraph(filePath, imports);
 
         for (const [id, chunk] of Array.from(this.chunks.entries())) {
@@ -680,10 +717,47 @@ export class MemoryGraphIndex {
         return out;
     }
 
+    /**
+     * Resolved symbol-graph edges incident to a chunk (A4). Returns [] unless the
+     * opt-in graph was built. Deterministically ordered (the edge list is pre-sorted).
+     * @param {string} chunkId
+     * @param {object} [opts]
+     * @param {string|null} [opts.kind]      Filter to 'calls' | 'extends' | 'type'.
+     * @param {'in'|'out'} [opts.direction]  'in' = referrers of chunkId (default), 'out' = its referents.
+     * @returns {Array<{from_chunk_id:string,to_chunk_id:string,kind:string,confidence:string,chunk:object|null}>}
+     */
+    getEdges(chunkId, { kind = null, direction = 'in' } = {}) {
+        if (!this._edges) return [];
+        const src = direction === 'out' ? this._edgesByFrom : this._edgesByTo;
+        const list = src.get(chunkId) || [];
+        const out = [];
+        for (const e of list) {
+            if (kind && e.kind !== kind) continue;
+            const otherId = direction === 'out' ? e.to_chunk_id : e.from_chunk_id;
+            out.push({ ...e, chunk: this.chunks.get(otherId) ?? null });
+        }
+        return out;
+    }
+
     /** Chunks that call the given function name. @returns {object[]} */
     findCallers(funcName) {
+        // Edge-backed (A4) when the resolved graph is present and the name is defined —
+        // returns the SAME set as the scan below (every name-match caller → each def).
+        if (this._edges) {
+            const defs = this.resolveSymbol(funcName);
+            if (defs.length > 0) return this._referrersByEdge(defs, e => e.kind === 'calls');
+        }
         const out = [];
         for (const c of this.chunks.values()) if (c.calls?.includes(funcName)) out.push(c);
+        return out;
+    }
+
+    /** From-chunks of edges of a given kind that point at any of `defs`, id-sorted. */
+    _referrersByEdge(defs, keep) {
+        const ids = new Set();
+        for (const def of defs) for (const e of (this._edgesByTo.get(def.id) || [])) if (keep(e)) ids.add(e.from_chunk_id);
+        const out = [];
+        for (const id of [...ids].sort()) { const c = this.chunks.get(id); if (c) out.push(c); }
         return out;
     }
 
@@ -697,6 +771,10 @@ export class MemoryGraphIndex {
     findReferers(symbol) {
         const key = String(symbol).toLowerCase().trim();
         if (!key) return [];
+        if (this._edges) {
+            const defs = this.resolveSymbol(symbol);
+            if (defs.length > 0) return this._referrersByEdge(defs, e => e.kind === 'extends' || e.kind === 'type');
+        }
         const out = [];
         for (const c of this.chunks.values()) {
             // A class/type lists its own name in type_refs (the name node is a

@@ -94,6 +94,29 @@ store primitives — no ranking, parity, or default-path impact.
   proving `tests_for` returns only the test chunk (not the production caller) and `explain_symbol`
   composes definition + callees + callers + tests, in both response formats.
 
+### Persistent resolved symbol graph (A4) — Phase 2
+
+- **`--symbol-graph`** (`INDEXER_SYMBOL_GRAPH` / `symbolGraph` config) materializes a resolved
+  **chunk→chunk** graph at index time: one edge `{from_chunk_id, to_chunk_id, kind, confidence}`
+  per resolved reference, where `kind` ∈ `calls` | `extends` | `type` and `confidence` ∈
+  `high` | `name_only`. It is built by **reusing the query-time resolvers** (`classifyCallers` /
+  `findReferences`) over every defined symbol, so an edge's confidence is identical to what
+  `get_call_graph` / `find_references` report — no logic duplication, no drift.
+- New store method **`getEdges(chunkId, { kind?, direction })`** (`direction: 'in'` = referrers,
+  `'out'` = referents) on both backends, deterministically ordered → byte-identical
+  memory↔sqlite. Stored in a SQLite `edges` table / the in-memory index JSON.
+- `findCallers` / `findReferers` now **read the edge graph when present**, returning the *same*
+  sets as the name-match scan (a set-equivalence test is the load-bearing guard), and **fall back
+  to the scan** when the graph is absent or the name is undefined — so the default path is
+  byte-identical and an undefined-symbol lookup never returns empty-by-edges.
+- **Invariants:** OFF by default → index + call graph byte-identical, `test:eval` unchanged
+  (edges never touch search). Air-gapped, zero new deps. Deterministic edge order. A per-file
+  daemon update **invalidates** the graph (it would otherwise go stale) so callers fall back to
+  the always-correct scan until the next full `idx-index`. New `test/edges.mjs` (6 tests):
+  set-equivalence, getEdges direction/kind/confidence, undefined-name fallback, memory↔sqlite
+  parity, daemon invalidation, deterministic ordering. Foundation for `impact_of_edit` (C4) and
+  symbol-level PageRank (A5). Write-up: `docs/internals/IMPROVEMENT_SYMBOL_GRAPH.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

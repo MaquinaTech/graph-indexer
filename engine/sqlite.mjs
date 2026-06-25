@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS postings (term TEXT, chunk_id TEXT, tf INTEGER);
 CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, df INTEGER);
 CREATE TABLE IF NOT EXISTS call_edges (callee TEXT, chunk_id TEXT);
+CREATE TABLE IF NOT EXISTS edges (from_chunk_id TEXT, to_chunk_id TEXT, kind TEXT, confidence TEXT);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
 CREATE TABLE IF NOT EXISTS routes (
   id INTEGER PRIMARY KEY,
@@ -81,6 +82,8 @@ CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term);
 CREATE INDEX IF NOT EXISTS idx_postings_chunk ON postings(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_calledges_callee ON call_edges(callee);
+CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_chunk_id);
 CREATE INDEX IF NOT EXISTS idx_deps_file ON deps(file);
 CREATE INDEX IF NOT EXISTS idx_deps_dep ON deps(dep);
 CREATE INDEX IF NOT EXISTS idx_routes_method ON routes(method);
@@ -129,6 +132,7 @@ export class SqliteGraphStore {
         this._dataVersion = -1;
         this._writeReady = false;
         this._sketch = null; // binary-quantized vector sketch (built above SKETCH_THRESHOLD)
+        this._hasEdges = false; // A4: resolved symbol graph present (opt-in)
     }
 
     get backend() { return 'sqlite'; }
@@ -177,8 +181,15 @@ export class SqliteGraphStore {
         this._openVecFd();
         this._refreshSketch();
         this._prepare();
+        this._refreshHasEdges();
         this._dataVersion = this._readDataVersion();
         return this;
+    }
+
+    /** Whether the opt-in resolved symbol graph (A4) has any edges. */
+    _refreshHasEdges() {
+        try { this._hasEdges = Boolean(this.db.prepare('SELECT 1 FROM edges LIMIT 1').get()); }
+        catch { this._hasEdges = false; }
     }
 
     _openVecFd() {
@@ -306,6 +317,17 @@ export class SqliteGraphStore {
             'SELECT method, path, handler_name, handler_chunk_id, file_path, line, framework '
             + 'FROM routes ORDER BY id'
         );
+        // A4 symbol graph. ORDER mirrors the in-memory engine's per-endpoint slice of the
+        // globally-sorted edge list (fixed `to` → sort by from,kind,confidence; fixed `from`
+        // → sort by to,kind,confidence) so getEdges is byte-identical cross-backend.
+        this._stmtEdgesIn   = this.db.prepare(
+            'SELECT from_chunk_id, to_chunk_id, kind, confidence FROM edges WHERE to_chunk_id = ? '
+            + 'ORDER BY from_chunk_id, kind, confidence'
+        );
+        this._stmtEdgesOut  = this.db.prepare(
+            'SELECT from_chunk_id, to_chunk_id, kind, confidence FROM edges WHERE from_chunk_id = ? '
+            + 'ORDER BY to_chunk_id, kind, confidence'
+        );
     }
 
     _prepareWrite() {
@@ -365,11 +387,46 @@ export class SqliteGraphStore {
         return this._stmtByName.all(key).map(r => this._rowToChunk(r));
     }
 
-    findCallers(funcName) { return this._stmtCallers.all(funcName).map(r => this._rowToChunk(r)); }
+    /**
+     * Resolved symbol-graph edges incident to a chunk (A4). Mirrors MemoryGraphIndex.getEdges,
+     * including deterministic order. Returns [] unless the opt-in graph was built.
+     */
+    getEdges(chunkId, { kind = null, direction = 'in' } = {}) {
+        if (!this._hasEdges) return [];
+        const rows = direction === 'out' ? this._stmtEdgesOut.all(chunkId) : this._stmtEdgesIn.all(chunkId);
+        const out = [];
+        for (const e of rows) {
+            if (kind && e.kind !== kind) continue;
+            const otherId = direction === 'out' ? e.to_chunk_id : e.from_chunk_id;
+            out.push({ from_chunk_id: e.from_chunk_id, to_chunk_id: e.to_chunk_id, kind: e.kind, confidence: e.confidence, chunk: this.getChunk(otherId) });
+        }
+        return out;
+    }
+
+    /** From-chunks of edges of a kept kind pointing at any of `defs`, id-sorted. */
+    _referrersByEdge(defs, keepKind) {
+        const ids = new Set();
+        for (const def of defs) for (const e of this._stmtEdgesIn.all(def.id)) if (keepKind(e.kind)) ids.add(e.from_chunk_id);
+        const out = [];
+        for (const id of [...ids].sort()) { const c = this.getChunk(id); if (c) out.push(c); }
+        return out;
+    }
+
+    findCallers(funcName) {
+        if (this._hasEdges) {
+            const defs = this.resolveSymbol(funcName);
+            if (defs.length > 0) return this._referrersByEdge(defs, k => k === 'calls');
+        }
+        return this._stmtCallers.all(funcName).map(r => this._rowToChunk(r));
+    }
 
     findReferers(symbol) {
         const key = String(symbol).toLowerCase().trim();
         if (!key) return [];
+        if (this._hasEdges) {
+            const defs = this.resolveSymbol(symbol);
+            if (defs.length > 0) return this._referrersByEdge(defs, k => k === 'extends' || k === 'type');
+        }
         // Escape LIKE metacharacters in the symbol, then bracket with JSON quotes so
         // the prefilter only fires on a whole array element.
         const esc = key.replace(/[\\%_]/g, m => '\\' + m);
@@ -657,6 +714,11 @@ export class SqliteGraphStore {
 
         this.db.exec('BEGIN');
         try {
+            // A per-file edit makes the whole-program symbol graph (A4) stale; clear it so
+            // findCallers/findReferers fall back to the always-correct scan until the next
+            // full `idx-index` rebuilds it (the daemon never rebuilds the graph).
+            if (this._hasEdges) { this.db.exec('DELETE FROM edges'); this._hasEdges = false; }
+
             // Capture reusable vector offsets BEFORE deleting old rows, which may
             // be the only rows that hold those offsets.
             const reuse = new Map();
@@ -749,7 +811,7 @@ export class SqliteGraphStore {
      * @param {{dependencies:Object<string,string[]>}} payload.graph
      * @param {Map<string,Float32Array>|object} [payload.embeddingCache]  Keyed by embeddingKeyFor(chunk).
      */
-    buildFrom({ chunks, graph, embeddingCache }) {
+    buildFrom({ chunks, graph, embeddingCache, edges = null }) {
         this._open();
         this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
@@ -781,7 +843,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS postings;
             DROP TABLE IF EXISTS terms;  DROP TABLE IF EXISTS call_edges;
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
-            DROP TABLE IF EXISTS routes;
+            DROP TABLE IF EXISTS routes; DROP TABLE IF EXISTS edges;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -846,6 +908,15 @@ export class SqliteGraphStore {
                 r.handler_chunk_id ?? null, String(r.file_path || ''),
                 r.line ?? null, r.framework ?? null
             );
+        }
+
+        // A4 resolved symbol graph (opt-in). Inserted in the deterministic order produced
+        // by buildSymbolGraph so the table mirrors the in-memory edge list.
+        if (Array.isArray(edges) && edges.length) {
+            const insEdge = this.db.prepare(
+                'INSERT INTO edges (from_chunk_id, to_chunk_id, kind, confidence) VALUES (?, ?, ?, ?)'
+            );
+            for (const e of edges) insEdge.run(e.from_chunk_id, e.to_chunk_id, e.kind, e.confidence);
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');

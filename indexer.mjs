@@ -242,6 +242,29 @@ async function main() {
         }
     }
 
+    // Opt-in resolved symbol graph (--symbol-graph): build the chunk→chunk edge set ONCE
+    // over the finalized chunks (reusing the query-time resolvers, so confidence matches
+    // get_call_graph). Serialized into the index for both backends → getEdges. Built via a
+    // throwaway in-memory store so it sees the same resolution the MCP server will.
+    let symbolEdges = null;
+    if (config.symbolGraph) {
+        const tmpSg = path.join(config.dataDir, '_symbolgraph-build.json');
+        try {
+            fs.writeFileSync(tmpSg, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph }));
+            const { MemoryGraphIndex } = await import('./engine/memory.mjs');
+            const { buildSymbolGraph } = await import('./mcp/symbolgraph.mjs');
+            const sgIdx = new MemoryGraphIndex(tmpSg, { cacheEmbeddings: false });
+            sgIdx.load();
+            const res = buildSymbolGraph(sgIdx);
+            symbolEdges = res.edges;
+            sgIdx.close?.();
+            console.log(`🕸  Symbol graph: ${symbolEdges.length} resolved edges`
+                + `${res.cappedNames.length ? ` (⚠️ ${res.cappedNames.length} high-degree name(s) capped: ${res.cappedNames.slice(0, 5).join(', ')})` : ''}.`);
+        } finally {
+            try { fs.unlinkSync(tmpSg); } catch { /* none */ }
+        }
+    }
+
     // Resolve 'auto' now that the true chunk count is known — the threshold is only
     // meaningful after all chunks have been extracted.
     const backend = config.storage === 'auto'
@@ -256,6 +279,7 @@ async function main() {
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
+            edges: symbolEdges,
         });
         store.close?.();
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
@@ -265,7 +289,10 @@ async function main() {
         const tmpPath = `${INDEX_PATH}.tmp`;
         const tmpBinPath = `${EMBEDDINGS_PATH}.tmp`;
         await Promise.all([
-            fs.promises.writeFile(tmpPath, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph })),
+            fs.promises.writeFile(tmpPath, JSON.stringify({
+                chunks: indexData.chunks, graph: indexData.graph,
+                ...(symbolEdges ? { edges: symbolEdges } : {}),
+            })),
             fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
         ]);
         await Promise.all([

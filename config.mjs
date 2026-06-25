@@ -43,6 +43,11 @@ export const DEFAULTS = Object.freeze({
                                        // receivers resolve in get_call_graph / find_references. Air-gapped,
                                        // deterministic; default index is byte-identical. Enable with
                                        // --interprocedural / INDEXER_INTERPROCEDURAL.
+    symbolGraph: false,                // OPT-IN: persist a resolved symbol graph (chunk→chunk edges with
+                                       // kind + confidence) at index time, exposed via getEdges. findCallers/
+                                       // findReferers read it when present (identical sets, fall back to scan).
+                                       // Air-gapped, deterministic; default index byte-identical; search
+                                       // ranking unaffected. Enable with --symbol-graph / INDEXER_SYMBOL_GRAPH.
     enrichment: Object.freeze({
         enabled: false,
         model: 'qwen2.5-coder:1.5b',   // smallest coder model; quality sufficient for summaries.
@@ -165,6 +170,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_INTERPROCEDURAL === 'on'
         || file.interprocedural === true;
 
+    // Opt-in persistent resolved symbol graph (index-time, air-gapped).
+    const symbolGraph = argv.includes('--symbol-graph')
+        || env.INDEXER_SYMBOL_GRAPH === 'on'
+        || file.symbolGraph === true;
+
     const paths = artifactPaths(projectRoot);
 
     return Object.freeze({
@@ -197,6 +207,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         gitSignals,
         gitRankBoost,
         interprocedural,
+        symbolGraph,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
@@ -272,6 +283,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
             : 'off'}`,
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
+        `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
     ];
 }
 
@@ -292,6 +304,12 @@ export function configNotices(config) {
             + 'cross-file factory chains refresh on the next full `idx-index`; until then they fall '
             + 'back to single-hop resolution (never worse than the default). It only sharpens '
             + 'get_call_graph / find_references — search ranking is unaffected.');
+    }
+    if (config.symbolGraph) {
+        out.push('The resolved symbol graph is built once at index time (a whole-program pass), adding '
+            + 'index time roughly proportional to repo size. The watch daemon does NOT rebuild it, so '
+            + 'edges refresh on the next full `idx-index`; until then findCallers/findReferers fall back '
+            + 'to the name-match scan (never worse). It powers getEdges; search ranking is unaffected.');
     }
     if (config.enrichment.enabled && !config.rerank.enabled) {
         out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '

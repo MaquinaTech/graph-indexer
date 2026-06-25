@@ -222,6 +222,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--rerank` | off | Enable the reranker (reorders the over-fetched pool on NL queries). |
 | `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
 | `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
+| `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 | `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |
@@ -245,6 +246,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `RERANK_CROSS_ENCODER_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | Cross-encoder model id (downloaded on first use). |
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_INTERPROCEDURAL` | (off) | `on` enables the index-time inter-procedural receiver-type fixpoint (`--interprocedural`). |
+| `INDEXER_SYMBOL_GRAPH` | (off) | `on` builds the persistent resolved symbol graph (`--symbol-graph`). |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
 | `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |
 | `INDEXER_MLX_LM_HOST` | `http://localhost:8080` | Endpoint for the `mlx_lm.server` when `INDEXER_LLM_PROVIDER=mlx`. |

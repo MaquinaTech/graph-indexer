@@ -18,6 +18,7 @@
  *   resolveSymbol(name)                      → chunk[]   (exact, case-insensitive)
  *   findCallers(funcName)                    → chunk[]
  *   findReferers(symbol)                     → chunk[]   (type_refs / extends matches)
+ *   getEdges(chunkId, {kind?, direction})    → edge[]    (A4 resolved symbol graph; [] when off)
  *   findRoutes({method, pathPrefix})         → route[]   (HTTP route → handler chunk)
  *   iterateChunks()                          → Iterable<chunk>  (cursor on SQLite)
  *   getDependencies(path) / getImportedBy(path) → string[]
