@@ -120,8 +120,17 @@ list_index_stats → { ..., sealed: 'strict', egress_guard: 'active' }
   (tree-sitter grammars, node:sqlite, optional hnswlib) don't; `@huggingface/transformers` *does*
   download models — blocked under `strict`, and under `local` only if the model cache is already
   warm (first-run download fails closed, which is correct). Document this explicitly.
-- **Signing** — v1 ships an unsigned hashed manifest; key-based signing (cosign-style) is a clean
-  follow-on once the manifest format is stable.
+- **Signing** — ✅ **IMPLEMENTED (v2.1).** The manifest is now cryptographically signable. `seal.mjs`
+  adds `signManifest(manifest, privateKeyPem)` (Ed25519 / RSA / EC, via `node:crypto` — zero
+  dependency, sealed-compatible) → a `{ manifest, signature: { alg, keyType, publicKeyFingerprint,
+  value } }` envelope, with the signature taken over a `canonicalJson` (recursively key-sorted) form
+  so it survives a file round-trip and any future key-order change. `verifySignedManifest(envelope,
+  publicKeyPem)` returns `{ valid, reason }` (never throws). CLI: `idx-index --gen-attestation-key
+  <prefix>` writes an Ed25519 keypair; `idx-index --attest --sign-key <path>` prints the signed
+  envelope; `idx-index --verify-attestation <file> --pub-key <path>` verifies the signature AND
+  reports whether the attested manifest still matches the current effective config (policy drift →
+  exit 3). `test/seal.mjs` covers Ed25519 + RSA sign/verify, tamper rejection, wrong-key rejection,
+  algorithm-mismatch, and JSON-round-trip.
 
 ## Effort
 

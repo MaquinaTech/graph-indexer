@@ -13,9 +13,11 @@ import assert from 'node:assert/strict';
 import os from 'os';
 import http from 'node:http';
 import net from 'node:net';
+import crypto from 'node:crypto';
 import {
     isLoopbackHost, isLoopbackUrl, egressingFeatures, assertSealCompatible,
     installEgressGuard, egressGuardActive, sealManifest, commandWouldEgress, SealViolation,
+    canonicalJson, signManifest, verifySignedManifest, generateAttestationKeyPair, publicKeyFingerprint,
 } from '../seal.mjs';
 import { resolveConfig } from '../config.mjs';
 
@@ -125,6 +127,61 @@ test('seal: manifest is a deterministic attestation document', () => {
     const m2 = sealManifest(cfg({ sealed: 'local', embeddingsEnabled: true, embedProvider: 'ollama' }));
     assert.equal(m2.egress, 'loopback-only');
     assert.equal(m2.providers.embeddings, 'ollama');
+});
+
+test('seal: canonicalJson is recursively key-order-independent', () => {
+    assert.equal(canonicalJson({ b: 1, a: 2 }), canonicalJson({ a: 2, b: 1 }));
+    assert.equal(canonicalJson({ a: { y: 1, x: 2 }, c: [3, { q: 1, p: 2 }] }),
+        '{"a":{"x":2,"y":1},"c":[3,{"p":2,"q":1}]}');
+    // arrays keep order (only object keys are sorted)
+    assert.equal(canonicalJson([3, 1, 2]), '[3,1,2]');
+});
+
+test('seal: sign + verify a manifest (Ed25519); tamper and wrong key are rejected', () => {
+    const { publicKey, privateKey } = generateAttestationKeyPair();
+    const m = sealManifest(cfg({ sealed: 'strict' }));
+    const env = signManifest(m, privateKey);
+    assert.equal(env.signature.alg, 'ed25519');
+    assert.equal(env.signature.keyType, 'ed25519');
+    assert.equal(env.signature.publicKeyFingerprint, publicKeyFingerprint(crypto.createPublicKey(publicKey)));
+    assert.deepEqual(env.manifest, m, 'envelope carries the manifest verbatim');
+
+    const ok = verifySignedManifest(env, publicKey);
+    assert.ok(ok.valid, ok.reason);
+    assert.equal(ok.publicKeyFingerprint, env.signature.publicKeyFingerprint);
+
+    // tamper the manifest body → signature no longer matches
+    const tampered = { ...env, manifest: { ...env.manifest, sealed: 'off' } };
+    assert.equal(verifySignedManifest(tampered, publicKey).valid, false, 'tampered manifest rejected');
+    // a different key → rejected
+    const other = generateAttestationKeyPair();
+    assert.equal(verifySignedManifest(env, other.publicKey).valid, false, 'wrong key rejected');
+    // not an envelope → clean false (never throws)
+    assert.equal(verifySignedManifest({ foo: 1 }, publicKey).valid, false);
+    assert.equal(verifySignedManifest(null, publicKey).valid, false);
+});
+
+test('seal: signing works with an RSA key and detects algorithm mismatch', () => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    const env = signManifest(sealManifest(cfg({ sealed: 'local', embeddingsEnabled: true, embedProvider: 'ollama' })), privateKey);
+    assert.equal(env.signature.alg, 'rsa-sha256');
+    assert.ok(verifySignedManifest(env, publicKey).valid);
+    // verifying an RSA envelope with an Ed25519 public key → algorithm mismatch, not a crash
+    const ed = generateAttestationKeyPair();
+    const r = verifySignedManifest(env, ed.publicKey);
+    assert.equal(r.valid, false);
+    assert.match(r.reason, /mismatch/);
+});
+
+test('seal: a signed manifest round-trips through JSON (file-equivalent) and still verifies', () => {
+    const { publicKey, privateKey } = generateAttestationKeyPair();
+    const env = signManifest(sealManifest(cfg({ sealed: 'strict' })), privateKey);
+    const roundTripped = JSON.parse(JSON.stringify(env)); // simulate write→read of the attestation file
+    assert.ok(verifySignedManifest(roundTripped, publicKey).valid, 'survives a JSON round-trip');
 });
 
 test('seal: resolveConfig fail-closes a sealed-incompatible config', () => {

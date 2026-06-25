@@ -27,6 +27,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import cp from 'node:child_process';
+import crypto from 'node:crypto';
 
 /** Thrown by the fail-closed validation and by the runtime guard. */
 export class SealViolation extends Error {
@@ -277,4 +278,109 @@ export function sealManifest(config) {
         },
         egressing_features: egressingFeatures(config).map(f => ({ feature: f.feature, reach: f.reach, target: f.target })),
     };
+}
+
+// ── Attestation signing (F1 hardening) ───────────────────────────────────────────────────────
+// Turn the manifest from a document you trust into one you can VERIFY: a detached signature over
+// its canonical bytes, so an auditor/CI proves the attested posture is authentic and untampered.
+// Pure local crypto (node:crypto) — no dependency, no network; works under --sealed strict.
+
+/**
+ * Deterministic JSON: object keys sorted recursively → stable bytes for signing/verifying. (The
+ * manifest is already emitted in a fixed order, but signing over a canonical form makes the
+ * signature robust to any future key-order change and to a round-trip through a file.)
+ */
+export function canonicalJson(value) {
+    const norm = (v) => {
+        if (Array.isArray(v)) return v.map(norm);
+        if (v && typeof v === 'object') {
+            const out = {};
+            for (const k of Object.keys(v).sort()) out[k] = norm(v[k]);
+            return out;
+        }
+        return v;
+    };
+    return JSON.stringify(norm(value));
+}
+
+/** Map an asymmetric key type to its (node digest, label) signing spec. Ed25519 uses a null digest. */
+function signSpec(keyType) {
+    switch (keyType) {
+        case 'ed25519': return { digest: null, alg: 'ed25519' };
+        case 'ed448': return { digest: null, alg: 'ed448' };
+        case 'rsa':
+        case 'rsa-pss': return { digest: 'sha256', alg: 'rsa-sha256' };
+        case 'ec': return { digest: 'sha256', alg: 'ecdsa-sha256' };
+        default: throw new Error(`unsupported attestation key type: ${keyType}`);
+    }
+}
+
+/** SHA-256 fingerprint (first 16 bytes, hex) of a public key's SPKI/DER encoding — a stable key id. */
+export function publicKeyFingerprint(publicKey) {
+    const der = publicKey.export({ type: 'spki', format: 'der' });
+    return crypto.createHash('sha256').update(der).digest('hex').slice(0, 32);
+}
+
+/**
+ * Sign a seal manifest with a PEM private key (Ed25519 / RSA / EC). Returns a signed envelope
+ * `{ manifest, signature: { alg, keyType, publicKeyFingerprint, value } }`. The signature covers the
+ * CANONICAL JSON of the manifest, so it is reproducible and tamper-evident.
+ *
+ * @param {object} manifest  Output of sealManifest(config).
+ * @param {string|Buffer} privateKeyPem  A PEM-encoded private key.
+ */
+export function signManifest(manifest, privateKeyPem) {
+    const privateKey = crypto.createPrivateKey(privateKeyPem);
+    const spec = signSpec(privateKey.asymmetricKeyType);
+    const data = Buffer.from(canonicalJson(manifest), 'utf8');
+    const value = crypto.sign(spec.digest, data, privateKey).toString('base64');
+    const publicKey = crypto.createPublicKey(privateKey);
+    return {
+        manifest,
+        signature: {
+            alg: spec.alg,
+            keyType: privateKey.asymmetricKeyType,
+            publicKeyFingerprint: publicKeyFingerprint(publicKey),
+            value,
+        },
+    };
+}
+
+/**
+ * Verify a signed manifest envelope against a PEM public key. Returns `{ valid, reason }` (never
+ * throws — a malformed envelope/key is a clean `valid:false`). `valid` is true only if the signature
+ * matches the canonical JSON of `envelope.manifest` under the declared algorithm and key.
+ *
+ * @param {object} envelope  Output of signManifest().
+ * @param {string|Buffer} publicKeyPem  A PEM-encoded public key.
+ */
+export function verifySignedManifest(envelope, publicKeyPem) {
+    try {
+        if (!envelope || !envelope.manifest || !envelope.signature || !envelope.signature.value) {
+            return { valid: false, reason: 'not a signed manifest envelope (missing manifest/signature)' };
+        }
+        const publicKey = crypto.createPublicKey(publicKeyPem);
+        const spec = signSpec(publicKey.asymmetricKeyType);
+        if (spec.alg !== envelope.signature.alg) {
+            return { valid: false, reason: `algorithm mismatch: envelope=${envelope.signature.alg}, key=${spec.alg}` };
+        }
+        const data = Buffer.from(canonicalJson(envelope.manifest), 'utf8');
+        const ok = crypto.verify(spec.digest, data, publicKey, Buffer.from(envelope.signature.value, 'base64'));
+        if (!ok) return { valid: false, reason: 'signature does not match (tampered manifest or wrong key)' };
+        const fp = publicKeyFingerprint(publicKey);
+        if (envelope.signature.publicKeyFingerprint && envelope.signature.publicKeyFingerprint !== fp) {
+            return { valid: false, reason: 'public-key fingerprint mismatch' };
+        }
+        return { valid: true, reason: 'signature valid', publicKeyFingerprint: fp };
+    } catch (e) {
+        return { valid: false, reason: `verification error: ${e.message}` };
+    }
+}
+
+/** Generate an Ed25519 attestation keypair as PEM strings (`idx-index --gen-attestation-key`). */
+export function generateAttestationKeyPair() {
+    return crypto.generateKeyPairSync('ed25519', {
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
 }

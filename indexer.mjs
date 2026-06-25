@@ -24,7 +24,16 @@ import { AUTO_SQLITE_CHUNK_THRESHOLD } from './storage.mjs';
 import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { enrichCoreChunks } from './enrichment.mjs';
 import { collectGitSignals, writeGitSignals } from './git-signals.mjs';
-import { installEgressGuard, sealManifest } from './seal.mjs';
+import {
+    installEgressGuard, sealManifest, signManifest, verifySignedManifest,
+    generateAttestationKeyPair, canonicalJson,
+} from './seal.mjs';
+
+/** Value following `--flag` in argv, or undefined. */
+function argVal(flag) {
+    const i = process.argv.indexOf(flag);
+    return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : undefined;
+}
 
 // resolveConfig fail-closes on a sealed-incompatible config (throws SealViolation); surface it
 // as a clean exit rather than an unhandled rejection.
@@ -36,9 +45,58 @@ try {
     throw err;
 }
 
-// `idx-index --attest`: print the deterministic seal manifest and exit (no indexing).
+// `idx-index --gen-attestation-key <prefix>`: write an Ed25519 keypair (<prefix>.key / <prefix>.pub)
+// and exit. The private key is the signing key (keep safe); the public key is shared for verification.
+{
+    const prefix = argVal('--gen-attestation-key');
+    if (prefix) {
+        const { publicKey, privateKey } = generateAttestationKeyPair();
+        fs.writeFileSync(`${prefix}.key`, privateKey, { mode: 0o600 });
+        fs.writeFileSync(`${prefix}.pub`, publicKey);
+        console.log(`🔑 Attestation keypair written: ${prefix}.key (private — keep safe) + ${prefix}.pub (share to verify).`);
+        process.exit(0);
+    }
+}
+
+// `idx-index --verify-attestation <file> --pub-key <path>`: verify a signed manifest's signature and,
+// if authentic, report whether it MATCHES the current effective config. Exit 0 = valid + matching.
+{
+    const verifyFile = argVal('--verify-attestation');
+    if (verifyFile) {
+        let envelope;
+        try { envelope = JSON.parse(fs.readFileSync(verifyFile, 'utf8')); }
+        catch (e) { console.error(`❌ cannot read attestation ${verifyFile}: ${e.message}`); process.exit(3); }
+        const pubPath = argVal('--pub-key');
+        if (!pubPath) { console.error('❌ --verify-attestation requires --pub-key <path>'); process.exit(3); }
+        let pubPem;
+        try { pubPem = fs.readFileSync(pubPath, 'utf8'); }
+        catch (e) { console.error(`❌ cannot read public key ${pubPath}: ${e.message}`); process.exit(3); }
+        const res = verifySignedManifest(envelope, pubPem);
+        if (!res.valid) { console.error(`❌ attestation INVALID: ${res.reason}`); process.exit(3); }
+        console.log(`✅ attestation signature VALID (key ${res.publicKeyFingerprint}).`);
+        const matches = canonicalJson(sealManifest(config)) === canonicalJson(envelope.manifest);
+        if (matches) { console.log('✅ attested manifest MATCHES the current effective config.'); process.exit(0); }
+        console.log('⚠️  attested manifest DIFFERS from the current effective config (policy drift):');
+        console.log(`   attested: ${canonicalJson(envelope.manifest)}`);
+        console.log(`   current : ${canonicalJson(sealManifest(config))}`);
+        process.exit(3);
+    }
+}
+
+// `idx-index --attest [--sign-key <path>]`: print the deterministic seal manifest (signed if a key
+// is given) and exit (no indexing).
 if (process.argv.includes('--attest')) {
-    console.log(JSON.stringify(sealManifest(config), null, 2));
+    const manifest = sealManifest(config);
+    const signKey = argVal('--sign-key');
+    if (signKey) {
+        let keyPem;
+        try { keyPem = fs.readFileSync(signKey, 'utf8'); }
+        catch (e) { console.error(`❌ cannot read signing key ${signKey}: ${e.message}`); process.exit(2); }
+        try { console.log(JSON.stringify(signManifest(manifest, keyPem), null, 2)); }
+        catch (e) { console.error(`❌ signing failed: ${e.message}`); process.exit(2); }
+    } else {
+        console.log(JSON.stringify(manifest, null, 2));
+    }
     process.exit(0);
 }
 
