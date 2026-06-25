@@ -726,6 +726,9 @@ export class MemoryGraphIndex {
      * @param {'in'|'out'} [opts.direction]  'in' = referrers of chunkId (default), 'out' = its referents.
      * @returns {Array<{from_chunk_id:string,to_chunk_id:string,kind:string,confidence:string,chunk:object|null}>}
      */
+    /** Whether the opt-in resolved symbol graph (A4) is loaded. */
+    hasSymbolGraph() { return this._edges != null; }
+
     getEdges(chunkId, { kind = null, direction = 'in' } = {}) {
         if (!this._edges) return [];
         const src = direction === 'out' ? this._edgesByFrom : this._edgesByTo;

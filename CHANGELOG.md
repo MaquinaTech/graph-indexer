@@ -117,6 +117,21 @@ store primitives — no ranking, parity, or default-path impact.
   parity, daemon invalidation, deterministic ordering. Foundation for `impact_of_edit` (C4) and
   symbol-level PageRank (A5). Write-up: `docs/internals/IMPROVEMENT_SYMBOL_GRAPH.md`.
 
+### `impact_of_edit` — precise blast radius (C1 + C4) — Phase 2
+
+- New MCP tool **`impact_of_edit({ symbols?, files? })`** (13 → 14 tools): pass what you are
+  about to change and get the **transitively-affected** code (callers, subclasses, type users by
+  hop depth), the HTTP routes that reach it, the tests to run, the direct same-named referrers to
+  verify, and git co-change — in one call instead of recursively walking `get_call_graph`.
+- It follows **high-confidence** edges transitively (a precise closure that does not explode on
+  ambiguous names) and lists direct `name_only` referrers separately. It is **chunk-precise on a
+  `--symbol-graph` index** (walks `getEdges`) and falls back to query-time `classifyCallers` /
+  `findReferences` otherwise — a new `buildImpact` in `mcp/topology.mjs`, plus a `hasSymbolGraph()`
+  store predicate. Deterministic ordering (depth, file, line, id); both response formats.
+- Additive and read-only — no ranking/parity/default-path impact. `test/edges.mjs` adds 4 tests
+  (transitive depth via the graph AND the fallback, the two agreeing, and the tool composing
+  changed + impacted + tests + routes); `test/mcp.mjs` asserts the 14-tool surface.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

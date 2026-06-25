@@ -75,7 +75,10 @@ A4 ships the **additive** layer: edges + `getEdges` + the equivalence-preserving
 `classifyCallers` / `find_references` still compute confidence at query time (their output is
 unchanged); the stored confidence powers `getEdges` and the Phase 2 milestones that build on it:
 
-- **C1/C4 — `impact_of_edit(diff)`**: transitive `getEdges('in')` from changed symbols → affected
-  routes/tests/co-change.
+- **C1/C4 — `impact_of_edit` (shipped):** `buildImpact` (`mcp/topology.mjs`) does a reverse-direction
+  transitive BFS over high-confidence referrers — `getEdges('in')` when the graph is present, else
+  query-time `classifyCallers`/`findReferences` — and the `impact_of_edit` MCP tool composes that
+  with affected routes, tests, and git co-change. A `hasSymbolGraph()` store predicate selects the
+  fast path; both paths produce the same blast radius (tested).
 - **A5 — symbol PageRank / betweenness / communities** over the edge set.
 - **A1 — precise resolution** (tree-sitter-stack-graphs) upgrading edge confidence `high → resolved`.

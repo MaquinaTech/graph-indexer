@@ -17,7 +17,7 @@ import { coChangesFor, gitBoostScore, computeFreshness, currentGitState } from '
 import { extractSignatureLine, pruneBodyByQuery } from './format.mjs';
 import {
     assessConfidence, hydeQueryVector, buildHydePrompt, detectRepoLanguage,
-    classifyCallers, findReferences, findRoutes, buildSubgraph,
+    classifyCallers, findReferences, findRoutes, buildSubgraph, buildImpact,
 } from './topology.mjs';
 
 // ─── Structured (JSON) output helpers ────────────────────────────────────────────
@@ -1310,6 +1310,99 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 for (const t of tests.slice(0, 10)) lines.push(`  - 🧪 \`${t.name}\` in \`${t.file_path}\` · id \`${t.id}\``);
                 if (recentChanges.length) lines.push('', `**Recent activity:** ` + recentChanges.map(r => `\`${r.file}\` (hotness ${r.hotness})`).join(', '));
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (note) lines.push('', note);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── impact_of_edit ─────────────────────────────────────────────────────────────
+    server.tool(
+        'impact_of_edit',
+        'The precise BLAST RADIUS of a change before you make it: pass the symbols and/or files '
+        + 'you are about to edit and get the transitively-affected code (callers, subclasses, type '
+        + 'users), the HTTP routes that reach them, the tests to run, and the files that '
+        + 'historically change together. Follows high-confidence edges transitively (precise, no '
+        + 'name collisions); direct ambiguous referrers are listed separately to verify. Most '
+        + 'precise on an index built with --symbol-graph; otherwise resolves at query time.',
+        {
+            symbols: z.array(z.string()).optional().describe('Symbol names about to change (functions, classes, methods).'),
+            files: z.array(z.string()).optional().describe('Repo-relative file paths about to change (every defined symbol in them seeds the impact).'),
+            max_depth: z.number().int().min(1).max(6).default(3).describe('Transitive caller hops to follow (default 3).'),
+            max_nodes: z.number().int().min(1).max(1000).default(200).describe('Cap on affected chunks returned.'),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe(
+                "'markdown' (default) or 'json' (typed { changed, impacted, ambiguous, routes, tests, co_changes })."
+            ),
+        },
+        async ({ symbols = [], files = [], max_depth, max_nodes, response_format }) => {
+            try {
+                // Seed: every definition of each symbol + every chunk in each named file.
+                const seedMap = new Map();
+                for (const s of symbols) for (const c of db.resolveSymbol(s)) seedMap.set(c.id, c);
+                for (const f of files) for (const c of db.getChunksByFile(f)) seedMap.set(c.id, c);
+                const seed = [...seedMap.values()];
+
+                if (seed.length === 0) {
+                    const msg = (symbols.length || files.length)
+                        ? `No indexed symbols matched ${JSON.stringify([...symbols, ...files])}. Check the names/paths, or run search_code.`
+                        : 'Pass `symbols` and/or `files` you are about to change.';
+                    return response_format === 'json'
+                        ? jsonResult({ changed: [], impacted: [], ambiguous: [], routes: [], tests: [], co_changes: [], note: msg })
+                        : { content: [{ type: 'text', text: msg }] };
+                }
+
+                const { impacted, ambiguous, truncated, usedGraph } = buildImpact(db, seed, { maxDepth: max_depth, maxNodes: max_nodes });
+
+                // Affected = seed ∪ impacted. Split tests out from production code.
+                const affected = [...seed.map(c => ({ chunk: c, depth: 0, kind: 'seed' })), ...impacted];
+                const affectedIds = new Set(affected.map(a => a.chunk.id));
+                const isTest = (c) => TEST_FILE_RE.test(c.file_path);
+                const impactedCode = impacted.filter(a => !isTest(a.chunk));
+                const tests = affected.filter(a => isTest(a.chunk)).map(a => a.chunk);
+
+                // Routes whose handler chunk is in the affected set.
+                const routes = findRoutes(db, {}).filter(r => r.id && affectedIds.has(r.id));
+                const seedFiles = [...new Set(seed.map(c => c.file_path))];
+                const coChanges = coChangeFiles(gitSignals, seedFiles);
+                const fresh = indexFreshness();
+                const note = freshnessNote(fresh);
+
+                if (response_format === 'json') {
+                    return jsonResult({
+                        seed_symbols: symbols, seed_files: files,
+                        resolution: usedGraph ? 'symbol-graph' : 'query-time',
+                        changed: seed.map(chunkCard),
+                        impacted: impactedCode.map(a => ({ ...chunkCard(a.chunk), depth: a.depth, via: a.kind })),
+                        ambiguous: ambiguous.map(a => ({ ...chunkCard(a.chunk), via: a.kind })),
+                        routes,
+                        tests: tests.map(chunkCard),
+                        co_changes: coChanges,
+                        truncated,
+                        index: fresh,
+                    });
+                }
+
+                const ref = (c) => `\`${c.class_context ? c.class_context + '.' : ''}${c.name}\` in \`${c.file_path}\`:${c.start_line}`;
+                const lines = [`# 💥 Impact of editing ${seed.map(c => `\`${c.name}\``).slice(0, 8).join(', ')}`];
+                lines.push(`> resolution: ${usedGraph ? 'symbol-graph (precise)' : 'query-time'}${truncated ? ` · ⚠️ truncated at ${max_nodes} nodes` : ''}`);
+                lines.push('', `**Changed (${seed.length}):** ${seed.map(c => `\`${c.name}\``).join(', ')}`);
+                lines.push('', `**Impacted code (${impactedCode.length})** — transitive high-confidence callers/users:`);
+                for (const a of impactedCode.slice(0, 40)) lines.push(`  - [d${a.depth}·${a.kind}] ${ref(a.chunk)}`);
+                if (impactedCode.length > 40) lines.push(`  …and ${impactedCode.length - 40} more`);
+                lines.push('', tests.length ? `**Tests to run (${tests.length}):**` : `**Tests to run:** none found`);
+                for (const t of tests.slice(0, 20)) lines.push(`  - 🧪 ${ref(t)} · id \`${t.id}\``);
+                if (routes.length) {
+                    lines.push('', `**Affected routes (${routes.length}):**`);
+                    for (const r of routes) lines.push(`  - **${r.method}** \`${r.path}\` → \`${r.handler_name}\``);
+                }
+                if (ambiguous.length) {
+                    lines.push('', `**Ambiguous (${ambiguous.length}) — verify (same-named symbol, not expanded):**`);
+                    for (const a of ambiguous.slice(0, 15)) lines.push(`  - ❔ ${ref(a.chunk)}`);
+                }
+                if (coChanges.length) lines.push('', coChangeLine(coChanges));
+                if (!usedGraph) lines.push('', '> ℹ️ Build the index with `--symbol-graph` for a precomputed, chunk-precise blast radius.');
                 if (note) lines.push('', note);
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {

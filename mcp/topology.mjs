@@ -554,3 +554,87 @@ export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudg
     }));
     return { seed, found: true, truncated, nodes: nodeList, edges };
 }
+
+/**
+ * Reverse-direction transitive blast radius (C4): from a set of seed chunks (the symbols /
+ * files about to change), the transitively-affected REFERRERS — callers, subclasses, and type
+ * users — bounded by hop depth and node count.
+ *
+ * Uses the persistent symbol graph (getEdges) when present — precise and chunk-level — and
+ * otherwise falls back to query-time classifyCallers / findReferences. HIGH-confidence
+ * referrers drive the transitive closure (a precise blast radius that does not explode on
+ * ambiguous names); the DIRECT name_only referrers of the seed are surfaced separately for the
+ * agent to verify. Fully deterministic (every list is sorted: depth, file, line, id).
+ *
+ * @param {object} db
+ * @param {object[]} seedChunks  The chunks being changed.
+ * @param {object} [opts]
+ * @param {number} [opts.maxDepth]  Transitive hops to follow (default 3).
+ * @param {number} [opts.maxNodes]  Cap on impacted chunks (default 200).
+ * @returns {{ impacted:Array<{chunk,depth,kind}>, ambiguous:Array<{chunk,kind}>,
+ *             truncated:boolean, usedGraph:boolean }}
+ */
+export function buildImpact(db, seedChunks, { maxDepth = 3, maxNodes = 200 } = {}) {
+    const hasGraph = typeof db.hasSymbolGraph === 'function' && db.hasSymbolGraph();
+    const seedIds = new Set(seedChunks.map(c => c.id));
+
+    const highReferrers = (chunk) => {
+        const out = [];
+        if (hasGraph) {
+            for (const e of db.getEdges(chunk.id, { direction: 'in' }))
+                if (e.chunk && e.confidence === 'high') out.push({ chunk: e.chunk, kind: e.kind });
+            return out;
+        }
+        if (!chunk.name || chunk.name === 'anonymous') return out;
+        const tcl = chunk.class_context || null;
+        const seen = new Set();
+        for (const h of classifyCallers(db, chunk.name, { targetClass: tcl }).high)
+            if (!seen.has(h.chunk.id)) { seen.add(h.chunk.id); out.push({ chunk: h.chunk, kind: 'calls' }); }
+        const refs = findReferences(db, chunk.name, { targetClass: tcl });
+        for (const r of refs.inherits) if (r.confidence === 'high' && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'extends' }); }
+        for (const r of refs.types) if (r.confidence === 'high' && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'type' }); }
+        return out;
+    };
+    const nameOnlyReferrers = (chunk) => {
+        const out = [];
+        if (hasGraph) {
+            for (const e of db.getEdges(chunk.id, { direction: 'in' }))
+                if (e.chunk && e.confidence === 'name_only') out.push({ chunk: e.chunk, kind: e.kind });
+            return out;
+        }
+        if (!chunk.name || chunk.name === 'anonymous') return out;
+        for (const n of classifyCallers(db, chunk.name, { targetClass: chunk.class_context || null }).nameOnly)
+            out.push({ chunk: n.chunk, kind: 'calls' });
+        return out;
+    };
+
+    const ambiguous = new Map();
+    for (const s of seedChunks) for (const r of nameOnlyReferrers(s))
+        if (!seedIds.has(r.chunk.id) && !ambiguous.has(r.chunk.id)) ambiguous.set(r.chunk.id, r);
+
+    const impacted = new Map();
+    const visited = new Set(seedIds);
+    let truncated = false;
+    let frontier = seedChunks.map(c => ({ chunk: c }));
+    for (let depth = 1; depth <= maxDepth && !truncated; depth++) {
+        const next = [];
+        for (const { chunk } of frontier) {
+            for (const r of highReferrers(chunk)) {
+                if (visited.has(r.chunk.id)) continue;
+                if (impacted.size >= maxNodes) { truncated = true; break; }
+                visited.add(r.chunk.id);
+                impacted.set(r.chunk.id, { chunk: r.chunk, depth, kind: r.kind });
+                next.push({ chunk: r.chunk });
+            }
+            if (truncated) break;
+        }
+        if (next.length === 0) break;
+        frontier = next;
+    }
+
+    const byPlace = (a, b) => (a.chunk.file_path < b.chunk.file_path ? -1 : a.chunk.file_path > b.chunk.file_path ? 1 : 0)
+        || (a.chunk.start_line - b.chunk.start_line) || (a.chunk.id < b.chunk.id ? -1 : 1);
+    const impactedList = [...impacted.values()].sort((a, b) => (a.depth - b.depth) || byPlace(a, b));
+    const ambiguousList = [...ambiguous.values()].sort(byPlace);
+    return { impacted: impactedList, ambiguous: ambiguousList, truncated, usedGraph: hasGraph };
+}

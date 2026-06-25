@@ -391,6 +391,9 @@ export class SqliteGraphStore {
      * Resolved symbol-graph edges incident to a chunk (A4). Mirrors MemoryGraphIndex.getEdges,
      * including deterministic order. Returns [] unless the opt-in graph was built.
      */
+    /** Whether the opt-in resolved symbol graph (A4) is loaded. */
+    hasSymbolGraph() { return this._hasEdges; }
+
     getEdges(chunkId, { kind = null, direction = 'in' } = {}) {
         if (!this._hasEdges) return [];
         const rows = direction === 'out' ? this._stmtEdgesOut.all(chunkId) : this._stmtEdgesIn.all(chunkId);

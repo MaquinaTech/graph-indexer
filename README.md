@@ -182,6 +182,7 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
 | `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
 | `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, and git recency/co-change. |
+| `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`. |
 
 ## Configuration
 

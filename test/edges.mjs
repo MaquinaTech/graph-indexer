@@ -21,6 +21,8 @@ import { SqliteGraphStore } from '../engine/sqlite.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { buildSymbolGraph, edgeOrder } from '../mcp/symbolgraph.mjs';
+import { buildImpact } from '../mcp/topology.mjs';
+import { registerTools } from '../mcp/tools.mjs';
 
 const GOD = Array.from({ length: 210 }, (_, i) => `  // pad ${i}`).join('\n');
 const FILES = {
@@ -202,4 +204,115 @@ test('symbol graph: edge list is deterministically ordered', () => {
     const { edges } = loadMem(perFile, { withEdges: false });
     const sorted = edges.slice().sort(edgeOrder);
     assert.deepEqual(edges, sorted, 'buildSymbolGraph emits edges already in the parity order');
+});
+
+// ── C4: transitive blast radius. Chain validateToken ← login ← handleLogin, plus a test
+//    that calls validateToken. Editing validateToken impacts login (d1), handleLogin (d2),
+//    and the test (d1). ────────────────────────────────────────────────────────────────
+const IMPACT_FILES = {
+    'auth.ts': `
+export function validateToken(token) {
+  return verify(token);
+}
+`,
+    'service.ts': `
+import { validateToken } from './auth';
+export function login(req) {
+  return validateToken(req.t);
+}
+`,
+    'api.ts': `
+import { login } from './service';
+export function handleLogin(req) {
+  return login(req);
+}
+`,
+    'auth.test.ts': `
+import { validateToken } from './auth';
+test('validates a token', () => {
+  return validateToken('x');
+});
+`,
+};
+const IMPACT_IMPORTS = { 'service.ts': ['auth.ts'], 'api.ts': ['service.ts'], 'auth.test.ts': ['auth.ts'] };
+
+function parseImpact() {
+    const parser = getParserForFile('.ts');
+    if (!parser) return null;
+    const perFile = {};
+    for (const [f, src] of Object.entries(IMPACT_FILES)) {
+        const tree = parser.parse((o) => (o < src.length ? src.slice(o, o + 4096) : null));
+        perFile[f] = extractSemanticChunks(tree.rootNode, f, src, '.ts');
+    }
+    return perFile;
+}
+function loadImpact(perFile, { withEdges }) {
+    const p = path.join(os.tmpdir(), `impact-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+    const scan = new MemoryGraphIndex(p, { cacheEmbeddings: false });
+    for (const [f, chunks] of Object.entries(perFile)) {
+        scan.applyFileUpdate(f, { chunks, imports: IMPACT_IMPORTS[f] || [] });
+        if (scan._saveTimer) { clearTimeout(scan._saveTimer); scan._saveTimer = null; }
+    }
+    if (!withEdges) return scan;
+    const { edges } = buildSymbolGraph(scan);
+    fs.writeFileSync(p, JSON.stringify({ chunks: [...scan.chunks.values()], graph: scan.graph, edges }));
+    const db = new MemoryGraphIndex(p); db.load();
+    return db;
+}
+
+for (const mode of ['symbol-graph', 'query-time-fallback']) {
+    test(`impact (C4): transitive blast radius via ${mode}`, () => {
+        const perFile = parseImpact();
+        if (!perFile) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+        const db = loadImpact(perFile, { withEdges: mode === 'symbol-graph' });
+        assert.equal(db.hasSymbolGraph(), mode === 'symbol-graph', 'graph presence matches the mode');
+        const seed = db.resolveSymbol('validateToken');
+        const { impacted, usedGraph } = buildImpact(db, seed, { maxDepth: 3 });
+        assert.equal(usedGraph, mode === 'symbol-graph');
+        const byName = new Map(impacted.map(a => [a.chunk.name, a.depth]));
+        assert.equal(byName.get('login'), 1, 'direct caller at depth 1');
+        assert.equal(byName.get('handleLogin'), 2, 'transitive caller at depth 2');
+        // the test chunk (expression_statement) is a depth-1 caller in the test file
+        assert.ok(impacted.some(a => /auth\.test\.ts/.test(a.chunk.file_path) && a.depth === 1),
+            'the exercising test is in the blast radius at depth 1');
+    });
+}
+
+test('impact (C4): symbol-graph and query-time fallback agree on the impacted set', () => {
+    const perFile = parseImpact();
+    if (!perFile) return;
+    const graphDb = loadImpact(perFile, { withEdges: true });
+    const scanDb = loadImpact(perFile, { withEdges: false });
+    const set = (db) => buildImpact(db, db.resolveSymbol('validateToken'), { maxDepth: 3 })
+        .impacted.map(a => `${a.chunk.name}@${a.depth}`).sort();
+    assert.deepEqual(set(graphDb), set(scanDb), 'graph and fallback produce the same blast radius');
+});
+
+test('impact_of_edit tool composes changed + impacted + tests + routes', async () => {
+    const perFile = parseImpact();
+    if (!perFile) return;
+    const db = loadImpact(perFile, { withEdges: true });
+    // Attach a route whose handler is the depth-2 caller, so it must surface as affected.
+    const handler = db.resolveSymbol('handleLogin')[0];
+    db.graph.routes = [{
+        method: 'POST', path: '/login', handler_name: 'handleLogin',
+        handler_chunk_id: handler.id, file_path: 'api.ts', line: handler.start_line, framework: 'express',
+    }];
+    const handlers = new Map();
+    registerTools({ tool: (n, _d, _s, h) => handlers.set(n, h) }, db, {
+        projectRoot: os.tmpdir(), artifactPath: '/nonexistent', pidFile: null,
+        embeddingsEnabled: false, embedder: null,
+    });
+
+    const res = await handlers.get('impact_of_edit')({ symbols: ['validateToken'], response_format: 'json' });
+    const sc = res.structuredContent;
+    assert.equal(sc.resolution, 'symbol-graph', 'used the persistent graph');
+    assert.deepEqual(sc.changed.map(c => c.name), ['validateToken']);
+    const impactedNames = sc.impacted.map(c => c.name);
+    assert.ok(impactedNames.includes('login') && impactedNames.includes('handleLogin'), 'transitive code impacted');
+    assert.ok(sc.impacted.every(c => !/\.test\./.test(c.file_path)), 'tests are split out of impacted code');
+    assert.equal(sc.tests.length, 1, 'the exercising test is surfaced');
+    assert.match(sc.tests[0].file_path, /auth\.test\.ts/);
+    assert.deepEqual(sc.routes.map(r => `${r.method} ${r.path}`), ['POST /login'], 'affected route surfaced');
+    assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
 });
