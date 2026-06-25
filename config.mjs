@@ -53,6 +53,10 @@ export const DEFAULTS = Object.freeze({
                                        // trace_taint / find_tainted_sinks tools serve instantly (both backends
                                        // serve identical flows). Default off → tools compute query-time (the
                                        // index is byte-identical). --taint / INDEXER_TAINT.
+    ranker: 'rrf',                     // Search ranker (D3). 'rrf' (default): the RRF + boost-ladder fusion —
+                                       // BYTE-IDENTICAL to before. 'learned': a post-fusion linear re-rank over
+                                       // RRF score + A5 centrality + resolved/SCIP in-degree + git (zero-dep dot
+                                       // product; lift is on --symbol-graph indexes). --ranker / INDEXER_RANKER.
     sealed: 'off',                     // Sealed mode (F1): 'off' (default) | 'local' (loopback only) |
                                        // 'strict' (zero network egress; lexical-only). Fail-closed:
                                        // refuses to start if an enabled feature would egress beyond the
@@ -199,6 +203,10 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_TAINT === 'on'
         || file.taint === true;
 
+    // Search ranker (D3). Unknown values fall back to the default 'rrf' (byte-identical fusion).
+    const rankerRaw = flagValue(argv, '--ranker') || env.INDEXER_RANKER || file.ranker || DEFAULTS.ranker;
+    const ranker = (rankerRaw === 'learned' || rankerRaw === 'rrf') ? rankerRaw : 'rrf';
+
     // Resolver provider for the symbol graph (A1/A2). Unknown values fall back to 'heuristic'.
     const resolverRaw = flagValue(argv, '--resolver') || env.INDEXER_RESOLVER || file.resolver || DEFAULTS.resolver;
     const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic' || resolverRaw === 'scip')
@@ -254,6 +262,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         interprocedural,
         symbolGraph,
         taint,
+        ranker,
         resolver,
         scipIndex,
 
@@ -338,6 +347,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
         `taint       : ${config.taint ? 'on · precomputed flows (trace_taint / find_tainted_sinks)' : 'off (query-time)'}`,
+        `ranker      : ${config.ranker === 'learned' ? 'learned · post-fusion linear re-rank (opt-in)' : 'rrf (default)'}`,
         `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier'
             : config.resolver === 'scip' ? `scip · cross-file SCIP bindings → \`resolved\` (${config.scipIndex || '⚠️ no --scip-index'})`
             : 'heuristic (default)'}`,
@@ -376,6 +386,13 @@ export function configNotices(config) {
             + 'index time roughly proportional to repo size. The watch daemon does NOT rebuild it, so '
             + 'edges refresh on the next full `idx-index`; until then findCallers/findReferers fall back '
             + 'to the name-match scan (never worse). It powers getEdges; search ranking is unaffected.');
+    }
+    if (config.ranker === 'learned') {
+        out.push('Learned ranker (D3): the fused top-N is re-ordered by a zero-dependency linear model '
+            + 'over the RRF score + symbol centrality + resolved/SCIP in-degree + git recency. It is a '
+            + 'post-fusion re-rank (the default RRF ordering is untouched). Its discriminating features '
+            + 'are zero without --symbol-graph, so pair it with --symbol-graph for the measured lift; on a '
+            + 'plain lexical index it is ≈neutral. RRF remains the default; this is opt-in.');
     }
     if (config.taint) {
         out.push('Taint flows are precomputed once at index time and serialized, so trace_taint / '

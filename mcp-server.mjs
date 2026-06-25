@@ -178,6 +178,7 @@ registerTools(server, db, {
     gitSignals,
     gitRankBoost: config.gitRankBoost,
     sealed: config.sealed,
+    ranker: config.ranker,
 });
 
 const transport = new StdioServerTransport();

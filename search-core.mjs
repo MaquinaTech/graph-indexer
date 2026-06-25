@@ -593,6 +593,102 @@ export function fuseAndRank({
         .filter(r => r.chunk !== undefined);
 }
 
+// ─── D3: learned re-ranker (opt-in, post-fusion) ─────────────────────────────────
+//
+// A learned linear model that RE-ORDERS the fused top-N using features the engine
+// already computes — the RRF fused score plus PROGRAM-STRUCTURE signals A4/A5/A1 added
+// (symbol centrality, resolved-edge in-degree, SCIP-resolved in-degree) and git recency.
+// It is a *post-fusion* re-rank (like the LLM reranker / git boost — tool layer, never
+// inside fuseAndRank), so the default RRF ordering is byte-identical: this runs ONLY when
+// the caller opts in (config.ranker === 'learned'). Inference is a dot product — zero
+// runtime dependency, no model server, deterministic (ties broken on id) → parity-safe.
+//
+// Honest scope: the discriminating features (centrality / in-degree / resolved-in) are
+// ZERO without --symbol-graph, so on a default index the model degrades to the RRF score
+// + git + node-type and is ≈neutral; its lift is on symbol-graph indexes. Trained offline
+// (bench/train-ranker.mjs) on the benchmark's labelled query→chunk pairs; RRF stays the
+// default. See docs/internals/IMPROVEMENT_LEARNED_RANKER.md for the measured deltas.
+
+/** Feature order — the model's weight vector is keyed by these names. */
+export const RANKER_FEATURES = ['rrf', 'rank', 'centrality', 'in_degree', 'resolved_in', 'git', 'is_def', 'is_test'];
+
+// Node types that are NOT a definition (a re-export / bare expression / import is a weaker hit).
+const NON_DEF_NODE_RE = /expression|call_expression|re_export|_export_statement|import|comment/;
+
+/**
+ * Default shipped model — CONSERVATIVE and RRF-DOMINANT by design. The offline trainer
+ * (bench/train-ranker.mjs) measured that the program-structure features (centrality / resolved
+ * in-degree) carry ~no signal for symbol retrieval on the benchmark — the correct symbol is usually
+ * NOT the most central one (the fit assigns them near-zero weight) — and a fully data-fit model only
+ * TIES RRF on the held-out split (rank-1 0.579 vs 0.579). So the shipped default keeps RRF in charge
+ * (it already
+ * encodes lexical+vector+boosts), adds only a whisper of structure as a tie-breaker, and an is_test
+ * penalty that aligns with the existing demotion. RRF remains the engine default (config.ranker);
+ * this model only runs under the opt-in `--ranker learned`, where it is ≈neutral on the generic
+ * benchmark and exists for users to RETRAIN on their own symbol-graph-rich repo. See
+ * docs/internals/IMPROVEMENT_LEARNED_RANKER.md for the full measured story.
+ */
+export const DEFAULT_RANKER_MODEL = Object.freeze({
+    bias: 0,
+    weights: Object.freeze({
+        rrf: 1.0, rank: 0.30, centrality: 0.04, in_degree: 0.04,
+        resolved_in: 0.04, git: 0.03, is_def: 0.0, is_test: -0.20,
+    }),
+});
+
+/**
+ * Extract the feature vector for one fused candidate. Pure; all backend data arrives through
+ * accessors so memory and SQLite produce identical features (parity).
+ *
+ * @param {{score:number, chunk:object}} result
+ * @param {number} idx  0-based position in the fused pool.
+ * @param {object} ctx  { maxScore, getCentrality?, getInEdges?, gitScoreFor? }
+ */
+export function extractRankerFeatures(result, idx, ctx) {
+    const c = result.chunk || {};
+    const cen = ctx.getCentrality ? ctx.getCentrality(c.id) : null;
+    const inEdges = ctx.getInEdges ? (ctx.getInEdges(c.id) || []) : [];
+    let resolvedIn = 0;
+    for (const e of inEdges) if (e.confidence === 'resolved') resolvedIn++;
+    const nodeType = String(c.node_type || '');
+    return {
+        rrf: ctx.maxScore > 0 ? (result.score || 0) / ctx.maxScore : 0,
+        rank: 1 / (1 + idx),
+        centrality: cen ? cen.score : 0,
+        in_degree: Math.min(inEdges.length / 10, 1),     // squashed into [0,1]
+        resolved_in: Math.min(resolvedIn / 5, 1),
+        git: ctx.gitScoreFor ? (ctx.gitScoreFor(c.file_path) || 0) : 0,
+        is_def: nodeType && !NON_DEF_NODE_RE.test(nodeType) ? 1 : 0,
+        is_test: c.file_path && TEST_FILE_RE.test(c.file_path) ? 1 : 0,
+    };
+}
+
+/** Linear score of a feature vector under a model. */
+export function scoreLearned(features, model = DEFAULT_RANKER_MODEL) {
+    let s = model.bias || 0;
+    const w = model.weights || {};
+    for (const f of RANKER_FEATURES) s += (w[f] || 0) * (features[f] || 0);
+    return s;
+}
+
+/**
+ * Re-rank fused results with the learned model. Returns a NEW array (score replaced by the learned
+ * score), ordered by learned score desc with id tie-break. ≤1 result is returned unchanged.
+ * Deterministic → both backends re-rank identically (parity-safe).
+ *
+ * @param {Array<{score:number, chunk:object}>} results  The fused (RRF) pool, over-fetched.
+ * @param {object} ctx  Accessors: { getCentrality?, getInEdges?, gitScoreFor? }.
+ * @param {object} [model]
+ */
+export function learnedRerank(results, ctx = {}, model = DEFAULT_RANKER_MODEL) {
+    if (!Array.isArray(results) || results.length <= 1) return results;
+    const maxScore = results.reduce((m, r) => Math.max(m, r.score || 0), 0);
+    const fctx = { ...ctx, maxScore };
+    const scored = results.map((r, i) => ({ r, s: scoreLearned(extractRankerFeatures(r, i, fctx), model) }));
+    scored.sort((a, b) => (b.s - a.s) || ((a.r.chunk?.id ?? '') < (b.r.chunk?.id ?? '') ? -1 : 1));
+    return scored.map(({ r, s }) => ({ ...r, score: s }));
+}
+
 // ─── Graph centrality ──────────────────────────────────────────────────────────
 
 /**

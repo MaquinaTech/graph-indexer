@@ -46,7 +46,7 @@ import { fileURLToPath } from 'url';
 import { FIXTURES_DIR } from './setup.mjs';
 import { loadIndex } from './harness.mjs';
 import { mean, fmt, fmtPct, pad, c } from './metrics.mjs';
-import { isNaturalLanguageQuery } from '../search-core.mjs';
+import { isNaturalLanguageQuery, learnedRerank, DEFAULT_RANKER_MODEL } from '../search-core.mjs';
 import { rerankResults, rerankCrossEncoder, crossEncoderScore, ollamaGenerate } from '../enrichment.mjs';
 import { artifactPaths } from '../layout.mjs';
 import { createEmbedder, readEmbedMeta, needsNomicPrefix, MLX_EMBED_MODEL, _resetSubprocesses } from '../embeddings.mjs';
@@ -72,6 +72,8 @@ const verbose = args.includes('--verbose') || args.includes('-v');
 const useEmbeddings = args.includes('--embeddings');
 const useSqlite = args.includes('--use-sqlite');
 const useRerank = args.includes('--rerank');
+// D3: --ranker learned applies the opt-in post-fusion learned re-rank (for honest measurement).
+const useLearned = args.includes('--ranker') && args[args.indexOf('--ranker') + 1] === 'learned';
 // Rerank provider for measurement: 'generative' (LLM judge, default) | 'cross-encoder'
 // (local air-gapped MS-MARCO cross-encoder). Mirrors config.rerank.provider.
 const rerankProvider = args.includes('--rerank-provider')
@@ -280,6 +282,14 @@ async function evaluateSuite(suite) {
         const topK = Math.max(q.topK ?? 10, RETRIEVE_K);
         const qVec = queryVectors ? (queryVectors.get(q.id) ?? null) : null;
         let results = db.searchHybrid(q.query, qVec, topK);
+        // D3: post-fusion learned re-rank (mirrors mcp-tools), BEFORE the optional LLM judge.
+        if (useLearned && results.length > 1) {
+            results = learnedRerank(results, {
+                getCentrality: db.hasCentrality?.() ? (id) => db.getCentrality(id) : null,
+                getInEdges: db.hasSymbolGraph?.() ? (id) => db.getEdges(id, { direction: 'in' }) : null,
+                gitScoreFor: null,
+            }, DEFAULT_RANKER_MODEL);
+        }
         // Mirrors the production gate in mcp-tools: rerank only natural-language
         // queries, best-effort, original order on any failure.
         if (useRerank && isNaturalLanguageQuery(q.query)) {

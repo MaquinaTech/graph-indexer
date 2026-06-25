@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import fs from 'fs';
 import path, { resolve } from 'path';
-import { computePageRank, isNaturalLanguageQuery, TEST_FILE_RE } from '../search-core.mjs';
+import { computePageRank, isNaturalLanguageQuery, TEST_FILE_RE, learnedRerank, DEFAULT_RANKER_MODEL } from '../search-core.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { extractFileSkeleton } from '../parse/extractor.mjs';
 import { describeEmbedder } from '../embeddings.mjs';
@@ -119,7 +119,7 @@ function refCard({ chunk, recvHint, reason, confidence }) {
  * @param {object|null} [opts.gitSignals] Loaded git-signals sidecar (churn/recency/co-change), or null.
  * @param {number} [opts.gitRankBoost]    0..1 opt-in recency/churn weight in search_code (0 = ranking unchanged).
  */
-export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', llmProvider = 'ollama', mlxLmHost = 'http://localhost:8080', gitSignals = null, gitRankBoost = 0, sealed = 'off' }) {
+export function registerTools(server, db, { projectRoot, artifactPath, pidFile, embeddingsEnabled, embedder, rerank, hyde, ollamaHost = 'http://localhost:11434', llmProvider = 'ollama', mlxLmHost = 'http://localhost:8080', gitSignals = null, gitRankBoost = 0, sealed = 'off', ranker = 'rrf' }) {
 
     // Scoped here (not module-level) so multiple servers in one process don't cross-contaminate.
     // `undefined` = not yet detected; `null` = unknown (→ generic prompt).
@@ -256,10 +256,25 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 // in the tool layer — never in db.searchHybrid — so measured
                 // retrieval ranking and backend parity are unchanged unless enabled.
                 const applyGitBoost = gitRankBoost > 0 && gitSignals;
+                // D3: the learned re-rank also needs a deeper pool to RESCUE a structurally-strong
+                // but lexically-deep hit into top_k (same rationale as rerank / git boost).
+                const wantLearned = ranker === 'learned' && !exact_tokens;
                 const poolSize = willRerank
                     ? Math.min(Math.max(top_k, rerank?.poolSize ?? 15), 25)
-                    : applyGitBoost ? Math.min(Math.max(top_k * 2, 12), 25) : top_k;
+                    : (applyGitBoost || wantLearned) ? Math.min(Math.max(top_k * 2, 12), 25) : top_k;
                 let matches = db.searchHybrid(fullQuery, queryVector, poolSize, min_score, exact_tokens || null);
+
+                // D3: post-fusion learned re-rank (opt-in). Reorders the fused pool by a zero-dep
+                // linear model over RRF score + centrality + resolved/SCIP in-degree + git, BEFORE the
+                // optional LLM judge / git nudge. Accessors are null when the layer is absent, so the
+                // model degrades to RRF + git + node-type (≈neutral) on a plain index.
+                if (wantLearned && matches.length > 1) {
+                    matches = learnedRerank(matches, {
+                        getCentrality: db.hasCentrality?.() ? (id) => db.getCentrality(id) : null,
+                        getInEdges: db.hasSymbolGraph?.() ? (id) => db.getEdges(id, { direction: 'in' }) : null,
+                        gitScoreFor: gitSignals ? (file) => gitBoostScore(gitSignals, file) : null,
+                    }, DEFAULT_RANKER_MODEL);
+                }
 
                 let rerankFailed = false;
                 if (willRerank && matches.length > 1) {

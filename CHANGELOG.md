@@ -233,6 +233,29 @@ store primitives — no ranking, parity, or default-path impact.
   `parse/taint-patterns.mjs`, `mcp/taint.mjs`; `test/taint.mjs` adds 9 tests; `test/mcp.mjs` asserts
   the 16-tool surface. Design: `docs/internals/PHASE3_TAINT_ANALYSIS.md`.
 
+### Learned re-ranker — opt-in, measured ≈neutral, RRF stays default (D3)
+
+- **`--ranker learned` / `INDEXER_RANKER`** adds an opt-in, **zero-dependency** post-fusion
+  learning-to-rank layer: a small linear model re-orders the fused top-N using the RRF score plus the
+  program-structure signals the earlier phases produced — symbol **centrality** (A5), **resolved** /
+  SCIP **in-degree** (A4/A1) — and git recency. It is a *post-fusion* re-rank in the tool layer (like
+  the git boost / LLM reranker — never inside `db.searchHybrid`), so the **default RRF ordering is
+  byte-identical** and inference is a deterministic dot product (parity-safe). New module surface in
+  `search-core.mjs` (`learnedRerank`, `scoreLearned`, `extractRankerFeatures`,
+  `DEFAULT_RANKER_MODEL`); an offline trainer `bench/train-ranker.mjs` (zero-dep logistic regression,
+  **not shipped at runtime**); `test/ranker.mjs` (6 tests).
+- **Honest measurement (the headline):** the trainer was run over all five eval fixtures built with
+  `--symbol-graph` (3 161 candidates, 410 positives). Held-out rank-1 (95 queries, grouped per
+  query) — **RRF-only 0.579 vs the data-fit model 0.579**: the learned model **ties** RRF, it does
+  not beat it. The structure features get near-zero learned weight because the correct symbol is
+  usually *not* the most central / most-called one. Per the honest-metrics + sacred-default
+  invariants, a tie is no reason to displace the simpler, faster default — **RRF remains the default
+  ranker.** What
+  ships is the *capability*: the shipped `DEFAULT_RANKER_MODEL` is conservative + RRF-dominant and
+  measures **byte-identical to RRF** on the benchmark (a safe, never-regressing opt-in), and the
+  trainer lets users fit a *repo-specific* model where their call structure does carry signal. Full
+  write-up: `docs/internals/IMPROVEMENT_LEARNED_RANKER.md`.
+
 ### Taint analysis hardening — index-time serialization + Java/Go (C2)
 
 - **Opt-in index-time serialization (`--taint` / `INDEXER_TAINT`).** The taint flow set can now be
