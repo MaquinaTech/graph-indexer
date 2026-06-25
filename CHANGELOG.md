@@ -4,11 +4,18 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
-## [Unreleased]
+## [2.1.0] — 2026-06-25
 
-Frontier upgrade — Phase 1. Every item is **opt-in**: the default path stays lexical-only,
+Frontier upgrade (Phases 1–3). Every item is **opt-in**: the default path stays lexical-only,
 in-memory, zero-dependency, with byte-identical `npm run test:eval` output and byte-identical
-memory↔sqlite top-5 parity.
+memory↔sqlite top-5 parity. Headline additions: code-aware retrieval knobs (B1/B2), an
+inter-procedural receiver-type fixpoint (A3), a **persistent resolved symbol graph** with
+symbol-level **centrality** (A4/A5), a **precise resolver** + cross-file **SCIP** resolution
+(A1/A2), `impact_of_edit` / `explain_symbol` / `tests_for` MCP tools (C1/C4/C5/D1), **sealed mode**
+with a runtime egress guard and **signed attestation** (F1), **taint analysis** (`trace_taint` /
+`find_tainted_sinks`) with index-time serialization across JS/TS/Python/Java/Go (C2), and an opt-in
+**learned ranker** (D3, measured a tie — RRF stays the default). Every capability ships behind a
+flag + env + config key with the trade-off printed at startup; nothing changes the default path.
 
 ### Code-specialized embedding models — documented; NL vector-weight re-tune evaluated and rejected (B1)
 
