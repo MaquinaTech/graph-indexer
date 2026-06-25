@@ -77,7 +77,8 @@ async function main() {
         check('tools/list exposes the full surface', () => {
             for (const t of ['search_code', 'get_chunk', 'resolve_symbol', 'get_chunk_summary',
                 'get_file_skeleton', 'get_call_graph', 'find_references', 'find_routes', 'get_subgraph',
-                'get_repo_map', 'list_index_stats', 'tests_for', 'explain_symbol', 'impact_of_edit']) {
+                'get_repo_map', 'list_index_stats', 'tests_for', 'explain_symbol', 'impact_of_edit',
+                'trace_taint', 'find_tainted_sinks']) {
                 assert.ok(names.includes(t), `missing tool: ${t}`);
             }
         });

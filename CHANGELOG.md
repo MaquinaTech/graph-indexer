@@ -211,6 +211,28 @@ store primitives — no ranking, parity, or default-path impact.
   per-tier validation, guard block/permit/restore, child denylist, manifest, resolveConfig
   fail-close). Design: `docs/internals/PHASE3_SEALED_MODE.md`.
 
+### Taint analysis (C2) — Phase 3
+
+- Two new **security** MCP tools (14 → 16): **`trace_taint`** traces untrusted data from a SOURCE
+  (request body/query/params, argv/env, stdin, socket/file reads) to a dangerous SINK (eval/exec,
+  SQL, fs/path, HTML, outbound request) across the call graph, returning the concrete source→sink
+  path tagged with category (rce/sqli/xss/path/ssrf) and confidence. **`find_tainted_sinks`** lists
+  every dangerous sink grouped by category, each flagged with whether an untrusted source reaches
+  it — the attack-surface map.
+- **Confidence model**: a same-function source→sink is `high` (`direct`); a source function that
+  transitively calls a sink function is `medium` (`reachable`); a sanitizer
+  (escape/encode/parameterise/`Number()`/`int()`…) on the path drops it to `low`. Flows are
+  deterministically ordered by category severity, then confidence, then location.
+- **Query-time, read-only, zero default cost**: implemented as on-demand tools (like
+  `get_call_graph`) — no index-time work, no serialization, **no parity surface**, the default index
+  is byte-identical, and the tools cost nothing unless invoked. **Air-gapped** (pure regex catalogs
+  + call-graph traversal; no model, no network). Walks A4 `getEdges` when present, else `chunk.calls`.
+- **Honest scope**: a **finder, not a verifier** (JS/TS + Python in v1). It favours precision but
+  misses flows through dynamic dispatch, reflection, ORM/query-builder indirection, and untyped
+  collections — every tool response says so, and "0 findings" ≠ "no vulnerabilities." New modules
+  `parse/taint-patterns.mjs`, `mcp/taint.mjs`; `test/taint.mjs` adds 9 tests; `test/mcp.mjs` asserts
+  the 16-tool surface. Design: `docs/internals/PHASE3_TAINT_ANALYSIS.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

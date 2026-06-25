@@ -1,7 +1,11 @@
-# Phase 3 design — C2: Taint Analysis
+# Phase 3 — C2: Taint Analysis
 
-> **Status: DESIGN ONLY. Nothing here is implemented.** Interface stubs are illustrative
-> signatures, not code. Plan + approve before any work.
+> **Status: IMPLEMENTED (v1)** (`parse/taint-patterns.mjs`, `mcp/taint.mjs`, the `trace_taint` /
+> `find_tainted_sinks` tools in `mcp/tools.mjs`; `test/taint.mjs`). One deliberate deviation from
+> the sketch below: v1 is **query-time** (the tools compute on demand, like `get_call_graph`) rather
+> than index-time + serialized — this keeps the default index byte-identical with zero parity
+> surface. Index-time serialization (a `taint` table) remains a v2 performance option. The honesty
+> framing ("finder, not verifier") shipped verbatim.
 
 ## One line
 

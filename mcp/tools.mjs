@@ -20,6 +20,8 @@ import {
     assessConfidence, hydeQueryVector, buildHydePrompt, detectRepoLanguage,
     classifyCallers, findReferences, findRoutes, buildSubgraph, buildImpact,
 } from './topology.mjs';
+import { traceTaint, findTaintedSinks } from './taint.mjs';
+import { CATEGORY_SEVERITY } from '../parse/taint-patterns.mjs';
 
 // ─── Structured (JSON) output helpers ────────────────────────────────────────────
 
@@ -1442,6 +1444,90 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
                 if (!usedGraph) lines.push('', '> ℹ️ Build the index with `--symbol-graph` for a precomputed, chunk-precise blast radius.');
                 if (note) lines.push('', note);
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── trace_taint ─────────────────────────────────────────────────────────────────
+    server.tool(
+        'trace_taint',
+        'Security: trace UNTRUSTED data from a source (request body/query/params, argv/env, stdin, '
+        + 'socket/file reads) to a dangerous SINK (eval/exec, SQL, fs/path, HTML, outbound request) '
+        + 'across the call graph — surfacing injection-class risks (rce/sqli/xss/path/ssrf) with the '
+        + 'concrete source→sink path. Same-function flows are high-confidence; cross-function '
+        + 'reachability is medium; a sanitizer on the path lowers it. FINDER, not a verifier — it '
+        + 'misses dynamic dispatch / reflection / ORM indirection, so "no flows" ≠ "safe". '
+        + 'JS/TS + Python. Most precise on a `--symbol-graph` index.',
+        {
+            source_kind: z.string().optional().describe("Restrict to one source kind (e.g. 'http-request', 'process-input', 'stdin')."),
+            category: z.enum(['rce', 'sqli', 'xss', 'path', 'ssrf']).optional().describe('Restrict to one sink category.'),
+            max_depth: z.number().int().min(1).max(8).default(4).describe('Cross-function call hops to follow from a source (default 4).'),
+            max_flows: z.number().int().min(1).max(500).default(100).describe('Cap on flows returned (default 100).'),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe("'markdown' (default) or 'json' (typed { flows: [{ source, sink, path, via, confidence, sanitized }] })."),
+        },
+        async ({ source_kind, category, max_depth, max_flows, response_format }) => {
+            try {
+                const { flows, truncated, scanned } = traceTaint(db, {
+                    sourceKind: source_kind || null, sinkCategory: category || null, maxDepth: max_depth, maxFlows: max_flows,
+                });
+                if (response_format === 'json') {
+                    return jsonResult({ source_kind: source_kind || null, category: category || null, scanned, flow_count: flows.length, truncated, flows });
+                }
+                const lines = [`# 🧪 Taint flows — ${flows.length}${truncated ? '+' : ''} found (scanned ${scanned} chunks)`, ''];
+                if (!flows.length) lines.push('No source→sink flows matched. ⚠️ This is a finder, not a verifier — absence of a flow is not proof of safety.');
+                for (const f of flows.slice(0, 40)) {
+                    lines.push(`- **${f.sink.category.toUpperCase()}** [${f.confidence}${f.sanitized ? ' · sanitizer on path' : ''}] — \`${f.source.kind}\` → \`${f.sink.label}\``);
+                    lines.push(`  - source \`${f.source.name}\` in \`${f.source.file_path}\`:${f.source.line}`);
+                    lines.push(`  - sink   \`${f.sink.name}\` in \`${f.sink.file_path}\`:${f.sink.line}  (${f.via}, depth ${f.depth})`);
+                }
+                if (flows.length > 40) lines.push(`\n…and ${flows.length - 40} more.`);
+                lines.push('', '> Heuristic finder (JS/TS + Python). Triage each flow against its path; it can over- and under-report.');
+                return { content: [{ type: 'text', text: lines.join('\n') }] };
+            } catch (err) {
+                return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+            }
+        }
+    );
+
+    // ─── find_tainted_sinks ──────────────────────────────────────────────────────────
+    server.tool(
+        'find_tainted_sinks',
+        'Security orientation: list every dangerous SINK in the codebase (eval/exec, SQL, fs/path, '
+        + 'HTML, outbound requests) grouped by category, each flagged with whether an untrusted '
+        + 'SOURCE reaches it. Use it FIRST to map the attack surface, then trace_taint a specific '
+        + 'one. JS/TS + Python; same heuristic-finder caveats as trace_taint.',
+        {
+            category: z.enum(['rce', 'sqli', 'xss', 'path', 'ssrf']).optional().describe('Restrict to one sink category.'),
+            reachable_only: z.boolean().default(false).describe('Only sinks reachable from an untrusted source.'),
+            max_depth: z.number().int().min(1).max(8).default(4).describe('Reachability hops to consider (default 4).'),
+            response_format: z.enum(['markdown', 'json']).default('markdown').describe("'markdown' (default) or 'json' (typed { sinks_by_category })."),
+        },
+        async ({ category, reachable_only, max_depth, response_format }) => {
+            try {
+                const { byCategory, scanned, flowCount } = findTaintedSinks(db, {
+                    category: category || null, reachableOnly: reachable_only, maxDepth: max_depth,
+                });
+                const total = Object.values(byCategory).reduce((s, a) => s + a.length, 0);
+                if (response_format === 'json') {
+                    return jsonResult({ category: category || null, reachable_only, scanned, sink_count: total, reachable_flow_count: flowCount, sinks_by_category: byCategory });
+                }
+                const lines = [`# 🎯 Dangerous sinks — ${total} (scanned ${scanned} chunks)`, ''];
+                if (!total) lines.push('No sinks matched these filters.');
+                for (const cat of CATEGORY_SEVERITY) {
+                    const list = byCategory[cat];
+                    if (!list || !list.length) continue;
+                    const reached = list.filter(s => s.reached_by_source).length;
+                    lines.push(`## ${cat.toUpperCase()} — ${list.length}${reached ? ` (${reached} reachable from untrusted input ⚠️)` : ''}`);
+                    for (const s of list.slice(0, 25)) {
+                        lines.push(`  - ${s.reached_by_source ? '⚠️ ' : ''}\`${s.label}\` in \`${s.file_path}\`:${s.line} — \`${s.name}\``);
+                    }
+                    if (list.length > 25) lines.push(`  …and ${list.length - 25} more`);
+                    lines.push('');
+                }
+                lines.push('> Heuristic finder (JS/TS + Python). A flagged sink is a place to look, not a confirmed bug.');
                 return { content: [{ type: 'text', text: lines.join('\n') }] };
             } catch (err) {
                 return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
