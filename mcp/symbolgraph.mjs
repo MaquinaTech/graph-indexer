@@ -20,6 +20,7 @@
  * @license MIT
  */
 import { classifyCallers, findReferences } from './topology.mjs';
+import { getResolver, strongerConfidence } from './resolver.mjs';
 
 /** Deterministic total order on edges — required for memory↔sqlite parity. */
 export function edgeOrder(a, b) {
@@ -40,10 +41,12 @@ const normConfidence = (c) => (c === 'high' ? 'high' : 'name_only');
  * @param {number} [opts.maxPerName]  Safety cap on edges emitted for one symbol name
  *                                    (pathological ambiguous names). Excess is logged, not
  *                                    silently dropped.
+ * @param {object} [opts.resolver]  A1 resolver provider (default `heuristic` → byte-identical
+ *                                  { high, name_only }; `precise` → adds the `resolved` tier).
  * @returns {{ edges: Array<{from_chunk_id:string,to_chunk_id:string,kind:string,confidence:string}>,
  *             cappedNames: string[] }}
  */
-export function buildSymbolGraph(db, { maxPerName = 20000 } = {}) {
+export function buildSymbolGraph(db, { maxPerName = 20000, resolver = getResolver('heuristic') } = {}) {
     const edges = [];
     const cappedNames = [];
 
@@ -62,8 +65,9 @@ export function buildSymbolGraph(db, { maxPerName = 20000 } = {}) {
         if (!defs.length) continue;            // undefined name → no edge (findCallers falls back to scan)
         const { high, nameOnly } = classifyCallers(db, name);
         let n = 0; let capped = false;
-        const emit = (callers, confidence) => {
-            for (const { chunk } of callers) {
+        const emit = (callers, baseConf) => {
+            for (const { chunk, proven } of callers) {
+                const confidence = resolver.confidenceFor(baseConf, Boolean(proven));
                 for (const def of defs) {
                     if (n >= maxPerName) { capped = true; return; }
                     edges.push({ from_chunk_id: chunk.id, to_chunk_id: def.id, kind: 'calls', confidence });
@@ -85,9 +89,10 @@ export function buildSymbolGraph(db, { maxPerName = 20000 } = {}) {
         let n = 0; let capped = false;
         const emit = (refs, kind) => {
             for (const r of refs) {
+                const confidence = resolver.confidenceFor(normConfidence(r.confidence), Boolean(r.proven));
                 for (const def of defs) {
                     if (n >= maxPerName) { capped = true; return; }
-                    edges.push({ from_chunk_id: r.chunk.id, to_chunk_id: def.id, kind, confidence: normConfidence(r.confidence) });
+                    edges.push({ from_chunk_id: r.chunk.id, to_chunk_id: def.id, kind, confidence });
                     n++;
                 }
             }
@@ -97,16 +102,16 @@ export function buildSymbolGraph(db, { maxPerName = 20000 } = {}) {
         if (capped && !cappedNames.includes(name)) cappedNames.push(name);
     }
 
-    // Dedupe by (from, to, kind) keeping the strongest confidence ('high' sorts before
-    // 'name_only'), then return in the deterministic parity order.
-    edges.sort(edgeOrder);
-    const seen = new Set();
-    const out = [];
+    // Dedupe by (from, to, kind) keeping the STRONGEST confidence (resolved > high > name_only),
+    // then return in the deterministic parity order. (On the default `heuristic` path the only
+    // values are high/name_only and high is strongest → identical to the prior keep-first dedupe.)
+    const rep = new Map();
     for (const e of edges) {
         const k = `${e.from_chunk_id}|${e.to_chunk_id}|${e.kind}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push(e);
+        const cur = rep.get(k);
+        if (!cur) rep.set(k, { from_chunk_id: e.from_chunk_id, to_chunk_id: e.to_chunk_id, kind: e.kind, confidence: e.confidence });
+        else cur.confidence = strongerConfidence(cur.confidence, e.confidence);
     }
+    const out = [...rep.values()].sort(edgeOrder);
     return { edges: out, cappedNames };
 }

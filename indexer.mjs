@@ -254,13 +254,18 @@ async function main() {
             fs.writeFileSync(tmpSg, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph }));
             const { MemoryGraphIndex } = await import('./engine/memory.mjs');
             const { buildSymbolGraph } = await import('./mcp/symbolgraph.mjs');
+            const { getResolver } = await import('./mcp/resolver.mjs');
             const { computeSymbolCentrality } = await import('./mcp/centrality.mjs');
             const sgIdx = new MemoryGraphIndex(tmpSg, { cacheEmbeddings: false });
             sgIdx.load();
-            const res = buildSymbolGraph(sgIdx);
+            const resolver = getResolver(config.resolver);
+            const res = buildSymbolGraph(sgIdx, { resolver });
             symbolEdges = res.edges;
             sgIdx.close?.();
+            const resolvedCount = config.resolver === 'precise'
+                ? symbolEdges.filter(e => e.confidence === 'resolved').length : 0;
             console.log(`🕸  Symbol graph: ${symbolEdges.length} resolved edges`
+                + `${config.resolver === 'precise' ? ` · resolver=precise (${resolvedCount} resolved-tier)` : ''}`
                 + `${res.cappedNames.length ? ` (⚠️ ${res.cappedNames.length} high-degree name(s) capped: ${res.cappedNames.slice(0, 5).join(', ')})` : ''}.`);
             // A5: confidence-weighted PageRank over those edges (computed once → serialized →
             // parity-free). Surfaced by explain_symbol / get_repo_map; does not touch ranking.

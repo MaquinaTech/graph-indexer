@@ -85,4 +85,8 @@ unchanged); the stored confidence powers `getEdges` and the Phase 2 milestones t
   chunk (parity-free, like the edges), and surfaces it through `explain_symbol` / `get_repo_map`.
   Betweenness / community detection are intentionally deferred. See
   `docs/internals/IMPROVEMENT_SYMBOL_CENTRALITY.md`.
-- **A1 — precise resolution** (tree-sitter-stack-graphs) upgrading edge confidence `high → resolved`.
+- **A1 — precise resolver provider (shipped):** `mcp/resolver.mjs` adds a pluggable provider; the
+  opt-in `precise` provider (`--resolver precise`) lifts provably-unambiguous edges from `high` to a
+  `resolved` tier, and `impact_of_edit(precision: 'strict')` follows only those edges. The provider
+  abstraction is the seam a future cross-file backend (stack-graphs / LSP / SCIP) would plug into.
+  See `docs/internals/IMPROVEMENT_PRECISE_RESOLVER.md`.

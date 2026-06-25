@@ -48,6 +48,11 @@ export const DEFAULTS = Object.freeze({
                                        // findReferers read it when present (identical sets, fall back to scan).
                                        // Air-gapped, deterministic; default index byte-identical; search
                                        // ranking unaffected. Enable with --symbol-graph / INDEXER_SYMBOL_GRAPH.
+    resolver: 'heuristic',             // Resolver provider for the symbol graph (A1). 'heuristic' (default):
+                                       // edges stay { high, name_only } — byte-identical. 'precise': lift
+                                       // provably-unambiguous edges (sole definition / type-pinned receiver)
+                                       // to a `resolved` tier, powering impact_of_edit precision='strict'.
+                                       // Only meaningful with --symbol-graph. --resolver / INDEXER_RESOLVER.
     enrichment: Object.freeze({
         enabled: false,
         model: 'qwen2.5-coder:1.5b',   // smallest coder model; quality sufficient for summaries.
@@ -175,6 +180,10 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_SYMBOL_GRAPH === 'on'
         || file.symbolGraph === true;
 
+    // Resolver provider for the symbol graph (A1). Unknown values fall back to 'heuristic'.
+    const resolverRaw = flagValue(argv, '--resolver') || env.INDEXER_RESOLVER || file.resolver || DEFAULTS.resolver;
+    const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic') ? resolverRaw : 'heuristic';
+
     const paths = artifactPaths(projectRoot);
 
     return Object.freeze({
@@ -208,6 +217,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         gitRankBoost,
         interprocedural,
         symbolGraph,
+        resolver,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
@@ -284,6 +294,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
+        `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier' : 'heuristic (default)'}`,
     ];
 }
 
@@ -310,6 +321,15 @@ export function configNotices(config) {
             + 'index time roughly proportional to repo size. The watch daemon does NOT rebuild it, so '
             + 'edges refresh on the next full `idx-index`; until then findCallers/findReferers fall back '
             + 'to the name-match scan (never worse). It powers getEdges; search ranking is unaffected.');
+    }
+    if (config.resolver === 'precise' && !config.symbolGraph) {
+        out.push('--resolver precise has no effect without --symbol-graph (the resolver runs only when '
+            + 'the symbol graph is built). Add --symbol-graph to enable the `resolved` edge tier.');
+    } else if (config.resolver === 'precise') {
+        out.push('Precise resolver: edges with a provably-unambiguous binding (sole definition, or a '
+            + 'type-pinned receiver) are promoted from `high` to a `resolved` tier — used by '
+            + "impact_of_edit(precision: 'strict') for a false-positive-free blast radius. Confidence "
+            + 'strings only change; edge sets, parity, and search ranking are unaffected.');
     }
     if (config.enrichment.enabled && !config.rerank.enabled) {
         out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '

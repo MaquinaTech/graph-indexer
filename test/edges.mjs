@@ -24,6 +24,7 @@ import { extractSemanticChunks } from '../parse/extractor.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { buildSymbolGraph, edgeOrder } from '../mcp/symbolgraph.mjs';
 import { computeSymbolCentrality } from '../mcp/centrality.mjs';
+import { getResolver, strongerConfidence, CONFIDENCE_RANK } from '../mcp/resolver.mjs';
 import { buildImpact } from '../mcp/topology.mjs';
 import { registerTools } from '../mcp/tools.mjs';
 
@@ -93,14 +94,14 @@ function parseFixture() {
     return perFile;
 }
 
-function loadMem(perFile, { withEdges }) {
+function loadMem(perFile, { withEdges, resolver = 'heuristic' }) {
     const p = path.join(os.tmpdir(), `edges-mem-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
     const scan = new MemoryGraphIndex(p, { cacheEmbeddings: false });
     for (const [f, chunks] of Object.entries(perFile)) {
         scan.applyFileUpdate(f, { chunks, imports: IMPORTS[f] || [] });
         if (scan._saveTimer) { clearTimeout(scan._saveTimer); scan._saveTimer = null; }
     }
-    const { edges } = buildSymbolGraph(scan);
+    const { edges } = buildSymbolGraph(scan, { resolver: getResolver(resolver) });
     if (!withEdges) return { db: scan, edges };
     // A5: centrality is computed with the graph and serialized alongside the edges.
     const { centrality } = computeSymbolCentrality(edges);
@@ -444,4 +445,93 @@ test('centrality (A5): explain_symbol + get_repo_map surface it (and omit it whe
     assert.equal((await off.get('explain_symbol')({ symbol: 'format', response_format: 'json' })).structuredContent.definitions[0].centrality, undefined);
     assert.equal((await off.get('get_repo_map')({ response_format: 'json' })).structuredContent.central_symbols, undefined);
     assert.ok(!/Most central symbols/.test((await off.get('get_repo_map')({ response_format: 'markdown' })).content[0].text), 'no central block without the graph');
+});
+
+// ── A1: precise resolver provider + the impact precision dial. The default `heuristic`
+//    provider must keep edges byte-identical { high, name_only }; `precise` lifts the
+//    provably-unambiguous subset to a `resolved` tier without adding/dropping edges. ──────────
+test('resolver (A1): confidence rank + strongerConfidence', () => {
+    assert.ok(CONFIDENCE_RANK.resolved > CONFIDENCE_RANK.high && CONFIDENCE_RANK.high > CONFIDENCE_RANK.name_only);
+    assert.equal(strongerConfidence('high', 'resolved'), 'resolved');
+    assert.equal(strongerConfidence('resolved', 'high'), 'resolved');
+    assert.equal(strongerConfidence('high', 'name_only'), 'high');
+    assert.equal(strongerConfidence('name_only', 'name_only'), 'name_only');
+});
+
+test('resolver (A1): precise promotes unambiguous edges to `resolved`; heuristic stays { high, name_only }', () => {
+    const perFile = parseFixture();
+    if (!perFile) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+    const { db: scan } = loadMem(perFile, { withEdges: false });
+    const heur = buildSymbolGraph(scan, { resolver: getResolver('heuristic') }).edges;
+    const prec = buildSymbolGraph(scan, { resolver: getResolver('precise') }).edges;
+
+    // Same edge SET, only confidence strings may differ (no add/drop/reorder).
+    const tup = (es) => es.map(e => `${e.from_chunk_id}|${e.to_chunk_id}|${e.kind}`).sort();
+    assert.deepEqual(tup(prec), tup(heur), 'precise neither adds nor drops edges');
+
+    // getId is a SOLE definition → unambiguous → high under heuristic, resolved under precise.
+    const getIdId = scan.resolveSymbol('getId')[0].id;
+    const eH = heur.find(e => e.to_chunk_id === getIdId && e.kind === 'calls');
+    const eP = prec.find(e => e.to_chunk_id === getIdId && e.kind === 'calls');
+    assert.equal(eH.confidence, 'high', 'heuristic: sole-definition caller is high');
+    assert.equal(eP.confidence, 'resolved', 'precise: sole-definition caller is resolved');
+
+    // format is AMBIGUOUS (two defs) → its import/proximity caller stays `high`, never promoted.
+    const fmtIds = new Set(scan.resolveSymbol('format').map(d => d.id));
+    const eFmt = prec.find(e => fmtIds.has(e.to_chunk_id) && e.kind === 'calls'
+        && scan.getChunk(e.from_chunk_id).name === 'handle');
+    assert.equal(eFmt.confidence, 'high', 'precise: ambiguous-name caller stays high (not proven)');
+
+    // Default-path guarantee: heuristic NEVER emits the resolved tier; precise does.
+    assert.ok(heur.every(e => e.confidence !== 'resolved'), 'heuristic emits no resolved edges');
+    assert.ok(prec.some(e => e.confidence === 'resolved'), 'precise emits resolved edges');
+});
+
+test('resolver (A1): the `resolved` tier round-trips memory ↔ sqlite', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db: mem, edges, chunks, graph } = loadMem(perFile, { withEdges: true, resolver: 'precise' });
+    const dbPath = path.join(os.tmpdir(), `res-sq-${process.pid}-${Math.random().toString(36).slice(2)}.db`);
+    new SqliteGraphStore(dbPath).buildFrom({ chunks, graph, embeddingCache: new Map(), edges });
+    const sq = new SqliteGraphStore(dbPath); sq.load();
+
+    const getId = mem.resolveSymbol('getId')[0];
+    const conf = (db) => db.getEdges(getId.id, { direction: 'in', kind: 'calls' }).map(e => e.confidence).sort();
+    assert.ok(conf(mem).includes('resolved'), 'memory carries the resolved tier');
+    assert.deepEqual(conf(sq), conf(mem), 'resolved tier is byte-identical cross-backend');
+
+    sq.close?.();
+    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.rmSync(`${dbPath}-shm`, { force: true });
+});
+
+test('resolver (A1): impact precision=strict follows only resolved edges (narrows the blast radius)', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db } = loadMem(perFile, { withEdges: true, resolver: 'precise' });
+    // Seed both an ambiguous symbol (format) and a unique one (getId). handle reaches the seed
+    // via getId (resolved) AND format (high); Admin reaches it only via format (high).
+    const seed = [...db.resolveSymbol('format'), ...db.resolveSymbol('getId')];
+    const std = buildImpact(db, seed, { precision: 'standard' }).impacted.map(a => a.chunk.name).sort();
+    const strict = buildImpact(db, seed, { precision: 'strict' }).impacted.map(a => a.chunk.name).sort();
+    assert.ok(std.includes('handle') && std.includes('Admin'), 'standard follows resolved + high');
+    assert.ok(strict.includes('handle'), 'strict keeps the caller reached by a resolved edge');
+    assert.ok(!strict.includes('Admin'), 'strict drops the caller reached only by a high edge');
+});
+
+test('resolver (A1): impact_of_edit exposes the precision dial', async () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db } = loadMem(perFile, { withEdges: true, resolver: 'precise' });
+    const handlers = new Map();
+    registerTools({ tool: (n, _d, _s, fn) => handlers.set(n, fn) }, db, {
+        projectRoot: os.tmpdir(), artifactPath: '/nonexistent', pidFile: null, embeddingsEnabled: false, embedder: null,
+    });
+    const strict = await handlers.get('impact_of_edit')({ symbols: ['format', 'getId'], precision: 'strict', response_format: 'json' });
+    assert.equal(strict.structuredContent.precision, 'strict', 'precision echoed');
+    const sNames = strict.structuredContent.impacted.map(c => c.name);
+    assert.ok(sNames.includes('handle') && !sNames.includes('Admin'), 'strict narrows in the tool too');
+    const std = await handlers.get('impact_of_edit')({ symbols: ['format', 'getId'], precision: 'standard', response_format: 'json' });
+    assert.ok(std.structuredContent.impacted.map(c => c.name).includes('Admin'), 'standard is the wider default');
 });

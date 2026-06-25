@@ -20,9 +20,11 @@
 /**
  * Per-confidence edge weight. A `name_only` edge is a heuristic name match (no receiver type
  * / no import evidence) and is noisier than a `high` edge, so it contributes half the flow.
- * Both are deterministic constants — no tuning knob, no config surface.
+ * The A1 `resolved` tier is a *precision* refinement of `high` (a provably-unambiguous binding),
+ * so it carries the SAME weight — enabling the precise resolver does not perturb centrality.
+ * All deterministic constants — no tuning knob, no config surface.
  */
-const CONFIDENCE_WEIGHT = { high: 1.0, name_only: 0.5 };
+const CONFIDENCE_WEIGHT = { resolved: 1.0, high: 1.0, name_only: 0.5 };
 
 const DAMPING = 0.85;
 const MAX_ITERS = 100;          // hard safety net; sparse symbol graphs converge in ~20–40

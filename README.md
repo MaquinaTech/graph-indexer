@@ -182,7 +182,7 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
 | `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
 | `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, git recency/co-change, and (with `--symbol-graph`) its symbol-centrality rank. |
-| `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`. |
+| `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`; `precision: 'strict'` follows only provably-unambiguous (`resolved`) edges (best on a `--resolver precise` index). |
 
 ## Configuration
 
@@ -224,6 +224,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
 | `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Also computes symbol-level centrality (confidence-weighted PageRank over the edges), surfaced by `explain_symbol` and `get_repo_map`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
+| `--resolver <heuristic\|precise>` | `heuristic` | Resolver provider for the symbol graph. `precise` lifts provably-unambiguous edges (sole definition, or a type-pinned receiver) from `high` to a `resolved` tier, powering `impact_of_edit(precision: 'strict')` for a false-positive-free blast radius. Only meaningful with `--symbol-graph`; confidence strings only change — edge sets, parity, and ranking are unaffected. |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 | `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |
@@ -248,6 +249,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_INTERPROCEDURAL` | (off) | `on` enables the index-time inter-procedural receiver-type fixpoint (`--interprocedural`). |
 | `INDEXER_SYMBOL_GRAPH` | (off) | `on` builds the persistent resolved symbol graph (`--symbol-graph`). |
+| `INDEXER_RESOLVER` | `heuristic` | `precise` enables the precise resolver (`resolved` edge tier) for the symbol graph (`--resolver`). |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
 | `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |
 | `INDEXER_MLX_LM_HOST` | `http://localhost:8080` | Endpoint for the `mlx_lm.server` when `INDEXER_LLM_PROVIDER=mlx`. |

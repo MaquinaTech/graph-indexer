@@ -157,6 +157,37 @@ store primitives — no ranking, parity, or default-path impact.
   gating, and the two tools surfacing/omitting it). Full write-up:
   `docs/internals/IMPROVEMENT_SYMBOL_CENTRALITY.md`.
 
+### Precise resolver provider + impact precision dial (A1) — Phase 2
+
+- **`--resolver precise`** (`INDEXER_RESOLVER` / `resolver` config) adds a pluggable resolver
+  provider for the symbol graph. The default `heuristic` provider keeps edge confidence exactly
+  `{ high, name_only }` (byte-identical). `precise` lifts the **provably-unambiguous** subset into
+  a third, stronger tier — **`resolved`** — a reference is `resolved` when there is no question
+  *which* definition it binds to: a **sole definition** (no same-named rival), or a **type-pinned
+  receiver** (typed receiver, the A3 inter-procedural fixpoint, `this.m()` inside the class, or an
+  explicit target class — type-resolved, so shadow-immune). `high` then means "ambiguous name,
+  import/proximity-disambiguated"; `name_only` means "ambiguous, no evidence."
+- **`impact_of_edit` gains a `precision` dial:** `standard` (default) follows the high-confidence
+  closure (`resolved` + `high`); **`strict`** follows **only `resolved`** edges — a
+  false-positive-free blast radius ("what *definitely* breaks"). Without a graph, `strict` follows
+  the `proven` query-time callers, so it degrades gracefully. Measured on the repo's own source:
+  of 325 `high` calls/refs edges, 303 are provably unambiguous (→ `resolved`), 22 remain heuristic
+  `high`; `name_only` is never promoted.
+- **Additive and parity-free:** the resolver only changes the `confidence` STRING on edges that
+  already exist (never adds, drops, or reorders them), so `findCallers`/`findReferers`
+  set-equivalence holds and both backends round-trip the `resolved` tier identically. `resolved`
+  carries the same A5 centrality weight as `high`, so enabling it does not perturb centrality. The
+  symbol-graph dedupe now keeps the **strongest** confidence (`resolved > high > name_only`); on the
+  default path the values are unchanged so the dedupe is identical. New module `mcp/resolver.mjs`;
+  `classifyCallers` / `findReferences` gain an additive `proven` flag.
+- **Honest scope:** v1 ships the unambiguous-binding tier the engine can already prove from
+  index-time signals. Detecting a local variable that **shadows** an import (and *refuting* that
+  edge), and cross-file precise resolution via stack-graphs, are the documented next layers — both
+  need per-language AST/scope analysis and an external toolchain that does not fit the air-gapped
+  default. `tree-sitter-stack-graphs` has no production Node binding, so a literal integration would
+  require a Rust CLI sidecar (rejected for v1). `test/edges.mjs` adds 5 tests; full write-up:
+  `docs/internals/IMPROVEMENT_PRECISE_RESOLVER.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

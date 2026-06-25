@@ -1360,11 +1360,16 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
             files: z.array(z.string()).optional().describe('Repo-relative file paths about to change (every defined symbol in them seeds the impact).'),
             max_depth: z.number().int().min(1).max(6).default(3).describe('Transitive caller hops to follow (default 3).'),
             max_nodes: z.number().int().min(1).max(1000).default(200).describe('Cap on affected chunks returned.'),
+            precision: z.enum(['standard', 'strict']).default('standard').describe(
+                "'standard' (default): follow the high-confidence closure (resolved + import/proximity). "
+                + "'strict': follow ONLY provably-unambiguous bindings (sole definition or type-pinned receiver) "
+                + 'for a false-positive-free blast radius — most useful on a --symbol-graph --resolver precise index.'
+            ),
             response_format: z.enum(['markdown', 'json']).default('markdown').describe(
                 "'markdown' (default) or 'json' (typed { changed, impacted, ambiguous, routes, tests, co_changes })."
             ),
         },
-        async ({ symbols = [], files = [], max_depth, max_nodes, response_format }) => {
+        async ({ symbols = [], files = [], max_depth, max_nodes, precision = 'standard', response_format }) => {
             try {
                 // Seed: every definition of each symbol + every chunk in each named file.
                 const seedMap = new Map();
@@ -1381,7 +1386,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         : { content: [{ type: 'text', text: msg }] };
                 }
 
-                const { impacted, ambiguous, truncated, usedGraph } = buildImpact(db, seed, { maxDepth: max_depth, maxNodes: max_nodes });
+                const { impacted, ambiguous, truncated, usedGraph } = buildImpact(db, seed, { maxDepth: max_depth, maxNodes: max_nodes, precision });
 
                 // Affected = seed ∪ impacted. Split tests out from production code.
                 const affected = [...seed.map(c => ({ chunk: c, depth: 0, kind: 'seed' })), ...impacted];
@@ -1401,6 +1406,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     return jsonResult({
                         seed_symbols: symbols, seed_files: files,
                         resolution: usedGraph ? 'symbol-graph' : 'query-time',
+                        precision,
                         changed: seed.map(chunkCard),
                         impacted: impactedCode.map(a => ({ ...chunkCard(a.chunk), depth: a.depth, via: a.kind })),
                         ambiguous: ambiguous.map(a => ({ ...chunkCard(a.chunk), via: a.kind })),
@@ -1414,7 +1420,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
 
                 const ref = (c) => `\`${c.class_context ? c.class_context + '.' : ''}${c.name}\` in \`${c.file_path}\`:${c.start_line}`;
                 const lines = [`# 💥 Impact of editing ${seed.map(c => `\`${c.name}\``).slice(0, 8).join(', ')}`];
-                lines.push(`> resolution: ${usedGraph ? 'symbol-graph (precise)' : 'query-time'}${truncated ? ` · ⚠️ truncated at ${max_nodes} nodes` : ''}`);
+                lines.push(`> resolution: ${usedGraph ? 'symbol-graph (precise)' : 'query-time'} · precision: ${precision}${truncated ? ` · ⚠️ truncated at ${max_nodes} nodes` : ''}`);
                 lines.push('', `**Changed (${seed.length}):** ${seed.map(c => `\`${c.name}\``).join(', ')}`);
                 lines.push('', `**Impacted code (${impactedCode.length})** — transitive high-confidence callers/users:`);
                 for (const a of impactedCode.slice(0, 40)) lines.push(`  - [d${a.depth}·${a.kind}] ${ref(a.chunk)}`);

@@ -351,20 +351,24 @@ export function classifyCallers(db, targetFunction, { targetClass = null } = {})
             }
         }
 
-        let reason = '';
-        if (uniqueTarget && !classFiltered) reason = 'sole definition';
-        else if (recvs.has('this') && callerClass && targetClasses.has(callerClass)) reason = `this.${targetFunction}()`;
-        else if (recvs.has('') && targetIsFreeFn) reason = `${targetFunction}()`;
-        else if (typeMatch) reason = `${classDisplay.get(typeMatch) || typeMatch}.${targetFunction}()`;
-        else if (deps.some(d => targetFiles.has(d))) reason = 'imports definition';
-        else if (targetFiles.has(caller.file_path)) reason = 'same file';
-        else if (tcl && [...recvs].some(r => r && r.toLowerCase() === tcl)) reason = `${targetClass}.${targetFunction}()`;
+        // `proven` (A1): the binding is UNAMBIGUOUS — a sole definition, or pinned by the
+        // receiver's TYPE (typed receiver / A3 fixpoint / this-in-class / explicit target
+        // class). The precise resolver lifts these to the `resolved` edge tier. Import- and
+        // proximity-based reasons are likely-but-not-proven → stay `high`.
+        let reason = '', proven = false;
+        if (uniqueTarget && !classFiltered) { reason = 'sole definition'; proven = true; }
+        else if (recvs.has('this') && callerClass && targetClasses.has(callerClass)) { reason = `this.${targetFunction}()`; proven = true; }
+        else if (recvs.has('') && targetIsFreeFn) { reason = `${targetFunction}()`; proven = false; }
+        else if (typeMatch) { reason = `${classDisplay.get(typeMatch) || typeMatch}.${targetFunction}()`; proven = true; }
+        else if (deps.some(d => targetFiles.has(d))) { reason = 'imports definition'; proven = false; }
+        else if (targetFiles.has(caller.file_path)) { reason = 'same file'; proven = false; }
+        else if (tcl && [...recvs].some(r => r && r.toLowerCase() === tcl)) { reason = `${targetClass}.${targetFunction}()`; proven = true; }
 
         const recvHint = [...recvs].map(r =>
             r === '' ? `${targetFunction}()` : r === 'this' ? `this.${targetFunction}()` : `${r}.${targetFunction}()`
         ).join(', ');
 
-        (reason ? high : nameOnly).push({ chunk: caller, reason, recvHint });
+        (reason ? high : nameOnly).push({ chunk: caller, reason, recvHint, proven: reason ? proven : false });
     }
 
     return { high, nameOnly, targetDefs, ambiguous, hasSiteData, classFiltered };
@@ -408,8 +412,10 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
             : imports ? 'imports definition'
                 : sameFile ? 'same file' : '';
         const confidence = reason ? 'high' : 'name-only';
-        if ((ref.extends || []).some(t => t.toLowerCase() === key)) inherits.push({ chunk: ref, confidence, reason });
-        if ((ref.type_refs || []).some(t => t.toLowerCase() === key)) types.push({ chunk: ref, confidence, reason });
+        // proven (A1): a sole definition is an unambiguous binding → eligible for `resolved`.
+        const proven = uniqueTarget;
+        if ((ref.extends || []).some(t => t.toLowerCase() === key)) inherits.push({ chunk: ref, confidence, reason, proven });
+        if ((ref.type_refs || []).some(t => t.toLowerCase() === key)) types.push({ chunk: ref, confidence, reason, proven });
     }
     const order = (a, b) => (a.confidence === b.confidence
         ? a.chunk.file_path.localeCompare(b.chunk.file_path)
@@ -574,25 +580,32 @@ export function buildSubgraph(db, seed, { maxNodes = 12, maxDepth = 2, tokenBudg
  * @returns {{ impacted:Array<{chunk,depth,kind}>, ambiguous:Array<{chunk,kind}>,
  *             truncated:boolean, usedGraph:boolean }}
  */
-export function buildImpact(db, seedChunks, { maxDepth = 3, maxNodes = 200 } = {}) {
+export function buildImpact(db, seedChunks, { maxDepth = 3, maxNodes = 200, precision = 'standard' } = {}) {
     const hasGraph = typeof db.hasSymbolGraph === 'function' && db.hasSymbolGraph();
     const seedIds = new Set(seedChunks.map(c => c.id));
+
+    // A1 precision dial. `standard` follows the high-confidence closure (resolved + high);
+    // `strict` follows ONLY provably-unambiguous bindings (the `resolved` edge tier, or — with
+    // no graph — the `proven` query-time callers) for a false-positive-free blast radius.
+    const strict = precision === 'strict';
+    const keepEdge = strict ? (c) => c === 'resolved' : (c) => c === 'high' || c === 'resolved';
+    const keepRef = (proven) => !strict || Boolean(proven);
 
     const highReferrers = (chunk) => {
         const out = [];
         if (hasGraph) {
             for (const e of db.getEdges(chunk.id, { direction: 'in' }))
-                if (e.chunk && e.confidence === 'high') out.push({ chunk: e.chunk, kind: e.kind });
+                if (e.chunk && keepEdge(e.confidence)) out.push({ chunk: e.chunk, kind: e.kind });
             return out;
         }
         if (!chunk.name || chunk.name === 'anonymous') return out;
         const tcl = chunk.class_context || null;
         const seen = new Set();
         for (const h of classifyCallers(db, chunk.name, { targetClass: tcl }).high)
-            if (!seen.has(h.chunk.id)) { seen.add(h.chunk.id); out.push({ chunk: h.chunk, kind: 'calls' }); }
+            if (keepRef(h.proven) && !seen.has(h.chunk.id)) { seen.add(h.chunk.id); out.push({ chunk: h.chunk, kind: 'calls' }); }
         const refs = findReferences(db, chunk.name, { targetClass: tcl });
-        for (const r of refs.inherits) if (r.confidence === 'high' && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'extends' }); }
-        for (const r of refs.types) if (r.confidence === 'high' && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'type' }); }
+        for (const r of refs.inherits) if (r.confidence === 'high' && keepRef(r.proven) && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'extends' }); }
+        for (const r of refs.types) if (r.confidence === 'high' && keepRef(r.proven) && !seen.has(r.chunk.id)) { seen.add(r.chunk.id); out.push({ chunk: r.chunk, kind: 'type' }); }
         return out;
     };
     const nameOnlyReferrers = (chunk) => {
@@ -636,5 +649,5 @@ export function buildImpact(db, seedChunks, { maxDepth = 3, maxNodes = 200 } = {
         || (a.chunk.start_line - b.chunk.start_line) || (a.chunk.id < b.chunk.id ? -1 : 1);
     const impactedList = [...impacted.values()].sort((a, b) => (a.depth - b.depth) || byPlace(a, b));
     const ambiguousList = [...ambiguous.values()].sort(byPlace);
-    return { impacted: impactedList, ambiguous: ambiguousList, truncated, usedGraph: hasGraph };
+    return { impacted: impactedList, ambiguous: ambiguousList, truncated, usedGraph: hasGraph, precision };
 }
