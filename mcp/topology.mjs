@@ -422,7 +422,30 @@ export function findReferences(db, symbol, { targetClass = null } = {}) {
         : a.confidence === 'high' ? -1 : 1);
     inherits.sort(order); types.sort(order);
 
-    return { symbol, targetDefs, ambiguous, calls, inherits, types };
+    // A2 v2: precise cross-file references from a locally-generated SCIP index (--resolver scip).
+    // SCIP occurrences are kind-agnostic ("symbol used here"), so this is the binding-precise,
+    // cross-file "used by" set: it both DISAMBIGUATES same-named symbols (each referer is attached
+    // to the one definition SCIP bound it to) and RECOVERS references the AST/name heuristic above
+    // misses entirely. Confidence is `resolved` — trustworthy, not a name guess. Empty (and so
+    // byte-identical) on every index built without a SCIP resolver. Isolated artifact → parity-free.
+    const references = [];
+    if (db.hasScipRefs?.()) {
+        const seen = new Set();
+        for (const def of targetDefs) {
+            for (const refId of db.getScipReferers(def.id)) {
+                if (seen.has(refId)) continue;
+                seen.add(refId);
+                const chunk = db.getChunk(refId);
+                if (chunk) references.push({ chunk, confidence: 'resolved', reason: 'scip' });
+            }
+        }
+        references.sort((a, b) =>
+            a.chunk.file_path.localeCompare(b.chunk.file_path)
+            || ((a.chunk.start_line || 0) - (b.chunk.start_line || 0))
+            || (a.chunk.id < b.chunk.id ? -1 : a.chunk.id > b.chunk.id ? 1 : 0));
+    }
+
+    return { symbol, targetDefs, ambiguous, calls, inherits, types, references };
 }
 
 // ─── HTTP route → handler resolution ──────────────────────────────────────────────

@@ -328,6 +328,7 @@ async function main() {
     // throwaway in-memory store so it sees the same resolution the MCP server will.
     let symbolEdges = null;
     let centrality = null;
+    let scipReferers = null;     // A2 v2: SCIP precise cross-file references for find_references
     if (config.symbolGraph) {
         const tmpSg = path.join(config.dataDir, '_symbolgraph-build.json');
         try {
@@ -350,10 +351,14 @@ async function main() {
                     resolver = getResolver('heuristic');
                 } else {
                     try {
-                        const { loadScip, buildScipBindings } = await import('./parse/scip.mjs');
+                        const { loadScip, buildScipBindings, buildScipReferers } = await import('./parse/scip.mjs');
                         const aligned = buildScipBindings(sgIdx, loadScip(config.scipIndex));
                         scipStats = aligned.stats;
                         resolver = createScipResolver(aligned.bindings, aligned.definedChunks);
+                        // A2 v2: invert the same bindings into the precise cross-file "referenced-by"
+                        // map find_references consumes (kind-agnostic, sound, isolated artifact).
+                        const refs = buildScipReferers(aligned.bindings);
+                        if (Object.keys(refs).length) scipReferers = refs;
                         if (scipStats.matchedDocs === 0) {
                             console.warn(`⚠️  SCIP index matched 0 of ${scipStats.docs} document(s) to indexed `
                                 + `files (${config.scipIndex}) — check the path / project_root. Resolver is `
@@ -381,6 +386,12 @@ async function main() {
             const cen = computeSymbolCentrality(symbolEdges);
             centrality = cen.total ? cen.centrality : null;
             if (centrality) console.log(`📊 Centrality: ranked ${cen.total} connected symbols (PageRank, ${cen.iters} iters).`);
+            // A2 v2: precise cross-file references (find_references `resolved` tier), serialized
+            // as an isolated artifact alongside the graph.
+            if (scipReferers) {
+                const pairs = Object.values(scipReferers).reduce((s, a) => s + a.length, 0);
+                console.log(`🎯 SCIP references: ${Object.keys(scipReferers).length} definitions referenced (${pairs} precise referer pairs).`);
+            }
         } finally {
             try { fs.unlinkSync(tmpSg); } catch { /* none */ }
         }
@@ -425,7 +436,7 @@ async function main() {
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
-            edges: symbolEdges, centrality, taint: taintPayload,
+            edges: symbolEdges, centrality, taint: taintPayload, scipRefs: scipReferers,
         });
         store.close?.();
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
@@ -440,6 +451,7 @@ async function main() {
                 ...(symbolEdges ? { edges: symbolEdges } : {}),
                 ...(centrality ? { centrality } : {}),
                 ...(taintPayload ? { taint: taintPayload } : {}),
+                ...(scipReferers ? { scip_refs: scipReferers } : {}),
             })),
             fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
         ]);

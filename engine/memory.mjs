@@ -90,6 +90,12 @@ export class MemoryGraphIndex {
         //    so the taint tools serve instantly and both backends serve identical flows. Cleared
         //    on any incremental file update (a code change invalidates the flow set).
         this._taint = null;
+
+        // ── A2 v2: SCIP precise references — `{ defChunkId: [refererChunkId, …] }`, built at index
+        //    time from a locally-generated SCIP index (--resolver scip) and serialized as an
+        //    isolated artifact so it cannot perturb A4 edges / A5 centrality. find_references reads
+        //    it for a binding-precise, cross-file `resolved` reference tier. Cleared with the graph.
+        this._scipRefs = null;
     }
 
     /** Index the (already deterministically-ordered) edge list by endpoint. */
@@ -112,7 +118,7 @@ export class MemoryGraphIndex {
         this._centralRanked = null;
     }
 
-    /** Drop the symbol graph + its centrality + serialized taint (an incremental update makes them stale). */
+    /** Drop the symbol graph + its centrality + serialized taint + SCIP references (an incremental update makes them stale). */
     _clearEdges() {
         this._edges = null;
         this._edgesByTo = new Map();
@@ -121,6 +127,7 @@ export class MemoryGraphIndex {
         this._centralityTotal = 0;
         this._centralRanked = null;
         this._taint = null;
+        this._scipRefs = null;
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -135,6 +142,8 @@ export class MemoryGraphIndex {
         if (data.centrality && typeof data.centrality === 'object') this._indexCentrality(data.centrality);
         // C2 serialized taint flows (opt-in --taint; absent on default indexes → no-op).
         if (data.taint && typeof data.taint === 'object') this._taint = data.taint;
+        // A2 v2 SCIP precise references (opt-in --resolver scip; absent on default indexes → no-op).
+        if (data.scip_refs && typeof data.scip_refs === 'object') this._scipRefs = data.scip_refs;
         // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
         // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
         // stay a low-weight rescue). Set during the chunk load loop below.
@@ -584,6 +593,7 @@ export class MemoryGraphIndex {
             ...(this._edges ? { edges: this._edges } : {}),
             ...(this._centrality ? { centrality: Object.fromEntries(this._centrality) } : {}),
             ...(this._taint ? { taint: this._taint } : {}),
+            ...(this._scipRefs ? { scip_refs: this._scipRefs } : {}),
         });
         const tmpPath    = `${this.indexPath}.tmp`;
         const tmpBinPath = `${this._embeddingPath}.tmp`;
@@ -636,7 +646,7 @@ export class MemoryGraphIndex {
         // A per-file edit makes the whole-program symbol graph + its centrality stale; drop
         // both so findCallers/findReferers fall back to the always-correct scan until the next
         // full `idx-index` rebuilds them (the daemon never rebuilds the graph).
-        if (this._edges || this._centrality || this._taint) this._clearEdges();
+        if (this._edges || this._centrality || this._taint || this._scipRefs) this._clearEdges();
         this.updateFileGraph(filePath, imports);
 
         for (const [id, chunk] of Array.from(this.chunks.entries())) {
@@ -779,6 +789,18 @@ export class MemoryGraphIndex {
 
     /** The serialized taint payload `{ flows, meta }` (C2), or null. */
     getTaintFlows() { return this._taint; }
+
+    /** Whether opt-in SCIP precise references (A2 v2 --resolver scip) are loaded. */
+    hasScipRefs() { return this._scipRefs != null; }
+
+    /** SCIP-confirmed referer chunk ids for a definition chunk (A2 v2), or [] when none / not loaded. */
+    getScipReferers(defChunkId) {
+        const refs = this._scipRefs && this._scipRefs[defChunkId];
+        return Array.isArray(refs) ? refs : [];
+    }
+
+    /** How many definitions carry SCIP precise references (A2 v2). 0 when not loaded. */
+    scipRefCount() { return this._scipRefs ? Object.keys(this._scipRefs).length : 0; }
 
     /**
      * Symbol centrality (A5) for one chunk: its PageRank score, dense rank (1 = most central),

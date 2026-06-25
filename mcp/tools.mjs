@@ -820,10 +820,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
         },
         async ({ symbol, target_class, response_format }) => {
             try {
-                const { targetDefs, ambiguous, calls, inherits, types } =
+                const { targetDefs, ambiguous, calls, inherits, types, references } =
                     findReferences(db, symbol, { targetClass: target_class || null });
                 const callTotal = calls.high.length + calls.nameOnly.length;
                 const total = callTotal + inherits.length + types.length;
+                const scipRefs = references || [];
                 const coChanges = coChangeFiles(gitSignals, [...new Set(targetDefs.map(d => d.file_path))]);
                 const fresh = indexFreshness();
                 const note = freshnessNote(fresh);
@@ -841,12 +842,15 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         },
                         subclassed_by: inherits.map(refCard),
                         used_as_type_by: types.map(refCard),
+                        // A2 v2: binding-precise cross-file references from a SCIP index (resolved tier).
+                        referenced_by_resolved: scipRefs.map(refCard),
+                        resolved_reference_count: scipRefs.length,
                         co_changes: coChanges,
                         index: fresh,
                     });
                 }
 
-                if (total === 0) {
+                if (total === 0 && scipRefs.length === 0) {
                     const parts = [`✅ No references to \`${symbol}\` found in the index.`];
                     if (coChanges.length) parts.push(coChangeLine(coChanges));
                     if (note) parts.push(note);
@@ -859,7 +863,8 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     + (recvHint ? ` · via ${recvHint}` : '')
                     + (confidence === 'name-only' ? ' · ⚠️ unverified' : '');
 
-                const lines = [`# 🔗 References to \`${symbol}\` — ${total} total`];
+                const lines = [`# 🔗 References to \`${symbol}\` — ${total} total`
+                    + (scipRefs.length ? ` · ${scipRefs.length} SCIP-resolved` : '')];
                 if (ambiguous) lines.push(`⚠️ ${targetDefs.length} symbols named \`${symbol}\` — name-only matches may target a different one.`);
 
                 if (callTotal) {
@@ -874,6 +879,12 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 if (types.length) {
                     lines.push('', `## 🏷  Used as a type by (${types.length})`);
                     for (const it of types) lines.push(fmt(it));
+                }
+                if (scipRefs.length) {
+                    lines.push('', `## 🎯 Referenced by — SCIP-resolved (${scipRefs.length})`,
+                        '_Binding-precise cross-file references from your SCIP index (kind-agnostic): disambiguates'
+                        + ' same-named symbols and catches uses the name heuristics above can miss._');
+                    for (const it of scipRefs) lines.push(fmt(it));
                 }
                 if (coChanges.length) lines.push('', coChangeLine(coChanges));
                 if (note) lines.push('', note);
@@ -1188,6 +1199,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         sealed: sealed,
                         egress_guard: sealed === 'off' ? 'off' : (egressGuardActive() ? 'active' : 'requested'),
                         taint_flows: db.hasTaint?.() ? (db.getTaintFlows()?.flows?.length ?? 0) : null,
+                        scip_references: db.hasScipRefs?.() ? (db.scipRefCount?.() ?? null) : null,
                         daemon_running: daemonRunning,
                         index_age_seconds: ageSeconds,
                         freshness: {
@@ -1213,6 +1225,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     `| **Lazy vec mode** | ${s.lazyMode ? '✅ Yes (enterprise scale)' : '❌ No (small corpus)'} |`,
                     ...(sealed !== 'off' ? [`| **Sealed mode** | 🔒 ${sealed} · egress guard ${egressGuardActive() ? 'active' : 'requested'} |`] : []),
                     ...(db.hasTaint?.() ? [`| **Taint flows** | 🧪 ${db.getTaintFlows()?.flows?.length ?? 0} precomputed |`] : []),
+                    ...(db.hasScipRefs?.() ? [`| **SCIP references** | 🎯 ${db.scipRefCount?.() ?? 0} definitions (precise cross-file) |`] : []),
                     `| **Daemon** | ${daemonStatus} |`,
                     `| **Index age** | ${indexAge} |`,
                     `| **Built at commit** | ${fresh.indexedCommit || '—'}${fresh.commitMoved ? ` (HEAD now ${fresh.currentCommit})` : ''} |`,
@@ -1299,8 +1312,9 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         : { content: [{ type: 'text', text: indexEmpty ? `⚠️ ${emptyHint}` : `Symbol \`${symbol}\` not in index. Try search_code(query="${symbol}").` }] };
                 }
 
-                const { targetDefs, ambiguous, calls, inherits, types } =
+                const { targetDefs, ambiguous, calls, inherits, types, references } =
                     findReferences(db, symbol, { targetClass: target_class || null });
+                const scipRefs = references || [];
                 const callees = [...new Set(defs.flatMap(d => d.calls || []))].sort();
                 const tests = testsForSymbol(symbol);
                 const defIds = new Set(defs.map(d => d.id));
@@ -1331,6 +1345,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         },
                         subclassed_by: inherits.map(refCard),
                         used_as_type_by: types.map(refCard),
+                        referenced_by_resolved: scipRefs.map(refCard),
                         routes,
                         tests: tests.map(chunkCard),
                         recent_changes: recentChanges,
@@ -1353,6 +1368,7 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 for (const h of calls.high.slice(0, 10)) lines.push(`  - ✅ \`${h.chunk.class_context ? h.chunk.class_context + '.' : ''}${h.chunk.name}\` in \`${h.chunk.file_path}\`${h.recvHint ? ` · via ${h.recvHint}` : ''}`);
                 if (inherits.length) lines.push('', `**Subclassed/implemented by (${inherits.length}):** ` + inherits.slice(0, 10).map(r => `\`${r.chunk.name}\``).join(', '));
                 if (types.length) lines.push('', `**Used as a type by (${types.length}):** ` + types.slice(0, 10).map(r => `\`${r.chunk.name}\``).join(', '));
+                if (scipRefs.length) lines.push('', `**🎯 SCIP-resolved references (${scipRefs.length}):** ` + scipRefs.slice(0, 10).map(r => `\`${r.chunk.name}\``).join(', '));
                 if (routes.length) {
                     lines.push('', `**Routes (${routes.length}):**`);
                     for (const r of routes) lines.push(`  - **${r.method}** \`${r.path}\``);

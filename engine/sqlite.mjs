@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS call_edges (callee TEXT, chunk_id TEXT);
 CREATE TABLE IF NOT EXISTS edges (from_chunk_id TEXT, to_chunk_id TEXT, kind TEXT, confidence TEXT);
 CREATE TABLE IF NOT EXISTS centrality (chunk_id TEXT, score REAL, rank INTEGER);
 CREATE TABLE IF NOT EXISTS taint (id INTEGER PRIMARY KEY, payload TEXT);
+CREATE TABLE IF NOT EXISTS scip_refs (id INTEGER PRIMARY KEY, payload TEXT);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
 CREATE TABLE IF NOT EXISTS routes (
   id INTEGER PRIMARY KEY,
@@ -140,6 +141,8 @@ export class SqliteGraphStore {
         this._hasCentrality = false; // A5: symbol centrality present (opt-in, built with the graph)
         this._centralityTotal = 0;
         this._hasTaint = false; // C2: serialized taint flows present (opt-in --taint)
+        this._hasScipRefs = false; // A2 v2: SCIP precise references present (opt-in --resolver scip)
+        this._scipRefsObj = null;  // lazily-parsed `{ defId: [refId,…] }` payload (memoized)
     }
 
     get backend() { return 'sqlite'; }
@@ -191,6 +194,7 @@ export class SqliteGraphStore {
         this._refreshHasEdges();
         this._refreshHasCentrality();
         this._refreshHasTaint();
+        this._refreshHasScipRefs();
         this._dataVersion = this._readDataVersion();
         return this;
     }
@@ -216,6 +220,15 @@ export class SqliteGraphStore {
             const row = this.db.prepare('SELECT COUNT(*) AS n FROM taint').get();
             this._hasTaint = Boolean(row && row.n > 0);
         } catch { this._hasTaint = false; }
+    }
+
+    /** Whether opt-in SCIP precise references (A2 v2 --resolver scip) are present. */
+    _refreshHasScipRefs() {
+        try {
+            const row = this.db.prepare('SELECT COUNT(*) AS n FROM scip_refs').get();
+            this._hasScipRefs = Boolean(row && row.n > 0);
+        } catch { this._hasScipRefs = false; }
+        this._scipRefsObj = null;   // drop any memoized payload — the row may have changed
     }
 
     _openVecFd() {
@@ -362,6 +375,7 @@ export class SqliteGraphStore {
         );
         // C2 serialized taint flows — a single JSON payload row (id = 0).
         this._stmtTaint = this.db.prepare('SELECT payload FROM taint WHERE id = 0');
+        this._stmtScipRefs = this.db.prepare('SELECT payload FROM scip_refs WHERE id = 0');
     }
 
     _prepareWrite() {
@@ -453,6 +467,29 @@ export class SqliteGraphStore {
         if (!row || !row.payload) return null;
         try { return JSON.parse(row.payload); } catch { return null; }
     }
+
+    /** Whether opt-in SCIP precise references (A2 v2 --resolver scip) are loaded. */
+    hasScipRefs() { return this._hasScipRefs; }
+
+    /** Parse the single JSON payload `{ defId: [refId,…] }` once, then memoize. */
+    _loadScipRefs() {
+        if (!this._hasScipRefs) return {};
+        if (!this._scipRefsObj) {
+            const row = this._stmtScipRefs.get();
+            try { this._scipRefsObj = row && row.payload ? JSON.parse(row.payload) : {}; }
+            catch { this._scipRefsObj = {}; }
+        }
+        return this._scipRefsObj;
+    }
+
+    /** SCIP-confirmed referer chunk ids for a definition chunk (A2 v2), or []. Mirrors MemoryGraphIndex. */
+    getScipReferers(defChunkId) {
+        const refs = this._loadScipRefs()[defChunkId];
+        return Array.isArray(refs) ? refs : [];
+    }
+
+    /** How many definitions carry SCIP precise references (A2 v2). 0 when not loaded. */
+    scipRefCount() { return this._hasScipRefs ? Object.keys(this._loadScipRefs()).length : 0; }
 
     /**
      * Symbol centrality (A5) for one chunk. Mirrors MemoryGraphIndex.getCentrality — same
@@ -792,6 +829,7 @@ export class SqliteGraphStore {
             if (this._hasEdges) { this.db.exec('DELETE FROM edges'); this._hasEdges = false; }
             if (this._hasCentrality) { this.db.exec('DELETE FROM centrality'); this._hasCentrality = false; this._centralityTotal = 0; }
             if (this._hasTaint) { this.db.exec('DELETE FROM taint'); this._hasTaint = false; }
+            if (this._hasScipRefs) { this.db.exec('DELETE FROM scip_refs'); this._hasScipRefs = false; this._scipRefsObj = null; }
 
             // Capture reusable vector offsets BEFORE deleting old rows, which may
             // be the only rows that hold those offsets.
@@ -885,7 +923,7 @@ export class SqliteGraphStore {
      * @param {{dependencies:Object<string,string[]>}} payload.graph
      * @param {Map<string,Float32Array>|object} [payload.embeddingCache]  Keyed by embeddingKeyFor(chunk).
      */
-    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null, taint = null }) {
+    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null, taint = null, scipRefs = null }) {
         this._open();
         this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
@@ -919,6 +957,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
             DROP TABLE IF EXISTS routes; DROP TABLE IF EXISTS edges;
             DROP TABLE IF EXISTS centrality; DROP TABLE IF EXISTS taint;
+            DROP TABLE IF EXISTS scip_refs;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -1006,6 +1045,13 @@ export class SqliteGraphStore {
         // the identical bytes → parity-free, exactly like edges/centrality.
         if (taint && typeof taint === 'object') {
             this.db.prepare('INSERT INTO taint (id, payload) VALUES (0, ?)').run(JSON.stringify(taint));
+        }
+
+        // A2 v2 SCIP precise references (opt-in --resolver scip). A single JSON payload (id = 0) of
+        // `{ defChunkId: [refererChunkId, …] }`; both backends parse identical bytes → parity-free,
+        // exactly like taint. find_references reads it for the cross-file `resolved` reference tier.
+        if (scipRefs && typeof scipRefs === 'object' && Object.keys(scipRefs).length) {
+            this.db.prepare('INSERT INTO scip_refs (id, payload) VALUES (0, ?)').run(JSON.stringify(scipRefs));
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');

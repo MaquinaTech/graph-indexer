@@ -25,6 +25,13 @@
  *              definition (`definedChunks`); a def SCIP never saw falls through to heuristic. v1
  *              applies SCIP resolution to `calls` edges only (the binding relation is kind-agnostic,
  *              so `extends`/`type` edges stay heuristic to avoid cross-kind contamination).
+ *
+ *              A2 v2 ADDS a second, kind-agnostic consumer that the same binding relation serves
+ *              soundly precisely BECAUSE it is kind-agnostic: `buildScipReferers` inverts the
+ *              bindings into a precise cross-file "referenced-by" map for find_references — no edge
+ *              suppression, no cross-kind risk, just the binding-precise reference set serialized as
+ *              an isolated index artifact (like centrality/taint), so it cannot perturb A4 edges or
+ *              A5 centrality.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -351,4 +358,34 @@ export function buildScipBindings(db, scip) {
         bindingPairs: pairCount,
     };
     return { bindings, definedChunks, stats };
+}
+
+/**
+ * A2 v2 — invert the cross-file binding relation into the precise "referenced-by" map that
+ * find_references consumes:
+ *
+ *     scipRefs: { defChunkId: [refererChunkId, ...] }   // "this definition is referenced by …"
+ *
+ * SCIP occurrences are kind-AGNOSTIC — a Reference occurrence is "symbol X is used here," with no
+ * call/type-use/inheritance distinction — which is exactly the question find_references answers
+ * ("what references this symbol?"). So the inverse of `bindings` is a genuinely cross-file,
+ * binding-precise reference set: it (a) DISAMBIGUATES same-named symbols (a referer is attached to
+ * the one definition SCIP bound it to, not every same-named def the name heuristic would match), and
+ * (b) RECOVERS references the AST/name heuristic misses entirely (the v1 "recall concern"), e.g.
+ * type usages in languages whose `type_refs` channel is empty. Serialized deterministically (sorted
+ * def ids, sorted referer ids) so both backends round-trip byte-identically. Self-references were
+ * already dropped upstream in buildScipBindings.
+ *
+ * @param {Map<string, Set<string>>} bindings  fromChunkId → set of def chunk ids (buildScipBindings).
+ * @returns {Record<string, string[]>}  defChunkId → sorted referer chunk ids (empty object when none).
+ */
+export function buildScipReferers(bindings) {
+    const rel = bindings instanceof Map ? bindings : new Map();
+    const inv = new Map();                       // defChunkId → Set<refererChunkId>
+    for (const [refererId, defIds] of rel) {
+        for (const defId of defIds) addToSetMap(inv, defId, refererId);
+    }
+    const out = {};
+    for (const defId of [...inv.keys()].sort()) out[defId] = [...inv.get(defId)].sort();
+    return out;
 }

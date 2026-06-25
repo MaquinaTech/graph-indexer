@@ -11,6 +11,12 @@
  *              if tree-sitter-typescript is absent) and prove buildSymbolGraph, under the scip
  *              resolver, marks the confirmed edge `resolved` and DROPS the wrong-target edge —
  *              byte-identically across memory ↔ sqlite.
+ *
+ *              A2 v2 adds a fourth layer: buildScipReferers inverts the same binding relation into
+ *              the precise cross-file "referenced-by" map find_references consumes (a `resolved`
+ *              tier), serialized as an isolated artifact. Tests cover the inversion, the new
+ *              find_references dimension (precise + correctly attributed), memory↔sqlite parity, the
+ *              sacred-default byte-identity when no SCIP index is present, and incremental staleness.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT
@@ -21,9 +27,10 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { loadScip, buildScipBindings, normalizeScipPath } from '../parse/scip.mjs';
+import { loadScip, buildScipBindings, buildScipReferers, normalizeScipPath } from '../parse/scip.mjs';
 import { createScipResolver, getResolver } from '../mcp/resolver.mjs';
 import { buildSymbolGraph } from '../mcp/symbolgraph.mjs';
+import { findReferences } from '../mcp/topology.mjs';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { SqliteGraphStore } from '../engine/sqlite.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
@@ -349,4 +356,118 @@ test('scip (A2): calls-only scope — extends/type edges are byte-identical to h
     assert.deepEqual(refEdges(scip), refEdges(heur),
         'scip leaves extends/type edges byte-identical to heuristic — no promotion, no suppression');
     rm(p);
+});
+
+// ── A2 v2: SCIP-backed precise cross-file references (find_references) ───────────────────────
+
+test('scip (A2 v2): buildScipReferers inverts the binding relation deterministically', () => {
+    // bindings: two callers reference a def in D; a third references E.
+    const bindings = new Map([
+        ['callerB', new Set(['D'])],
+        ['callerA', new Set(['D', 'E'])],
+    ]);
+    const refs = buildScipReferers(bindings);
+    assert.deepEqual(Object.keys(refs).sort(), ['D', 'E'], 'keys are the definition chunks');
+    assert.deepEqual(refs.D, ['callerA', 'callerB'], 'referers sorted, both callers of D');
+    assert.deepEqual(refs.E, ['callerA']);
+    // determinism: rebuilt from a differently-ordered map → identical bytes
+    const refs2 = buildScipReferers(new Map([['callerA', new Set(['E', 'D'])], ['callerB', new Set(['D'])]]));
+    assert.equal(JSON.stringify(refs2), JSON.stringify(refs), 'serialization is order-independent');
+    // garbage in → empty (never throws)
+    assert.deepEqual(buildScipReferers(null), {});
+});
+
+/** Load chunks + an optional scip_refs payload into BOTH backends; return { mem, sq, dbPath, memPath }. */
+function loadBothWithScipRefs(scan, scipRefs) {
+    const chunks = [...scan.chunks.values()];
+    const graph = scan.graph;
+    const memPath = tmp('.json');
+    fs.writeFileSync(memPath, JSON.stringify({ chunks, graph, ...(scipRefs ? { scip_refs: scipRefs } : {}) }));
+    const mem = new MemoryGraphIndex(memPath); mem.load();
+    const dbPath = tmp('.db');
+    new SqliteGraphStore(dbPath).buildFrom({ chunks, graph, embeddingCache: new Map(), scipRefs });
+    const sq = new SqliteGraphStore(dbPath); sq.load();
+    return { mem, sq, dbPath, memPath };
+}
+
+test('scip (A2 v2): find_references gains a precise `resolved` reference, attributed to the right def', () => {
+    const perFile = parseFixture();
+    if (!perFile) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+    const { scan, path: p } = buildScan(perFile);
+    const fmts = scan.resolveSymbol('format');           // ambiguous: format@a and format@b
+    const fmtA = fmts.find(c => c.file_path === 'a.ts').id;
+    const fmtB = fmts.find(c => c.file_path === 'b.ts').id;
+    const handle = scan.resolveSymbol('handle')[0].id;
+
+    // SCIP binds handle → format@a only; invert to the referenced-by map find_references consumes.
+    const sp = tmp('.json');
+    fs.writeFileSync(sp, JSON.stringify(SCIP_FIXTURE));
+    const { bindings } = buildScipBindings(scan, loadScip(sp));
+    rm(sp);
+    const scipRefs = buildScipReferers(bindings);
+    assert.deepEqual(scipRefs[fmtA], [handle], 'format@a is referenced by handle (precise)');
+    assert.ok(!scipRefs[fmtB], 'format@b has no SCIP referer — disambiguated away');
+
+    const { mem, sq, dbPath, memPath } = loadBothWithScipRefs(scan, scipRefs);
+    assert.ok(mem.hasScipRefs() && sq.hasScipRefs(), 'both backends report SCIP refs present');
+
+    const refs = findReferences(mem, 'format').references;
+    assert.equal(refs.length, 1, 'exactly one precise referer (handle → format@a); format@b contributes none');
+    assert.equal(refs[0].chunk.id, handle);
+    assert.equal(refs[0].confidence, 'resolved', 'SCIP reference is the trustworthy resolved tier');
+
+    sq.close?.(); rm(dbPath); rm(memPath); rm(p);
+});
+
+test('scip (A2 v2): SCIP references round-trip memory ↔ sqlite identically (parity)', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { scan, path: p } = buildScan(perFile);
+    const fmtA = scan.resolveSymbol('format').find(c => c.file_path === 'a.ts').id;
+    const handle = scan.resolveSymbol('handle')[0].id;
+    const scipRefs = { [fmtA]: [handle] };
+    const { mem, sq, dbPath, memPath } = loadBothWithScipRefs(scan, scipRefs);
+
+    assert.equal(sq.scipRefCount(), mem.scipRefCount(), 'scipRefCount parity');
+    assert.deepEqual(sq.getScipReferers(fmtA), mem.getScipReferers(fmtA), 'getScipReferers parity');
+    const ids = (db) => findReferences(db, 'format').references.map(r => r.chunk.id);
+    assert.deepEqual(ids(sq), ids(mem), 'find_references precise dimension is byte-identical across backends');
+
+    sq.close?.(); rm(dbPath); rm(memPath); rm(p);
+});
+
+test('scip (A2 v2): SACRED DEFAULT — no SCIP index → no scip_refs key, empty references, byte-identical', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { scan, path: p } = buildScan(perFile);
+    const { mem, sq, dbPath, memPath } = loadBothWithScipRefs(scan, null);   // ← no scip refs
+
+    assert.equal(mem.hasScipRefs(), false, 'memory: absent on a default index');
+    assert.equal(sq.hasScipRefs(), false, 'sqlite: absent on a default index');
+    assert.equal(mem.scipRefCount(), 0);
+    assert.deepEqual(findReferences(mem, 'format').references, [], 'references dimension is empty (default path)');
+    assert.deepEqual(findReferences(sq, 'format').references, []);
+    // the serialized JSON must NOT carry a scip_refs key (sacred-default byte-identity)
+    assert.ok(!('scip_refs' in JSON.parse(fs.readFileSync(memPath, 'utf8'))), 'no scip_refs key when feature is off');
+
+    sq.close?.(); rm(dbPath); rm(memPath); rm(p);
+});
+
+test('scip (A2 v2): an incremental file update drops the now-stale SCIP references', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { scan, path: p } = buildScan(perFile);
+    const fmtA = scan.resolveSymbol('format').find(c => c.file_path === 'a.ts').id;
+    const handle = scan.resolveSymbol('handle')[0].id;
+    const { mem, sq, dbPath, memPath } = loadBothWithScipRefs(scan, { [fmtA]: [handle] });
+    assert.ok(mem.hasScipRefs() && sq.hasScipRefs());
+
+    mem.applyFileUpdate('c.ts', { chunks: perFile['c.ts'], imports: [] });
+    if (mem._saveTimer) { clearTimeout(mem._saveTimer); mem._saveTimer = null; }
+    sq.applyFileUpdate('c.ts', { chunks: perFile['c.ts'], imports: [] });
+    assert.equal(mem.hasScipRefs(), false, 'memory: a per-file edit makes whole-program refs stale → cleared');
+    assert.equal(sq.hasScipRefs(), false, 'sqlite: same — DELETE FROM scip_refs on incremental update');
+    assert.deepEqual(findReferences(mem, 'format').references, [], 'no stale precise references served');
+
+    sq.close?.(); rm(dbPath); rm(memPath); rm(p);
 });
