@@ -9,11 +9,13 @@ the thing the heuristic structurally cannot: **disambiguate a same-named symbol 
 
 - **Branch:** `feat/improvements` (Frontier Phase 3 — the realistic, air-gapped backend for the A1
   resolver-provider seam).
-- **Files:** `parse/scip.mjs` (new — `loadScip`, `buildScipBindings`, `normalizeScipPath`),
-  `mcp/resolver.mjs` (`createScipResolver` + the `resolveEdges` provider method),
-  `mcp/symbolgraph.mjs` (the emit closures consult `resolveEdges`), `config.mjs`
+- **Files:** `parse/scip.mjs` (new — `loadScip`, `buildScipBindings`, `buildScipReferers` (v2),
+  `normalizeScipPath`), `mcp/resolver.mjs` (`createScipResolver` + the `resolveEdges` provider
+  method), `mcp/symbolgraph.mjs` (the emit closures consult `resolveEdges`), `mcp/topology.mjs` (v2 —
+  the `find_references` reference dimension), `engine/{memory,sqlite}.mjs` (v2 — the isolated
+  `scip_refs` artifact: `hasScipRefs`/`getScipReferers`/`scipRefCount`), `config.mjs`
   (`--resolver scip` / `--scip-index` / `INDEXER_SCIP_INDEX` / `scipIndex` config),
-  `indexer.mjs` (load + align + coverage logging + graceful fallback), `test/scip.mjs` (10 tests).
+  `indexer.mjs` (load + align + coverage logging + graceful fallback), `test/scip.mjs` (15 tests).
 
 ## Why SCIP, and why this is the honest path
 
@@ -95,12 +97,42 @@ Coverage is **never silent**: at index time the build prints
 warns loudly if the SCIP index matches **0** documents (a path / `project_root` mismatch) or is
 missing/unreadable (→ graceful fallback to heuristic, never a failed build).
 
-## Honest scope — what A2 v1 does *not* do
+## A2 v2 — precise cross-file references for `find_references`
 
-1. **It refines candidates; it does not synthesize edges.** A2 promotes/suppresses among the edges
-   the AST call-extraction already produced. A binding SCIP knows but our call-extraction missed
-   (e.g. a reference our AST walk didn't capture) is **not** added — that is a v2 recall concern,
-   deliberately out of v1 to keep the change bounded and low-risk.
+v1 applies SCIP to the `calls` symbol-graph edges only (the binding relation is kind-agnostic, so
+relabel/suppress on `extends`/`type` would risk cross-kind contamination). **v2 turns that same
+kind-agnostic property from a constraint into the feature** by giving SCIP a second consumer for
+which kind-agnostic is exactly right: `find_references`.
+
+`buildScipReferers(bindings)` inverts the binding relation (`fromChunkId → Set<defChunkId>`) into a
+precise *referenced-by* map (`{ defChunkId: [refererChunkId, …] }`), and `find_references` /
+`explain_symbol` surface it as a **`resolved`-tier** reference dimension. A SCIP Reference occurrence
+is just "symbol X used here" — no call/type-use/inheritance label — which is precisely the question
+`find_references` answers. So this one dimension delivers two wins the name heuristic structurally
+cannot:
+
+- **Precision / disambiguation.** Each referer is attached to the *one* definition SCIP bound it to,
+  not to every same-named definition the lowercased-name scan matches.
+- **Recall.** It surfaces references the AST/name heuristic never produced — e.g. type usages in
+  languages whose `type_refs` channel is empty (the v1 "recall concern", now addressed for the
+  *reference* surface, though still not for the symbol-graph *edges*).
+
+Architecturally it is the **taint/centrality pattern**: computed once at index time, serialized as an
+**isolated artifact** (`scip_refs` — a memory JSON key / a single-row sqlite table), exposed through
+`hasScipRefs` / `getScipReferers` / `scipRefCount`. Because it is a separate blob — *not* folded into
+the A4 edge list — it **cannot perturb the symbol-graph edges or A5 centrality**, it is parity-free
+(both backends parse identical bytes), it is **empty (default byte-identical) on any non-SCIP index**,
+and it is dropped on incremental file update (a per-file edit makes the whole-program set stale). The
+`find_references` *categorised* dimensions (callers / subclasses / type users) are untouched; the SCIP
+set is an additive, clearly-labelled precise overlay.
+
+## Honest scope — what the SCIP resolver does *not* do
+
+1. **It refines candidates; it does not synthesize symbol-graph *edges*.** A2 promotes/suppresses
+   among the `calls` edges the AST call-extraction already produced; a binding SCIP knows but our
+   call-extraction missed is **not** added to the A4 edge list. (v2 *does* surface such missed
+   bindings in the `find_references` reference dimension, but the resolved edge set itself stays
+   candidate-refining — deliberately bounded and low-risk.)
 2. **Line-granularity alignment.** Chunks store no column offsets and `call_sites` are positionless
    and de-duplicated, so a SCIP occurrence resolves to its *containing chunk*, never to an exact
    span or a specific call site. Sufficient for chunk→chunk edges; not for sub-chunk precision.

@@ -314,12 +314,25 @@ store primitives — no ranking, parity, or default-path impact.
   `.js` def, a stale `.scip`) keeps the heuristic edge — never dropped. Coverage (matched docs,
   bindings, resolved-tier count) is printed at index time; a missing/unreadable/0-match index warns
   loudly and falls back to heuristic (the build never fails).
-- **Honest scope (v1):** refines the heuristic's *candidate* `calls` edges (promote + suppress); it
-  does not yet synthesize edges the AST call-extraction missed (a v2 recall concern). New module
-  `parse/scip.mjs` (`loadScip`, `buildScipBindings`, `normalizeScipPath`) + `createScipResolver`
-  in `mcp/resolver.mjs`; `test/scip.mjs` adds 10 tests (protobuf round-trip, alignment, promote +
-  suppress over a real ambiguous-name fixture, **partial-coverage soundness**, **calls-only
-  cross-kind isolation**, memory↔sqlite parity). Write-up:
+- **v2 — precise cross-file references for `find_references`.** The same binding relation is
+  inverted (`buildScipReferers`) into a precise *referenced-by* map and surfaced by
+  `find_references` (and `explain_symbol`) as a **`resolved`-tier reference dimension**. SCIP
+  occurrences are kind-agnostic ("symbol used here"), which is exactly what `find_references`
+  answers — so this single dimension both **disambiguates** same-named symbols (each referer is
+  attached to the one definition SCIP bound it to, not every same-named def the name heuristic
+  matches) and **recovers references the AST/name heuristic misses entirely** (the v1 "recall
+  concern" — including type usages in languages whose `type_refs` channel is empty). It is
+  serialized as an **isolated index artifact** (`scip_refs`), exactly like taint/centrality, so it
+  **cannot perturb the A4 edges or A5 centrality** and is parity-free; empty (and so default
+  byte-identical) on any index built without a SCIP resolver, and dropped on incremental update.
+  `list_index_stats` reports the count.
+- **Module surface:** `parse/scip.mjs` (`loadScip`, `buildScipBindings`, `buildScipReferers`,
+  `normalizeScipPath`) + `createScipResolver` in `mcp/resolver.mjs`; the `scip_refs` artifact in
+  both engines (`hasScipRefs`/`getScipReferers`/`scipRefCount`). `test/scip.mjs` adds 15 tests
+  (protobuf round-trip, alignment, promote + suppress over a real ambiguous-name fixture,
+  **partial-coverage soundness**, **calls-only cross-kind isolation**, memory↔sqlite parity, plus
+  v2: inversion determinism, precise+attributed `find_references` dimension, references parity,
+  **sacred-default byte-identity**, incremental staleness). Write-up:
   `docs/internals/IMPROVEMENT_SCIP_RESOLVER.md`.
 
 ### Sealed-mode attestation signing (F1 hardening)
