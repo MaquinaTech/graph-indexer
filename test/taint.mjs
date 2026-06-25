@@ -11,9 +11,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'os';
-import { scanChunk, buildTaintGraph, traceTaint, findTaintedSinks } from '../mcp/taint.mjs';
+import path from 'node:path';
+import fs from 'node:fs';
+import { scanChunk, buildTaintGraph, traceTaint, findTaintedSinks, computeTaintCache } from '../mcp/taint.mjs';
 import { langKeyForExt } from '../parse/taint-patterns.mjs';
 import { registerTools } from '../mcp/tools.mjs';
+import { MemoryGraphIndex } from '../engine/memory.mjs';
+import { SqliteGraphStore } from '../engine/sqlite.mjs';
+
+const tmp = (ext) => path.join(os.tmpdir(), `taint-${process.pid}-${Math.random().toString(36).slice(2)}${ext}`);
+const rm = (p) => { for (const s of ['', '-wal', '-shm']) fs.rmSync(`${p}${s}`, { force: true }); };
 
 const C = (id, name, file, startLine, code, calls = []) => ({
     id, name, file_path: file, start_line: startLine,
@@ -81,6 +88,16 @@ test('taint: Go sources / sinks + a direct rce flow', () => {
     assert.ok(flows.some(f => f.sink.category === 'rce' && f.confidence === 'high'), 'direct go rce flow');
 });
 
+test('taint: Go SQLi lookbehind excludes only x.URL.Query(), not real db handles', () => {
+    const onlyUrl = scanChunk(C('gu', 'f', 'u.go', 1, 'func f(r *http.Request){ q := r.URL.Query() }'));
+    assert.ok(!onlyUrl.sinks.some(s => s.category === 'sqli'), 'r.URL.Query() is NOT a db sink');
+    // a db handle whose name ends in URL must still be detected (no over-exclusion)
+    const dbUrl = scanChunk(C('gd', 'g', 'd.go', 1, 'func g(){ dbURL.Query("SELECT 1") }'));
+    assert.ok(dbUrl.sinks.some(s => s.category === 'sqli'), 'dbURL.Query() IS a db sink');
+    const plain = scanChunk(C('gp', 'h', 'p.go', 1, 'func h(){ db.Exec("DELETE") ; conn.QueryRow("x") }'));
+    assert.equal(plain.sinks.filter(s => s.category === 'sqli').length, 2, 'Exec + QueryRow both detected');
+});
+
 test('taint: scanChunk detects sources, sinks, and sanitizers', () => {
     const s1 = scanChunk(CHUNKS[0]);
     assert.equal(s1.sources[0].kind, 'http-request');
@@ -143,6 +160,59 @@ test('taint: findTaintedSinks groups by category and flags reachability', () => 
     assert.equal(sqli.reached_by_source, true, 'the SQL sink is reachable from req.body');
     const onlyReached = findTaintedSinks(fakeDb(), { reachableOnly: true });
     assert.ok(Object.values(onlyReached.byCategory).flat().every(s => s.reached_by_source));
+});
+
+test('taint (C2 serialize): computeTaintCache == live, and the fast path filters by category/depth', () => {
+    const live = buildTaintGraph(fakeDb(), { maxFlows: Infinity }).flows;
+    const cache = computeTaintCache(fakeDb(), { maxDepth: 4 });
+    assert.deepEqual(cache.flows, live, 'cache is the full live flow set');
+    assert.equal(cache.meta.maxDepth, 4);
+
+    // A store that serves from the cache (hasTaint) returns the same flows, filtered in-envelope.
+    const cachedDb = { ...fakeDb(), hasTaint: () => true, getTaintFlows: () => cache };
+    const served = buildTaintGraph(cachedDb);
+    assert.ok(served.cached, 'served from cache');
+    assert.deepEqual(served.flows, live, 'cached path == live for the default query');
+    assert.ok(buildTaintGraph(cachedDb, { category: 'sqli' }).flows.every(f => f.sink.category === 'sqli'));
+    assert.ok(buildTaintGraph(cachedDb, { maxDepth: 0 }).flows.every(f => f.depth === 0), 'depth filter applied');
+    // includeReachable:false (out of envelope) → recompute, NOT the cache.
+    assert.ok(!buildTaintGraph(cachedDb, { includeReachable: false }).cached, 'direct-only recomputes');
+});
+
+test('taint (C2 serialize): memory ↔ sqlite serve byte-identical flows (parity)', () => {
+    const cache = computeTaintCache(fakeDb(), { maxDepth: 4 });
+    const graph = { dependencies: {}, importedBy: {} };
+
+    const memPath = tmp('.json');
+    fs.writeFileSync(memPath, JSON.stringify({ chunks: CHUNKS, graph, taint: cache }));
+    const mem = new MemoryGraphIndex(memPath); mem.load();
+
+    const dbPath = tmp('.db');
+    new SqliteGraphStore(dbPath).buildFrom({ chunks: CHUNKS, graph, embeddingCache: new Map(), taint: cache });
+    const sq = new SqliteGraphStore(dbPath); sq.load();
+
+    assert.ok(mem.hasTaint() && sq.hasTaint(), 'both backends report taint present');
+    assert.deepEqual(sq.getTaintFlows(), mem.getTaintFlows(), 'getTaintFlows byte-identical across backends');
+    // Both serve the tools from their cache → identical flows.
+    const memFlows = buildTaintGraph(mem).flows.map(f => `${f.source.chunk_id}->${f.sink.chunk_id}:${f.sink.category}`);
+    const sqFlows = buildTaintGraph(sq).flows.map(f => `${f.source.chunk_id}->${f.sink.chunk_id}:${f.sink.category}`);
+    assert.deepEqual(sqFlows, memFlows, 'tool flows identical across backends');
+    assert.deepEqual(memFlows, cache.flows.map(f => `${f.source.chunk_id}->${f.sink.chunk_id}:${f.sink.category}`));
+
+    sq.close?.();
+    rm(dbPath); rm(memPath);
+});
+
+test('taint (C2 serialize): an incremental file update clears the serialized cache', () => {
+    const cache = computeTaintCache(fakeDb(), { maxDepth: 4 });
+    const memPath = tmp('.json');
+    fs.writeFileSync(memPath, JSON.stringify({ chunks: CHUNKS, graph: { dependencies: {}, importedBy: {} }, taint: cache }));
+    const mem = new MemoryGraphIndex(memPath); mem.load();
+    assert.ok(mem.hasTaint(), 'cache present after load');
+    mem.applyFileUpdate('handler.js', { chunks: [CHUNKS[0]], imports: [] });
+    if (mem._saveTimer) { clearTimeout(mem._saveTimer); mem._saveTimer = null; }
+    assert.equal(mem.hasTaint(), false, 'an incremental update invalidates + clears the cache');
+    rm(memPath);
 });
 
 test('taint: trace_taint + find_tainted_sinks MCP tools', async () => {

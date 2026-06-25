@@ -81,8 +81,10 @@ export const SINKS = {
     ],
     go: [
         { re: /\bexec\.Command(Context)?\s*\(/, category: 'rce', label: 'exec.Command' },
-        // Negative lookbehind excludes `r.URL.Query()` (the URL parser) from the db-query sink.
-        { re: /(?<!URL)\.(Query|QueryRow|QueryContext|QueryRowContext|Exec|ExecContext)\s*\(/, category: 'sqli', label: 'db query/exec' },
+        // The `.URL`-scoped lookbehind excludes only `x.URL.Query()` (net/url's parser) — a db handle
+        // like `dbURL.Query()` is still matched. Exec* needs no guard (url.URL has no Exec method).
+        { re: /(?<!\.URL)\.(Query|QueryRow|QueryContext|QueryRowContext)\s*\(/, category: 'sqli', label: 'db query' },
+        { re: /\.(Exec|ExecContext)\s*\(/, category: 'sqli', label: 'db exec' },
         { re: /\bw\.Write\s*\(|\bio\.WriteString\s*\(\s*w|\bfmt\.Fprint\w*\s*\(\s*w|\btemplate\.HTML\s*\(/, category: 'xss', label: 'response writer / template.HTML' },
         { re: /\b(os\.Open|os\.OpenFile|os\.ReadFile|ioutil\.ReadFile|os\.Create|filepath\.Join|http\.ServeFile)\s*\(/, category: 'path', label: 'file/path sink' },
         { re: /\bhttp\.(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\s*\(|\b\w*[Cc]lient\.Do\s*\(/, category: 'ssrf', label: 'outbound request' },

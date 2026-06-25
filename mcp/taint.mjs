@@ -87,6 +87,25 @@ function flowOrder(a, b) {
  * @returns {{ flows: object[], truncated: boolean, scanned: number, sources: number, sinks: number }}
  */
 export function buildTaintGraph(db, { maxDepth = 4, maxFlows = 200, category = null, includeReachable = true } = {}) {
+    // ── Fast path: serialized flows from an index built with --taint (C2). The cache is the FULL
+    //    flow set computed once at index time (includeReachable, uncapped), so any query within its
+    //    depth envelope is served by filtering — no graph walk, and both backends serve identical
+    //    flows. A direct-only query (includeReachable:false) or a deeper maxDepth than the cache
+    //    falls through to a live recompute (correctness preserved over speed). ───────────────────
+    if (includeReachable && typeof db.hasTaint === 'function' && db.hasTaint()) {
+        const cached = db.getTaintFlows();
+        if (cached && cached.meta && maxDepth <= cached.meta.maxDepth) {
+            let flows = cached.flows || [];
+            if (category) flows = flows.filter(f => f.sink.category === category);
+            if (maxDepth < cached.meta.maxDepth) flows = flows.filter(f => f.depth <= maxDepth);
+            const truncated = flows.length > maxFlows;
+            return {
+                flows: truncated ? flows.slice(0, maxFlows) : flows, truncated, cached: true,
+                scanned: cached.meta.scanned, sources: cached.meta.sources, sinks: cached.meta.sinks,
+            };
+        }
+    }
+
     // Scan every chunk once (sorted by id for deterministic, backend-stable output).
     const chunks = [...db.iterateChunks()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const scans = new Map();
@@ -155,6 +174,16 @@ export function buildTaintGraph(db, { maxDepth = 4, maxFlows = 200, category = n
     const all = [...flows.values()].sort(flowOrder);
     const truncated = all.length > maxFlows;
     return { flows: truncated ? all.slice(0, maxFlows) : all, truncated, scanned: scans.size, sources: sourceCount, sinks: sinkCount };
+}
+
+/**
+ * Compute the serializable taint cache (C2 --taint) for index-time serialization: the FULL flow set
+ * (uncapped, includeReachable) plus the meta the fast path needs to answer in-envelope queries
+ * (`maxDepth` is the cache's depth — a query asking for ≤ this is served from the cache).
+ */
+export function computeTaintCache(db, { maxDepth = 4 } = {}) {
+    const r = buildTaintGraph(db, { maxDepth, maxFlows: Infinity, includeReachable: true, category: null });
+    return { flows: r.flows, meta: { maxDepth, scanned: r.scanned, sources: r.sources, sinks: r.sinks } };
 }
 
 /** Flows filtered by source kind and/or sink category (a thin filter over buildTaintGraph). */

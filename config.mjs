@@ -49,6 +49,10 @@ export const DEFAULTS = Object.freeze({
                                        // findReferers read it when present (identical sets, fall back to scan).
                                        // Air-gapped, deterministic; default index byte-identical; search
                                        // ranking unaffected. Enable with --symbol-graph / INDEXER_SYMBOL_GRAPH.
+    taint: false,                      // OPT-IN: precompute + serialize taint flows (C2) at index time so the
+                                       // trace_taint / find_tainted_sinks tools serve instantly (both backends
+                                       // serve identical flows). Default off → tools compute query-time (the
+                                       // index is byte-identical). --taint / INDEXER_TAINT.
     sealed: 'off',                     // Sealed mode (F1): 'off' (default) | 'local' (loopback only) |
                                        // 'strict' (zero network egress; lexical-only). Fail-closed:
                                        // refuses to start if an enabled feature would egress beyond the
@@ -190,6 +194,11 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_SYMBOL_GRAPH === 'on'
         || file.symbolGraph === true;
 
+    // Opt-in index-time taint serialization (C2): precompute + persist the flow set.
+    const taint = argv.includes('--taint')
+        || env.INDEXER_TAINT === 'on'
+        || file.taint === true;
+
     // Resolver provider for the symbol graph (A1/A2). Unknown values fall back to 'heuristic'.
     const resolverRaw = flagValue(argv, '--resolver') || env.INDEXER_RESOLVER || file.resolver || DEFAULTS.resolver;
     const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic' || resolverRaw === 'scip')
@@ -244,6 +253,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         gitRankBoost,
         interprocedural,
         symbolGraph,
+        taint,
         resolver,
         scipIndex,
 
@@ -327,6 +337,7 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
+        `taint       : ${config.taint ? 'on · precomputed flows (trace_taint / find_tainted_sinks)' : 'off (query-time)'}`,
         `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier'
             : config.resolver === 'scip' ? `scip · cross-file SCIP bindings → \`resolved\` (${config.scipIndex || '⚠️ no --scip-index'})`
             : 'heuristic (default)'}`,
@@ -365,6 +376,13 @@ export function configNotices(config) {
             + 'index time roughly proportional to repo size. The watch daemon does NOT rebuild it, so '
             + 'edges refresh on the next full `idx-index`; until then findCallers/findReferers fall back '
             + 'to the name-match scan (never worse). It powers getEdges; search ranking is unaffected.');
+    }
+    if (config.taint) {
+        out.push('Taint flows are precomputed once at index time and serialized, so trace_taint / '
+            + 'find_tainted_sinks answer instantly (both backends serve identical flows). The watch '
+            + 'daemon does NOT rebuild them — flows refresh on the next full `idx-index`; until then the '
+            + 'tools fall back to a query-time scan (never worse). It only affects the security tools; '
+            + 'search ranking is unaffected. Pair with --symbol-graph for cross-function precision.');
     }
     if ((config.resolver === 'precise' || config.resolver === 'scip') && !config.symbolGraph) {
         out.push(`--resolver ${config.resolver} has no effect without --symbol-graph (the resolver runs only `

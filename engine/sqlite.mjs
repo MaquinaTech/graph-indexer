@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, df INTEGER);
 CREATE TABLE IF NOT EXISTS call_edges (callee TEXT, chunk_id TEXT);
 CREATE TABLE IF NOT EXISTS edges (from_chunk_id TEXT, to_chunk_id TEXT, kind TEXT, confidence TEXT);
 CREATE TABLE IF NOT EXISTS centrality (chunk_id TEXT, score REAL, rank INTEGER);
+CREATE TABLE IF NOT EXISTS taint (id INTEGER PRIMARY KEY, payload TEXT);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
 CREATE TABLE IF NOT EXISTS routes (
   id INTEGER PRIMARY KEY,
@@ -138,6 +139,7 @@ export class SqliteGraphStore {
         this._hasEdges = false; // A4: resolved symbol graph present (opt-in)
         this._hasCentrality = false; // A5: symbol centrality present (opt-in, built with the graph)
         this._centralityTotal = 0;
+        this._hasTaint = false; // C2: serialized taint flows present (opt-in --taint)
     }
 
     get backend() { return 'sqlite'; }
@@ -188,6 +190,7 @@ export class SqliteGraphStore {
         this._prepare();
         this._refreshHasEdges();
         this._refreshHasCentrality();
+        this._refreshHasTaint();
         this._dataVersion = this._readDataVersion();
         return this;
     }
@@ -205,6 +208,14 @@ export class SqliteGraphStore {
             this._centralityTotal = row ? row.n : 0;
             this._hasCentrality = this._centralityTotal > 0;
         } catch { this._hasCentrality = false; this._centralityTotal = 0; }
+    }
+
+    /** Whether opt-in serialized taint flows (C2 --taint) are present. */
+    _refreshHasTaint() {
+        try {
+            const row = this.db.prepare('SELECT COUNT(*) AS n FROM taint').get();
+            this._hasTaint = Boolean(row && row.n > 0);
+        } catch { this._hasTaint = false; }
     }
 
     _openVecFd() {
@@ -349,6 +360,8 @@ export class SqliteGraphStore {
         this._stmtTopCentral = this.db.prepare(
             'SELECT chunk_id, score, rank FROM centrality ORDER BY rank ASC, chunk_id ASC LIMIT ?'
         );
+        // C2 serialized taint flows — a single JSON payload row (id = 0).
+        this._stmtTaint = this.db.prepare('SELECT payload FROM taint WHERE id = 0');
     }
 
     _prepareWrite() {
@@ -429,6 +442,17 @@ export class SqliteGraphStore {
 
     /** Whether opt-in symbol centrality (A5) is loaded. */
     hasCentrality() { return this._hasCentrality; }
+
+    /** Whether opt-in serialized taint flows (C2 --taint) are loaded. */
+    hasTaint() { return this._hasTaint; }
+
+    /** The serialized taint payload `{ flows, meta }` (C2), or null. Mirrors MemoryGraphIndex. */
+    getTaintFlows() {
+        if (!this._hasTaint) return null;
+        const row = this._stmtTaint.get();
+        if (!row || !row.payload) return null;
+        try { return JSON.parse(row.payload); } catch { return null; }
+    }
 
     /**
      * Symbol centrality (A5) for one chunk. Mirrors MemoryGraphIndex.getCentrality — same
@@ -767,6 +791,7 @@ export class SqliteGraphStore {
             // full `idx-index` rebuilds it (the daemon never rebuilds the graph).
             if (this._hasEdges) { this.db.exec('DELETE FROM edges'); this._hasEdges = false; }
             if (this._hasCentrality) { this.db.exec('DELETE FROM centrality'); this._hasCentrality = false; this._centralityTotal = 0; }
+            if (this._hasTaint) { this.db.exec('DELETE FROM taint'); this._hasTaint = false; }
 
             // Capture reusable vector offsets BEFORE deleting old rows, which may
             // be the only rows that hold those offsets.
@@ -860,7 +885,7 @@ export class SqliteGraphStore {
      * @param {{dependencies:Object<string,string[]>}} payload.graph
      * @param {Map<string,Float32Array>|object} [payload.embeddingCache]  Keyed by embeddingKeyFor(chunk).
      */
-    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null }) {
+    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null, taint = null }) {
         this._open();
         this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
@@ -893,7 +918,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS terms;  DROP TABLE IF EXISTS call_edges;
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
             DROP TABLE IF EXISTS routes; DROP TABLE IF EXISTS edges;
-            DROP TABLE IF EXISTS centrality;
+            DROP TABLE IF EXISTS centrality; DROP TABLE IF EXISTS taint;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -975,6 +1000,12 @@ export class SqliteGraphStore {
             const insCen = this.db.prepare('INSERT INTO centrality (chunk_id, score, rank) VALUES (?, ?, ?)');
             const rows = Object.entries(centrality).sort((a, b) => a[1].rank - b[1].rank);
             for (const [id, v] of rows) insCen.run(id, v.score, v.rank);
+        }
+
+        // C2 serialized taint flows (opt-in). A single JSON payload (id = 0); both backends parse
+        // the identical bytes → parity-free, exactly like edges/centrality.
+        if (taint && typeof taint === 'object') {
+            this.db.prepare('INSERT INTO taint (id, payload) VALUES (0, ?)').run(JSON.stringify(taint));
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');

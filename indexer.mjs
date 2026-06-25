@@ -386,6 +386,31 @@ async function main() {
         }
     }
 
+    // C2: opt-in index-time taint serialization. Compute the full flow set once — against the
+    // symbol-graph edges when present (cross-function precision), else chunk.calls — and serialize
+    // it so trace_taint / find_tainted_sinks answer instantly. Like edges/centrality: computed once
+    // → both backends serve byte-identical flows (parity-free).
+    let taintPayload = null;
+    if (config.taint) {
+        const tmpT = path.join(config.dataDir, '_taint-build.json');
+        try {
+            fs.writeFileSync(tmpT, JSON.stringify({
+                chunks: indexData.chunks, graph: indexData.graph,
+                ...(symbolEdges ? { edges: symbolEdges } : {}),
+            }));
+            const { MemoryGraphIndex } = await import('./engine/memory.mjs');
+            const { computeTaintCache } = await import('./mcp/taint.mjs');
+            const tIdx = new MemoryGraphIndex(tmpT, { cacheEmbeddings: false });
+            tIdx.load();
+            taintPayload = computeTaintCache(tIdx, { maxDepth: 4 });
+            tIdx.close?.();
+            console.log(`🧪 Taint: ${taintPayload.flows.length} flows precomputed `
+                + `(${taintPayload.meta.sources} sources, ${taintPayload.meta.sinks} sinks, depth ${taintPayload.meta.maxDepth}).`);
+        } finally {
+            try { fs.unlinkSync(tmpT); } catch { /* none */ }
+        }
+    }
+
     // Resolve 'auto' now that the true chunk count is known — the threshold is only
     // meaningful after all chunks have been extracted.
     const backend = config.storage === 'auto'
@@ -400,7 +425,7 @@ async function main() {
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
-            edges: symbolEdges, centrality,
+            edges: symbolEdges, centrality, taint: taintPayload,
         });
         store.close?.();
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
@@ -414,6 +439,7 @@ async function main() {
                 chunks: indexData.chunks, graph: indexData.graph,
                 ...(symbolEdges ? { edges: symbolEdges } : {}),
                 ...(centrality ? { centrality } : {}),
+                ...(taintPayload ? { taint: taintPayload } : {}),
             })),
             fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
         ]);

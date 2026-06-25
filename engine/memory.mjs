@@ -85,6 +85,11 @@ export class MemoryGraphIndex {
         this._centrality      = null;
         this._centralityTotal = 0;
         this._centralRanked   = null;    // lazy id-by-rank cache for topCentral
+
+        // ── C2: serialized taint flows ({ flows, meta }); precomputed at index time with --taint,
+        //    so the taint tools serve instantly and both backends serve identical flows. Cleared
+        //    on any incremental file update (a code change invalidates the flow set).
+        this._taint = null;
     }
 
     /** Index the (already deterministically-ordered) edge list by endpoint. */
@@ -107,7 +112,7 @@ export class MemoryGraphIndex {
         this._centralRanked = null;
     }
 
-    /** Drop the symbol graph + its centrality (an incremental update makes both stale). */
+    /** Drop the symbol graph + its centrality + serialized taint (an incremental update makes them stale). */
     _clearEdges() {
         this._edges = null;
         this._edgesByTo = new Map();
@@ -115,6 +120,7 @@ export class MemoryGraphIndex {
         this._centrality = null;
         this._centralityTotal = 0;
         this._centralRanked = null;
+        this._taint = null;
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -127,6 +133,8 @@ export class MemoryGraphIndex {
         if (Array.isArray(data.edges)) this._indexEdges(data.edges);
         // A5 symbol centrality (built with the graph; absent on default indexes → no-op).
         if (data.centrality && typeof data.centrality === 'object') this._indexCentrality(data.centrality);
+        // C2 serialized taint flows (opt-in --taint; absent on default indexes → no-op).
+        if (data.taint && typeof data.taint === 'object') this._taint = data.taint;
         // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
         // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
         // stay a low-weight rescue). Set during the chunk load loop below.
@@ -575,6 +583,7 @@ export class MemoryGraphIndex {
             chunks: chunksData, graph: this.graph,
             ...(this._edges ? { edges: this._edges } : {}),
             ...(this._centrality ? { centrality: Object.fromEntries(this._centrality) } : {}),
+            ...(this._taint ? { taint: this._taint } : {}),
         });
         const tmpPath    = `${this.indexPath}.tmp`;
         const tmpBinPath = `${this._embeddingPath}.tmp`;
@@ -627,7 +636,7 @@ export class MemoryGraphIndex {
         // A per-file edit makes the whole-program symbol graph + its centrality stale; drop
         // both so findCallers/findReferers fall back to the always-correct scan until the next
         // full `idx-index` rebuilds them (the daemon never rebuilds the graph).
-        if (this._edges || this._centrality) this._clearEdges();
+        if (this._edges || this._centrality || this._taint) this._clearEdges();
         this.updateFileGraph(filePath, imports);
 
         for (const [id, chunk] of Array.from(this.chunks.entries())) {
@@ -764,6 +773,12 @@ export class MemoryGraphIndex {
 
     /** Whether opt-in symbol centrality (A5) is loaded. */
     hasCentrality() { return this._centrality != null; }
+
+    /** Whether opt-in serialized taint flows (C2 --taint) are loaded. */
+    hasTaint() { return this._taint != null; }
+
+    /** The serialized taint payload `{ flows, meta }` (C2), or null. */
+    getTaintFlows() { return this._taint; }
 
     /**
      * Symbol centrality (A5) for one chunk: its PageRank score, dense rank (1 = most central),

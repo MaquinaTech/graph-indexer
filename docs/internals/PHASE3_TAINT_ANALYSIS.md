@@ -1,11 +1,16 @@
 # Phase 3 — C2: Taint Analysis
 
-> **Status: IMPLEMENTED (v1)** (`parse/taint-patterns.mjs`, `mcp/taint.mjs`, the `trace_taint` /
-> `find_tainted_sinks` tools in `mcp/tools.mjs`; `test/taint.mjs`). One deliberate deviation from
-> the sketch below: v1 is **query-time** (the tools compute on demand, like `get_call_graph`) rather
-> than index-time + serialized — this keeps the default index byte-identical with zero parity
-> surface. Index-time serialization (a `taint` table) remains a v2 performance option. The honesty
-> framing ("finder, not verifier") shipped verbatim.
+> **Status: IMPLEMENTED (v1 + hardening)** (`parse/taint-patterns.mjs`, `mcp/taint.mjs`, the
+> `trace_taint` / `find_tainted_sinks` tools in `mcp/tools.mjs`; `test/taint.mjs`). v1 shipped
+> **query-time** (the tools compute on demand, like `get_call_graph`). The **hardening pass (v2.1)**
+> added the index-time path the sketch below describes: an **opt-in `--taint`** precomputes the flow
+> set once and serializes it (a `taint` table in SQLite / a `taint` JSON key in memory; new store
+> methods `hasTaint()` / `getTaintFlows()`), so the tools serve instantly while the **default index
+> stays byte-identical** (off → no serialization) and **both backends serve byte-identical flows**
+> (computed once, like A4 edges / A5 centrality — parity-free). `buildTaintGraph` gained a fast path
+> that serves the cache filtered to the query's category/depth envelope, falling back to a live
+> recompute outside it. Language coverage extended to **Java and Go** (was JS/TS + Python). The
+> honesty framing ("finder, not verifier") is unchanged.
 
 ## One line
 

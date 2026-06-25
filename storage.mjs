@@ -22,6 +22,7 @@
  *   hasSymbolGraph() / hasCentrality()       → boolean   (opt-in A4 / A5 layers present?)
  *   getCentrality(chunkId)                   → { score, rank, total } | null   (A5 symbol PageRank)
  *   topCentral(limit)                        → [{ chunk, score, rank }]         (A5, rank-ascending)
+ *   hasTaint() / getTaintFlows()             → boolean / { flows, meta } | null (C2 serialized taint, --taint)
  *   findRoutes({method, pathPrefix})         → route[]   (HTTP route → handler chunk)
  *   iterateChunks()                          → Iterable<chunk>  (cursor on SQLite)
  *   getDependencies(path) / getImportedBy(path) → string[]
