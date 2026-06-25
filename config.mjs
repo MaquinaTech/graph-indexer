@@ -54,11 +54,15 @@ export const DEFAULTS = Object.freeze({
                                        // refuses to start if an enabled feature would egress beyond the
                                        // tier, and installs a deny-by-default runtime egress guard.
                                        // --sealed [strict|local] / INDEXER_SEALED.
-    resolver: 'heuristic',             // Resolver provider for the symbol graph (A1). 'heuristic' (default):
-                                       // edges stay { high, name_only } — byte-identical. 'precise': lift
+    resolver: 'heuristic',             // Resolver provider for the symbol graph (A1/A2). 'heuristic' (default):
+                                       // edges stay { high, name_only } — byte-identical. 'precise' (A1): lift
                                        // provably-unambiguous edges (sole definition / type-pinned receiver)
                                        // to a `resolved` tier, powering impact_of_edit precision='strict'.
-                                       // Only meaningful with --symbol-graph. --resolver / INDEXER_RESOLVER.
+                                       // 'scip' (A2): ingest a locally-generated SCIP index (--scip-index) and
+                                       // promote/suppress `calls` edges by real cross-file bindings. Only
+                                       // meaningful with --symbol-graph. --resolver / INDEXER_RESOLVER.
+    scipIndex: null,                   // Path to a locally-generated SCIP index for --resolver scip (A2).
+                                       // --scip-index / INDEXER_SCIP_INDEX / scipIndex config; null = none.
     enrichment: Object.freeze({
         enabled: false,
         model: 'qwen2.5-coder:1.5b',   // smallest coder model; quality sufficient for summaries.
@@ -186,9 +190,14 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         || env.INDEXER_SYMBOL_GRAPH === 'on'
         || file.symbolGraph === true;
 
-    // Resolver provider for the symbol graph (A1). Unknown values fall back to 'heuristic'.
+    // Resolver provider for the symbol graph (A1/A2). Unknown values fall back to 'heuristic'.
     const resolverRaw = flagValue(argv, '--resolver') || env.INDEXER_RESOLVER || file.resolver || DEFAULTS.resolver;
-    const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic') ? resolverRaw : 'heuristic';
+    const resolver = (resolverRaw === 'precise' || resolverRaw === 'heuristic' || resolverRaw === 'scip')
+        ? resolverRaw : 'heuristic';
+    // A2: path to a locally-generated SCIP index, consumed by the `scip` resolver. flag > env > file.
+    // Resolved against projectRoot (a relative path) so a config-file value is repo-relative.
+    const scipRaw = flagValue(argv, '--scip-index') || env.INDEXER_SCIP_INDEX || file.scipIndex || null;
+    const scipIndex = scipRaw ? path.resolve(projectRoot, scipRaw) : null;
 
     // Sealed mode (F1). flag > env > file > default. A bare `--sealed` (no value, or followed by
     // another flag) means strict; `--sealed local` opts into the loopback tier; env 'on' → strict.
@@ -236,6 +245,7 @@ export function resolveConfig({ argv = process.argv.slice(2), env = process.env,
         interprocedural,
         symbolGraph,
         resolver,
+        scipIndex,
 
         enrichment: Object.freeze({
             enabled: enrichmentEnabled,
@@ -317,7 +327,9 @@ export function describeConfig(config, { backend = config.storage } = {}) {
         `git signals : ${config.gitSignals ? 'on' : 'off'}${config.gitRankBoost ? ` · rank boost=${config.gitRankBoost}` : ''}`,
         `interproc.  : ${config.interprocedural ? 'on · factory return-type propagation' : 'off'}`,
         `symbol graph: ${config.symbolGraph ? 'on · persisted resolved edges (getEdges)' : 'off'}`,
-        `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier' : 'heuristic (default)'}`,
+        `resolver    : ${config.resolver === 'precise' ? 'precise · unambiguous edges → `resolved` tier'
+            : config.resolver === 'scip' ? `scip · cross-file SCIP bindings → \`resolved\` (${config.scipIndex || '⚠️ no --scip-index'})`
+            : 'heuristic (default)'}`,
         `sealed mode : ${config.sealed === 'strict' ? '🔒 strict · zero network egress (enforced)'
             : config.sealed === 'local' ? '🔒 local · loopback only (enforced)' : 'off'}`,
     ];
@@ -354,14 +366,25 @@ export function configNotices(config) {
             + 'edges refresh on the next full `idx-index`; until then findCallers/findReferers fall back '
             + 'to the name-match scan (never worse). It powers getEdges; search ranking is unaffected.');
     }
-    if (config.resolver === 'precise' && !config.symbolGraph) {
-        out.push('--resolver precise has no effect without --symbol-graph (the resolver runs only when '
-            + 'the symbol graph is built). Add --symbol-graph to enable the `resolved` edge tier.');
+    if ((config.resolver === 'precise' || config.resolver === 'scip') && !config.symbolGraph) {
+        out.push(`--resolver ${config.resolver} has no effect without --symbol-graph (the resolver runs only `
+            + 'when the symbol graph is built). Add --symbol-graph to enable the `resolved` edge tier.');
     } else if (config.resolver === 'precise') {
         out.push('Precise resolver: edges with a provably-unambiguous binding (sole definition, or a '
             + 'type-pinned receiver) are promoted from `high` to a `resolved` tier — used by '
             + "impact_of_edit(precision: 'strict') for a false-positive-free blast radius. Confidence "
             + 'strings only change; edge sets, parity, and search ranking are unaffected.');
+    } else if (config.resolver === 'scip' && !config.scipIndex) {
+        out.push('--resolver scip needs --scip-index <path.scip> (a SCIP index generated locally by your '
+            + 'own toolchain — scip-typescript, scip-python, scip-java, rust-analyzer --scip). Without it '
+            + 'the resolver is inert and edges stay heuristic { high, name_only }.');
+    } else if (config.resolver === 'scip') {
+        out.push('SCIP resolver: cross-file bindings from a locally-generated SCIP index promote CONFIRMED '
+            + '`calls` edges to a `resolved` tier AND suppress the wrong-target fan-out an ambiguous name '
+            + 'would otherwise emit (heritage/type edges stay heuristic). Suppression is sound under '
+            + 'partial coverage — a def SCIP never recorded is never dropped. Air-gapped (a local file '
+            + 'read; sealed-compatible). Files the SCIP index does not cover fall back to heuristic, never '
+            + 'worse. Coverage is printed at index time; re-generate the .scip when code changes.');
     }
     if (config.enrichment.enabled && !config.rerank.enabled) {
         out.push('Enrichment is most effective when paired with --rerank. Running enrichment-only may '

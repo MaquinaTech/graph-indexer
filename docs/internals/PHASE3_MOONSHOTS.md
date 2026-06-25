@@ -8,6 +8,15 @@
 
 ## A2 — LSP / SCIP resolver bridge
 
+> **Status: IMPLEMENTED (v1, SCIP path).** `parse/scip.mjs` (`loadScip`, `buildScipBindings`,
+> `normalizeScipPath`), `createScipResolver` in `mcp/resolver.mjs`, the `resolveEdges` consult in
+> `mcp/symbolgraph.mjs`, `--resolver scip` / `--scip-index` in `config.mjs` + `indexer.mjs`,
+> `test/scip.mjs` (8 tests). Two deviations from the sketch below: (1) the binding alignment also
+> **suppresses** wrong-target fan-out (not just relabels), which is the main precision win and is
+> still parity-free because it is opt-in + computed once + serialized; (2) the protobuf is decoded
+> by a hand-rolled zero-dependency reader (no protobuf lib). The LSP-server variant remains future
+> work. Full write-up: `docs/internals/IMPROVEMENT_SCIP_RESOLVER.md`.
+
 **Idea.** The realistic, air-gapped backend for A1's resolver-provider seam. Ingest a **SCIP** index
 (Sourcegraph's protocol; local indexers exist: `scip-typescript`, `scip-python`, `scip-java`,
 `rust-analyzer --scip`) — or query a running LSP server — and emit truly cross-file-`resolved`

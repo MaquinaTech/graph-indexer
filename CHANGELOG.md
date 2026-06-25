@@ -233,6 +233,39 @@ store primitives — no ranking, parity, or default-path impact.
   `parse/taint-patterns.mjs`, `mcp/taint.mjs`; `test/taint.mjs` adds 9 tests; `test/mcp.mjs` asserts
   the 16-tool surface. Design: `docs/internals/PHASE3_TAINT_ANALYSIS.md`.
 
+### SCIP resolver provider (A2) — Phase 3
+
+- **`--resolver scip` + `--scip-index <path>`** (`INDEXER_SCIP_INDEX` / `scipIndex` config)
+  completes the A1 precision story with the realistic, air-gapped cross-file backend. Where
+  `--resolver precise` only *relabels* edges the heuristic emitted, `scip` ingests a
+  **locally-generated SCIP index** (the user's own `scip-typescript` / `scip-python` /
+  `scip-java` / `rust-analyzer --scip` — produced out of band, on-box) and resolves edges by
+  **real cross-file bindings**: it promotes a confirmed `calls` edge to the `resolved` tier **and
+  suppresses the wrong-target fan-out** an ambiguous same-name reference would otherwise emit —
+  the disambiguation the index-time heuristic structurally cannot do. (Scoped to `calls` edges in
+  v1; `extends`/`type` edges stay heuristic because the binding relation is kind-agnostic.)
+- **Zero new dependency.** The `.scip` protobuf is decoded by a **hand-rolled, zero-dependency**
+  wire reader (`parse/scip.mjs`) that walks only the four fields A2 needs; a SCIP-shaped JSON file
+  is also accepted. Occurrences align to chunks by 1-based line range (SCIP is 0-based; chunks
+  store no columns → line granularity). Air-gapped (a local file read only) — so **`--sealed
+  strict` + `--resolver scip` is a valid sealed, precisely-resolved index.**
+- **Parity-free, default byte-identical, never-worse.** Like A1, it runs once at index time and
+  serializes one edge list into both backends (no per-backend code; memory↔sqlite identical). The
+  `resolveEdges` provider method exists only on the `scip` provider, so the default
+  `heuristic`/`precise` path is byte-identical. **Absence ≠ refutation, even under partial
+  coverage**: suppression requires that SCIP *actually recorded* the def it drops (`definedChunks`
+  gate), so a covered caller referencing an *uncovered* def (a `.ts`-only run that never saw a
+  `.js` def, a stale `.scip`) keeps the heuristic edge — never dropped. Coverage (matched docs,
+  bindings, resolved-tier count) is printed at index time; a missing/unreadable/0-match index warns
+  loudly and falls back to heuristic (the build never fails).
+- **Honest scope (v1):** refines the heuristic's *candidate* `calls` edges (promote + suppress); it
+  does not yet synthesize edges the AST call-extraction missed (a v2 recall concern). New module
+  `parse/scip.mjs` (`loadScip`, `buildScipBindings`, `normalizeScipPath`) + `createScipResolver`
+  in `mcp/resolver.mjs`; `test/scip.mjs` adds 10 tests (protobuf round-trip, alignment, promote +
+  suppress over a real ambiguous-name fixture, **partial-coverage soundness**, **calls-only
+  cross-kind isolation**, memory↔sqlite parity). Write-up:
+  `docs/internals/IMPROVEMENT_SCIP_RESOLVER.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

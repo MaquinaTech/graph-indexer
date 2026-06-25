@@ -182,7 +182,7 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
 | `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
 | `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, git recency/co-change, and (with `--symbol-graph`) its symbol-centrality rank. |
-| `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`; `precision: 'strict'` follows only provably-unambiguous (`resolved`) edges (best on a `--resolver precise` index). |
+| `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`; `precision: 'strict'` follows only provably-unambiguous (`resolved`) edges (best on a `--resolver precise` or `--resolver scip` index). |
 | `trace_taint` | Security: trace untrusted data from a source (request body/query/params, argv/env, stdin) to a dangerous sink (eval/exec, SQL, fs/path, HTML, outbound request) across the call graph — injection-class risks (rce/sqli/xss/path/ssrf) with the source→sink path. JS/TS + Python; heuristic finder, not a verifier. |
 | `find_tainted_sinks` | Security orientation: every dangerous sink grouped by category, each flagged with whether an untrusted source reaches it — map the attack surface, then `trace_taint` a specific one. |
 
@@ -226,7 +226,8 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
 | `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Also computes symbol-level centrality (confidence-weighted PageRank over the edges), surfaced by `explain_symbol` and `get_repo_map`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
-| `--resolver <heuristic\|precise>` | `heuristic` | Resolver provider for the symbol graph. `precise` lifts provably-unambiguous edges (sole definition, or a type-pinned receiver) from `high` to a `resolved` tier, powering `impact_of_edit(precision: 'strict')` for a false-positive-free blast radius. Only meaningful with `--symbol-graph`; confidence strings only change — edge sets, parity, and ranking are unaffected. |
+| `--resolver <heuristic\|precise\|scip>` | `heuristic` | Resolver provider for the symbol graph. `precise` lifts provably-unambiguous edges (sole definition, or a type-pinned receiver) from `high` to a `resolved` tier. `scip` ingests a locally-generated SCIP index (`--scip-index`) and resolves edges by *real cross-file bindings* — promoting confirmed edges to `resolved` **and suppressing the wrong-target fan-out** an ambiguous same-name reference would otherwise emit. Both power `impact_of_edit(precision: 'strict')`. Only meaningful with `--symbol-graph`. |
+| `--scip-index <path>` | — | Path to a SCIP index generated locally by your own toolchain (`scip-typescript`, `scip-python`, `scip-java`, `rust-analyzer --scip`), consumed by `--resolver scip`. Air-gapped (a local file read — sealed-compatible). Files the index doesn't cover fall back to heuristic confidence (never worse); coverage is printed at index time. Accepts the `.scip` protobuf or a SCIP-shaped JSON. |
 | `--sealed [strict\|local]` | off | **Sealed mode** — air-gapped *enforced and verifiable*. `strict` = zero network egress (lexical-only); `local` = loopback only (local LLM/embedders OK, nothing off-box). Fail-closed: refuses to start if any enabled feature would egress beyond the tier, and installs a deny-by-default runtime egress guard. Bare `--sealed` = `strict`. |
 | `--attest` | — | Print the deterministic sealed-mode manifest (tier, providers, egress posture) and exit — an auditor/CI artifact. |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
@@ -253,7 +254,8 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `INDEXER_GIT_SIGNALS` | (on) | Set to `off` to skip git-signal collection. |
 | `INDEXER_INTERPROCEDURAL` | (off) | `on` enables the index-time inter-procedural receiver-type fixpoint (`--interprocedural`). |
 | `INDEXER_SYMBOL_GRAPH` | (off) | `on` builds the persistent resolved symbol graph (`--symbol-graph`). |
-| `INDEXER_RESOLVER` | `heuristic` | `precise` enables the precise resolver (`resolved` edge tier) for the symbol graph (`--resolver`). |
+| `INDEXER_RESOLVER` | `heuristic` | `precise` enables the precise resolver; `scip` enables the SCIP cross-file resolver (`resolved` edge tier) for the symbol graph (`--resolver`). |
+| `INDEXER_SCIP_INDEX` | (unset) | Path to a locally-generated SCIP index for `--resolver scip` (`--scip-index`). |
 | `INDEXER_SEALED` | (off) | `strict` (or `on`) / `local` enables sealed mode (`--sealed`): fail-closed validation + a runtime egress guard. |
 | `INDEXER_GIT_RANK_BOOST` | 0 | Opt-in git recency/churn ranking weight (0..1). |
 | `INDEXER_LLM_PROVIDER` | `ollama` | LLM backend for enrichment, reranking, and HyDE: `ollama` or `mlx`. |
@@ -300,7 +302,7 @@ Every number here is produced by the eval harness on cold, isolated builds — n
 What the measurements say, across 18 real-world fixtures spanning every supported language:
 
 - **The zero-dependency lexical default is the right starting point.** It wins the held-out metric outright on 2 fixtures, and 6 more need only a cheap in-process embedder — so **8 of 18 run with no Ollama and no network**. Most repos never need more.
-- **Symbolic lookups are strong** (mean rank-1 ≈ 0.70). Behavioural, natural-language queries are harder (≈ 0.30 on the default path) — that's where the optional embedding and reranker channels earn their keep.
+- **Symbolic lookups are strong** (mean rank-1 ≈ 0.70). Behavioural, natural-language queries are harder (≈ 0.30 overall (held-out semantic rank-1 0.40 with stemming)) — that's where the optional embedding and reranker channels earn their keep.
 - **Optional features are measured, not assumed.** Dense embeddings lift recall on larger repos; the LLM reranker is language- and repo-dependent (it lifts 8 fixtures but taxes JavaScript and Spring); enrichment helps only where proven (just rust). Setup surfaces each trade-off before you enable it.
 - **Backend parity:** the in-memory and SQLite backends return byte-identical top-5 on all 18 fixtures (gated by `test/sqlite.mjs`).
 
@@ -322,7 +324,7 @@ AST chunking and lexical search cover **every** supported language; only the typ
 
 ### Where it's weakest (honestly)
 
-- Behavioural, natural-language recall on the default path (rank-1 ≈ 0.30) — closing it needs the embedding/reranker channel, not lexical tuning.
+- Behavioural, natural-language recall on the default path (rank-1 ≈ 0.30 overall; held-out semantic rank-1 0.40 — the embedding/reranker channel closes it further) — closing it needs the embedding/reranker channel, not lexical tuning.
 - The hardest fixtures stay below 0.65 held-out success@5 even with the full stack (rails 0.50, rust 0.61).
 - Java/Spring `get_call_graph` reports at class granularity (the god-class split only fires ≥200 lines); SCSS has no meaningful call graph.
 - LLM enrichment without reranking regresses precision — enable it only paired with `--rerank`.

@@ -77,3 +77,8 @@ toolchain that does not fit the air-gapped default:
    shipped here is exactly the seam** a future stack-graphs (or LSP/SCIP) backend would plug into:
    a new provider that returns `resolved` for cross-file-proven bindings, with no change to the
    graph, the tools, or the storage contract.
+
+   > **Shipped (A2).** The cross-file backend now exists as the **`scip` resolver** — it consumes a
+   > locally-generated SCIP index and resolves edges by real cross-file bindings (promote +
+   > **suppress** wrong-target fan-out), plugging into exactly this seam with zero new dependency.
+   > See `IMPROVEMENT_SCIP_RESOLVER.md`. (Shadow refutation — layer 1 above — is still future work.)

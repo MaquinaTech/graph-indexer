@@ -276,18 +276,47 @@ async function main() {
             fs.writeFileSync(tmpSg, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph }));
             const { MemoryGraphIndex } = await import('./engine/memory.mjs');
             const { buildSymbolGraph } = await import('./mcp/symbolgraph.mjs');
-            const { getResolver } = await import('./mcp/resolver.mjs');
+            const { getResolver, createScipResolver } = await import('./mcp/resolver.mjs');
             const { computeSymbolCentrality } = await import('./mcp/centrality.mjs');
             const sgIdx = new MemoryGraphIndex(tmpSg, { cacheEmbeddings: false });
             sgIdx.load();
-            const resolver = getResolver(config.resolver);
+            // A2: a 'scip' resolver ingests a locally-generated SCIP index and resolves edges by
+            // real cross-file bindings (promote confirmed → `resolved`, suppress wrong-target
+            // fan-out). Missing/unreadable index → fall back to heuristic (never worse, loud).
+            let resolver = getResolver(config.resolver);
+            let scipStats = null;
+            if (config.resolver === 'scip') {
+                if (!config.scipIndex) {
+                    console.warn('⚠️  --resolver scip without --scip-index — no SCIP index to read; '
+                        + 'falling back to heuristic resolver.');
+                    resolver = getResolver('heuristic');
+                } else {
+                    try {
+                        const { loadScip, buildScipBindings } = await import('./parse/scip.mjs');
+                        const aligned = buildScipBindings(sgIdx, loadScip(config.scipIndex));
+                        scipStats = aligned.stats;
+                        resolver = createScipResolver(aligned.bindings, aligned.definedChunks);
+                        if (scipStats.matchedDocs === 0) {
+                            console.warn(`⚠️  SCIP index matched 0 of ${scipStats.docs} document(s) to indexed `
+                                + `files (${config.scipIndex}) — check the path / project_root. Resolver is `
+                                + 'effectively inert (edges stay heuristic { high, name_only }).');
+                        }
+                    } catch (e) {
+                        console.warn(`⚠️  SCIP load failed (${e.message}); falling back to heuristic resolver.`);
+                        resolver = getResolver('heuristic');
+                    }
+                }
+            }
             const res = buildSymbolGraph(sgIdx, { resolver });
             symbolEdges = res.edges;
             sgIdx.close?.();
-            const resolvedCount = config.resolver === 'precise'
+            const isPreciseTier = config.resolver === 'precise' || (config.resolver === 'scip' && scipStats);
+            const resolvedCount = isPreciseTier
                 ? symbolEdges.filter(e => e.confidence === 'resolved').length : 0;
             console.log(`🕸  Symbol graph: ${symbolEdges.length} resolved edges`
                 + `${config.resolver === 'precise' ? ` · resolver=precise (${resolvedCount} resolved-tier)` : ''}`
+                + `${(config.resolver === 'scip' && scipStats) ? ` · resolver=scip (${resolvedCount} resolved-tier; `
+                    + `${scipStats.matchedDocs}/${scipStats.docs} docs matched, ${scipStats.bindingPairs} bindings)` : ''}`
                 + `${res.cappedNames.length ? ` (⚠️ ${res.cappedNames.length} high-degree name(s) capped: ${res.cappedNames.slice(0, 5).join(', ')})` : ''}.`);
             // A5: confidence-weighted PageRank over those edges (computed once → serialized →
             // parity-free). Surfaced by explain_symbol / get_repo_map; does not touch ranking.

@@ -2,7 +2,10 @@
  * @file mcp/symbolgraph.mjs
  * @description Builds the persistent RESOLVED symbol graph (A4): one edge per resolved
  *              (referencing-chunk → definition-chunk) pair, tagged with `kind`
- *              ('calls' | 'extends' | 'type') and `confidence` ('high' | 'name_only').
+ *              ('calls' | 'extends' | 'type') and `confidence`. Confidence is `high` | `name_only`
+ *              on the default `heuristic` path; the opt-in resolvers add a `resolved` tier — A1
+ *              (`precise`) promotes provably-unambiguous edges, A2 (`scip`) confirms a cross-file
+ *              binding AND suppresses the wrong-target fan-out a same-name ambiguity would emit.
  *
  *              It REUSES the query-time resolvers (classifyCallers / findReferences) over
  *              every defined symbol, so an edge's confidence is identical to what
@@ -63,14 +66,28 @@ export function buildSymbolGraph(db, { maxPerName = 20000, resolver = getResolve
     for (const name of [...calleeNames].sort()) {
         const defs = db.resolveSymbol(name);
         if (!defs.length) continue;            // undefined name → no edge (findCallers falls back to scan)
+        const defIds = defs.map(d => d.id);
         const { high, nameOnly } = classifyCallers(db, name);
         let n = 0; let capped = false;
         const emit = (callers, baseConf) => {
             for (const { chunk, proven } of callers) {
-                const confidence = resolver.confidenceFor(baseConf, Boolean(proven));
+                // A2 (calls edges only): a data-backed resolver (scip) may CONFIRM the exact binding
+                // (→ `resolved`) and SUPPRESS the SCIP-known wrong-target siblings. A def SCIP never
+                // saw is neither — it falls through to the heuristic confidence (sound under partial
+                // coverage). No resolveEdges (heuristic/precise) → decision null → byte-identical.
+                const decision = resolver.resolveEdges
+                    ? resolver.resolveEdges({ fromId: chunk.id, defIds })
+                    : null;
+                const fallbackConf = resolver.confidenceFor(baseConf, Boolean(proven));
                 for (const def of defs) {
                     if (n >= maxPerName) { capped = true; return; }
-                    edges.push({ from_chunk_id: chunk.id, to_chunk_id: def.id, kind: 'calls', confidence });
+                    if (decision && decision.resolved.has(def.id)) {
+                        edges.push({ from_chunk_id: chunk.id, to_chunk_id: def.id, kind: 'calls', confidence: 'resolved' });
+                    } else if (decision && decision.suppressed.has(def.id)) {
+                        continue;                                  // SCIP-confirmed wrong-target → suppress
+                    } else {
+                        edges.push({ from_chunk_id: chunk.id, to_chunk_id: def.id, kind: 'calls', confidence: fallbackConf });
+                    }
                     n++;
                 }
             }
@@ -87,6 +104,9 @@ export function buildSymbolGraph(db, { maxPerName = 20000, resolver = getResolve
         if (!defs.length) continue;
         const { inherits, types } = findReferences(db, name);
         let n = 0; let capped = false;
+        // A2 scopes SCIP resolution to `calls` edges only: the binding relation is kind-agnostic, so
+        // applying it here would let a call-site binding suppress/relabel `extends`/`type` siblings of
+        // a different kind. These edges therefore stay heuristic under every resolver (byte-identical).
         const emit = (refs, kind) => {
             for (const r of refs) {
                 const confidence = resolver.confidenceFor(normConfidence(r.confidence), Boolean(r.proven));
