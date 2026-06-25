@@ -80,5 +80,9 @@ unchanged); the stored confidence powers `getEdges` and the Phase 2 milestones t
   query-time `classifyCallers`/`findReferences` — and the `impact_of_edit` MCP tool composes that
   with affected routes, tests, and git co-change. A `hasSymbolGraph()` store predicate selects the
   fast path; both paths produce the same blast radius (tested).
-- **A5 — symbol PageRank / betweenness / communities** over the edge set.
+- **A5 — symbol centrality (shipped):** `computeSymbolCentrality` (`mcp/centrality.mjs`) runs a
+  confidence-weighted PageRank over these edges at index time, serializes `{ score, rank }` per
+  chunk (parity-free, like the edges), and surfaces it through `explain_symbol` / `get_repo_map`.
+  Betweenness / community detection are intentionally deferred. See
+  `docs/internals/IMPROVEMENT_SYMBOL_CENTRALITY.md`.
 - **A1 — precise resolution** (tree-sitter-stack-graphs) upgrading edge confidence `high → resolved`.

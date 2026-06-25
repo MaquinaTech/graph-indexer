@@ -178,10 +178,10 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 | `find_references` | Where a symbol is used: callers, subclasses, and type references. |
 | `find_routes` | HTTP routes mapped to their handler chunks (NestJS, FastAPI/Flask, Spring, Express/Koa). |
 | `get_subgraph` | A bounded connected subgraph around a seed symbol — its callees, high-confidence callers, and type/inheritance users, in one call. |
-| `get_repo_map` | A high-level map of the repository's modules and topology. |
+| `get_repo_map` | A high-level map of the repository's modules and topology. With `--symbol-graph`, also lists the most-central symbols (PageRank). |
 | `list_index_stats` | Index health: chunk/file/symbol/vector counts and the active config. |
 | `tests_for` | The test/spec chunks that exercise a symbol (call or reference it) — which tests to run or update before changing it. |
-| `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, and git recency/co-change. |
+| `explain_symbol` | One-call overview of a symbol: signature, callees, callers (blast radius), subclasses/type users, routes it handles, tests, git recency/co-change, and (with `--symbol-graph`) its symbol-centrality rank. |
 | `impact_of_edit` | The precise blast radius of a change: pass the symbols/files you're about to edit → transitively-affected code, the routes that reach it, the tests to run, and git co-change. Most precise with `--symbol-graph`. |
 
 ## Configuration
@@ -223,7 +223,7 @@ For most repos, the default (lexical + stemming, no embeddings) is the right sta
 | `--rerank` | off | Enable the reranker (reorders the over-fetched pool on NL queries). |
 | `--rerank-provider <generative\|cross-encoder>` | `generative` | `generative` = local LLM judge; `cross-encoder` = local air-gapped MS-MARCO cross-encoder (optional `@huggingface/transformers`, no Ollama). |
 | `--interprocedural` | off | Index-time inter-procedural receiver-type fixpoint: propagate return types along factory call chains so multi-hop receivers resolve in `get_call_graph` / `find_references`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
-| `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
+| `--symbol-graph` | off | Persist a resolved chunk→chunk symbol graph (edges with kind + confidence) at index time, exposed via `getEdges`. `findCallers`/`findReferers` read it (identical sets, fall back to a scan). Also computes symbol-level centrality (confidence-weighted PageRank over the edges), surfaced by `explain_symbol` and `get_repo_map`. Air-gapped, deterministic; default index byte-identical; search ranking unaffected. |
 | `--no-git-signals` | (signals on) | Skip collecting local git churn/recency/co-change. |
 | `--git-rank-boost <0..1>` | 0 | Opt-in weight for git recency/churn in ranking (0 = ranking unchanged). |
 | `--llm-provider <ollama\|mlx>` | `ollama` | LLM backend for enrichment, reranking, and HyDE. `mlx` routes calls to a local `mlx_lm.server`. |

@@ -2,7 +2,9 @@
  * @file test/edges.mjs
  * @description Tests the A4 persistent resolved symbol graph: the edge builder, getEdges,
  *              the edge-backed findCallers/findReferers, cross-backend parity, the
- *              undefined-name scan fallback, and the daemon edge-invalidation.
+ *              undefined-name scan fallback, and the daemon edge-invalidation. Also covers
+ *              C4 (impact_of_edit blast radius) and A5 (symbol-centrality PageRank, its
+ *              serialization, store methods, parity, gating, and daemon invalidation).
  *
  *              The load-bearing safety property is SET-EQUIVALENCE: with the graph present,
  *              findCallers/findReferers must return exactly the same chunks as the name-match
@@ -21,6 +23,7 @@ import { SqliteGraphStore } from '../engine/sqlite.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
 import { getParserForFile } from '../parse/languages.mjs';
 import { buildSymbolGraph, edgeOrder } from '../mcp/symbolgraph.mjs';
+import { computeSymbolCentrality } from '../mcp/centrality.mjs';
 import { buildImpact } from '../mcp/topology.mjs';
 import { registerTools } from '../mcp/tools.mjs';
 
@@ -99,10 +102,12 @@ function loadMem(perFile, { withEdges }) {
     }
     const { edges } = buildSymbolGraph(scan);
     if (!withEdges) return { db: scan, edges };
-    // Round-trip through disk so edges load exactly as production does.
-    fs.writeFileSync(p, JSON.stringify({ chunks: [...scan.chunks.values()], graph: scan.graph, edges }));
+    // A5: centrality is computed with the graph and serialized alongside the edges.
+    const { centrality } = computeSymbolCentrality(edges);
+    // Round-trip through disk so edges + centrality load exactly as production does.
+    fs.writeFileSync(p, JSON.stringify({ chunks: [...scan.chunks.values()], graph: scan.graph, edges, centrality }));
     const db = new MemoryGraphIndex(p); db.load();
-    return { db, edges, chunks: [...scan.chunks.values()], graph: scan.graph };
+    return { db, edges, centrality, chunks: [...scan.chunks.values()], graph: scan.graph };
 }
 
 const names = (chunks) => chunks.map(c => c.name).sort();
@@ -315,4 +320,128 @@ test('impact_of_edit tool composes changed + impacted + tests + routes', async (
     assert.match(sc.tests[0].file_path, /auth\.test\.ts/);
     assert.deepEqual(sc.routes.map(r => `${r.method} ${r.path}`), ['POST /login'], 'affected route surfaced');
     assert.deepEqual(JSON.parse(res.content[0].text), sc, 'json text block matches structuredContent');
+});
+
+// ── A5: symbol-centrality PageRank. The pure function tests run without tree-sitter
+//    (synthetic edges); the store/parity/gating tests reuse the TS fixture above. ────────────
+const E = (from, to, confidence = 'high', kind = 'calls') =>
+    ({ from_chunk_id: from, to_chunk_id: to, kind, confidence });
+
+test('centrality (A5): deterministic for identical input', () => {
+    const edges = [E('a', 'hub'), E('b', 'hub'), E('c', 'hub'), E('a', 'leaf')];
+    const r1 = computeSymbolCentrality(edges);
+    const r2 = computeSymbolCentrality(edges);
+    assert.deepEqual(r1.centrality, r2.centrality, 'same edges → byte-identical centrality');
+    assert.equal(r1.total, r2.total);
+    // Empty graph is a clean no-op (default path).
+    const empty = computeSymbolCentrality([]);
+    assert.deepEqual(empty, { centrality: {}, total: 0, iters: 0 });
+});
+
+test('centrality (A5): a hub outranks a leaf', () => {
+    // hub is referenced by a, b, c; leaf only by a → hub must be more central.
+    const edges = [E('a', 'hub'), E('b', 'hub'), E('c', 'hub'), E('a', 'leaf')];
+    const { centrality, total } = computeSymbolCentrality(edges);
+    assert.equal(total, 5, 'all five connected chunks are ranked');
+    assert.ok(centrality['hub'].rank < centrality['leaf'].rank, 'hub ranks ahead of leaf');
+    assert.ok(centrality['hub'].score > centrality['leaf'].score, 'hub scores higher than leaf');
+    assert.equal(centrality['hub'].rank, 1, 'hub is the single most-central node');
+});
+
+test('centrality (A5): high-confidence edges confer more centrality than name_only', () => {
+    // p and q have the SAME two referrers; p via high edges, q via name_only edges.
+    const edges = [E('x', 'p', 'high'), E('y', 'p', 'high'), E('x', 'q', 'name_only'), E('y', 'q', 'name_only')];
+    const { centrality } = computeSymbolCentrality(edges);
+    assert.ok(centrality['p'].score > centrality['q'].score,
+        'identical topology, but the high-confidence target is more central');
+});
+
+test('centrality (A5): serialization round-trips + store methods (memory)', () => {
+    const perFile = parseFixture();
+    if (!perFile) { console.log('  ⚠️  tree-sitter-typescript not installed — skipping'); return; }
+    const { db } = loadMem(perFile, { withEdges: true });
+    assert.ok(db.hasCentrality(), 'centrality loaded from disk');
+    const fmt = db.resolveSymbol('format')[0];
+    const gc = db.getCentrality(fmt.id);
+    assert.ok(gc && gc.rank >= 1 && gc.rank <= gc.total && gc.total >= 1, 'getCentrality returns rank/total');
+    assert.equal(typeof gc.score, 'number');
+    const top = db.topCentral(5);
+    assert.ok(top.length > 0 && top[0].rank === 1, 'topCentral is rank-ascending from #1');
+    for (let i = 1; i < top.length; i++) assert.ok(top[i].rank >= top[i - 1].rank, 'monotonic ranks');
+    // An unranked id (no such chunk in the graph) → null, never a throw.
+    assert.equal(db.getCentrality('no-such-id'), null);
+});
+
+test('centrality (A5): memory ↔ sqlite parity (rank exact, score within 1e-9, topCentral order)', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db: mem, edges, centrality, chunks, graph } = loadMem(perFile, { withEdges: true });
+
+    const dbPath = path.join(os.tmpdir(), `cen-sq-${process.pid}-${Math.random().toString(36).slice(2)}.db`);
+    new SqliteGraphStore(dbPath).buildFrom({ chunks, graph, embeddingCache: new Map(), edges, centrality });
+    const sq = new SqliteGraphStore(dbPath); sq.load();
+    assert.equal(sq.hasCentrality(), true, 'sqlite detects the centrality table');
+
+    for (const c of chunks) {
+        const m = mem.getCentrality(c.id);
+        const s = sq.getCentrality(c.id);
+        if (m === null) { assert.equal(s, null, `${c.name} unranked in both`); continue; }
+        assert.equal(s.rank, m.rank, `rank parity for ${c.name}`);
+        assert.equal(s.total, m.total, `total parity for ${c.name}`);
+        assert.ok(Math.abs(s.score - m.score) < 1e-9, `score parity for ${c.name}`);
+    }
+    const order = (db) => db.topCentral(50).map(t => `${t.chunk.id}#${t.rank}`);
+    assert.deepEqual(order(sq), order(mem), 'topCentral order parity');
+
+    sq.close?.();
+    fs.rmSync(dbPath, { force: true });
+    fs.rmSync(`${dbPath}-wal`, { force: true });
+    fs.rmSync(`${dbPath}-shm`, { force: true });
+});
+
+test('centrality (A5): an incremental update invalidates it (daemon staleness guard)', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db } = loadMem(perFile, { withEdges: true });
+    assert.ok(db.hasCentrality(), 'centrality present before update');
+    const fmtId = db.resolveSymbol('format')[0].id;
+    db.applyFileUpdate('helpers.ts', { chunks: perFile['helpers.ts'], imports: [] });
+    if (db._saveTimer) { clearTimeout(db._saveTimer); db._saveTimer = null; }
+    assert.equal(db.hasCentrality(), false, 'centrality cleared after an incremental update');
+    assert.equal(db.getCentrality(fmtId), null, 'getCentrality null once invalidated');
+    assert.deepEqual(db.topCentral(5), [], 'topCentral empty once invalidated');
+});
+
+test('centrality (A5): absent on the default path (no symbol graph → gated off)', () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const { db: scan } = loadMem(perFile, { withEdges: false });
+    assert.equal(scan.hasCentrality(), false, 'no centrality without --symbol-graph');
+    assert.equal(scan.getCentrality(scan.resolveSymbol('format')[0].id), null);
+    assert.deepEqual(scan.topCentral(5), []);
+});
+
+test('centrality (A5): explain_symbol + get_repo_map surface it (and omit it when off)', async () => {
+    const perFile = parseFixture();
+    if (!perFile) return;
+    const opts = { projectRoot: os.tmpdir(), artifactPath: '/nonexistent', pidFile: null, embeddingsEnabled: false, embedder: null };
+    const wire = (db) => { const h = new Map(); registerTools({ tool: (n, _d, _s, fn) => h.set(n, fn) }, db, opts); return h; };
+
+    // With the graph: explain_symbol attaches centrality; get_repo_map lists central symbols.
+    const on = wire(loadMem(perFile, { withEdges: true }).db);
+    const es = await on.get('explain_symbol')({ symbol: 'format', response_format: 'json' });
+    const def = es.structuredContent.definitions[0];
+    assert.ok(def.centrality && def.centrality.rank >= 1 && def.centrality.total >= 1, 'explain_symbol json carries centrality');
+    const esMd = await on.get('explain_symbol')({ symbol: 'format', response_format: 'markdown' });
+    assert.match(esMd.content[0].text, /centrality #\d+\/\d+/, 'explain_symbol markdown shows the centrality tag');
+    const rm = await on.get('get_repo_map')({ response_format: 'json' });
+    assert.ok(Array.isArray(rm.structuredContent.central_symbols) && rm.structuredContent.central_symbols.length > 0, 'central_symbols present');
+    assert.equal(rm.structuredContent.central_symbols[0].rank, 1, 'central_symbols rank-ascending');
+    assert.match((await on.get('get_repo_map')({ response_format: 'markdown' })).content[0].text, /Most central symbols/);
+
+    // Without the graph: both tools omit centrality entirely (default path unchanged).
+    const off = wire(loadMem(perFile, { withEdges: false }).db);
+    assert.equal((await off.get('explain_symbol')({ symbol: 'format', response_format: 'json' })).structuredContent.definitions[0].centrality, undefined);
+    assert.equal((await off.get('get_repo_map')({ response_format: 'json' })).structuredContent.central_symbols, undefined);
+    assert.ok(!/Most central symbols/.test((await off.get('get_repo_map')({ response_format: 'markdown' })).content[0].text), 'no central block without the graph');
 });

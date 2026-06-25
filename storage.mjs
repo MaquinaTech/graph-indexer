@@ -19,6 +19,9 @@
  *   findCallers(funcName)                    → chunk[]
  *   findReferers(symbol)                     → chunk[]   (type_refs / extends matches)
  *   getEdges(chunkId, {kind?, direction})    → edge[]    (A4 resolved symbol graph; [] when off)
+ *   hasSymbolGraph() / hasCentrality()       → boolean   (opt-in A4 / A5 layers present?)
+ *   getCentrality(chunkId)                   → { score, rank, total } | null   (A5 symbol PageRank)
+ *   topCentral(limit)                        → [{ chunk, score, rank }]         (A5, rank-ascending)
  *   findRoutes({method, pathPrefix})         → route[]   (HTTP route → handler chunk)
  *   iterateChunks()                          → Iterable<chunk>  (cursor on SQLite)
  *   getDependencies(path) / getImportedBy(path) → string[]

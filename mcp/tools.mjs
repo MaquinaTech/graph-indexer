@@ -1028,6 +1028,11 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 const totalFiles = fileChunks.size;
                 const totalSymbols = Array.from(fileChunks.values()).reduce((s, a) => s + a.length, 0);
 
+                // A5: most-central symbols (PageRank over the resolved symbol graph), shown only
+                // on the unfiltered orientation view and only when --symbol-graph built it.
+                // Absent on the default path → output byte-identical.
+                const central = (db.hasCentrality?.() && !path_filter) ? db.topCentral(12) : [];
+
                 if (response_format === 'json') {
                     const files = sortedFiles.map(filePath => {
                         const seen = new Set();
@@ -1047,6 +1052,14 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     return jsonResult({
                         total_files: totalFiles, total_symbols: totalSymbols,
                         shown_files: sortedFiles.length, sort_by, path_filter: path_filter || null,
+                        ...(central.length ? {
+                            central_total: db.getCentrality(central[0].chunk.id)?.total ?? central.length,
+                            central_symbols: central.map(({ chunk, score, rank }) => ({
+                                name: chunk.name, class_context: chunk.class_context || null,
+                                file_path: chunk.file_path, node_type: chunk.node_type,
+                                rank, score,
+                            })),
+                        } : {}),
                         files,
                     });
                 }
@@ -1056,6 +1069,16 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                     path_filter ? `(filtered to '${path_filter}')` : '',
                     sortedFiles.length < totalFiles ? `(showing top ${sortedFiles.length} by ${sort_by}; use path_filter to narrow)\n` : '',
                 ].filter(Boolean);
+
+                if (central.length) {
+                    const cenTotal = db.getCentrality(central[0].chunk.id)?.total ?? central.length;
+                    lines.push(`**Most central symbols** (PageRank over the resolved symbol graph, top ${central.length} of ${cenTotal}):`);
+                    for (const { chunk, rank } of central) {
+                        const nm = `${chunk.class_context ? chunk.class_context + '.' : ''}${chunk.name}`;
+                        lines.push(`  ${rank}. \`${nm}\` — \`${chunk.file_path}\``);
+                    }
+                    lines.push('');
+                }
 
                 for (const filePath of sortedFiles) {
                     const chunks = fileChunks.get(filePath);
@@ -1274,7 +1297,10 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                         target_class: target_class || null,
                         ambiguous,
                         definition_count: defs.length,
-                        definitions: defs.map(d => ({ ...chunkCard(d), signature: extractSignatureLine(d.code_snippet) })),
+                        definitions: defs.map(d => {
+                            const cen = db.getCentrality?.(d.id);
+                            return { ...chunkCard(d), signature: extractSignatureLine(d.code_snippet), ...(cen ? { centrality: cen } : {}) };
+                        }),
                         callees,
                         called_by: {
                             high: calls.high.map(h => refCard({ ...h, confidence: 'high' })),
@@ -1294,7 +1320,9 @@ export function registerTools(server, db, { projectRoot, artifactPath, pidFile, 
                 const lines = [`# 🔎 \`${target_class ? target_class + '.' : ''}${symbol}\``];
                 if (ambiguous) lines.push(`> ⚠️ ${defs.length} symbols named \`${symbol}\`${target_class ? '' : ' — pass target_class to scope callers/references'}.`);
                 for (const d of defs) {
-                    lines.push('', `**${d.class_context ? d.class_context + '.' : ''}${d.name}** [${d.node_type}] · \`${d.file_path}\`:${d.start_line}–${d.end_line} · id \`${d.id}\``);
+                    const cen = db.getCentrality?.(d.id);
+                    const cenTag = cen ? ` · 🎯 centrality #${cen.rank}/${cen.total}${cen.rank <= Math.ceil(cen.total * 0.1) ? ' (hub)' : ''}` : '';
+                    lines.push('', `**${d.class_context ? d.class_context + '.' : ''}${d.name}** [${d.node_type}] · \`${d.file_path}\`:${d.start_line}–${d.end_line} · id \`${d.id}\`${cenTag}`);
                     lines.push('```', extractSignatureLine(d.code_snippet), '```');
                 }
                 if (callees.length) lines.push('', `**Calls (${callees.length}):** ${callees.slice(0, 20).join(', ')}${callees.length > 20 ? ' …' : ''}`);

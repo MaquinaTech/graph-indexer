@@ -132,6 +132,31 @@ store primitives — no ranking, parity, or default-path impact.
   (transitive depth via the graph AND the fallback, the two agreeing, and the tool composing
   changed + impacted + tests + routes); `test/mcp.mjs` asserts the 14-tool surface.
 
+### Symbol-level centrality (A5) — Phase 2
+
+- On a `--symbol-graph` index, the indexer now also computes **symbol centrality**: a
+  confidence-weighted **PageRank over the resolved chunk→chunk edges** (`high` edges weighted
+  1.0, `name_only` 0.5). A definition referenced — called / extended / used as a type — by many
+  *other central* symbols scores high; it surfaces the program's load-bearing hubs. New module
+  `mcp/centrality.mjs` (`computeSymbolCentrality`). This is **distinct** from the existing
+  file-level `computePageRank` (import graph): A5 is symbol-granular and call/type-aware.
+- **Surfaced** through two existing tools (no new tool — the surface stays at 14): `explain_symbol`
+  attaches each definition's `{ score, rank, total }` (markdown shows `🎯 centrality #R/T`, with a
+  `(hub)` tag in the top decile); `get_repo_map`'s unfiltered view lists the most-central symbols.
+  Both **omit** centrality entirely when the graph is absent → default output unchanged.
+- **Parity-free, like the edges:** computed **once at index time** and serialized
+  (memory `centrality` map; SQLite `centrality(chunk_id, score, rank)` table), so both backends
+  read byte-identical scores and ranks. It never touches `searchHybrid`, so `test:eval` and the
+  search parity gate are unaffected. New store methods `hasCentrality()`, `getCentrality(id)`,
+  `topCentral(limit)` on both backends. Deterministic (sorted node set, fixed-order power
+  iteration, rounded scores, rank tie-broken by id).
+- **Daemon staleness:** a per-file update invalidates the centrality alongside the edges
+  (it is a whole-program quantity) — both engines drop it until the next full `idx-index`.
+- `test/edges.mjs` adds 8 tests (PageRank determinism, hub-outranks-leaf, confidence weighting,
+  serialization round-trip + store methods, memory↔sqlite parity, daemon invalidation, default-path
+  gating, and the two tools surfacing/omitting it). Full write-up:
+  `docs/internals/IMPROVEMENT_SYMBOL_CENTRALITY.md`.
+
 ## [2.0.0] — 2026-06-21
 
 This is a major release. The public API (MCP tools, CLI flags, config keys) has grown significantly, but the default behaviour — lexical-only search, in-memory store, zero external dependencies — is backward-compatible. Internal modules were reorganized into `engine/`, `mcp/`, and `parse/` (see [Module reorganization](#module-reorganization-breaking-only-for-deep-imports) below) — breaking only for code that deep-imported internal files.

@@ -247,12 +247,14 @@ async function main() {
     // get_call_graph). Serialized into the index for both backends → getEdges. Built via a
     // throwaway in-memory store so it sees the same resolution the MCP server will.
     let symbolEdges = null;
+    let centrality = null;
     if (config.symbolGraph) {
         const tmpSg = path.join(config.dataDir, '_symbolgraph-build.json');
         try {
             fs.writeFileSync(tmpSg, JSON.stringify({ chunks: indexData.chunks, graph: indexData.graph }));
             const { MemoryGraphIndex } = await import('./engine/memory.mjs');
             const { buildSymbolGraph } = await import('./mcp/symbolgraph.mjs');
+            const { computeSymbolCentrality } = await import('./mcp/centrality.mjs');
             const sgIdx = new MemoryGraphIndex(tmpSg, { cacheEmbeddings: false });
             sgIdx.load();
             const res = buildSymbolGraph(sgIdx);
@@ -260,6 +262,11 @@ async function main() {
             sgIdx.close?.();
             console.log(`🕸  Symbol graph: ${symbolEdges.length} resolved edges`
                 + `${res.cappedNames.length ? ` (⚠️ ${res.cappedNames.length} high-degree name(s) capped: ${res.cappedNames.slice(0, 5).join(', ')})` : ''}.`);
+            // A5: confidence-weighted PageRank over those edges (computed once → serialized →
+            // parity-free). Surfaced by explain_symbol / get_repo_map; does not touch ranking.
+            const cen = computeSymbolCentrality(symbolEdges);
+            centrality = cen.total ? cen.centrality : null;
+            if (centrality) console.log(`📊 Centrality: ranked ${cen.total} connected symbols (PageRank, ${cen.iters} iters).`);
         } finally {
             try { fs.unlinkSync(tmpSg); } catch { /* none */ }
         }
@@ -279,7 +286,7 @@ async function main() {
         const store = new SqliteGraphStore(config.sqlitePath, { embeddingPath: EMBEDDINGS_PATH });
         const res = store.buildFrom({
             chunks: indexData.chunks, graph: indexData.graph, embeddingCache: indexData.embeddingCache,
-            edges: symbolEdges,
+            edges: symbolEdges, centrality,
         });
         store.close?.();
         for (const p of [INDEX_PATH, `${INDEX_PATH}.tmp`]) { try { fs.unlinkSync(p); } catch { /* none */ } }
@@ -292,6 +299,7 @@ async function main() {
             fs.promises.writeFile(tmpPath, JSON.stringify({
                 chunks: indexData.chunks, graph: indexData.graph,
                 ...(symbolEdges ? { edges: symbolEdges } : {}),
+                ...(centrality ? { centrality } : {}),
             })),
             fs.promises.writeFile(tmpBinPath, writeEmbeddingBinary(indexData.embeddingCache)),
         ]);

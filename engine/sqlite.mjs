@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS postings (term TEXT, chunk_id TEXT, tf INTEGER);
 CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, df INTEGER);
 CREATE TABLE IF NOT EXISTS call_edges (callee TEXT, chunk_id TEXT);
 CREATE TABLE IF NOT EXISTS edges (from_chunk_id TEXT, to_chunk_id TEXT, kind TEXT, confidence TEXT);
+CREATE TABLE IF NOT EXISTS centrality (chunk_id TEXT, score REAL, rank INTEGER);
 CREATE TABLE IF NOT EXISTS deps (file TEXT, dep TEXT);
 CREATE TABLE IF NOT EXISTS routes (
   id INTEGER PRIMARY KEY,
@@ -84,6 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_postings_chunk ON postings(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_calledges_callee ON call_edges(callee);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_chunk_id);
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_centrality_chunk ON centrality(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_centrality_rank ON centrality(rank);
 CREATE INDEX IF NOT EXISTS idx_deps_file ON deps(file);
 CREATE INDEX IF NOT EXISTS idx_deps_dep ON deps(dep);
 CREATE INDEX IF NOT EXISTS idx_routes_method ON routes(method);
@@ -133,6 +136,8 @@ export class SqliteGraphStore {
         this._writeReady = false;
         this._sketch = null; // binary-quantized vector sketch (built above SKETCH_THRESHOLD)
         this._hasEdges = false; // A4: resolved symbol graph present (opt-in)
+        this._hasCentrality = false; // A5: symbol centrality present (opt-in, built with the graph)
+        this._centralityTotal = 0;
     }
 
     get backend() { return 'sqlite'; }
@@ -182,6 +187,7 @@ export class SqliteGraphStore {
         this._refreshSketch();
         this._prepare();
         this._refreshHasEdges();
+        this._refreshHasCentrality();
         this._dataVersion = this._readDataVersion();
         return this;
     }
@@ -190,6 +196,15 @@ export class SqliteGraphStore {
     _refreshHasEdges() {
         try { this._hasEdges = Boolean(this.db.prepare('SELECT 1 FROM edges LIMIT 1').get()); }
         catch { this._hasEdges = false; }
+    }
+
+    /** Whether opt-in symbol centrality (A5) is present, and how many chunks are ranked. */
+    _refreshHasCentrality() {
+        try {
+            const row = this.db.prepare('SELECT COUNT(*) AS n FROM centrality').get();
+            this._centralityTotal = row ? row.n : 0;
+            this._hasCentrality = this._centralityTotal > 0;
+        } catch { this._hasCentrality = false; this._centralityTotal = 0; }
     }
 
     _openVecFd() {
@@ -328,6 +343,12 @@ export class SqliteGraphStore {
             'SELECT from_chunk_id, to_chunk_id, kind, confidence FROM edges WHERE from_chunk_id = ? '
             + 'ORDER BY to_chunk_id, kind, confidence'
         );
+        // A5 symbol centrality. rank/score are precomputed at index time; topCentral orders by
+        // the stored rank (chunk_id tie-break mirrors the in-memory ranked cache).
+        this._stmtCentrality = this.db.prepare('SELECT score, rank FROM centrality WHERE chunk_id = ?');
+        this._stmtTopCentral = this.db.prepare(
+            'SELECT chunk_id, score, rank FROM centrality ORDER BY rank ASC, chunk_id ASC LIMIT ?'
+        );
     }
 
     _prepareWrite() {
@@ -402,6 +423,30 @@ export class SqliteGraphStore {
             if (kind && e.kind !== kind) continue;
             const otherId = direction === 'out' ? e.to_chunk_id : e.from_chunk_id;
             out.push({ from_chunk_id: e.from_chunk_id, to_chunk_id: e.to_chunk_id, kind: e.kind, confidence: e.confidence, chunk: this.getChunk(otherId) });
+        }
+        return out;
+    }
+
+    /** Whether opt-in symbol centrality (A5) is loaded. */
+    hasCentrality() { return this._hasCentrality; }
+
+    /**
+     * Symbol centrality (A5) for one chunk. Mirrors MemoryGraphIndex.getCentrality — same
+     * { score, rank, total } shape; null when unranked or centrality was not built.
+     */
+    getCentrality(chunkId) {
+        if (!this._hasCentrality) return null;
+        const row = this._stmtCentrality.get(chunkId);
+        return row ? { score: row.score, rank: row.rank, total: this._centralityTotal } : null;
+    }
+
+    /** The most central symbols (A5), rank-ascending. @returns {Array<{chunk,score,rank}>} */
+    topCentral(limit = 20) {
+        if (!this._hasCentrality) return [];
+        const out = [];
+        for (const row of this._stmtTopCentral.all(limit)) {
+            const chunk = this.getChunk(row.chunk_id);
+            if (chunk) out.push({ chunk, score: row.score, rank: row.rank });
         }
         return out;
     }
@@ -721,6 +766,7 @@ export class SqliteGraphStore {
             // findCallers/findReferers fall back to the always-correct scan until the next
             // full `idx-index` rebuilds it (the daemon never rebuilds the graph).
             if (this._hasEdges) { this.db.exec('DELETE FROM edges'); this._hasEdges = false; }
+            if (this._hasCentrality) { this.db.exec('DELETE FROM centrality'); this._hasCentrality = false; this._centralityTotal = 0; }
 
             // Capture reusable vector offsets BEFORE deleting old rows, which may
             // be the only rows that hold those offsets.
@@ -814,7 +860,7 @@ export class SqliteGraphStore {
      * @param {{dependencies:Object<string,string[]>}} payload.graph
      * @param {Map<string,Float32Array>|object} [payload.embeddingCache]  Keyed by embeddingKeyFor(chunk).
      */
-    buildFrom({ chunks, graph, embeddingCache, edges = null }) {
+    buildFrom({ chunks, graph, embeddingCache, edges = null, centrality = null }) {
         this._open();
         this.db.exec('PRAGMA synchronous = OFF;'); // safe only for a full rebuild; not used for incremental writes
 
@@ -847,6 +893,7 @@ export class SqliteGraphStore {
             DROP TABLE IF EXISTS terms;  DROP TABLE IF EXISTS call_edges;
             DROP TABLE IF EXISTS deps;   DROP TABLE IF EXISTS meta;
             DROP TABLE IF EXISTS routes; DROP TABLE IF EXISTS edges;
+            DROP TABLE IF EXISTS centrality;
         `);
         this.db.exec(SCHEMA_TABLES);
         this.db.exec(SCHEMA_INDEXES);
@@ -920,6 +967,14 @@ export class SqliteGraphStore {
                 'INSERT INTO edges (from_chunk_id, to_chunk_id, kind, confidence) VALUES (?, ?, ?, ?)'
             );
             for (const e of edges) insEdge.run(e.from_chunk_id, e.to_chunk_id, e.kind, e.confidence);
+        }
+
+        // A5 symbol centrality (opt-in). Precomputed score/rank per chunk id; both backends
+        // read these exact numbers → parity-free. Inserted in rank order for tidy storage.
+        if (centrality && typeof centrality === 'object') {
+            const insCen = this.db.prepare('INSERT INTO centrality (chunk_id, score, rank) VALUES (?, ?, ?)');
+            const rows = Object.entries(centrality).sort((a, b) => a[1].rank - b[1].rank);
+            for (const [id, v] of rows) insCen.run(id, v.score, v.rank);
         }
 
         const insMeta = this.db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');

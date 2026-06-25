@@ -78,6 +78,13 @@ export class MemoryGraphIndex {
         this._edges       = null;
         this._edgesByTo   = new Map();   // to_chunk_id   → edge[]
         this._edgesByFrom = new Map();   // from_chunk_id → edge[]
+
+        // ── A5: symbol centrality (PageRank over the edges; built with the graph) ──
+        // _centrality maps chunk id → { score, rank }; precomputed at index time and
+        // serialized, so both backends serve identical numbers. Cleared with the edges.
+        this._centrality      = null;
+        this._centralityTotal = 0;
+        this._centralRanked   = null;    // lazy id-by-rank cache for topCentral
     }
 
     /** Index the (already deterministically-ordered) edge list by endpoint. */
@@ -93,11 +100,21 @@ export class MemoryGraphIndex {
         }
     }
 
-    /** Drop the symbol graph (an incremental update would make it stale). */
+    /** Load the precomputed symbol-centrality map (A5). */
+    _indexCentrality(centrality) {
+        this._centrality = new Map(Object.entries(centrality));
+        this._centralityTotal = this._centrality.size;
+        this._centralRanked = null;
+    }
+
+    /** Drop the symbol graph + its centrality (an incremental update makes both stale). */
     _clearEdges() {
         this._edges = null;
         this._edgesByTo = new Map();
         this._edgesByFrom = new Map();
+        this._centrality = null;
+        this._centralityTotal = 0;
+        this._centralRanked = null;
     }
 
     // ─── Load ─────────────────────────────────────────────────────────────────
@@ -108,6 +125,8 @@ export class MemoryGraphIndex {
         this.graph = data.graph || { dependencies: {}, importedBy: {} };
         // A4 resolved symbol graph (opt-in; absent on default indexes → no-op).
         if (Array.isArray(data.edges)) this._indexEdges(data.edges);
+        // A5 symbol centrality (built with the graph; absent on default indexes → no-op).
+        if (data.centrality && typeof data.centrality === 'object') this._indexCentrality(data.centrality);
         // Does this corpus carry LLM enrichment? Drives the NL vector-channel weight
         // in fuseAndRank (strong summary vectors earn full weight; plain code vectors
         // stay a low-weight rescue). Set during the chunk load loop below.
@@ -555,6 +574,7 @@ export class MemoryGraphIndex {
         const payload  = JSON.stringify({
             chunks: chunksData, graph: this.graph,
             ...(this._edges ? { edges: this._edges } : {}),
+            ...(this._centrality ? { centrality: Object.fromEntries(this._centrality) } : {}),
         });
         const tmpPath    = `${this.indexPath}.tmp`;
         const tmpBinPath = `${this._embeddingPath}.tmp`;
@@ -604,10 +624,10 @@ export class MemoryGraphIndex {
      * @param {Map<string, Float32Array|number[]>} [p.embeddings] New vectors keyed by embeddingKeyFor(chunk).
      */
     applyFileUpdate(filePath, { chunks = [], imports = [], embeddings = null } = {}) {
-        // A per-file edit makes the whole-program symbol graph stale; drop it so
-        // findCallers/findReferers fall back to the always-correct scan until the next
-        // full `idx-index` rebuilds it (the daemon never rebuilds the graph).
-        if (this._edges) this._clearEdges();
+        // A per-file edit makes the whole-program symbol graph + its centrality stale; drop
+        // both so findCallers/findReferers fall back to the always-correct scan until the next
+        // full `idx-index` rebuilds them (the daemon never rebuilds the graph).
+        if (this._edges || this._centrality) this._clearEdges();
         this.updateFileGraph(filePath, imports);
 
         for (const [id, chunk] of Array.from(this.chunks.entries())) {
@@ -738,6 +758,38 @@ export class MemoryGraphIndex {
             if (kind && e.kind !== kind) continue;
             const otherId = direction === 'out' ? e.to_chunk_id : e.from_chunk_id;
             out.push({ ...e, chunk: this.chunks.get(otherId) ?? null });
+        }
+        return out;
+    }
+
+    /** Whether opt-in symbol centrality (A5) is loaded. */
+    hasCentrality() { return this._centrality != null; }
+
+    /**
+     * Symbol centrality (A5) for one chunk: its PageRank score, dense rank (1 = most central),
+     * and the total number of ranked (connected) chunks. Null when the chunk is unranked
+     * (isolated) or centrality was not built. @returns {{score:number,rank:number,total:number}|null}
+     */
+    getCentrality(chunkId) {
+        if (!this._centrality) return null;
+        const e = this._centrality.get(chunkId);
+        return e ? { score: e.score, rank: e.rank, total: this._centralityTotal } : null;
+    }
+
+    /** The most central symbols (A5), rank-ascending. @returns {Array<{chunk,score,rank}>} */
+    topCentral(limit = 20) {
+        if (!this._centrality) return [];
+        if (!this._centralRanked) {
+            this._centralRanked = [...this._centrality.entries()]
+                .map(([id, v]) => ({ id, score: v.score, rank: v.rank }))
+                .sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        }
+        const out = [];
+        for (const { id, score, rank } of this._centralRanked) {
+            const chunk = this.chunks.get(id);
+            if (!chunk) continue;
+            out.push({ chunk, score, rank });
+            if (out.length >= limit) break;
         }
         return out;
     }
