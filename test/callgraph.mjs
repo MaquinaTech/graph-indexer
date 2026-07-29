@@ -19,9 +19,13 @@ import os from 'os';
 import path from 'path';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
-import { getParserForFile } from '../parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from '../parse/languages.mjs';
 import { classifyCallers, buildSubgraph } from '../mcp/topology.mjs';
 import { applyInterprocedural, resolveReturnTypes } from '../parse/interprocedural.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 // ── Fixture: two modules export a same-named free function `save`. Callers that
 //    import one of them are real callers of an indexed save; a caller that hits a

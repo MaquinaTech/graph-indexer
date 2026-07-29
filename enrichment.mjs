@@ -313,7 +313,8 @@ async function _crossEncoderPipeline(model) {
     catch {
         throw new Error(
             "Cross-encoder rerank needs the optional '@huggingface/transformers' package. "
-            + "Install it (`npm i @huggingface/transformers`) or set rerank.provider to 'generative'."
+            + "Install it (`npm run embed:setup:local`, or `npm i @huggingface/transformers`) "
+            + "or set rerank.provider to 'generative'."
         );
     }
     const m = await mod.AutoModelForSequenceClassification.from_pretrained(model, { quantized: true });

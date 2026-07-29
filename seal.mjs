@@ -19,6 +19,12 @@
  *
  *              Sealed mode is itself opt-in and can only REMOVE capability (fail-closed); it never
  *              changes ranking, the store, or parity. The default path is already strict-compatible.
+ *
+ *              Language grammars (parse/languages.mjs) are a separate, asset-availability form of
+ *              fail-closed: they are not bundled dependencies (installed on demand into
+ *              .graph-indexer/node_modules), so under sealed mode auto-install is disabled and
+ *              indexer.mjs throws SealViolation if a configured language's grammar isn't already
+ *              resolvable — pre-install before sealing rather than silently shipping a partial index.
  * @author MaquinaTech <https://github.com/MaquinaTech>
  * @copyright (c) 2026 MaquinaTech. All rights reserved.
  * @license MIT

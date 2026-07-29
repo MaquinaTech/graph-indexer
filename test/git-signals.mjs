@@ -16,9 +16,13 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
-import { getParserForFile } from '../parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from '../parse/languages.mjs';
 import { registerTools } from '../mcp/tools.mjs';
 import { collectGitSignals, coChangesFor, gitBoostScore } from '../git-signals.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 function gitAvailable() {
     try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; }

@@ -20,10 +20,14 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
-import { getParserForFile } from '../parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from '../parse/languages.mjs';
 import { extractRoutes } from '../parse/routes.mjs';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { findRoutes } from '../mcp/topology.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 import { registerTools } from '../mcp/tools.mjs';
 
 let passed = 0, failed = 0;

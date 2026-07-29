@@ -23,13 +23,14 @@ Graph Indexer is a local [Model Context Protocol](https://modelcontextprotocol.i
 
 - **Up to 98.2% Token Savings:** Delivers the exact AST chunk needed instead of dumping 1M token context files.
 - **Blast radius before every edit.** `get_call_graph` and `find_references` surface every caller, subclass, and dependency a change would touch, so the agent reasons about impact on code it never opened.
-- **Private by default.** Everything runs locally; the default path makes zero network calls and needs no model — your code never leaves your machine.
-- **One command, any language.** Guided setup wires your editors in seconds, and the zero-dependency lexical engine indexes 14 languages out of the box.
+- **Private by default.** Everything runs locally; the default path makes zero network calls and needs no model — your code never leaves your machine. (The very first index build fetches only the Tree-sitter grammar(s) for languages actually in your repo — see [Language grammars](#language-grammars) — cached from then on; `--sealed` enforces zero network hard.)
+- **One command, any language.** Guided setup wires your editors in seconds, and the lexical engine indexes 14 languages — installing each one's grammar on first use, not bundled, so a fresh `npm install graph-indexer` stays small.
 
 ## 📦 Prerequisites
 
 * **Node.js** 18+ (22+ recommended if you hit >15k chunks for automatic SQLite scaling).
 * **OS:** Agnostic. macOS Apple Silicon required only for the optional MLX GPU acceleration.
+* **Network (first index build only):** installs the Tree-sitter grammar(s) for languages in your repo (a few MB each) — see [Language grammars](#language-grammars). Cached after; fully offline from then on, or pre-install before going air-gapped.
 * **Optional:** Ollama for embeddings, enrichment, and reranking (see [Ollama setup](#ollama-setup)).
 * **Optional:** Python 3.10+ for the MLX embedder (macOS Apple Silicon only).
 
@@ -141,7 +142,7 @@ Before the steps, it scans the repo to pre-select your stack — languages from 
 
 It finishes with a grouped summary (created / updated / kept / skipped / warnings), offers to **build the index now**, and prints your next steps.
 
-**Most repos need nothing past step 3's default** — the lexical engine has zero dependencies and works in any language. Step 3 only branches when you decline the defaults:
+**Most repos need nothing past step 3's default** — the lexical engine works in any language, installing that language's grammar on the first index build. Step 3 only branches when you decline the defaults:
 
 - **Storage** — `auto` (in-memory, promoting to SQLite past ~15k chunks), or force in-memory / SQLite.
 - **Embeddings** — `off` (default), `auto`, **Ollama**, **local** (in-process MiniLM, ~25 MB on first index), or **Apple Metal (MLX)** on macOS. Ollama is probed only when you actually pick it; choosing MLX offers to provision its Python venv on the spot.
@@ -164,6 +165,10 @@ Setup also runs non-interactively whenever stdin isn't a TTY, so piping into it 
 - **Retrieval.** A hybrid ranker fuses a lexical channel (BM25 with camelCase splitting and language-agnostic Porter stemming) with an optional dense-vector channel (local embeddings) via Reciprocal Rank Fusion. With embeddings off, only the lexical channel runs — and it is the default.
 - **Call graph.** `get_call_graph` returns the callers and callees of a symbol — the *blast radius* of a change — so an agent can see what it might break before editing code it never read.
 - **Backend parity.** The in-memory and SQLite backends share the same ranking core, so they return identical top-5 results for the same query (enforced by `test/sqlite.mjs`).
+
+### Language grammars
+
+Tree-sitter grammars aren't bundled with the package — a fresh `npm install graph-indexer` doesn't download all 14 languages' native bindings, just the ~5 MB core engine. Instead, the first `idx-index` run installs the grammar(s) for whichever languages you actually selected (or, un-narrowed, whatever's detected) into `.graph-indexer/node_modules`, and reuses that cache on every later run — no re-download, no re-build. This works the same way whether graph-indexer is a project dependency, a global install, or run ad hoc via `npx`, because the install target is always your repo's own `.graph-indexer/` directory, not graph-indexer's own location. A platform-incompatible grammar (e.g. a missing native toolchain) is skipped on its own — other languages still install and index normally, the same graceful degradation `npm`'s `optionalDependencies` used to give for free. Under `--sealed`, auto-install is disabled entirely: an unresolvable grammar fails the run with the exact `npm install --prefix .graph-indexer <pkg>@<version>` command to run first, rather than silently shipping a partial index.
 
 ### MCP tools
 

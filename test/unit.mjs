@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { buildIgnoreFilter, extractSemanticChunks } from '../parse/extractor.mjs';
-import { getParserForFile, EXTENSIONS } from '../parse/languages.mjs';
+import { getParserForFile, EXTENSIONS, ensureLanguagesReady } from '../parse/languages.mjs';
 import { extractDecorators, extractHeritage } from '../parse/metadata.mjs';
 import { extractRoutes } from '../parse/routes.mjs';
 import { buildEmbeddingPayload, resolveLocalImports } from '../parse/imports.mjs';
@@ -36,6 +36,10 @@ function test(name, fn) {
         console.log(`  ✗ ${name}\n      ${err.message}`);
     }
 }
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 console.log('\nUNIT TESTS\n');
 

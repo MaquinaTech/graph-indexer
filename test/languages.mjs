@@ -15,8 +15,14 @@
  */
 import assert from 'node:assert/strict';
 import { extractSemanticChunks, extractImportsFromAST } from '../parse/extractor.mjs';
-import { getParserForFile, EXTENSIONS } from '../parse/languages.mjs';
+import { getParserForFile, EXTENSIONS, ensureLanguagesReady } from '../parse/languages.mjs';
 import { extractHeritage, extractTypeAnnotations } from '../parse/metadata.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+// A language whose devDependency somehow isn't present still SKIPS gracefully
+// (withLang below), matching this file's existing graceful-degradation contract.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 let passed = 0, failed = 0, skipped = 0;
 

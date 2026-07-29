@@ -4,6 +4,39 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Install-size fix: heavy optional packages no longer ship by default
+
+- **`@huggingface/transformers` (→ onnxruntime-node, ~950 MB with the full model/runtime chain)
+  and `hnswlib-node` are no longer `optionalDependencies`.** npm's `optionalDependencies`
+  install eagerly regardless of the name — "optional" only means "don't fail the whole install
+  if this can't build on this platform" — so every `npm i graph-indexer` was downloading the
+  local-embeddings/cross-encoder-rerank stack even for lexical-only and Ollama-only users. They
+  are now `devDependencies` (available for this repo's own tests/CI, never installed as a
+  dependent). The runtime already lazy-`import()`s them with a clear "install it or change
+  provider" error — that design was correct; only the packaging contradicted it. New
+  `npm run embed:setup:local` one-liner installs it on demand, mirroring `embed:setup:mlx`; the
+  `init.mjs` wizard now offers to install it inline when "Local (in-process)" embeddings are
+  selected (or "Auto" falls through because Ollama isn't reachable).
+- **The 15 Tree-sitter language grammars (~250 MB combined) are also no longer bundled.** Same
+  fix, larger surface: `parse/languages.mjs` now resolves each grammar ambiently first (this
+  repo's own devDependencies, or a project that installed one directly), then from a scoped
+  `.graph-indexer/node_modules` install dir, auto-installing whatever's missing there on the
+  first `idx-index`/`idx-mcp`/daemon run for the languages actually selected/detected — cached
+  from then on, works identically whether graph-indexer is a project dependency, a global
+  install, or run via bare `npx` (the install always targets the repo being indexed, not
+  graph-indexer's own location). Each grammar installs independently, so one platform-
+  incompatible package (no native toolchain) only skips that language, not the whole batch — the
+  same graceful degradation `optionalDependencies` used to give for free, now paired with a
+  negative-install-cache so a known-unbuildable grammar isn't retried on every run. `--sealed`
+  disables auto-install entirely and fails the run with the exact remedy command if a configured
+  language's grammar isn't already resolvable, rather than silently shipping a partial index.
+  Verified end-to-end: a fresh `npm install graph-indexer` drops from ~1.5 GB to ~27 MB of
+  `node_modules`; `test:all` (including `test:languages` and `test:seal`) stays green.
+
+---
+
 ## [2.1.0] — 2026-06-25
 
 Frontier upgrade (Phases 1–3). Every item is **opt-in**: the default path stays lexical-only,

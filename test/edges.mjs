@@ -21,12 +21,16 @@ import fs from 'fs';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { SqliteGraphStore } from '../engine/sqlite.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
-import { getParserForFile } from '../parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from '../parse/languages.mjs';
 import { buildSymbolGraph, edgeOrder } from '../mcp/symbolgraph.mjs';
 import { computeSymbolCentrality } from '../mcp/centrality.mjs';
 import { getResolver, strongerConfidence, CONFIDENCE_RANK } from '../mcp/resolver.mjs';
 import { buildImpact } from '../mcp/topology.mjs';
 import { registerTools } from '../mcp/tools.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 const GOD = Array.from({ length: 210 }, (_, i) => `  // pad ${i}`).join('\n');
 const FILES = {

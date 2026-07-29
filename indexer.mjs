@@ -13,7 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MAX_FILE_SIZE_BYTES, buildIgnoreFilter, extractImportsFromAST, extractSemanticChunks } from './parse/extractor.mjs';
-import { EXTENSIONS, getParserForFile } from './parse/languages.mjs';
+import { EXTENSIONS, getParserForFile, ensureLanguagesReady } from './parse/languages.mjs';
 import { extractRoutes } from './parse/routes.mjs';
 import { resolveLocalImports, buildEmbeddingPayload, fullBodyForEmbedding } from './parse/imports.mjs';
 import { readEmbeddingBinary, writeEmbeddingBinary } from './engine/binary.mjs';
@@ -26,7 +26,7 @@ import { enrichCoreChunks } from './enrichment.mjs';
 import { collectGitSignals, writeGitSignals } from './git-signals.mjs';
 import {
     installEgressGuard, sealManifest, signManifest, verifySignedManifest,
-    generateAttestationKeyPair, canonicalJson,
+    generateAttestationKeyPair, canonicalJson, SealViolation,
 } from './seal.mjs';
 
 /** Value following `--flag` in argv, or undefined. */
@@ -137,6 +137,30 @@ async function main() {
     for (const notice of configNotices(config)) console.log(`⚠️  ${notice}`);
     console.log('');
 
+    // Grammar packages are installed on demand (not bundled) — resolve/install
+    // whatever the configured languages need BEFORE walking the repo. Sealed mode
+    // never reaches the network for this: installEgressGuard can't stop a child
+    // `npm install` process, so autoInstall is explicitly off rather than relying
+    // on the guard — and, matching the fail-closed egress checks elsewhere in
+    // sealed mode, an unresolvable grammar refuses the run instead of silently
+    // shipping a partial index.
+    const { missing: missingGrammars } = await ensureLanguagesReady({
+        projectRoot: PROJECT_ROOT,
+        enabledLangs: config.languages,
+        autoInstall: config.sealed === 'off',
+        log: (msg) => console.log(msg),
+    });
+    if (config.sealed !== 'off' && missingGrammars.length > 0) {
+        const detail = missingGrammars.map(m => `  • ${m.key} (${m.pkg}@${m.version})`).join('\n');
+        throw new SealViolation(
+            `--sealed ${config.sealed} refuses to start — ${missingGrammars.length} language grammar(s) `
+            + `are not installed and sealed mode won't fetch them:\n${detail}\n`
+            + `  remedy: pre-install before sealing, e.g. npm install --prefix ${path.join(PROJECT_ROOT, '.graph-indexer')} `
+            + `${missingGrammars.map(m => `${m.pkg}@${m.version}`).join(' ')}`
+            + ` — or drop the language from your .graph-indexer.json "languages" selection`
+        );
+    }
+
     const ig = buildIgnoreFilter(PROJECT_ROOT);
     const files = walkRepo(PROJECT_ROOT, PROJECT_ROOT, ig);
     console.log(`Found ${files.length} files to analyse.\n`);
@@ -150,7 +174,7 @@ async function main() {
         if (embedder.provider === 'local') {
             console.log(`   ↪ Ollama not reachable at ${config.ollamaHost}; using the bundled in-process model (no daemon required).`);
         } else if (embedder.provider === 'off') {
-            console.log(`   ↪ No Ollama and no in-process model installed (\`npm i @huggingface/transformers\`) — indexing lexical-only.`);
+            console.log(`   ↪ No Ollama and no in-process model installed (\`npm run embed:setup:local\`) — indexing lexical-only.`);
         }
     }
     console.log('');
@@ -515,4 +539,8 @@ async function main() {
     _resetSubprocesses();
 }
 
-main().catch(console.error);
+main().catch((err) => {
+    if (err && err.name === 'SealViolation') { console.error(`🔒 ${err.message}`); process.exit(2); }
+    console.error(err);
+    process.exit(1);
+});

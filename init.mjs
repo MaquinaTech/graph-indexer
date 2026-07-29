@@ -33,6 +33,7 @@ import {
 } from './layout.mjs';
 import { readPid, isAlive } from './daemon-lock.mjs';
 import { ensureMlxEnv, mlxEnvReady, mlxVenvPython, mlxVenvDir } from './embedders/setup-mlx.mjs';
+import { localEmbedAvailable } from './embeddings.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1359,6 +1360,7 @@ runMigration();
 
 
 stepHeader(1, 'Languages to index');
+log(c.dim('  Each language\'s Tree-sitter grammar installs on first index build (not bundled — keeps a fresh install small); already-installed grammars are reused.'));
 
 let selectedLanguages = null;
 if (isInteractive) {
@@ -1375,6 +1377,7 @@ if (selectedLanguages) {
 } else {
     line(glyph.ok, 'Languages', 'all supported (default)');
     if (detectedLanguages.size > 0) log(c.dim(`      detected: ${Array.from(detectedLanguages).join(', ')}`));
+    log(c.dim('      selecting a subset above installs only those grammars — narrower is faster/smaller'));
 }
 
 
@@ -1448,9 +1451,9 @@ let mlxServerReady = null;
 
         const engineItems = [
             { key: 'off', label: 'Lexical only', desc: c.dim('default · keyword/symbol + stemming · no vectors, no dependencies') },
-            { key: 'auto', label: 'Auto', desc: c.dim('Ollama if running, else a bundled local model — no setup') },
+            { key: 'auto', label: 'Auto', desc: c.dim('Ollama if running, else offers to install a bundled local model') },
             { key: 'ollama', label: 'Ollama', desc: c.dim('highest quality · needs the Ollama app + a pulled model') },
-            { key: 'local', label: 'Local (in-process)', desc: c.dim('no daemon · downloads a ~25 MB model on first index') },
+            { key: 'local', label: 'Local (in-process)', desc: c.dim('no daemon · installs @huggingface/transformers (~50 MB) once + a ~25 MB model on first index') },
         ];
         // MLX runs on the Apple Metal GPU and is macOS-only; only offer it there.
         if (process.platform === 'darwin') {
@@ -1500,6 +1503,26 @@ let mlxServerReady = null;
                 else line(glyph.warn, 'MLX', `setup incomplete: ${res.error} — run ${c.cyan('npm run embed:setup:mlx')} later`);
             } else {
                 line(glyph.skip, 'MLX', `setup deferred — run ${c.cyan('npm run embed:setup:mlx')} before indexing`);
+            }
+        }
+
+        // Local (in-process) embeddings: the @huggingface/transformers + ONNX runtime
+        // stack (100s of MB) is a devDependency, NOT shipped to end users by default
+        // (npm's `optionalDependencies` installs eagerly regardless of "optional" in
+        // its name — the opposite of what we want here), so it has to be installed on
+        // demand. Same "provision now" pattern as MLX above. `auto` only needs this
+        // when Ollama actually isn't reachable, so its "no setup" promise stays true
+        // for anyone who already has Ollama running.
+        if (embedProvider === 'local' || (embedProvider === 'auto' && ollamaProbed && !models)) {
+            if (await localEmbedAvailable()) {
+                line(glyph.ok, 'Local embeddings', '@huggingface/transformers installed');
+            } else if (localDep && await confirm({ label: 'Install the local embedding package now?  (npm i @huggingface/transformers, ~50 MB)', def: true })) {
+                log(c.dim('      installing @huggingface/transformers…'));
+                const res = spawnSync(NPM_BIN, ['install', '@huggingface/transformers'], { cwd: PROJECT_ROOT, stdio: 'inherit' });
+                if (res.status === 0) line(glyph.ok, 'Local embeddings', 'installed');
+                else line(glyph.warn, 'Local embeddings', `install failed — run ${c.cyan('npm i @huggingface/transformers')} manually`);
+            } else {
+                line(glyph.skip, 'Local embeddings', `install later with ${c.cyan('npm i @huggingface/transformers')}${localDep ? '' : ' in your project'}`);
             }
         }
 

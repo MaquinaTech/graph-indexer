@@ -35,7 +35,7 @@ import {
     summaryEmbeddingText, SUMMARY_VEC_SUFFIX, WINDOW_VEC_SUFFIX, embeddingWindows,
 } from './search-core.mjs';
 import { MAX_FILE_SIZE_BYTES, buildIgnoreFilter, extractImportsFromAST, extractSemanticChunks } from './parse/extractor.mjs';
-import { getParserForFile } from './parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from './parse/languages.mjs';
 import { resolveLocalImports, buildEmbeddingPayload, fullBodyForEmbedding } from './parse/imports.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import {
@@ -239,7 +239,12 @@ async function processFileChange(absolutePath) {
 
 // Serialize updates: chokidar can fire bursts (git checkout, format-on-save across
 // files); per-file work must not interleave inside the store.
-let queue = Promise.resolve();
+// Seeds the update chain: the daemon inherits its language set from whatever the
+// last `idx-index` run resolved, and won't autoInstall (grammars are provisioned
+// at index time, not silently mid-watch) — a language added after the daemon
+// started is picked up on the next full `idx-index`, same as other whole-program
+// passes (see interprocedural.mjs).
+let queue = ensureLanguagesReady({ projectRoot: PROJECT_ROOT, enabledLangs: config.languages, autoInstall: false, log: (msg) => process.stderr.write(msg + '\n') });
 function enqueue(absolutePath) {
     queue = queue.then(() => processFileChange(absolutePath)).catch(() => {});
 }

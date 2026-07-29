@@ -33,8 +33,12 @@ import { buildSymbolGraph } from '../mcp/symbolgraph.mjs';
 import { findReferences } from '../mcp/topology.mjs';
 import { MemoryGraphIndex } from '../engine/memory.mjs';
 import { SqliteGraphStore } from '../engine/sqlite.mjs';
-import { getParserForFile } from '../parse/languages.mjs';
+import { getParserForFile, ensureLanguagesReady } from '../parse/languages.mjs';
 import { extractSemanticChunks } from '../parse/extractor.mjs';
+
+// Grammars load lazily now (installed on demand, not bundled) — this repo's own
+// devDependencies satisfy ambient resolution, so no install is ever triggered here.
+await ensureLanguagesReady({ enabledLangs: null, autoInstall: false });
 
 const tmp = (ext) => path.join(os.tmpdir(), `scip-${process.pid}-${Math.random().toString(36).slice(2)}${ext}`);
 const rm = (p) => { for (const s of ['', '-wal', '-shm']) fs.rmSync(`${p}${s}`, { force: true }); };

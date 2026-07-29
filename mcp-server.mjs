@@ -21,6 +21,7 @@ import { ensureDataDir, migrateLegacyLayout } from './layout.mjs';
 import { daemonStatus } from './daemon-lock.mjs';
 import { createStore } from './storage.mjs';
 import { registerTools } from './mcp/tools.mjs';
+import { ensureLanguagesReady } from './parse/languages.mjs';
 import { createEmbedder, readEmbedMeta } from './embeddings.mjs';
 import { loadGitSignals } from './git-signals.mjs';
 import { installEgressGuard } from './seal.mjs';
@@ -42,6 +43,16 @@ const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 ensureDataDir(PROJECT_ROOT);
 migrateLegacyLayout(PROJECT_ROOT);
+
+// get_file_skeleton parses on demand at query time — grammars must be resolved
+// (and, outside sealed mode, installed if this server is starting before the
+// first `idx-index` run) before the transport connects and starts serving tools.
+await ensureLanguagesReady({
+    projectRoot: PROJECT_ROOT,
+    enabledLangs: config.languages,
+    autoInstall: config.sealed === 'off',
+    log: (msg) => process.stderr.write(msg + '\n'),
+});
 
 function readPackageVersion() {
     try {

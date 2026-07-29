@@ -21,7 +21,9 @@ import {
 
 export const MAX_FILE_SIZE_BYTES = 500000;
 
-const _hasSCSS = Boolean(LANGUAGE_MAP['.scss']) && LANGUAGE_MAP['.scss'] !== LANGUAGE_MAP['.css'];
+// Evaluated lazily (not at module load) — LANGUAGE_MAP populates asynchronously
+// via ensureLanguagesReady(), which callers await before extractSemanticChunks runs.
+function _hasSCSS() { return Boolean(LANGUAGE_MAP['.scss']) && LANGUAGE_MAP['.scss'] !== LANGUAGE_MAP['.css']; }
 
 const LANGUAGE_QUERIES = {
     ts: `
@@ -342,7 +344,7 @@ export function extractSemanticChunks(rootNode, relPath, sourceCode, ext, { inte
         // .scss uses the SCSS grammar+query when installed; otherwise it parses
         // with the CSS grammar, so it MUST use the css query (the scss query
         // references node types the CSS grammar doesn't have).
-        '.scss': _hasSCSS ? 'scss' : 'css',
+        '.scss': _hasSCSS() ? 'scss' : 'css',
         // C headers share the C grammar/query; .sh and .bash share the bash query.
         // (.c and .swift resolve via the ext.slice(1) fallback below.)
         '.h': 'c', '.sh': 'bash', '.bash': 'bash',

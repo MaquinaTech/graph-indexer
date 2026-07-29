@@ -168,7 +168,8 @@ async function _localPipeline(model) {
     catch {
         throw new Error(
             "Local embeddings need the optional '@huggingface/transformers' package. "
-            + "Install it (`npm i @huggingface/transformers`) or set embedProvider to 'ollama'/'off'."
+            + "Install it (`npm run embed:setup:local`, or `npm i @huggingface/transformers`) "
+            + "or set embedProvider to 'ollama'/'off'."
         );
     }
     _pipe = await mod.pipeline('feature-extraction', model);
@@ -201,7 +202,8 @@ async function _codeLocalPipeline(model) {
     catch {
         throw new Error(
             "The code-local embedder needs the optional '@huggingface/transformers' package. "
-            + "Install it (`npm i @huggingface/transformers`) or set embedProvider to 'ollama'/'local'/'off'."
+            + "Install it (`npm run embed:setup:local`, or `npm i @huggingface/transformers`) "
+            + "or set embedProvider to 'ollama'/'local'/'off'."
         );
     }
     // q8 quantized weights: a 161M-param code model is ~4× faster on CPU at q8 with
