@@ -107,6 +107,9 @@
         "tree-sitter-swift": "0.5.0",
         "tree-sitter-typescript": "0.21.2"
     },
+    "overrides": {
+        "sharp": "^0.35.4"
+    },
     "keywords": [
         "mcp",
         "model-context-protocol",
