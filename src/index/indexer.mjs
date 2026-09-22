@@ -18,6 +18,7 @@ import { SymbolTable, Resolver } from './resolver.mjs';
 import { extractFile } from '../parse/extract.mjs';
 import { specForPath, LANGUAGES } from '../parse/languages.mjs';
 import { tokenString, codeTokens } from '../search/tokenize.mjs';
+import { indexFingerprint } from './fingerprint.mjs';
 
 const SPECS = Object.fromEntries(LANGUAGES.map(l => [l.id, l]));
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -41,12 +42,20 @@ export class Indexer {
         this.resolver = new Resolver(this.table, SPECS);
         this.modules = null;
         this.loaded = false;
+        this.resolveAll = false;
         this.version = 0; // bumps on every change; caches key off it
     }
 
     // ── bootstrap from the store ─────────────────────────────────────────────────
     load() {
         const s = this.store;
+        const fp = indexFingerprint();
+        if (s.getMeta('fingerprint') !== fp) {
+            if (s.get('SELECT 1 AS x FROM files LIMIT 1')) { this.log('index was written by another graph-indexer version: rebuilding'); s.reset(); }
+            s.setMeta('fingerprint', fp);
+        }
+        // an interrupted run may have written files whose references were never resolved
+        this.resolveAll = s.getMeta('resolve_pending') === '1';
         const files = s.all('SELECT id, path, lang, package, is_test FROM files');
         for (const f of files) this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
         for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, start_line, end_line FROM symbols')) {
@@ -144,6 +153,7 @@ export class Indexer {
         }
 
         // parse changed/new files (async extraction), write in batches
+        if (toParse.length || removed.length) s.setMeta('resolve_pending', '1');
         const BATCH = 200;
         let done = 0;
         for (let i = 0; i < toParse.length; i += BATCH) {
@@ -203,7 +213,10 @@ export class Indexer {
                 for (const r of s.all(`SELECT id FROM refs WHERE name IN (${chunk.map(() => '?').join(',')}) AND (dst_id IS NULL OR conf < 0.9)`, ...chunk)) refIds.add(r.id);
             }
         }
+        if (this.resolveAll) for (const r of s.all('SELECT id FROM refs')) refIds.add(r.id);
         const resolved = this.#resolveRefs([...refIds]);
+        this.resolveAll = false;
+        if (toParse.length || removed.length) s.setMeta('resolve_pending', '0');
         if (touchedFileIds.length || removed.length) this.version++;
         return { added, changed, removed: removed.length, unchangedContent, resolved };
     }
@@ -331,7 +344,7 @@ export class Indexer {
                 const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
                 for (const r of rows) {
                     const res = this.resolver.resolve(r);
-                    if (res.id == null && (r.kind === 'value' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }
+                    if (res.id == null && (r.kind === 'value' || r.kind === 'read' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }
                     s.run('UPDATE refs SET dst_id = ?, conf = ?, ncand = ? WHERE id = ?', res.id, res.conf, res.ncand ?? 0, r.id);
                     if (res.id != null) n++;
                 }

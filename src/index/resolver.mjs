@@ -320,6 +320,7 @@ export class Resolver {
         if (kind === 'new') return TYPE_KINDS.has(s.kind) || s.kind === 'function' || s.kind === 'constructor';
         if (kind === 'call') return CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind) || s.kind === 'variable' || s.kind === 'field' || s.kind === 'property' || s.kind === 'constant';
         if (kind === 'decorator') return CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind) || s.kind === 'variable';
+        if (kind === 'read') return s.kind === 'field' || s.kind === 'property' || s.kind === 'method' || s.kind === 'constant' || s.kind === 'variable' || TYPE_KINDS.has(s.kind);
         return true;
     }
 
@@ -547,7 +548,9 @@ export class Resolver {
                 if (r) return r;
             }
         }
-        // unknown receiver: any member with that name (dynamic dispatch by name)
+        // unknown receiver: any member with that name (dynamic dispatch by name). Property reads are
+        // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
+        if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
         return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
     }
 

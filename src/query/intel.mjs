@@ -220,17 +220,50 @@ export class CodeIntel {
         return out;
     }
 
+    /** Overload set: same qualified name, same file, same container (TS/Java/C#/C++ overloads). */
+    overloads(sym) {
+        return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?)', sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id).map(r => r.id);
+    }
+
+    /** Members with the same name in subtypes (overrides/implementations), transitively. */
+    #subtypeMembers(sym) {
+        const t = this.ix.table, r = this.ix.resolver;
+        const type = r.enclosingType(sym.id);
+        if (!type || type.id == null) return [];
+        const out = [];
+        const seen = new Set([type.id]);
+        let frontier = [type.id];
+        for (let depth = 0; depth < 4 && frontier.length; depth++) {
+            const next = [];
+            for (const tid of frontier) {
+                const subs = this.store.all("SELECT DISTINCT src_id FROM refs WHERE dst_id = ? AND kind = 'inherit' AND src_id IS NOT NULL", tid);
+                for (const { src_id } of subs) {
+                    if (seen.has(src_id)) continue;
+                    seen.add(src_id);
+                    next.push(src_id);
+                    const st = t.sym(src_id);
+                    for (const mid of t.byParent.get(src_id)?.get(sym.name) ?? []) out.push({ id: mid, via: st?.name ?? '?' });
+                }
+            }
+            frontier = next;
+        }
+        return out;
+    }
+
     /**
-     * All references to a symbol, grouped by file.
-     * @returns {{ groups: Map<string, object[]>, total: number, unresolvedSameName: number, viaSupertypes: object[] }}
+     * All references to a symbol, grouped by file. Includes its overload set and, for members,
+     * the method family: calls through a supertype (may dispatch here) and calls to overrides in
+     * subtypes — each labelled so the agent can tell direct uses from dispatch-related ones.
+     * @returns {{ groups: Map<string, object[]>, total: number, unresolvedSameName: number }}
      */
-    references(id, { kinds = null, includeTests = true, minConf = 0 } = {}) {
+    references(id, { kinds = null, includeTests = true, minConf = 0, family = true } = {}) {
         const sym = this.sym(id);
         if (!sym) return null;
-        const ids = [id];
+        const ids = [...new Set([id, ...this.overloads(sym)])];
         const via = new Map();
-        if (sym.kind === 'method' || sym.kind === 'property' || sym.kind === 'field') {
-            for (const s of this.#supertypeMembers(sym)) { ids.push(s.id); via.set(s.id, s.via); }
+        if (family && (sym.kind === 'method' || sym.kind === 'property' || sym.kind === 'field')) {
+            for (const s of this.#supertypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
+            for (const s of this.#subtypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
         }
         const rows = this.store.all(`SELECT r.id, r.kind, r.line, r.col, r.conf, r.ncand, r.recv, r.dst_id, f.path, f.is_test, src.qname AS src_qname, src.kind AS src_kind
             FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols src ON src.id = r.src_id

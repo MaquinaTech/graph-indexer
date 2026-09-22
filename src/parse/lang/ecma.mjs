@@ -70,6 +70,9 @@ const REFS_COMMON = `
 (pair value: (identifier) @name) @ref.value
 (array (identifier) @name) @ref.value
 (shorthand_property_identifier) @name @ref.value
+(member_expression object: (_) @recv property: (property_identifier) @name) @ref.read
+(member_expression object: (identifier) @name) @ref.value
+(binary_expression operator: "instanceof" right: (identifier) @name) @ref.type
 `;
 
 const REFS_JSX = `

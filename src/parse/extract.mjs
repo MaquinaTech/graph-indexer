@@ -15,7 +15,7 @@ import { compileQuery, createParser, loadGrammar } from './runtime.mjs';
 
 const MAX_SIG = 240;
 const MEMBER_PARENT = new Set(['class', 'interface', 'struct', 'trait', 'impl', 'enum', 'object', 'module']);
-const REF_PRIORITY = { decorator: 6, inherit: 5, new: 4, call: 3, import: 2, type: 1, value: 0 };
+const REF_PRIORITY = { decorator: 6, inherit: 5, new: 4, call: 3, import: 2, type: 1, value: 0, read: -1 };
 const MAX_DOC = 600;
 
 const compiled = new Map(); // spec.id -> { language, query, parser }

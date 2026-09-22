@@ -108,3 +108,27 @@ test('ensureFresh picks up edits made on disk without an explicit sync', async (
     const refs = refsTo('Cache.set');
     assert.ok(refs.some(r => r.path === 'pkg/extra.py' && r.line === 5));
 });
+
+test('an index written by another extractor version is rebuilt; an interrupted run is re-resolved', async () => {
+    const dbPath = intel.dbPath;
+    intel.close();
+    // simulate an upgrade: facts on disk were produced by a different extractor
+    const { Store } = await import('../src/store/db.mjs');
+    let s = new Store(dbPath);
+    s.setMeta('fingerprint', 'older-extractor');
+    s.run("UPDATE symbols SET name = 'stale', name_lc = 'stale' WHERE qname = 'UserService.getUser'");
+    s.close();
+    intel = new CodeIntel({ root });
+    await intel.open();
+    assert.equal(intel.findSymbols('stale').matches.length, 0, 'stale facts dropped');
+    assert.ok(intel.findSymbols('UserService.getUser').matches.length, 'facts re-extracted');
+    // simulate a crash between writing facts and resolving references
+    intel.close();
+    s = new Store(dbPath);
+    s.run('UPDATE refs SET dst_id = NULL, conf = 0');
+    s.setMeta('resolve_pending', '1');
+    s.close();
+    intel = new CodeIntel({ root });
+    await intel.open();
+    assert.ok(refsTo('UserRepository.findById').some(r => r.path === 'src/users/user.service.ts'), 'references re-resolved after an interrupted run');
+});

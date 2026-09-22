@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS files (
   package TEXT,
   is_test INTEGER NOT NULL DEFAULT 0,
   parse_errors INTEGER NOT NULL DEFAULT 0,
-  api_hash TEXT,
   indexed_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS symbols (
@@ -101,8 +100,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
   tokenize = 'porter unicode61 remove_diacritics 2',
   content = '', contentless_delete = 1
 );
-CREATE TABLE IF NOT EXISTS cochange (a INTEGER NOT NULL, b INTEGER NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (a, b)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS churn (file_id INTEGER PRIMARY KEY, commits INTEGER NOT NULL, last_ts INTEGER NOT NULL);
 `;
 
 export class Store {
@@ -146,6 +143,14 @@ export class Store {
         this.db.exec('BEGIN');
         try { const r = fn(); this.db.exec('COMMIT'); return r; }
         catch (e) { try { this.db.exec('ROLLBACK'); } catch { /* already rolled back */ } throw e; }
+    }
+
+    /** Drop every indexed fact but keep the database (the index is a cache of the source tree). */
+    reset() {
+        this.tx(() => {
+            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields']) this.db.exec(`DELETE FROM ${t}`);
+            this.db.exec("INSERT INTO fts(fts) VALUES ('delete-all')");
+        });
     }
 
     getMeta(key) { return this.get('SELECT value FROM meta WHERE key = ?', key)?.value ?? null; }
