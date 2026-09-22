@@ -69,7 +69,7 @@ async function runTool(name, args) {
     if (rejectUnknownOptions()) return;
     const intel = await openIntel({ quiet: true });
     const { callTool } = await import('../src/mcp/tools.mjs');
-    try { process.stdout.write((await callTool(intel, name, args)) + '\n'); }
+    try { process.stdout.write((await callTool(intel, name, args, { cli: true })) + '\n'); }
     finally { intel.close(); }
 }
 

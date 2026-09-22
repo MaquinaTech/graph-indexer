@@ -192,7 +192,7 @@ const shownAs = (s, matches) => `${s.qname}${s.is_static ? ' (static)' : ''} in 
 function notFound(intel, target) {
     const { results } = intel.search.search(String(target), { limit: 5 });
     const sugg = results.map(r => intel.sym(r.id)).filter(Boolean).map(s => `  ${symHeader(s)}`);
-    return `No symbol named "${target}".` + (sugg.length ? `\nClosest matches:\n${sugg.join('\n')}` : '\nTry search_code with a description of what it does.');
+    return `No symbol named "${target}".` + (sugg.length ? `\nClosest matches:\n${sugg.join('\n')}` : `\nTry ${tn('search_code')} with a description of what it does.`);
 }
 
 /**
@@ -227,7 +227,20 @@ function refSummary(intel, id) {
     return c ?? { n: 0, f: 0 };
 }
 
-export async function callTool(intel, name, args = {}) {
+/**
+ * Hints inside tool output name the next tool to call; through the CLI they must name the
+ * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
+ */
+const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline' };
+let surface = 'mcp';
+const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
+
+export async function callTool(intel, name, args = {}, { cli = false } = {}) {
+    surface = cli ? 'cli' : 'mcp';
+    try { return await dispatchTool(intel, name, args); } finally { surface = 'mcp'; }
+}
+
+async function dispatchTool(intel, name, args) {
     switch (name) {
         case 'search_code': return toolSearch(intel, args);
         case 'search_text': return toolText(intel, args);
@@ -259,7 +272,7 @@ async function toolSearch(intel, { query, path: p = null, kind = null, limit = 8
             for (const ln of matchingLines(lines, s, terms, 2)) out.push(`   ${ln}: ${clip(lines[ln - 1].trim(), 150)}`);
         }
     });
-    out.push('Next: get_symbol(<name or path:line>) to read one; find_references / call_graph for usages.');
+    out.push(surface === 'cli' ? 'Next: `symbol <name | path:line>` to read one; `refs` / `callgraph` for usages.' : 'Next: get_symbol(<name or path:line>) to read one; find_references / call_graph for usages.');
     return out.join('\n');
 }
 
@@ -331,7 +344,7 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
     const refs = intel.references(fresh.id, { minConf: 0.4 });
     if (refs.total) {
         const top = [...refs.groups.values()].flat().slice(0, 8);
-        out.push(`used by: ${plural(refs.total, 'reference')} in ${plural(refs.groups.size, 'file')} — e.g. ${top.map(t => `${t.src_qname ?? '(module)'} ${t.path}:${t.line}`).join(', ')}${refs.total > 8 ? ' … (find_references for all)' : ''}`);
+        out.push(`used by: ${plural(refs.total, 'reference')} in ${plural(refs.groups.size, 'file')} — e.g. ${top.map(t => `${t.src_qname ?? '(module)'} ${t.path}:${t.line}`).join(', ')}${refs.total > 8 ? ` … (${tn('find_references')} for all)` : ''}`);
     } else out.push(`used by: no bound references${VALUE_KINDS.has(fresh.kind) ? ' (field/attribute uses through untyped receivers are not all indexed — grep the name before concluding it is unused)' : ' (may be an entry point, framework-invoked, or called dynamically)'}.`);
     if (refs.unbound?.plausible.length) out.push(`also possibly used at: ${refs.unbound.plausible.slice(0, 5).map(r => `${r.path}:${r.line}`).join(', ')}${refs.unbound.plausible.length > 5 ? ', …' : ''} (unknown receiver type, file mentions ${typeList(refs.unbound.typeNames) || 'it'})`);
     if (include_code) {
@@ -340,7 +353,7 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
         const cap = TYPE_KINDS.has(fresh.kind) && span > max_lines ? Math.min(max_lines, 40) : max_lines;
         out.push('');
         out.push(codeBlock(lines, fresh.start_line, fresh.end_line, { maxLines: cap }));
-        if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or get_symbol on a member)`);
+        if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or ${tn('get_symbol')} on a member)`);
     }
     if (matches.length > 1) {
         out.push('');
@@ -516,7 +529,7 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
             shown++;
         }
     }
-    if (siteCount > shown) out.push(`    … ${siteCount - shown} more (find_references on the symbol lists them all)`);
+    if (siteCount > shown) out.push(`    … ${siteCount - shown} more (${tn('find_references')} on the symbol lists them all)`);
     for (const [file, info] of moduleUses.slice(0, 8)) out.push(`    ${file}:${info.sites[0]}  (module level)${info.conf < 0.9 ? `  [${confWord(info.conf)}]` : ''}`);
     if (moduleUses.length > 8) out.push(`    … ${moduleUses.length - 8} more files with module-level uses`);
     if (overrides.length) {
