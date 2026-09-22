@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/microservices/client/client-mqtt.ts",
+    "cls": "ClientMqtt",
+    "name": "createResponseCallback",
+    "params": 1,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/client/client-kafka.ts",
+      "cls": "ClientKafka",
+      "name": "createResponseCallback",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-redis.ts",
+      "cls": "ClientRedis",
+      "name": "createResponseCallback",
+      "params": 0
+    }
+  ]
+}

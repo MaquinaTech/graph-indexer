@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_duckdb.py::TestDuckDB::test_timestamps_with_time_zone_precision"
+]

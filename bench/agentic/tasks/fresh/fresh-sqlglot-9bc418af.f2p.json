@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_snowflake.py::TestSnowflake::test_put_to_stage",
+  "tests/dialects/test_snowflake.py::TestSnowflake::test_staged_files"
+]

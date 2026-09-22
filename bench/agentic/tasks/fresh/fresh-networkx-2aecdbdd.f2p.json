@@ -1,0 +1,15 @@
+[
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_graph_input_order[vf2pp]",
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_graph_input_order[vf2pp_SG]",
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_graph_input_order[vf2pp_mono]",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestDiGraphISOVF2pp::test_wikipedia_graph",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestGraphISOVF2pp::test_custom_graph1_same_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestGraphISOVF2pp::test_custom_graph2_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestGraphISOVF2pp::test_custom_graph3_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestGraphISOVF2pp::test_custom_graph4_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestGraphISOVF2pp::test_custom_graph5_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestMultiGraphISOVF2pp::test_custom_multigraph1_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestMultiGraphISOVF2pp::test_custom_multigraph2_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestMultiGraphISOVF2pp::test_custom_multigraph3_different_labels",
+  "networkx/algorithms/isomorphism/tests/test_vf2pp.py::TestMultiGraphISOVF2pp::test_custom_multigraph4_different_labels"
+]

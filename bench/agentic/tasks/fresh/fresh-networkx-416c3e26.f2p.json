@@ -1,0 +1,12 @@
+[
+  "networkx/algorithms/connectivity/tests/test_connectivity.py::::test_directed_node_connectivity_both_orders",
+  "networkx/algorithms/connectivity/tests/test_connectivity.py::::test_directed_node_connectivity_both_orders_strongly_connected",
+  "networkx/algorithms/connectivity/tests/test_connectivity.py::::test_directed_node_connectivity_not_strongly_connected",
+  "networkx/algorithms/connectivity/tests/test_connectivity.py::::test_node_connectivity_multigraphs",
+  "networkx/algorithms/connectivity/tests/test_connectivity.py::::test_node_connectivity_self_loops",
+  "networkx/algorithms/connectivity/tests/test_cuts.py::::test_directed_minimum_node_cut",
+  "networkx/algorithms/connectivity/tests/test_cuts.py::::test_directed_minimum_node_cut_both_orders",
+  "networkx/algorithms/connectivity/tests/test_cuts.py::::test_directed_minimum_node_cut_not_strongly_connected",
+  "networkx/algorithms/connectivity/tests/test_cuts.py::::test_directed_minimum_st_node_cut_reverse_edge",
+  "networkx/algorithms/connectivity/tests/test_cuts.py::::test_minimum_node_cut_self_loops"
+]

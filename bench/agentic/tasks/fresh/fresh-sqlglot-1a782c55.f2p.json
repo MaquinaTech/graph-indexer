@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_mysql.py::TestMySQL::test_if",
+  "tests/dialects/test_singlestore.py::TestSingleStore::test_math_functions"
+]

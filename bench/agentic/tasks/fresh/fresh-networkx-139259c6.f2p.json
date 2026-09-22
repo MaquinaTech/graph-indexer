@@ -1,0 +1,5 @@
+[
+  "networkx/algorithms/isomorphism/tests/test_ismags.py::TestSubgraphIsomorphism::test_edgeless_subgraph_with_edge_match",
+  "networkx/algorithms/isomorphism/tests/test_ismags.py::TestSubgraphIsomorphism::test_subgraph_color_with_only_node",
+  "networkx/algorithms/isomorphism/tests/test_ismags.py::TestSubgraphIsomorphism::test_subgraph_with_graph_only_node_color"
+]

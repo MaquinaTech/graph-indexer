@@ -1,0 +1,5 @@
+[
+  "tests/dialects/test_trino.py::TestTrino::test_concat_ws",
+  "tests/dialects/test_trino.py::TestTrino::test_concat_ws_typed",
+  "tests/dialects/test_trino.py::TestTrino::test_concat_ws_unknown_types"
+]

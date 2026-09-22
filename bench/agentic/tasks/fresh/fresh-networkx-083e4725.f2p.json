@@ -1,0 +1,3 @@
+[
+  "networkx/classes/tests/test_graph.py::TestGraph::test_views_do_not_create_reference_cycles"
+]

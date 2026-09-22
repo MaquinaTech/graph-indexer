@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/microservices/factories/rpc-params-factory.ts",
+    "cls": "RpcParamsFactory",
+    "name": "exchangeKeyForValue",
+    "params": 4,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/core/router/route-params-factory.ts",
+      "cls": "RouteParamsFactory",
+      "name": "exchangeKeyForValue",
+      "params": 3
+    },
+    {
+      "file": "packages/websockets/factories/ws-params-factory.ts",
+      "cls": "WsParamsFactory",
+      "name": "exchangeKeyForValue",
+      "params": 3
+    }
+  ]
+}

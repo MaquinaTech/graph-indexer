@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/common/file-stream/streamable-file.ts",
+    "cls": "StreamableFile",
+    "name": "getHeaders",
+    "newName": "getHeadersChecked",
+    "params": 0
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/ctx-host/nats.context.ts",
+      "cls": "NatsContext",
+      "name": "getHeaders",
+      "params": 0
+    }
+  ]
+}

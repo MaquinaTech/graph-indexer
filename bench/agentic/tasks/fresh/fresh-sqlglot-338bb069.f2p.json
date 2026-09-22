@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_sqlite.py::TestSQLite::test_sqlite"
+]

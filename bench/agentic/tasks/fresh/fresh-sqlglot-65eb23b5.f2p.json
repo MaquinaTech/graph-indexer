@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_databricks.py::TestDatabricks::test_databricks",
+  "tests/dialects/test_spark.py::TestSpark::test_ddl"
+]

@@ -1,0 +1,15 @@
+[
+  "tests/dialects/test_trino.py::TestTrino::test_analyze",
+  "tests/dialects/test_trino.py::TestTrino::test_array_first",
+  "tests/dialects/test_trino.py::TestTrino::test_ddl",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf_begin_end",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf_case",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf_if",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf_loop_repeat",
+  "tests/dialects/test_trino.py::TestTrino::test_inline_udf_while",
+  "tests/dialects/test_trino.py::TestTrino::test_json_value",
+  "tests/dialects/test_trino.py::TestTrino::test_listagg",
+  "tests/dialects/test_trino.py::TestTrino::test_trim",
+  "tests/dialects/test_trino.py::TestTrino::test_trino"
+]

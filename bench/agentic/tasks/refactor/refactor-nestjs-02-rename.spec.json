@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/websockets/errors/ws-exception.ts",
+    "cls": "WsException",
+    "name": "getError",
+    "newName": "getErrorChecked",
+    "params": 0
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/exceptions/kafka-retriable-exception.ts",
+      "cls": "KafkaRetriableException",
+      "name": "getError",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/exceptions/rpc-exception.ts",
+      "cls": "RpcException",
+      "name": "getError",
+      "params": 0
+    }
+  ]
+}

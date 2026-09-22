@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_fabric.py::TestFabric::test_lossy_type_mappings_keep_precision",
+  "tests/dialects/test_fabric.py::TestFabric::test_type_mappings"
+]

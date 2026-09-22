@@ -1,0 +1,644 @@
+[
+  {
+    "id": "fresh-sqlglot-02562228",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "285f6077a4196063eb1c6c9c8fca1c56480452f0",
+    "statement": "feat(parser): supprot AGG (#8414)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_dialect.py b/tests/dialects/test_dialect.py\nindex 14808384..a71a72cb 100644\n--- a/tests/dialects/test_dialect.py\n+++ b/tests/dialects/test_dialect.py\n@@ -5474,3 +5474,8 @@ FROM subquery2\"\"\",\n         result = parse_one(\"SELECT DOUBLE_IT(5)\", dialect=MyDialect)\n         self.assertIsInstance(result.expressions[0], exp.Mul)\n         self.assertEqual(result.sql(), \"SELECT 2 * 5\")\n+\n+    def test_agg(self):\n+        expression = self.validate_identity(\"SELECT AGG(m), AGG(m) AS x, AGG(t.m) FROM t\")\n+        self.assertIsInstance(expression.selects[0], exp.Agg)\n+        self.assertEqual([s.output_name for s in expression.selects], [\"m\", \"x\", \"m\"])\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-02562228.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-02562228.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/expressions/aggregate.py"
+      ],
+      "functions": [
+        "output_name"
+      ],
+      "patch": "diff --git a/sqlglot/expressions/aggregate.py b/sqlglot/expressions/aggregate.py\nindex b5d301f9..7dad9a4b 100644\n--- a/sqlglot/expressions/aggregate.py\n+++ b/sqlglot/expressions/aggregate.py\n@@ -5,6 +5,12 @@ from __future__ import annotations\n from sqlglot.expressions.core import Expression, Func, AggFunc, Binary\n \n \n+class Agg(Expression, AggFunc):\n+    @property\n+    def output_name(self) -> str:\n+        return self.this.name\n+\n+\n class AIAgg(Expression, AggFunc):\n     arg_types = {\"this\": True, \"expression\": True}\n     _sql_names = [\"AI_AGG\"]\n"
+    },
+    "meta": {
+      "sha": "02562228357e7d933ef66e27c56e257b88faad8f",
+      "date": "2026-09-22",
+      "subject": "feat(parser): supprot AGG (#8414)",
+      "tests": [
+        "tests/dialects/test_dialect.py"
+      ],
+      "f2p": 1,
+      "p2p": 100,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-1a782c55",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "8c3b9893f72f0913fa0a8a4188d55c8cc6692ad5",
+    "statement": "fix(mysql)!: keep the native IF instead of changing it to CASE [CLAUDE] (#8409)\n\n* fix(mysql)!: keep the native IF instead of expanding it to CASE [CLAUDE]\n\nIF is a native MySQL function, but sqlglot expanded every exp.If into a\nCASE expression, so even MySQL's own IF(a, 1, 2) did not round-trip.\n\nIF takes exactly three arguments, so a missing false branch is emitted as\nNULL, matching what the BigQuery and Snowflake generators already do. A\nCASE that was written as one is untouched.\n\nVerified on StarRocks 3.5.18 that both forms agree, including a NULL\ncondition and the two-argument form rendered as IF(cond, value, NULL).\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* Update tests/dialects/test_mysql.py\n\n---------\n\nCo-authored-by: Shamil Alburin <shamil.alburin@kaspi.kz>\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>\nCo-authored-by: Jo <46752250+georgesittas@users.noreply.github.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_mysql.py b/tests/dialects/test_mysql.py\nindex c70ff072..98b6af04 100644\n--- a/tests/dialects/test_mysql.py\n+++ b/tests/dialects/test_mysql.py\n@@ -1453,6 +1453,23 @@ COMMENT='客户账户表'\"\"\"\n             \"SHOW CREATE TABLE foo FROM db_name\", \"SHOW CREATE TABLE db_name.foo\"\n         )\n \n+    def test_if(self):\n+        self.validate_identity(\"SELECT IF(a, 1, 2)\")\n+        self.validate_identity(\"SELECT IF(a, 1, IF(b, 2, 3))\")\n+\n+        # a CASE that was written as one stays a CASE\n+        self.validate_identity(\"SELECT CASE WHEN a THEN 1 ELSE 2 END\")\n+\n+        self.validate_all(\n+            \"SELECT IF(a, 1, 2)\",\n+            read={\"bigquery\": \"SELECT IF(a, 1, 2)\", \"tsql\": \"SELECT IIF(a, 1, 2)\"},\n+        )\n+\n+        # IF takes exactly three arguments, so a missing branch becomes NULL\n+        self.validate_all(\"SELECT IF(a, 1, NULL)\", read={\"spark\": \"SELECT IF(a, 1)\"})\n+        # IF takes exactly three arguments, so a missing branch becomes NULL\n+        self.validate_all(\"SELECT IF(a, 1, NULL)\", read={\"presto\": \"SELECT IF(a, 1)\"})\n+\n     def test_show_grants(self):\n         show = self.validate_identity(\"SHOW GRANTS FOR foo\")\n         self.assertIsInstance(show, exp.Show)\ndiff --git a/tests/dialects/test_singlestore.py b/tests/dialects/test_singlestore.py\nindex 99c32d54..e5dd678f 100644\n--- a/tests/dialects/test_singlestore.py\n+++ b/tests/dialects/test_singlestore.py\n@@ -365,9 +365,12 @@ class TestSingleStore(Validator):\n             \"SELECT SUM(CASE WHEN age > 18 THEN 1 ELSE 0 END) FROM `users`\",\n             read={\n                 \"singlestore\": \"SELECT SUM(CASE WHEN age > 18 THEN 1 ELSE 0 END) FROM `users`\",\n-                \"\": \"SELECT COUNT_IF(age > 18) FROM users\",\n             },\n         )\n+        self.validate_all(\n+            \"SELECT SUM(IF(age > 18, 1, 0)) FROM `users`\",\n+            read={\"\": \"SELECT COUNT_IF(age > 18) FROM users\"},\n+        )\n         self.validate_all(\n             \"SELECT MAX(ABS(age > 18)) FROM `users`\",\n             read={\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-1a782c55.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-1a782c55.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/mysql.py"
+      ],
+      "functions": [
+        "MySQLGenerator"
+      ],
+      "patch": "diff --git a/sqlglot/generators/mysql.py b/sqlglot/generators/mysql.py\nindex fcad8a5c..83e0e258 100644\n--- a/sqlglot/generators/mysql.py\n+++ b/sqlglot/generators/mysql.py\n@@ -17,6 +17,7 @@ from sqlglot.dialects.dialect import (\n     no_pivot_sql,\n     no_tablesample_sql,\n     no_trycast_sql,\n+    if_sql,\n     remove_ts_or_ds_to_date,\n     rename_func,\n     strposition_sql,\n@@ -165,6 +166,8 @@ class MySQLGenerator(generator.Generator):\n             f\"\"\"GROUP_CONCAT({self.sql(e, \"this\")} SEPARATOR {self.sql(e, \"separator\") or \"','\"})\"\"\"\n         ),\n         exp.ILike: no_ilike_sql,\n+        # https://dev.mysql.com/doc/refman/9.7/en/flow-control-functions.html#function_if\n+        exp.If: if_sql(false_value=\"NULL\"),\n         exp.JSONExtractScalar: arrow_json_extract_sql,\n         exp.Length: length_or_char_length_sql,\n         exp.LogicalOr: rename_func(\"MAX\"),\n"
+    },
+    "meta": {
+      "sha": "1a782c55a8f2bad4ac9ca7e28b1a1b1164840894",
+      "date": "2026-09-21",
+      "subject": "fix(mysql)!: keep the native IF instead of changing it to CASE [CLAUDE] (#8409)",
+      "tests": [
+        "tests/dialects/test_mysql.py",
+        "tests/dialects/test_singlestore.py"
+      ],
+      "f2p": 2,
+      "p2p": 80,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-8c3b9893",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "4ef067cff468c08f69cb84b4bab15f4b991da9e2",
+    "statement": "fix(mysql): SHOW CREATE TABLE generating a syntax error [CLAUDE] (#8408)\n\n* fix(mysql): qualify the name in SHOW CREATE instead of emitting FROM [CLAUDE]\n\nSHOW CREATE TABLE db.tbl was generated as SHOW CREATE TABLE tbl FROM db.\nSHOW CREATE takes a possibly qualified name and has no FROM clause, so\nthe result is a syntax error on both MySQL and StarRocks.\n\nThe FROM suffix is still used by the SHOW statements that do take it,\nsuch as SHOW COLUMNS and SHOW INDEX.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* Use `subTest` in the loop block.\n\n---------\n\nCo-authored-by: Shamil Alburin <shamil.alburin@kaspi.kz>\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>\nCo-authored-by: Jo <46752250+georgesittas@users.noreply.github.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_mysql.py b/tests/dialects/test_mysql.py\nindex bcf2588e..c70ff072 100644\n--- a/tests/dialects/test_mysql.py\n+++ b/tests/dialects/test_mysql.py\n@@ -1440,6 +1440,19 @@ COMMENT='客户账户表'\"\"\"\n             self.assertEqual(show.name, key)\n             self.assertEqual(show.text(\"target\"), \"foo\")\n \n+    def test_show_create_qualified(self):\n+        for key in [\"CREATE TABLE\", \"CREATE VIEW\", \"CREATE FUNCTION\", \"CREATE PROCEDURE\"]:\n+            with self.subTest(create_stmt=key):\n+                show = self.validate_identity(f\"SHOW {key} db_name.foo\")\n+                self.assertIsInstance(show, exp.Show)\n+                self.assertEqual(show.text(\"db\"), \"db_name\")\n+                self.assertEqual(show.text(\"target\"), \"foo\")\n+\n+        # SHOW CREATE has no FROM clause, the database is part of the name\n+        self.validate_identity(\n+            \"SHOW CREATE TABLE foo FROM db_name\", \"SHOW CREATE TABLE db_name.foo\"\n+        )\n+\n     def test_show_grants(self):\n         show = self.validate_identity(\"SHOW GRANTS FOR foo\")\n         self.assertIsInstance(show, exp.Show)\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-8c3b9893.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-8c3b9893.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/mysql.py"
+      ],
+      "functions": [
+        "MySQLGenerator"
+      ],
+      "patch": "diff --git a/sqlglot/generators/mysql.py b/sqlglot/generators/mysql.py\nindex db78afbe..fcad8a5c 100644\n--- a/sqlglot/generators/mysql.py\n+++ b/sqlglot/generators/mysql.py\n@@ -692,6 +692,15 @@ class MySQLGenerator(generator.Generator):\n         global_ = \" GLOBAL\" if expression.args.get(\"global_\") else \"\"\n \n         target = self.sql(expression, \"target\")\n+\n+        # SHOW CREATE ... takes a possibly qualified name, it has no FROM clause\n+        # https://dev.mysql.com/doc/refman/8.4/en/show-create-table.html\n+        if expression.name.startswith(\"CREATE\") and (db_id := self.sql(expression, \"db\")):\n+            target = f\"{db_id}.{target}\"\n+            db = \"\"\n+        else:\n+            db = self._prefixed_sql(\"FROM\", expression, \"db\")\n+\n         target = f\" {target}\" if target else \"\"\n         if expression.name in (\"COLUMNS\", \"INDEX\"):\n             target = f\" FROM{target}\"\n@@ -702,8 +711,6 @@ class MySQLGenerator(generator.Generator):\n         elif expression.name == \"PROJECTIONS\":\n             target = f\" ON TABLE{target}\" if target else \"\"\n \n-        db = self._prefixed_sql(\"FROM\", expression, \"db\")\n-\n         like = self._prefixed_sql(\"LIKE\", expression, \"like\")\n         where = self.sql(expression, \"where\")\n \n"
+    },
+    "meta": {
+      "sha": "8c3b9893f72f0913fa0a8a4188d55c8cc6692ad5",
+      "date": "2026-09-21",
+      "subject": "fix(mysql): SHOW CREATE TABLE generating a syntax error [CLAUDE] (#8408)",
+      "tests": [
+        "tests/dialects/test_mysql.py"
+      ],
+      "f2p": 1,
+      "p2p": 53,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-9beb769d",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "9bc418af0e03220a6eb5289a009bd79328e7cfd1",
+    "statement": "fix(duckdb)!: drop TIMESTAMP_LTZ precision [CODEX] (#8403)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_duckdb.py b/tests/dialects/test_duckdb.py\nindex d4301905..cb717580 100644\n--- a/tests/dialects/test_duckdb.py\n+++ b/tests/dialects/test_duckdb.py\n@@ -2349,6 +2349,22 @@ class TestDuckDB(Validator):\n             },\n         )\n \n+    def test_timestamps_with_time_zone_precision(self):\n+        for timestamp_type in (\"TIMESTAMP_TZ\", \"TIMESTAMP_LTZ\"):\n+            for precision in (\"\", \"(0)\", \"(3)\", \"(6)\", \"(9)\"):\n+                self.validate_all(\n+                    \"CREATE TABLE table1 (ts TIMESTAMPTZ)\",\n+                    read={\n+                        \"snowflake\": f\"CREATE TABLE table1 (ts {timestamp_type}{precision})\",\n+                    },\n+                )\n+                self.validate_all(\n+                    \"SELECT CAST(NULL AS TIMESTAMPTZ)\",\n+                    read={\n+                        \"snowflake\": f\"SELECT CAST(NULL AS {timestamp_type}{precision})\",\n+                    },\n+                )\n+\n     def test_timestamps_with_units(self):\n         self.validate_all(\n             \"SELECT w::TIMESTAMP_S, x::TIMESTAMP_MS, y::TIMESTAMP_US, z::TIMESTAMP_NS\",\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-9beb769d.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-9beb769d.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/duckdb.py"
+      ],
+      "functions": [
+        "_datatype_sql"
+      ],
+      "patch": "diff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py\nindex ab45dbe9..908d7b65 100644\n--- a/sqlglot/generators/duckdb.py\n+++ b/sqlglot/generators/duckdb.py\n@@ -656,8 +656,10 @@ def _datatype_sql(self: DuckDBGenerator, expression: exp.DataType) -> str:\n         return f\"{self.expressions(expression, flat=True)}[{self.expressions(expression, key='values', flat=True)}]\"\n \n     # Modifiers are not supported for TIME, [TIME | TIMESTAMP] WITH TIME ZONE\n-    if expression.is_type(exp.DType.TIME, exp.DType.TIMETZ, exp.DType.TIMESTAMPTZ):\n-        return expression.this.value\n+    if expression.is_type(\n+        exp.DType.TIME, exp.DType.TIMETZ, exp.DType.TIMESTAMPTZ, exp.DType.TIMESTAMPLTZ\n+    ):\n+        return self.TYPE_MAPPING.get(expression.this, expression.this.value)\n \n     return self.datatype_sql(expression)\n \n"
+    },
+    "meta": {
+      "sha": "9beb769dbffdbabc73b4459137ce2be21678765f",
+      "date": "2026-09-19",
+      "subject": "fix(duckdb)!: drop TIMESTAMP_LTZ precision [CODEX] (#8403)",
+      "tests": [
+        "tests/dialects/test_duckdb.py"
+      ],
+      "f2p": 1,
+      "p2p": 45,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-9bc418af",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "06c7b3dd7b656ff5ed80337ee668cf58318e002b",
+    "statement": "fix(snowflake): parse unquoted PUT sources as exp.Put [CODEX] (#8400)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_snowflake.py b/tests/dialects/test_snowflake.py\nindex 376dc4db..ab688fca 100644\n--- a/tests/dialects/test_snowflake.py\n+++ b/tests/dialects/test_snowflake.py\n@@ -3544,7 +3544,9 @@ class TestSnowflake(Validator):\n             \"SELECT $1, $2, metadata$filename FROM @mystage (PATTERN => '.*data-100.*')\"\n         )\n         self.validate_identity(\"SELECT * FROM '@external/location' (FILE_FORMAT => 'path.to.csv')\")\n-        self.validate_identity(\"PUT file:///dir/tmp.csv @%table\", check_command_warning=True)\n+        self.validate_identity(\n+            \"PUT file:///dir/tmp.csv @%table\", \"PUT 'file:///dir/tmp.csv' @%table\"\n+        )\n         self.validate_identity(\"SELECT * FROM (SELECT a FROM @foo)\")\n         self.validate_identity(\n             \"SELECT * FROM (SELECT * FROM '@external/location' (FILE_FORMAT => 'path.to.csv'))\"\n@@ -5775,12 +5777,15 @@ SINGLE = TRUE\"\"\",\n         # validate identity for different args and properties\n         self.validate_identity(\"PUT 'file:///dir/tmp.csv' @s1/test\")\n \n-        # the unquoted URI variant is not fully supported yet\n-        self.validate_identity(\"PUT file:///dir/tmp.csv @%table\", check_command_warning=True)\n+        ast = self.validate_identity(\n+            \"PUT file:///dir/tmp.csv @%table\", \"PUT 'file:///dir/tmp.csv' @%table\"\n+        ).assert_is(exp.Put)\n+        self.assertEqual(ast.this, exp.Literal.string(\"file:///dir/tmp.csv\"))\n+        self.assertEqual(ast.args[\"target\"], exp.Var(this=\"@%table\"))\n         self.validate_identity(\n             \"PUT file:///dir/tmp.csv @s1/test PARALLEL=1 AUTO_COMPRESS=FALSE source_compression=gzip OVERWRITE=TRUE\",\n-            check_command_warning=True,\n-        )\n+            \"PUT 'file:///dir/tmp.csv' @s1/test PARALLEL=1 AUTO_COMPRESS=FALSE source_compression=gzip OVERWRITE=TRUE\",\n+        ).assert_is(exp.Put)\n \n     def test_get_from_stage(self):\n         self.validate_identity('GET @\"my_DB\".\"schEMA1\".\"MYstage\" \\'file:///dir/tmp.csv\\'')\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-9bc418af.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-9bc418af.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/parsers/snowflake.py"
+      ],
+      "functions": [
+        "SnowflakeParser"
+      ],
+      "patch": "diff --git a/sqlglot/parsers/snowflake.py b/sqlglot/parsers/snowflake.py\nindex e055593c..bf2f709c 100644\n--- a/sqlglot/parsers/snowflake.py\n+++ b/sqlglot/parsers/snowflake.py\n@@ -1249,12 +1249,12 @@ class SnowflakeParser(parser.Parser):\n         return self.expression(exp.Undrop(this=this, kind=kind.name, rename=rename))\n \n     def _parse_put(self) -> exp.Put | exp.Command:\n-        if self._curr.token_type != TokenType.STRING:\n+        if self._curr.token_type not in (TokenType.STRING, TokenType.URI_START):\n             return self._parse_as_command(self._prev)\n \n         return self.expression(\n             exp.Put(\n-                this=self._parse_string(),\n+                this=self._parse_string() or exp.Literal.string(self._parse_location_path().name),\n                 target=self._parse_location_path(),\n                 properties=self._parse_properties(),\n             )\n"
+    },
+    "meta": {
+      "sha": "9bc418af0e03220a6eb5289a009bd79328e7cfd1",
+      "date": "2026-09-19",
+      "subject": "fix(snowflake): parse unquoted PUT sources as exp.Put [CODEX] (#8400)",
+      "tests": [
+        "tests/dialects/test_snowflake.py"
+      ],
+      "f2p": 2,
+      "p2p": 98,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-90d44b85",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "5a376abf51ad3804f20f7763b69e5a8400ca0d19",
+    "statement": "feat(trino): preserve Spark CONCAT_WS array semantics (#8391)\n\n* feat(trino): preserve Spark CONCAT_WS array semantics\n\n* use dialect flags instead of hardcoding",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_trino.py b/tests/dialects/test_trino.py\nindex 28de4635..6daa5b61 100644\n--- a/tests/dialects/test_trino.py\n+++ b/tests/dialects/test_trino.py\n@@ -1,11 +1,114 @@\n-from sqlglot import exp, parse_one\n+from sqlglot import ErrorLevel, UnsupportedError, exp, parse_one\n from sqlglot.generator import logger as generator_logger\n+from sqlglot.optimizer.annotate_types import annotate_types\n from tests.dialects.test_dialect import Validator\n \n \n class TestTrino(Validator):\n     dialect = \"trino\"\n \n+    def test_concat_ws(self):\n+        self.validate_identity(\"SELECT CONCAT_WS('-', ARRAY['a', NULL, 'b'])\")\n+        self.validate_identity(\"SELECT CONCAT_WS('-', CAST(NULL AS ARRAY(VARCHAR)))\")\n+\n+        for source, target in (\n+            (\n+                \"CONCAT_WS('', ARRAY('a', 'b'))\",\n+                \"CONCAT_WS('', COALESCE(CAST(ARRAY['a', 'b'] AS ARRAY(VARCHAR)), ARRAY[]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', ARRAY('a', NULL, '', 'b'))\",\n+                \"CONCAT_WS('-', COALESCE(CAST(ARRAY['a', NULL, '', 'b'] AS ARRAY(VARCHAR)), ARRAY[]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', ARRAY())\",\n+                \"CONCAT_WS('-', COALESCE(CAST(ARRAY[] AS ARRAY(VARCHAR)), ARRAY[]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', CAST(NULL AS ARRAY<STRING>))\",\n+                \"CONCAT_WS('-', COALESCE(TRY_CAST(NULL AS ARRAY(VARCHAR)), ARRAY[]))\",\n+            ),\n+            (\n+                \"CONCAT_WS(NULL, CAST(NULL AS ARRAY<STRING>))\",\n+                \"CONCAT_WS(NULL, COALESCE(TRY_CAST(NULL AS ARRAY(VARCHAR)), ARRAY[]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', ARRAY('abc', 'def'), 'ghi')\",\n+                \"CONCAT_WS('-', CONCAT(COALESCE(CAST(ARRAY['abc', 'def'] AS ARRAY(VARCHAR)), \"\n+                \"ARRAY[]), ARRAY[CAST('ghi' AS VARCHAR)]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', ARRAY('abc', 'def'), ARRAY('bla', 'bob'))\",\n+                \"CONCAT_WS('-', CONCAT(COALESCE(CAST(ARRAY['abc', 'def'] AS ARRAY(VARCHAR)), \"\n+                \"ARRAY[]), COALESCE(CAST(ARRAY['bla', 'bob'] AS ARRAY(VARCHAR)), ARRAY[])))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', 'x', ARRAY(), ARRAY(NULL), CAST(NULL AS ARRAY<STRING>), NULL, 'y')\",\n+                \"CONCAT_WS('-', CONCAT(ARRAY[CAST('x' AS VARCHAR)], \"\n+                \"COALESCE(CAST(ARRAY[] AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"COALESCE(CAST(ARRAY[NULL] AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"COALESCE(TRY_CAST(NULL AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"ARRAY[CAST(NULL AS VARCHAR)], ARRAY[CAST('y' AS VARCHAR)]))\",\n+            ),\n+            (\n+                \"CONCAT_WS('-', 1, NULL, 'a')\",\n+                \"CONCAT_WS('-', CAST(1 AS VARCHAR), CAST(NULL AS VARCHAR), CAST('a' AS VARCHAR))\",\n+            ),\n+        ):\n+            with self.subTest(source=source):\n+                self.validate_all(f\"SELECT {target}\", read={\"spark\": f\"SELECT {source}\"})\n+                parse_one(source, read=\"spark\").sql(\"trino\", unsupported_level=ErrorLevel.RAISE)\n+\n+    def test_concat_ws_typed(self):\n+        for a_type, b_type, expected in (\n+            (\n+                \"ARRAY<STRING>\",\n+                \"STRING\",\n+                \"CONCAT_WS(t.sep, CONCAT(COALESCE(CAST(t.a AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"ARRAY[CAST(t.b AS VARCHAR)]))\",\n+            ),\n+            (\n+                \"ARRAY<STRING>\",\n+                \"ARRAY<STRING>\",\n+                \"CONCAT_WS(t.sep, CONCAT(COALESCE(CAST(t.a AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"COALESCE(CAST(t.b AS ARRAY(VARCHAR)), ARRAY[])))\",\n+            ),\n+            (\n+                \"ARRAY<INT>\",\n+                \"INT\",\n+                \"CONCAT_WS(t.sep, CONCAT(COALESCE(CAST(t.a AS ARRAY(VARCHAR)), ARRAY[]), \"\n+                \"ARRAY[CAST(t.b AS VARCHAR)]))\",\n+            ),\n+        ):\n+            with self.subTest(a_type=a_type, b_type=b_type):\n+                expression = annotate_types(\n+                    parse_one(\"SELECT CONCAT_WS(t.sep, t.a, t.b) FROM t\", read=\"spark\"),\n+                    schema={\"t\": {\"sep\": \"STRING\", \"a\": a_type, \"b\": b_type}},\n+                    dialect=\"spark\",\n+                )\n+                self.assertEqual(\n+                    expression.sql(\"trino\", unsupported_level=ErrorLevel.RAISE),\n+                    f\"SELECT {expected} FROM t\",\n+                )\n+\n+    def test_concat_ws_unknown_types(self):\n+        for sql in (\n+            \"SELECT CONCAT_WS('-', t.a, t.b) FROM t\",\n+            \"SELECT CONCAT_WS('-', ARRAY('a'), t.b) FROM t\",\n+        ):\n+            for annotated in (False, True):\n+                with self.subTest(sql=sql, annotated=annotated):\n+                    expression = parse_one(sql, read=\"spark\")\n+                    if annotated:\n+                        expression = annotate_types(expression, dialect=\"spark\")\n+\n+                    with self.assertLogs(generator_logger) as logs:\n+                        expression.sql(\"trino\")\n+                    self.assertIn(\"CONCAT_WS with unknown argument types\", logs.output[0])\n+\n+                    with self.assertRaisesRegex(UnsupportedError, \"unknown argument types\"):\n+                        expression.sql(\"trino\", unsupported_level=ErrorLevel.RAISE)\n+\n     def test_trino(self):\n         self.validate_identity(\"REFRESH MATERIALIZED VIEW mynamespace.test_view\")\n         self.validate_identity(\"JSON_QUERY(m.properties, 'lax $.area' OMIT QUOTES NULL ON ERROR)\")\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-90d44b85.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-90d44b85.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/expressions/string.py",
+        "sqlglot/generators/trino.py",
+        "sqlglot/parsers/hive.py"
+      ],
+      "functions": [
+        "ConcatWs",
+        "TrinoGenerator",
+        "HiveParser",
+        "concatws_sql"
+      ],
+      "patch": "diff --git a/sqlglot/expressions/string.py b/sqlglot/expressions/string.py\nindex 9c5be210..72b64a7a 100644\n--- a/sqlglot/expressions/string.py\n+++ b/sqlglot/expressions/string.py\n@@ -32,6 +32,7 @@ class Concat(Expression, Func):\n \n \n class ConcatWs(Concat):\n+    arg_types = {**Concat.arg_types, \"flatten\": False}\n     _sql_names = [\"CONCAT_WS\"]\n \n \ndiff --git a/sqlglot/generators/trino.py b/sqlglot/generators/trino.py\nindex 86cef653..f8b57893 100644\n--- a/sqlglot/generators/trino.py\n+++ b/sqlglot/generators/trino.py\n@@ -52,6 +52,39 @@ class TrinoGenerator(PrestoGenerator):\n         exp.JSONPathSubscript,\n     }\n \n+    def concatws_sql(self, expression: exp.ConcatWs) -> str:\n+        if expression.args.get(\"flatten\"):\n+            arrays = []\n+            has_array = False\n+            has_unknown = False\n+\n+            for arg in expression.expressions[1:]:\n+                if isinstance(arg, exp.Array) or arg.is_type(exp.DType.ARRAY):\n+                    has_array = True\n+                    arg = exp.func(\"COALESCE\", exp.cast(arg, \"ARRAY<TEXT>\"), exp.array())\n+                else:\n+                    if (not arg.type or arg.is_type(exp.DType.UNKNOWN)) and not isinstance(\n+                        arg, exp.CONSTANTS\n+                    ):\n+                        has_unknown = True\n+\n+                    arg = exp.array(exp.cast(arg, exp.DType.TEXT))\n+\n+                arrays.append(arg)\n+\n+            if has_unknown:\n+                self.unsupported(\"Cannot transpile CONCAT_WS with unknown argument types to Trino.\")\n+\n+            if has_array:\n+                array = (\n+                    exp.ArrayConcat(this=arrays[0], expressions=arrays[1:])\n+                    if len(arrays) > 1\n+                    else arrays[0]\n+                )\n+                return self.func(\"CONCAT_WS\", expression.expressions[0], array)\n+\n+        return super().concatws_sql(expression)\n+\n     def functionspecification_sql(self, expression: exp.FunctionSpecification) -> str:\n         characteristics = expression.args.get(\"characteristics\")\n         characteristics_sql = (\ndiff --git a/sqlglot/parsers/hive.py b/sqlglot/parsers/hive.py\nindex 2ac5f813..020d2820 100644\n--- a/sqlglot/parsers/hive.py\n+++ b/sqlglot/parsers/hive.py\n@@ -71,6 +71,12 @@ class HiveParser(parser.Parser):\n         \"BASE64\": exp.ToBase64.from_arg_list,\n         \"COLLECT_LIST\": lambda args: exp.ArrayAgg(this=seq_get(args, 0), nulls_excluded=True),\n         \"COLLECT_SET\": exp.ArrayUniqueAgg.from_arg_list,\n+        \"CONCAT_WS\": lambda args, dialect: exp.ConcatWs(\n+            expressions=args,\n+            safe=not dialect.STRICT_STRING_CONCAT,\n+            coalesce=dialect.CONCAT_WS_COALESCE,\n+            flatten=True,\n+        ),\n         \"DATE_ADD\": lambda args: exp.TsOrDsAdd(\n             this=seq_get(args, 0), expression=seq_get(args, 1), unit=exp.Literal.string(\"DAY\")\n         ),\n"
+    },
+    "meta": {
+      "sha": "90d44b8556a19ddf8d4d43395a39f589a42ab748",
+      "date": "2026-09-18",
+      "subject": "feat(trino): preserve Spark CONCAT_WS array semantics (#8391)",
+      "tests": [
+        "tests/dialects/test_trino.py"
+      ],
+      "f2p": 3,
+      "p2p": 13,
+      "testSeconds": 0
+    }
+  },
+  {
+    "id": "fresh-sqlglot-76004d7f",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "b6aebcde1f6722142dbd812715cc5db6e5dc54f4",
+    "statement": "fix(sqlite): emit GROUP_CONCAT ORDER BY instead of dropping it [CODEX] (#8373)\n\n* fix(sqlite): emit GROUP_CONCAT ORDER BY instead of dropping it\n\nSQLite has supported GROUP_CONCAT(... ORDER BY ...) since 3.44.0.\nThe generator treated that clause as unsupported and omitted it,\nchanging result order. Keep ORDER BY in the generated SQL.\n\n* fix(sqlite): parse GROUP_CONCAT order for transpilation [CODEX]",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_mysql.py b/tests/dialects/test_mysql.py\nindex 1cd9ef37..30e753fc 100644\n--- a/tests/dialects/test_mysql.py\n+++ b/tests/dialects/test_mysql.py\n@@ -1220,7 +1220,7 @@ class TestMySQL(Validator):\n             \"GROUP_CONCAT(DISTINCT x ORDER BY y DESC)\",\n             write={\n                 \"mysql\": \"GROUP_CONCAT(DISTINCT x ORDER BY y DESC SEPARATOR ',')\",\n-                \"sqlite\": \"GROUP_CONCAT(DISTINCT x)\",\n+                \"sqlite\": \"GROUP_CONCAT(DISTINCT x ORDER BY y DESC)\",\n                 \"tsql\": \"STRING_AGG(x, ',') WITHIN GROUP (ORDER BY y DESC)\",\n                 \"databricks\": \"LISTAGG(DISTINCT x, ',') WITHIN GROUP (ORDER BY y DESC)\",\n                 \"postgres\": \"STRING_AGG(DISTINCT x, ',' ORDER BY y DESC NULLS LAST)\",\n@@ -1230,7 +1230,7 @@ class TestMySQL(Validator):\n             \"GROUP_CONCAT(x ORDER BY y SEPARATOR z)\",\n             write={\n                 \"mysql\": \"GROUP_CONCAT(x ORDER BY y SEPARATOR z)\",\n-                \"sqlite\": \"GROUP_CONCAT(x, z)\",\n+                \"sqlite\": \"GROUP_CONCAT(x, z ORDER BY y)\",\n                 \"tsql\": \"STRING_AGG(x, z) WITHIN GROUP (ORDER BY y)\",\n                 \"databricks\": \"LISTAGG(x, z) WITHIN GROUP (ORDER BY y)\",\n                 \"postgres\": \"STRING_AGG(x, z ORDER BY y NULLS FIRST)\",\n@@ -1240,7 +1240,7 @@ class TestMySQL(Validator):\n             \"GROUP_CONCAT(DISTINCT x ORDER BY y DESC SEPARATOR '')\",\n             write={\n                 \"mysql\": \"GROUP_CONCAT(DISTINCT x ORDER BY y DESC SEPARATOR '')\",\n-                \"sqlite\": \"GROUP_CONCAT(DISTINCT x, '')\",\n+                \"sqlite\": \"GROUP_CONCAT(DISTINCT x, '' ORDER BY y DESC)\",\n                 \"tsql\": \"STRING_AGG(x, '') WITHIN GROUP (ORDER BY y DESC)\",\n                 \"databricks\": \"LISTAGG(DISTINCT x, '') WITHIN GROUP (ORDER BY y DESC)\",\n                 \"postgres\": \"STRING_AGG(DISTINCT x, '' ORDER BY y DESC NULLS LAST)\",\n@@ -1281,7 +1281,7 @@ class TestMySQL(Validator):\n             \"GROUP_CONCAT(a, b, c ORDER BY d SEPARATOR '')\",\n             write={\n                 \"mysql\": \"GROUP_CONCAT(CONCAT(a, b, c) ORDER BY d SEPARATOR '')\",\n-                \"sqlite\": \"GROUP_CONCAT(a || b || c, '')\",\n+                \"sqlite\": \"GROUP_CONCAT(a || b || c, '' ORDER BY d)\",\n                 \"tsql\": \"STRING_AGG(a + b + c, '') WITHIN GROUP (ORDER BY d)\",\n                 \"databricks\": \"LISTAGG(CONCAT(a, b, c), '') WITHIN GROUP (ORDER BY d)\",\n                 \"postgres\": \"STRING_AGG(a || b || c, '' ORDER BY d NULLS FIRST)\",\n@@ -1291,7 +1291,7 @@ class TestMySQL(Validator):\n             \"GROUP_CONCAT(DISTINCT a, b, c ORDER BY d SEPARATOR '')\",\n             write={\n                 \"mysql\": \"GROUP_CONCAT(DISTINCT CONCAT(a, b, c) ORDER BY d SEPARATOR '')\",\n-                \"sqlite\": \"GROUP_CONCAT(DISTINCT a || b || c, '')\",\n+                \"sqlite\": \"GROUP_CONCAT(DISTINCT a || b || c, '' ORDER BY d)\",\n                 \"tsql\": \"STRING_AGG(a + b + c, '') WITHIN GROUP (ORDER BY d)\",\n                 \"databricks\": \"LISTAGG(DISTINCT CONCAT(a, b, c), '') WITHIN GROUP (ORDER BY d)\",\n                 \"postgres\": \"STRING_AGG(DISTINCT a || b || c, '' ORDER BY d NULLS FIRST)\",\ndiff --git a/tests/dialects/test_sqlite.py b/tests/dialects/test_sqlite.py\nindex 1dcd8e7f..4926510c 100644\n--- a/tests/dialects/test_sqlite.py\n+++ b/tests/dialects/test_sqlite.py\n@@ -1,7 +1,6 @@\n-from tests.dialects.test_dialect import Validator\n-\n-from sqlglot import exp\n+from sqlglot import UnsupportedError, exp\n from sqlglot.helper import logger as helper_logger\n+from tests.dialects.test_dialect import Validator\n \n \n class TestSQLite(Validator):\n@@ -24,6 +23,21 @@ class TestSQLite(Validator):\n         self.validate_identity(\"SELECT match FROM t\")\n         self.validate_identity(\"SELECT rowid FROM t1 WHERE t1 MATCH 'lorem'\")\n         self.validate_identity(\"SELECT * FROM t WHERE a REGEXP 'x'\")\n+        self.validate_identity(\"SELECT GROUP_CONCAT(x ORDER BY y)\")\n+        self.validate_identity(\"SELECT GROUP_CONCAT(x, ',' ORDER BY y)\")\n+        self.validate_identity(\"SELECT GROUP_CONCAT(DISTINCT x ORDER BY y DESC)\")\n+        self.validate_identity(\"SELECT GROUP_CONCAT(x, ',') OVER (PARTITION BY z ORDER BY y)\")\n+        self.validate_all(\n+            \"SELECT GROUP_CONCAT(x, ',' ORDER BY y)\",\n+            write={\n+                \"mysql\": \"SELECT GROUP_CONCAT(x ORDER BY y SEPARATOR ',')\",\n+                \"tsql\": \"SELECT STRING_AGG(x, ',') WITHIN GROUP (ORDER BY y)\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT GROUP_CONCAT(x, ',' ORDER BY y) OVER (PARTITION BY z)\",\n+            write={\"sqlite\": UnsupportedError},\n+        )\n         self.validate_identity(\"SELECT RANK() OVER (RANGE CURRENT ROW) FROM tbl\")\n         self.validate_identity(\n             \"SELECT RANK() OVER (RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM tbl\"\ndiff --git a/tests/dialects/test_tsql.py b/tests/dialects/test_tsql.py\nindex 39e0a8cb..25c2179e 100644\n--- a/tests/dialects/test_tsql.py\n+++ b/tests/dialects/test_tsql.py\n@@ -422,7 +422,7 @@ class TestTSQL(Validator):\n             write={\n                 \"tsql\": \"STRING_AGG(x, y) WITHIN GROUP (ORDER BY z DESC)\",\n                 \"mysql\": \"GROUP_CONCAT(x ORDER BY z DESC SEPARATOR y)\",\n-                \"sqlite\": \"GROUP_CONCAT(x, y)\",\n+                \"sqlite\": \"GROUP_CONCAT(x, y ORDER BY z DESC)\",\n                 \"postgres\": \"STRING_AGG(x, y ORDER BY z DESC NULLS LAST)\",\n             },\n         )\n@@ -431,7 +431,7 @@ class TestTSQL(Validator):\n             write={\n                 \"tsql\": \"STRING_AGG(x, '|') WITHIN GROUP (ORDER BY z ASC)\",\n                 \"mysql\": \"GROUP_CONCAT(x ORDER BY z ASC SEPARATOR '|')\",\n-                \"sqlite\": \"GROUP_CONCAT(x, '|')\",\n+                \"sqlite\": \"GROUP_CONCAT(x, '|' ORDER BY z ASC)\",\n                 \"postgres\": \"STRING_AGG(x, '|' ORDER BY z ASC NULLS FIRST)\",\n             },\n         )\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-76004d7f.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-76004d7f.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/sqlite.py",
+        "sqlglot/parsers/sqlite.py"
+      ],
+      "functions": [
+        "SQLiteGenerator",
+        "SQLiteParser"
+      ],
+      "patch": "diff --git a/sqlglot/generators/sqlite.py b/sqlglot/generators/sqlite.py\nindex 2c577425..42da9625 100644\n--- a/sqlglot/generators/sqlite.py\n+++ b/sqlglot/generators/sqlite.py\n@@ -333,9 +333,11 @@ class SQLiteGenerator(generator.Generator):\n         return f\"CAST({sql} AS INTEGER)\"\n \n     # https://www.sqlite.org/lang_aggfunc.html#group_concat\n+    # ORDER BY is valid since 3.44.0 (2023-11-01).\n     def groupconcat_sql(self, expression: exp.GroupConcat) -> str:\n         this = expression.this\n         distinct = find_in_scope(expression, exp.Distinct)\n+        order = this if isinstance(this, exp.Order) else None\n \n         if distinct:\n             this = distinct.expressions[0]\n@@ -343,13 +345,21 @@ class SQLiteGenerator(generator.Generator):\n         else:\n             distinct_sql = \"\"\n \n-        if isinstance(expression.this, exp.Order):\n-            self.unsupported(\"SQLite GROUP_CONCAT doesn't support ORDER BY.\")\n-            if expression.this.this and not distinct:\n-                this = expression.this.this\n+        if order:\n+            if order.this and not distinct:\n+                this = order.this\n+            if isinstance(expression.parent, exp.Window):\n+                self.unsupported(\n+                    \"SQLite GROUP_CONCAT window functions do not support argument ORDER BY\"\n+                )\n+                order_sql = \"\"\n+            else:\n+                order_sql = self.op_expressions(\" ORDER BY\", order, flat=True)\n+        else:\n+            order_sql = \"\"\n \n         separator = expression.args.get(\"separator\")\n-        return f\"GROUP_CONCAT({distinct_sql}{self.format_args(this, separator)})\"\n+        return f\"GROUP_CONCAT({distinct_sql}{self.format_args(this, separator)}{order_sql})\"\n \n     def _greatest_least_sql(self, expression: exp.Greatest | exp.Least) -> str:\n         if not expression.expressions:\ndiff --git a/sqlglot/parsers/sqlite.py b/sqlglot/parsers/sqlite.py\nindex 5155fc50..7e6fcfdd 100644\n--- a/sqlglot/parsers/sqlite.py\n+++ b/sqlglot/parsers/sqlite.py\n@@ -78,6 +78,11 @@ class SQLiteParser(parser.Parser):\n         \"TIME\": lambda args: exp.Anonymous(this=\"TIME\", expressions=args),\n     }\n \n+    FUNCTION_PARSERS: t.ClassVar = {\n+        **parser.Parser.FUNCTION_PARSERS,\n+        \"GROUP_CONCAT\": lambda self: self._parse_string_agg(),\n+    }\n+\n     PROPERTY_PARSERS = {\n         **parser.Parser.PROPERTY_PARSERS,\n         \"USING\": lambda self, **kwargs: self._parse_module_property(),\n"
+    },
+    "meta": {
+      "sha": "76004d7f33b2365e5e0d66917c18422070fda129",
+      "date": "2026-09-17",
+      "subject": "fix(sqlite): emit GROUP_CONCAT ORDER BY instead of dropping it [CODEX] (#8373)",
+      "tests": [
+        "tests/dialects/test_mysql.py",
+        "tests/dialects/test_sqlite.py",
+        "tests/dialects/test_tsql.py"
+      ],
+      "f2p": 3,
+      "p2p": 120,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-65eb23b5",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "be21f091dc5de8add630267b5d0c20ba1b10fc7f",
+    "statement": "fix(spark): emit SQL function determinism correctly [CODEX] (#8369)\n\n* fix(hive/spark/databricks): emit DETERMINISTIC for CREATE FUNCTION\n\nDETERMINISTIC was parsed as StabilityProperty IMMUTABLE, and Hive\ninherited the generic generator which printed IMMUTABLE. That is\ninvalid Databricks/Spark/Hive syntax. Mirror BigQuery/Trino and\nprint DETERMINISTIC.\n\nFixes #8368.\n\n* fix(spark): scope SQL function stability and parse NOT DETERMINISTIC [CODEX]",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_databricks.py b/tests/dialects/test_databricks.py\nindex 20e3d19c..55658f8e 100644\n--- a/tests/dialects/test_databricks.py\n+++ b/tests/dialects/test_databricks.py\n@@ -66,6 +66,12 @@ class TestDatabricks(Validator):\n         self.validate_identity(\"CREATE TABLE target SHALLOW CLONE source\")\n         self.validate_identity(\"INSERT INTO a REPLACE WHERE cond VALUES (1), (2)\")\n         self.validate_identity(\"CREATE FUNCTION a.b(x INT) RETURNS INT RETURN x + 1\")\n+        self.validate_identity(\n+            \"CREATE FUNCTION f(col STRING) RETURNS STRING DETERMINISTIC RETURN col\"\n+        )\n+        self.validate_identity(\n+            \"CREATE FUNCTION f(col STRING) RETURNS STRING NOT DETERMINISTIC RETURN col\"\n+        )\n         self.validate_identity(\"CREATE FUNCTION a AS b\")\n         self.validate_identity(\"SELECT ${x} FROM ${y} WHERE ${z} > 1\")\n         self.validate_identity(\"CREATE TABLE foo (x DATE GENERATED ALWAYS AS (CAST(y AS DATE)))\")\ndiff --git a/tests/dialects/test_spark.py b/tests/dialects/test_spark.py\nindex d5f55ca5..49acd4f1 100644\n--- a/tests/dialects/test_spark.py\n+++ b/tests/dialects/test_spark.py\n@@ -29,6 +29,12 @@ class TestSpark(Validator):\n             \"CREATE TABLE foo (col STRING) CLUSTERED BY (col) SORTED BY (col) INTO 10 BUCKETS\"\n         )\n         self.validate_identity(\"TRUNCATE TABLE t1 PARTITION(age = 10, name = 'test', address)\")\n+        self.validate_identity(\n+            \"CREATE FUNCTION f(col STRING) RETURNS STRING DETERMINISTIC RETURN col\"\n+        )\n+        self.validate_identity(\n+            \"CREATE FUNCTION f(col STRING) RETURNS STRING NOT DETERMINISTIC RETURN col\"\n+        )\n \n         self.validate_all(\n             \"CREATE TABLE t (a INT, b STRING, UNIQUE (a))\",\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-65eb23b5.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-65eb23b5.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/spark.py",
+        "sqlglot/parsers/spark.py"
+      ],
+      "functions": [
+        "SparkGenerator",
+        "SparkParser",
+        "_parse_property"
+      ],
+      "patch": "diff --git a/sqlglot/generators/spark.py b/sqlglot/generators/spark.py\nindex c687d492..f0421cd2 100644\n--- a/sqlglot/generators/spark.py\n+++ b/sqlglot/generators/spark.py\n@@ -128,6 +128,9 @@ class SparkGenerator(Spark2Generator):\n             exp.SafeMultiply: rename_func(\"TRY_MULTIPLY\"),\n             exp.SafeSubtract: rename_func(\"TRY_SUBTRACT\"),\n             exp.StartsWith: rename_func(\"STARTSWITH\"),\n+            exp.StabilityProperty: lambda self, e: (\n+                \"DETERMINISTIC\" if e.name == \"IMMUTABLE\" else \"NOT DETERMINISTIC\"\n+            ),\n             exp.TimeAdd: date_delta_to_binary_interval_op(cast=False),\n             exp.TimeSub: date_delta_to_binary_interval_op(cast=False),\n             exp.TsOrDsAdd: _dateadd_sql,\ndiff --git a/sqlglot/parsers/spark.py b/sqlglot/parsers/spark.py\nindex 652ea101..bda84d01 100644\n--- a/sqlglot/parsers/spark.py\n+++ b/sqlglot/parsers/spark.py\n@@ -53,6 +53,12 @@ def _build_dateadd(args: list) -> exp.Expr:\n \n \n class SparkParser(Spark2Parser):\n+    def _parse_property(self) -> exp.Expr | list[exp.Expr] | None:\n+        if self._match_text_seq(\"NOT\", \"DETERMINISTIC\"):\n+            return self.expression(exp.StabilityProperty(this=exp.Literal.string(\"VOLATILE\")))\n+\n+        return super()._parse_property()\n+\n     NO_PAREN_FUNCTIONS = {\n         **Spark2Parser.NO_PAREN_FUNCTIONS,\n         TokenType.SESSION_USER: exp.SessionUser,\n"
+    },
+    "meta": {
+      "sha": "65eb23b53420212c20f394d399ca18efefec90e3",
+      "date": "2026-09-17",
+      "subject": "fix(spark): emit SQL function determinism correctly [CODEX] (#8369)",
+      "tests": [
+        "tests/dialects/test_databricks.py",
+        "tests/dialects/test_spark.py"
+      ],
+      "f2p": 2,
+      "p2p": 42,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-fa736935",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "da5725b475a08258450a8e535dff1c72360f2f62",
+    "statement": "fix(parser): support OPERATOR as implicit alias (#8365)\n\n* support OPERATOR as implicit alias\n\n* update operator alias integration fixtures",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_dialect.py b/tests/dialects/test_dialect.py\nindex aa1e0f25..143561b0 100644\n--- a/tests/dialects/test_dialect.py\n+++ b/tests/dialects/test_dialect.py\n@@ -5358,6 +5358,10 @@ FROM subquery2\"\"\",\n         self.validate_identity(\"SELECT 1 OPERATOR(+) 2\")\n         self.validate_identity(\"SELECT 1 OPERATOR(+) /* foo */ 2\")\n         self.validate_identity(\"SELECT 1 OPERATOR(pg_catalog.+) 2\")\n+        self.validate_identity(\"SELECT 1 operator\", \"SELECT 1 AS operator\")\n+        self.validate_identity(\n+            \"SELECT 1 OPERATOR(+) 2 operator\", \"SELECT 1 OPERATOR(+) 2 AS operator\"\n+        )\n \n     def test_json_keys(self):\n         self.validate_all(\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-fa736935.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-fa736935.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/parser.py"
+      ],
+      "functions": [
+        "Parser"
+      ],
+      "patch": "diff --git a/sqlglot/parser.py b/sqlglot/parser.py\nindex a2c6cc9e..c31d6002 100644\n--- a/sqlglot/parser.py\n+++ b/sqlglot/parser.py\n@@ -10481,22 +10481,17 @@ class Parser:\n         return expr\n \n     def _parse_operator(self, this: exp.Expr | None) -> exp.Expr | None:\n-        while True:\n-            if not self._match(TokenType.L_PAREN):\n-                break\n-\n-            op = \"\"\n-            while self._curr and not self._match(TokenType.R_PAREN):\n-                op += self._curr.text\n-                self._advance()\n-\n-            comments = self._prev_comments\n-            this = self.expression(\n-                exp.Operator(this=this, operator=op, expression=self._parse_bitwise()),\n-                comments=comments,\n-            )\n+        if not self._match(TokenType.L_PAREN):\n+            self._retreat(self._index - 1)\n+            return None\n \n-            if not self._match(TokenType.OPERATOR):\n-                break\n+        op = \"\"\n+        while self._curr and not self._match(TokenType.R_PAREN):\n+            op += self._curr.text\n+            self._advance()\n \n-        return this\n+        comments = self._prev_comments\n+        return self.expression(\n+            exp.Operator(this=this, operator=op, expression=self._parse_bitwise()),\n+            comments=comments,\n+        )\n"
+    },
+    "meta": {
+      "sha": "fa73693547ad5a88ccbbe90fad1196b3153198ed",
+      "date": "2026-09-16",
+      "subject": "fix(parser): support OPERATOR as implicit alias (#8365)",
+      "tests": [
+        "tests/dialects/test_dialect.py"
+      ],
+      "f2p": 1,
+      "p2p": 99,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-d53cbc98",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "e94639635d388cf6b58dd79d643a62082d2305cb",
+    "statement": "fix(parser)!: raise on a duplicate OFFSET instead of overwriting it [CLAUDE] (#8367)\n\nLIMIT x, y splits into a limit and an offset, and the offset half went into\nits slot without the duplicate check the clause above it uses, so an OFFSET\nthat was already parsed got silently overwritten. It now raises the way a\nduplicate LIMIT does, and ErrorLevel.IGNORE still degrades to the old\noverwrite.",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/test_parser.py b/tests/test_parser.py\nindex 612f6202..559a3e0f 100644\n--- a/tests/test_parser.py\n+++ b/tests/test_parser.py\n@@ -1235,6 +1235,18 @@ class TestParser(unittest.TestCase):\n \n         self.assertIn(\"Found multiple 'START WITH' clauses. Line 1, Col: 65.\", str(ctx.exception))\n \n+        sql = \"SELECT a FROM x OFFSET 1 LIMIT 2, 3\"\n+\n+        with self.assertRaises(ParseError) as ctx:\n+            parse_one(sql)\n+\n+        self.assertIn(\"Found multiple 'OFFSET' clauses. Line 1, Col: 30.\", str(ctx.exception))\n+\n+        self.assertEqual(\n+            parse_one(sql, error_level=ErrorLevel.IGNORE).sql(),\n+            \"SELECT a FROM x LIMIT 3 OFFSET 2\",\n+        )\n+\n     def test_window_clause_without_from(self):\n         # https://github.com/tobymao/sqlglot/issues/7438\n         for dialect in (None, \"sqlite\", \"postgres\", \"mysql\", \"duckdb\", \"bigquery\"):\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-d53cbc98.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-d53cbc98.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/parser.py"
+      ],
+      "functions": [
+        "Parser"
+      ],
+      "patch": "diff --git a/sqlglot/parser.py b/sqlglot/parser.py\nindex c4e5867f..a2c6cc9e 100644\n--- a/sqlglot/parser.py\n+++ b/sqlglot/parser.py\n@@ -4378,6 +4378,11 @@ class Parser:\n                             expression.set(\"offset\", None)\n \n                             if offset:\n+                                if this.args.get(\"offset\"):\n+                                    self.raise_error(\n+                                        \"Found multiple 'OFFSET' clauses\", token=modifier_token\n+                                    )\n+\n                                 offset = exp.Offset(expression=offset)\n                                 this.set(\"offset\", offset)\n \n"
+    },
+    "meta": {
+      "sha": "d53cbc988512ee63ca547694c6a1656fd4dbb637",
+      "date": "2026-09-16",
+      "subject": "fix(parser)!: raise on a duplicate OFFSET instead of overwriting it [CLAUDE] (#8367)",
+      "tests": [
+        "tests/test_parser.py"
+      ],
+      "f2p": 1,
+      "p2p": 70,
+      "testSeconds": 42
+    }
+  },
+  {
+    "id": "fresh-sqlglot-338bb069",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "a069a0964418188e3822e8bf9238af6b89db0652",
+    "statement": "fix(sqlite): evaluate dynamic date-add amounts [COPILOT] (#8360)\n\nCo-authored-by: Peter Ong <peterong@microsoft.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_sqlite.py b/tests/dialects/test_sqlite.py\nindex 6dcda64e..1dcd8e7f 100644\n--- a/tests/dialects/test_sqlite.py\n+++ b/tests/dialects/test_sqlite.py\n@@ -43,6 +43,36 @@ class TestSQLite(Validator):\n                 \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL 1 DAY) FROM t\",\n             },\n         )\n+        self.validate_all(\n+            \"SELECT DATE(d, '-1 DAY') FROM t\",\n+            read={\n+                \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL (-1) DAY) FROM t\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT DATE(d, (n) || ' DAY') FROM t\",\n+            read={\n+                \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL (n) DAY) FROM t\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT DATE(d, (n + 1) || ' DAY') FROM t\",\n+            read={\n+                \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL (n + 1) DAY) FROM t\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT DATE(d, (-n) || ' MONTH') FROM t\",\n+            read={\n+                \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL (-n) MONTH) FROM t\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT DATE(d, (NULL) || ' DAY') FROM t\",\n+            read={\n+                \"duckdb\": \"SELECT DATE_ADD(d, INTERVAL (NULL) DAY) FROM t\",\n+            },\n+        )\n         self.validate_identity(\"SELECT DATETIME(1092941466, 'unixepoch')\")\n         self.validate_identity(\"SELECT DATETIME(1092941466, 'auto')\")\n         self.validate_identity(\"SELECT DATETIME(1092941466, 'unixepoch', 'localtime')\")\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-338bb069.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-338bb069.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/sqlite.py"
+      ],
+      "functions": [
+        "SQLiteGenerator"
+      ],
+      "patch": "diff --git a/sqlglot/generators/sqlite.py b/sqlglot/generators/sqlite.py\nindex 341bd0ac..2c577425 100644\n--- a/sqlglot/generators/sqlite.py\n+++ b/sqlglot/generators/sqlite.py\n@@ -244,6 +244,21 @@ class SQLiteGenerator(generator.Generator):\n         if isinstance(modifier, exp.Interval):\n             unit = unit or modifier.unit\n             modifier = modifier.this\n+\n+        modifier = modifier.unnest()\n+        if (\n+            unit\n+            and not isinstance(modifier, exp.Literal)\n+            and not (isinstance(modifier, exp.Neg) and modifier.this.is_number)\n+        ):\n+            return self.func(\n+                \"DATE\",\n+                expression.this,\n+                exp.DPipe(\n+                    this=exp.paren(modifier),\n+                    expression=exp.Literal.string(f\" {unit.name}\"),\n+                ),\n+            )\n         modifier = modifier.name if modifier.is_string else self.sql(modifier)\n         modifier = f\"'{modifier} {unit.name}'\" if unit else f\"'{modifier}'\"\n         return self.func(\"DATE\", expression.this, modifier)\n"
+    },
+    "meta": {
+      "sha": "338bb0699385f8a35f76c98954c58b920da679b5",
+      "date": "2026-09-15",
+      "subject": "fix(sqlite): evaluate dynamic date-add amounts [COPILOT] (#8360)",
+      "tests": [
+        "tests/dialects/test_sqlite.py"
+      ],
+      "f2p": 1,
+      "p2p": 12,
+      "testSeconds": 0
+    }
+  },
+  {
+    "id": "fresh-sqlglot-a069a096",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "4eb2c99a150f56c9048a3ddf6c71dded86597362",
+    "statement": "fix(tsql): parse FORMAT(x, 'ffffff') as a time format",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_tsql.py b/tests/dialects/test_tsql.py\nindex d52d947d..39e0a8cb 100644\n--- a/tests/dialects/test_tsql.py\n+++ b/tests/dialects/test_tsql.py\n@@ -2094,6 +2094,13 @@ WHERE\n                 \"tsql\": \"SELECT FORMAT(1234567, 'f')\",\n             },\n         )\n+        self.validate_all(\n+            \"SELECT FORMAT(a, 'ffffff')\",\n+            write={\n+                \"mysql\": \"SELECT DATE_FORMAT(a, '%f')\",\n+                \"tsql\": \"SELECT FORMAT(a, 'ffffff')\",\n+            },\n+        )\n         self.validate_all(\n             \"SELECT FORMAT('01-01-1991', 'dd.mm.yyyy')\",\n             write={\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-a069a096.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-a069a096.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/parsers/tsql.py"
+      ],
+      "functions": [],
+      "patch": "diff --git a/sqlglot/parsers/tsql.py b/sqlglot/parsers/tsql.py\nindex 44b2068b..2f837fc6 100644\n--- a/sqlglot/parsers/tsql.py\n+++ b/sqlglot/parsers/tsql.py\n@@ -46,7 +46,7 @@ DATE_DELTA_INTERVAL = {\n     \"d\": \"day\",\n }\n \n-DATE_FMT_RE = re.compile(\"([dD]{1,2})|([mM]{1,2})|([yY]{1,4})|([hH]{1,2})|([sS]{1,2})\")\n+DATE_FMT_RE = re.compile(\"([dD]{1,2})|([mM]{1,2})|([yY]{1,4})|([hH]{1,2})|([sS]{1,2})|([fF]{2,7})\")\n \n # N = Numeric, C=Currency\n TRANSPILE_SAFE_NUMBER_FMT = {\"N\", \"C\"}\n"
+    },
+    "meta": {
+      "sha": "a069a0964418188e3822e8bf9238af6b89db0652",
+      "date": "2026-09-15",
+      "subject": "fix(tsql): parse FORMAT(x, 'ffffff') as a time format",
+      "tests": [
+        "tests/dialects/test_tsql.py"
+      ],
+      "f2p": 1,
+      "p2p": 56,
+      "testSeconds": 1
+    }
+  },
+  {
+    "id": "fresh-sqlglot-4eb2c99a",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "4b84b4d4f3e91e4f64721cb72e0590e4de72aa46",
+    "statement": "fix(fabric)!: transpile json type to varchar(max), similar to xml",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_fabric.py b/tests/dialects/test_fabric.py\nindex c0d20c72..c1697130 100644\n--- a/tests/dialects/test_fabric.py\n+++ b/tests/dialects/test_fabric.py\n@@ -14,7 +14,7 @@ class TestFabric(Validator):\n         self.validate_identity(\"CAST(x AS DOUBLE)\", \"CAST(x AS FLOAT)\")\n         self.validate_identity(\"CAST(x AS IMAGE)\", \"CAST(x AS VARBINARY(MAX))\")\n         self.validate_identity(\"CAST(x AS INT)\", \"CAST(x AS INT)\")\n-        self.validate_identity(\"CAST(x AS JSON)\", \"CAST(x AS VARCHAR)\")\n+        self.validate_identity(\"CAST(x AS JSON)\", \"CAST(x AS VARCHAR(MAX))\")\n         self.validate_identity(\"CAST(x AS MONEY)\", \"CAST(x AS DECIMAL(19, 4))\")\n         self.validate_identity(\"CAST(x AS NCHAR)\", \"CAST(x AS CHAR)\")\n         self.validate_identity(\"CAST(x AS NVARCHAR)\", \"CAST(x AS VARCHAR)\")\n@@ -34,9 +34,9 @@ class TestFabric(Validator):\n         # A bare DECIMAL is DECIMAL(18, 0) and a bare VARCHAR / VARBINARY column is\n         # length 1, so an unsized replacement silently truncates the stored data\n         self.validate_all(\n-            \"CREATE TABLE t (a DECIMAL(19, 4), b DECIMAL(10, 4), c VARCHAR(MAX), d VARBINARY(MAX))\",\n+            \"CREATE TABLE t (a DECIMAL(19, 4), b DECIMAL(10, 4), c VARCHAR(MAX), d VARBINARY(MAX), e VARCHAR(MAX))\",\n             read={\n-                \"tsql\": \"CREATE TABLE t (a MONEY, b SMALLMONEY, c XML, d IMAGE)\",\n+                \"tsql\": \"CREATE TABLE t (a MONEY, b SMALLMONEY, c XML, d IMAGE, e JSON)\",\n             },\n         )\n \n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-4eb2c99a.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-4eb2c99a.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/fabric.py"
+      ],
+      "functions": [
+        "FabricGenerator"
+      ],
+      "patch": "diff --git a/sqlglot/generators/fabric.py b/sqlglot/generators/fabric.py\nindex ff08bae6..849682b7 100644\n--- a/sqlglot/generators/fabric.py\n+++ b/sqlglot/generators/fabric.py\n@@ -55,7 +55,7 @@ class FabricGenerator(TSQLGenerator):\n         exp.DType.DECIMAL: \"DECIMAL\",\n         exp.DType.IMAGE: \"VARBINARY(MAX)\",\n         exp.DType.INT: \"INT\",\n-        exp.DType.JSON: \"VARCHAR\",\n+        exp.DType.JSON: \"VARCHAR(MAX)\",\n         exp.DType.MONEY: \"DECIMAL(19, 4)\",\n         exp.DType.NCHAR: \"CHAR\",\n         exp.DType.NVARCHAR: \"VARCHAR\",\n"
+    },
+    "meta": {
+      "sha": "4eb2c99a150f56c9048a3ddf6c71dded86597362",
+      "date": "2026-09-15",
+      "subject": "fix(fabric)!: transpile json type to varchar(max), similar to xml",
+      "tests": [
+        "tests/dialects/test_fabric.py"
+      ],
+      "f2p": 2,
+      "p2p": 5,
+      "testSeconds": 0
+    }
+  },
+  {
+    "id": "fresh-sqlglot-4b84b4d4",
+    "family": "edit",
+    "kind": "fresh",
+    "repo": "sqlglot",
+    "base": "d3110c5c2c1eb6c1da6b4e3dc20652c08c8d4691",
+    "statement": "fix(fabric)!: keep scale and length for MONEY, SMALLMONEY, XML and IMAGE [CLAUDE] (#8362)\n\nClaude-Session: https://claude.ai/code/session_01Cu4ZB626TsN2NkidWnfrfd\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_fabric.py b/tests/dialects/test_fabric.py\nindex 60ec62df..c0d20c72 100644\n--- a/tests/dialects/test_fabric.py\n+++ b/tests/dialects/test_fabric.py\n@@ -12,15 +12,15 @@ class TestFabric(Validator):\n         self.validate_identity(\"CAST(x AS DATETIME)\", \"CAST(x AS DATETIME2(6))\")\n         self.validate_identity(\"CAST(x AS DECIMAL)\", \"CAST(x AS DECIMAL)\")\n         self.validate_identity(\"CAST(x AS DOUBLE)\", \"CAST(x AS FLOAT)\")\n-        self.validate_identity(\"CAST(x AS IMAGE)\", \"CAST(x AS VARBINARY)\")\n+        self.validate_identity(\"CAST(x AS IMAGE)\", \"CAST(x AS VARBINARY(MAX))\")\n         self.validate_identity(\"CAST(x AS INT)\", \"CAST(x AS INT)\")\n         self.validate_identity(\"CAST(x AS JSON)\", \"CAST(x AS VARCHAR)\")\n-        self.validate_identity(\"CAST(x AS MONEY)\", \"CAST(x AS DECIMAL)\")\n+        self.validate_identity(\"CAST(x AS MONEY)\", \"CAST(x AS DECIMAL(19, 4))\")\n         self.validate_identity(\"CAST(x AS NCHAR)\", \"CAST(x AS CHAR)\")\n         self.validate_identity(\"CAST(x AS NVARCHAR)\", \"CAST(x AS VARCHAR)\")\n         self.validate_identity(\"CAST(x AS ROWVERSION)\", \"CAST(x AS ROWVERSION)\")\n         self.validate_identity(\"CAST(x AS SMALLDATETIME)\", \"CAST(x AS DATETIME2(6))\")\n-        self.validate_identity(\"CAST(x AS SMALLMONEY)\", \"CAST(x AS DECIMAL)\")\n+        self.validate_identity(\"CAST(x AS SMALLMONEY)\", \"CAST(x AS DECIMAL(10, 4))\")\n         self.validate_identity(\"CAST(x AS TEXT)\", \"CAST(x AS VARCHAR(MAX))\")\n         self.validate_identity(\"CAST(x AS TIMESTAMP)\", \"CAST(x AS DATETIME2(6))\")\n         self.validate_identity(\"CAST(x AS TIMESTAMPNTZ)\", \"CAST(x AS DATETIME2(6))\")\n@@ -28,7 +28,17 @@ class TestFabric(Validator):\n         self.validate_identity(\"CAST(x AS UTINYINT)\", \"CAST(x AS SMALLINT)\")\n         self.validate_identity(\"CAST(x AS UUID)\", \"CAST(x AS UNIQUEIDENTIFIER)\")\n         self.validate_identity(\"CAST(x AS VARIANT)\", \"CAST(x AS SQL_VARIANT)\")\n-        self.validate_identity(\"CAST(x AS XML)\", \"CAST(x AS VARCHAR)\")\n+        self.validate_identity(\"CAST(x AS XML)\", \"CAST(x AS VARCHAR(MAX))\")\n+\n+    def test_lossy_type_mappings_keep_precision(self):\n+        # A bare DECIMAL is DECIMAL(18, 0) and a bare VARCHAR / VARBINARY column is\n+        # length 1, so an unsized replacement silently truncates the stored data\n+        self.validate_all(\n+            \"CREATE TABLE t (a DECIMAL(19, 4), b DECIMAL(10, 4), c VARCHAR(MAX), d VARBINARY(MAX))\",\n+            read={\n+                \"tsql\": \"CREATE TABLE t (a MONEY, b SMALLMONEY, c XML, d IMAGE)\",\n+            },\n+        )\n \n     def test_precision_capping(self):\n         \"\"\"Test that TIME, DATETIME2 & DATETIMEOFFSET precision is capped at 6 digits\"\"\"\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-4b84b4d4.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/fresh-sqlglot-4b84b4d4.p2p.json",
+          "timeoutSec": 900
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/fabric.py"
+      ],
+      "functions": [
+        "FabricGenerator"
+      ],
+      "patch": "diff --git a/sqlglot/generators/fabric.py b/sqlglot/generators/fabric.py\nindex 7cdea9fe..ff08bae6 100644\n--- a/sqlglot/generators/fabric.py\n+++ b/sqlglot/generators/fabric.py\n@@ -53,22 +53,22 @@ class FabricGenerator(TSQLGenerator):\n         **TSQLGenerator.TYPE_MAPPING,\n         exp.DType.DATETIME: \"DATETIME2\",\n         exp.DType.DECIMAL: \"DECIMAL\",\n-        exp.DType.IMAGE: \"VARBINARY\",\n+        exp.DType.IMAGE: \"VARBINARY(MAX)\",\n         exp.DType.INT: \"INT\",\n         exp.DType.JSON: \"VARCHAR\",\n-        exp.DType.MONEY: \"DECIMAL\",\n+        exp.DType.MONEY: \"DECIMAL(19, 4)\",\n         exp.DType.NCHAR: \"CHAR\",\n         exp.DType.NVARCHAR: \"VARCHAR\",\n         exp.DType.ROWVERSION: \"ROWVERSION\",\n         exp.DType.SMALLDATETIME: \"DATETIME2\",\n-        exp.DType.SMALLMONEY: \"DECIMAL\",\n+        exp.DType.SMALLMONEY: \"DECIMAL(10, 4)\",\n         exp.DType.TIMESTAMP: \"DATETIME2\",\n         exp.DType.TIMESTAMPNTZ: \"DATETIME2\",\n         exp.DType.TIMESTAMPTZ: \"DATETIME2\",\n         exp.DType.TINYINT: \"SMALLINT\",\n         exp.DType.UTINYINT: \"SMALLINT\",\n         exp.DType.UUID: \"UNIQUEIDENTIFIER\",\n-        exp.DType.XML: \"VARCHAR\",\n+        exp.DType.XML: \"VARCHAR(MAX)\",\n     }\n \n     TRANSFORMS = {\n"
+    },
+    "meta": {
+      "sha": "4b84b4d4f3e91e4f64721cb72e0590e4de72aa46",
+      "date": "2026-09-15",
+      "subject": "fix(fabric)!: keep scale and length for MONEY, SMALLMONEY, XML and IMAGE [CLAUDE] (#8362)",
+      "tests": [
+        "tests/dialects/test_fabric.py"
+      ],
+      "f2p": 2,
+      "p2p": 5,
+      "testSeconds": 0
+    }
+  }
+]

@@ -13,11 +13,14 @@ import fs from 'node:fs';
 const GREP_CMD = /(^|[|;&(\s])(grep|egrep|fgrep|rg|ag|ack|git\s+grep)(\s|$)/;
 const FIND_NAME = /(^|[|;&(\s])find\s+\S.*-(i?name|i?path|regex)\b/;
 const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
+/** `gi grep …` is graph-indexer's own text search, not a shell grep. */
+const maskGiGrep = (cmd) => cmd.replace(/(^|[\s/])(gi|graph-indexer(?:\.mjs)?)\s+grep\b/g, '$1$2 GI-GREP');
+const isGrep = (cmd) => GREP_CMD.test(maskGiGrep(cmd)) || FIND_NAME.test(cmd);
 
 /** Tool policy of each arm: which tool uses count as violations. */
 export const POLICIES = {
     grep: { forbidTools: [], forbidBash: [GI_CMD], label: 'built-in tools only' },
-    gi: { forbidTools: ['Grep', 'Glob'], forbidBash: [GREP_CMD, FIND_NAME], label: 'graph-indexer instead of grep/glob' },
+    gi: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob' },
     'grep+gi': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer' },
     'grep+gi+': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated' },
 };
@@ -83,7 +86,7 @@ export function parseTranscript(file, { arm = null } = {}) {
             const cmd = String(t.input.command ?? '');
             bash.push(cmd);
             if (GI_CMD.test(cmd)) giCalls++;
-            if (GREP_CMD.test(cmd) || FIND_NAME.test(cmd)) grepCalls++;
+            if (isGrep(cmd)) grepCalls++;
         }
         if (t.name === 'Grep' || t.name === 'Glob') grepCalls++;
         if (t.name.startsWith('mcp__graph-indexer') || t.name.startsWith('mcp__plugin_graph-indexer')) giCalls++;

@@ -179,9 +179,15 @@ function pickSymbol(intel, target) {
 
 /** "other definitions" note: each alternative as a ready-to-use qualified target with its use count. */
 function otherDefinitions(intel, matches, max = 5) {
-    const alts = matches.slice(1, 1 + max).map(m => `${m.path}:${m.qname} (${plural(refSummary(intel, m.id).n, 'ref')})`);
+    // `path:Name` is ambiguous when one file declares the name twice (static + instance, overloads
+    // of different classes with the same qualified name): point at the line instead
+    const key = (m) => `${m.path}:${m.qname}`;
+    const dup = new Set(matches.map(key).filter((k, i, a) => a.indexOf(k) !== i));
+    const alts = matches.slice(1, 1 + max).map(m => `${dup.has(key(m)) ? `${m.path}:${m.start_line}` : key(m)}${m.is_static ? ' (static' : ' ('}${m.is_static ? ', ' : ''}${plural(refSummary(intel, m.id).n, 'ref')})`);
     return alts.join(', ') + (matches.length > 1 + max ? `, … ${matches.length - 1 - max} more` : '');
 }
+/** Which of several same-name definitions is shown: `Logger.error (static) in path:209`. */
+const shownAs = (s, matches) => `${s.qname}${s.is_static ? ' (static)' : ''} in ${matches.filter(m => m.path === s.path && m.qname === s.qname).length > 1 ? `${s.path}:${s.start_line}` : s.path}`;
 
 function notFound(intel, target) {
     const { results } = intel.search.search(String(target), { limit: 5 });
@@ -355,7 +361,7 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
     for (const rows of res.groups.values()) for (const r of rows) counts[r.confidence] = (counts[r.confidence] ?? 0) + 1;
     const cstr = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
     const out = [`References to ${s.qname} (${s.kind}) ${loc(s)} — ${res.total} in ${plural(files.length, 'file')}${cstr ? ` (${cstr})` : ''}`];
-    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${s.qname} in ${s.path}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
+    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${shownAs(s, matches)}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
     let shown = 0;
     for (const [file, rows] of res.groups) {
         if (shown >= limit) break;
@@ -438,7 +444,7 @@ async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, lim
         const external = intel.callees(s.id).filter(c => c.dst_id == null).map(c => (c.recv ? `${c.recv}.` : '') + c.name);
         if (external.length) out.push(`  external/unbound: ${[...new Set(external)].slice(0, 12).join(', ')}${external.length > 12 ? ', …' : ''}`);
     }
-    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${s.qname} in ${s.path}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
+    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${shownAs(s, matches)}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
     return out.join('\n');
 }
 

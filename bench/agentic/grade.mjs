@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, git, WORK } from './lib.mjs';
+import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
 import { parseTranscript } from './transcript.mjs';
 
 /** Parse "path:LINE" answers (tolerates bullets, backticks, "./" and absolute checkout paths). */
@@ -79,16 +79,26 @@ function gradeEdit(task, meta) {
     out.changedFiles = git(cwd, 'diff', '--name-only', 'HEAD').trim().split('\n').filter(Boolean);
     out.untracked = git(cwd, 'ls-files', '--others', '--exclude-standard').trim().split('\n').filter(Boolean);
     out.diffStat = diff.split('\n').pop() ?? '';
-    // hidden tests: apply the original commit's test changes on top of the agent's work
+    // keep the agent's change (new files included) for failure analysis
+    sh('git add -A -N', { cwd });
+    fs.writeFileSync(path.join(meta.runDir, 'agent.patch'), git(cwd, 'diff', '--no-color', 'HEAD'));
+    // hidden tests: apply the original commit's test changes on top of the agent's work; like
+    // SWE-bench, the files they touch are first reset, so tests the agent wrote there are dropped
     if (g.testPatch) {
         const patch = path.join(meta.runDir, 'hidden-tests.patch');
         fs.writeFileSync(patch, g.testPatch);
+        const touched = [...g.testPatch.matchAll(/^diff --git a\/(\S+) b\/(\S+)$/gm)].map(m => m[2]);
+        for (const f of touched) {
+            if (tryGit(cwd, 'cat-file', '-e', `HEAD:${f}`) !== null) git(cwd, 'checkout', '-q', 'HEAD', '--', f);
+            else fs.rmSync(path.join(cwd, f), { force: true });
+        }
+        out.testFilesReset = touched.filter(f => out.changedFiles.includes(f) || out.untracked.includes(f));
         const r = sh(`git apply --whitespace=nowarn ${JSON.stringify(patch)}`, { cwd });
         out.checks.push({ name: 'apply hidden tests', ok: r.code === 0, detail: r.stderr.slice(-300) });
         if (r.code !== 0) return { ...out, solved: false, score: 0 };
     }
     for (const c of g.checks ?? []) {
-        const r = sh(c.cmd, { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
+        const r = sh(c.cmd.replaceAll('{GI}', GI_ROOT), { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
         const ok = c.expect === 'fail' ? r.code !== 0 : r.code === 0;
         out.checks.push({ name: c.name, kind: c.kind ?? 'test', ok, code: r.code, ms: r.ms, tail: (r.stdout + r.stderr).slice(-600) });
     }

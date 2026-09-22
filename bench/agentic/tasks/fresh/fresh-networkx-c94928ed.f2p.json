@@ -1,0 +1,4 @@
+[
+  "networkx/algorithms/isomorphism/tests/test_ismags.py::TestLargestCommonSubgraph::test_largest_subgraph_color_mismatches",
+  "networkx/algorithms/isomorphism/tests/test_ismags.py::TestLargestCommonSubgraph::test_largest_subgraph_empty_graphs"
+]

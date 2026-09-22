@@ -1,0 +1,8 @@
+[
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_full_graph_or_subgraph_isomorphisms_iter[vf2-DiGraph]",
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_full_graph_or_subgraph_isomorphisms_iter[vf2-Graph]",
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_full_graph_or_subgraph_isomorphisms_iter[vf2-MultiDiGraph]",
+  "networkx/algorithms/isomorphism/tests/test_common.py::::test_full_graph_or_subgraph_isomorphisms_iter[vf2-MultiGraph]",
+  "networkx/algorithms/isomorphism/tests/test_isomorphvf2.py::::test_isomorphism_iter3[False]",
+  "networkx/algorithms/isomorphism/tests/test_isomorphvf2.py::::test_isomorphism_iter3[True]"
+]

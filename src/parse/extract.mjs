@@ -156,6 +156,86 @@ function receiverDescriptor(node, spec) {
     return parts.join('.');
 }
 
+// ── type tests that narrow a variable (`x instanceof T`, `isinstance(x, T)`) ──
+const EXIT_STATEMENTS = new Set(['return_statement', 'throw_statement', 'raise_statement', 'continue_statement', 'break_statement']);
+const opText = (n) => n.childForFieldName('operator')?.text;
+const isNegation = (n) => (n.type === 'unary_expression' && opText(n) === '!') || n.type === 'not_operator';
+const isLogical = (n, ops) => (n.type === 'binary_expression' || n.type === 'boolean_operator') && ops.includes(opText(n));
+
+/** A block (or single statement) whose last statement leaves it: return / throw / raise / continue / break. */
+function alwaysExits(stmt) {
+    if (!stmt) return false;
+    if (EXIT_STATEMENTS.has(stmt.type)) return true;
+    if (stmt.type !== 'statement_block' && stmt.type !== 'block') return false;
+    const body = stmt.namedChildren.filter(c => c.type !== 'comment');
+    return body.length > 0 && EXIT_STATEMENTS.has(body[body.length - 1].type);
+}
+
+/**
+ * Source ranges where a type test proves a variable's type: `if (x instanceof T) {…}`, the rest of
+ * a block after `if (!(x instanceof T)) return …`, `x instanceof T && x.m()`, ternaries, Python's
+ * `isinstance(x, T)` in the same positions. Returns [{ subject node, type node, from, to }].
+ */
+function typeNarrowings(root, source) {
+    const out = [];
+    for (const m of source.matchAll(/\binstanceof\b|\bisinstance\s*\(/g)) {
+        let test = root.descendantForIndex(m.index);
+        for (let i = 0; test && i < 3 && !(test.type === 'binary_expression' || test.type === 'call'); i++) test = test.parent;
+        if (!test) continue;
+        let subject, type;
+        if (test.type === 'binary_expression' && opText(test) === 'instanceof') {
+            subject = test.childForFieldName('left'); type = test.childForFieldName('right');
+        } else if (test.type === 'call' && test.childForFieldName('function')?.text === 'isinstance') {
+            const args = test.childForFieldName('arguments')?.namedChildren ?? [];
+            if (args.length !== 2 || args[1].type === 'tuple') continue;
+            [subject, type] = args;
+        } else continue;
+        if (!subject || !type) continue;
+        const add = (node) => { if (node) out.push({ subject, type, from: node.startIndex, to: node.endIndex }); };
+        // climb through the condition, tracking the truth value of `n` under which the test holds
+        let n = test, holdsWhen = true;
+        for (let p = n.parent; p; n = p, p = p.parent) {
+            if (p.type === 'parenthesized_expression') continue;
+            if (isNegation(p)) { holdsWhen = !holdsWhen; continue; }
+            const left = p.childForFieldName('left');
+            if (isLogical(p, ['&&', 'and'])) {
+                if (!holdsWhen) break;
+                if (left && left.id === n.id) add(p.childForFieldName('right'));
+                continue;
+            }
+            if (isLogical(p, ['||', 'or'])) {
+                if (holdsWhen) break;
+                if (left && left.id === n.id) add(p.childForFieldName('right'));
+                continue;
+            }
+            const cond = p.childForFieldName('condition');
+            if (p.type === 'if_statement' || p.type === 'elif_clause' || p.type === 'while_statement') {
+                if (!cond || cond.id !== n.id) break;
+                const cons = p.childForFieldName('consequence') ?? p.childForFieldName('body');
+                if (holdsWhen) { add(cons); break; }
+                const alts = p.childrenForFieldName?.('alternative') ?? [];
+                for (const a of alts) if (a.type === 'else_clause') add(a);
+                // `if (!(x instanceof T)) return;` — the rest of the enclosing block
+                if (p.type === 'if_statement' && !alts.length && alwaysExits(cons) && p.parent) out.push({ subject, type, from: p.endIndex, to: p.parent.endIndex });
+                break;
+            }
+            if (p.type === 'ternary_expression') {
+                if (!cond || cond.id !== n.id) break;
+                add(p.childForFieldName(holdsWhen ? 'consequence' : 'alternative'));
+                break;
+            }
+            if (p.type === 'conditional_expression') { // Python: a if cond else b
+                const [a, c, b] = p.namedChildren;
+                if (!c || c.id !== n.id) break;
+                add(holdsWhen ? a : b);
+                break;
+            }
+            break;
+        }
+    }
+    return out;
+}
+
 /**
  * Extract symbols/refs/imports for one file.
  * @returns {{ symbols: object[], refs: object[], imports: object[], errors: number }}
@@ -392,6 +472,20 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (!n) return null;
         return !/(\[\]|\{\})$/.test(n) && spec.isPrimitiveType?.(n) ? '!' : n;
     };
+    // narrowed types by source range: { key (receiver descriptor), type, from, to }
+    const narrowed = [];
+    if (/\binstanceof\b|\bisinstance\s*\(/.test(source)) {
+        for (const r of typeNarrowings(root, source)) {
+            const key = receiverDescriptor(r.subject, spec), type = typeText(r.type.text);
+            if (type && type !== '!' && /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(key)) narrowed.push({ key, type, from: r.from, to: r.to });
+        }
+    }
+    /** The narrowest type test that holds at `pos` for `key` (`x`, `this.x`). */
+    const narrowedAt = (pos, key) => {
+        let best = null;
+        for (const r of narrowed) if (r.key === key && r.from <= pos && pos < r.to && (!best || r.to - r.from < best.to - best.from)) best = r;
+        return best?.type ?? null;
+    };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
     const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem;
     const setLocal = (scope, name, val) => {
@@ -401,7 +495,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true });
     };
     for (const b of binds) {
-        const ctx = ctxAt(b.node.startIndex);
+        const ctx = { ...ctxAt(b.node.startIndex), pos: b.node.startIndex };
         const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
         const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
         if (type) setLocal(ctx.scope, b.name, { type, ctx });
@@ -486,12 +580,14 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const st = selfType(ctx.sym);
             if (!st) return null;
             if (segs.length === 1) return first.ops.length ? null : st.name;
-            const ft = st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null;
+            const nt = ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, 'this.' + segs[1].name) : null;
+            const ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
             t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
             i = 2;
         } else {
             const isCall = first.ops[0] === '()';
-            const v = isCall ? null : lookupLocal(ctx, first.name);
+            const nt = !isCall && ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, first.name) : null;
+            const v = isCall ? null : nt ? { type: nt } : lookupLocal(ctx, first.name);
             if (v) t = applyOps(bindingType(v, depth), first.ops);
             else if (isCall) t = applyOps('call:' + first.name, first.ops.slice(1));
             else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
@@ -598,7 +694,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (kind === 'value' && spec.isNoiseValue?.(name)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
-        const recvType = inferReceiverType(recv, ctx);
+        const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
         refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl });
     }
 

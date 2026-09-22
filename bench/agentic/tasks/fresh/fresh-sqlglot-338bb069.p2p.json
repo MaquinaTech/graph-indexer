@@ -1,0 +1,14 @@
+[
+  "tests/dialects/test_sqlite.py::TestSQLite::test_analyze",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_create_trigger",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_datediff",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_ddl",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_generated_columns",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_hexadecimal_literal",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_json_arrow_precedence",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_longvarchar_dtype",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_strftime",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_trunc",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_warnings",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_window_null_treatment"
+]

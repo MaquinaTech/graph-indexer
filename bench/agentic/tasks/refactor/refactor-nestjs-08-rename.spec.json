@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/core/helpers/context-creator.ts",
+    "cls": "ContextCreator",
+    "name": "createContext",
+    "newName": "createContextChecked",
+    "params": 5
+  },
+  "decoys": [
+    {
+      "file": "packages/core/guards/guards-consumer.ts",
+      "cls": "GuardsConsumer",
+      "name": "createContext",
+      "params": 3
+    },
+    {
+      "file": "packages/core/interceptors/interceptors-consumer.ts",
+      "cls": "InterceptorsConsumer",
+      "name": "createContext",
+      "params": 3
+    }
+  ]
+}

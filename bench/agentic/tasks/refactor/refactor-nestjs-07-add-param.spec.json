@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/core/application-config.ts",
+    "cls": "ApplicationConfig",
+    "name": "enableVersioning",
+    "params": 2,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/core/nest-application.ts",
+      "cls": "NestApplication",
+      "name": "enableVersioning",
+      "params": 1
+    }
+  ]
+}

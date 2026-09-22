@@ -1,0 +1,3 @@
+[
+  "tests/test_parser.py::TestParser::test_multiple_query_modifiers"
+]

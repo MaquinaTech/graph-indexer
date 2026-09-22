@@ -1,0 +1,5 @@
+[
+  "networkx/algorithms/isomorphism/tests/test_match_helpers.py::::test_categorical_node_match",
+  "networkx/algorithms/isomorphism/tests/test_match_helpers.py::::test_generic_multiedge_match",
+  "networkx/algorithms/isomorphism/tests/test_match_helpers.py::::test_input_length_exceptions"
+]

@@ -1,0 +1,4 @@
+[
+  "networkx/readwrite/tests/test_p2g.py::::test_fn_import_from_module_deprecation",
+  "networkx/readwrite/tests/test_p2g.py::::test_import_deprecation"
+]

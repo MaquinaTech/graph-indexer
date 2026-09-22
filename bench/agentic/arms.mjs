@@ -16,7 +16,7 @@
 export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+'];
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
-function basicCard(gi) {
+function basicCard(gi, { grep = true } = {}) {
     return `## graph-indexer (code index for this repository)
 A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path):
 - \`gi search "<what you are looking for>" [--path DIR] [--kind function|method|class|…] [--limit N]\` — find where a behaviour or identifier is implemented (natural language or identifiers); ranked symbols with location, signature and matching lines.
@@ -25,16 +25,19 @@ A live structural index of the repository — definitions, references bound thro
 - \`gi callgraph <symbol> [--direction callers|callees|both] [--depth N]\` — call hierarchy tree with locations.
 - \`gi impact [--symbols A,B] [--files X,Y] [--diff] [--depth N]\` — blast radius of a change: dependents by distance, tests that exercise them, files that change together.
 - \`gi outline [path] [--focus TEXT] [--max-tokens N]\` — skeleton of a file, or a ranked map of a directory/the repository.
-Typical workflow: search → symbol → refs/callgraph before changing a signature → impact --diff before finishing. Use grep for string literals, config values and non-code files.`;
+Typical workflow: search → symbol → refs/callgraph before changing a signature → impact --diff before finishing.${grep ? ' Use grep for string literals, config values and non-code files.' : ''}`;
 }
 
 /** Integrated card: decision rules plus the verification/search commands of the integration. */
-function integratedCard(gi, caps = {}) {
+function integratedCard(gi, caps = {}, { grep = true } = {}) {
+    const textRule = grep
+        ? `plain grep only for strings, config, docs and non-code files${caps.grep ? ` — or \`gi grep\`, which also says which definition each match refers to` : ''}`
+        : caps.grep ? `\`gi grep\` for strings, config, docs and non-code files (it also says which definition each code match refers to)` : 'read the files for strings, config and docs';
     const lines = [`## graph-indexer (code index for this repository)
 A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).
 
 When to use what:
-- You know an identifier and need its definition or uses → \`gi symbol\` / \`gi refs\` (exact, tells same-name methods apart); plain grep only for strings, config, docs and non-code files${caps.grep ? ` — or \`gi grep\`, which also says which definition each match refers to` : ''}.
+- You know an identifier and need its definition or uses → \`gi symbol\` / \`gi refs\` (exact, tells same-name methods apart); ${textRule}.
 - You need to find code for a behaviour described in words → \`gi search\`, then \`gi symbol\` on the best hit.
 - Before changing a signature, renaming, or changing behaviour others rely on → \`gi refs\` / \`gi callgraph --direction callers\` to get every call site first.
 ${caps.check ? `- After editing → \`gi check\`: lists call sites that no longer match the new definitions, references to removed names, and the tests to run.\n` : ''}- Before finishing → \`gi impact --diff\` to see what depends on your change and which tests to run.
@@ -60,6 +63,7 @@ const POLICY = {
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
-    const card = arm === 'grep+gi+' || (arm === 'gi' && (caps.grep || caps.check)) ? integratedCard(gi, caps) : basicCard(gi);
+    const grep = arm !== 'gi';
+    const card = arm === 'grep+gi+' || (arm === 'gi' && (caps.grep || caps.check)) ? integratedCard(gi, caps, { grep }) : basicCard(gi, { grep });
     return `# Tools\n${POLICY[arm]}\n\n${card}`;
 }

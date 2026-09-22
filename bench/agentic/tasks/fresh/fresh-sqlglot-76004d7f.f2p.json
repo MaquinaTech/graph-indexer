@@ -1,0 +1,5 @@
+[
+  "tests/dialects/test_mysql.py::TestMySQL::test_mysql",
+  "tests/dialects/test_sqlite.py::TestSQLite::test_sqlite",
+  "tests/dialects/test_tsql.py::TestTSQL::test_tsql"
+]

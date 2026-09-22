@@ -1,0 +1,47 @@
+{
+  "target": {
+    "file": "packages/microservices/helpers/tcp-socket.ts",
+    "cls": "TcpSocket",
+    "name": "connect",
+    "params": 3,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/client/client-grpc.ts",
+      "cls": "ClientGrpcProxy",
+      "name": "connect",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-kafka.ts",
+      "cls": "ClientKafka",
+      "name": "connect",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-mqtt.ts",
+      "cls": "ClientMqtt",
+      "name": "connect",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-nats.ts",
+      "cls": "ClientNats",
+      "name": "connect",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-redis.ts",
+      "cls": "ClientRedis",
+      "name": "connect",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/client/client-rmq.ts",
+      "cls": "ClientRMQ",
+      "name": "connect",
+      "params": 0
+    }
+  ]
+}

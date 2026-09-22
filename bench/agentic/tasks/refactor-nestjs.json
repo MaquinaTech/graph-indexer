@@ -1,0 +1,492 @@
+[
+  {
+    "id": "refactor-nestjs-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `TcpSocket.connect` (declared in `packages/microservices/helpers/tcp-socket.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `connect` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/client/client-tcp.ts:64",
+        "packages/microservices/test/json-socket/helpers.ts:41",
+        "packages/microservices/test/json-socket/connection.spec.ts:197",
+        "packages/microservices/test/json-socket/connection.spec.ts:210"
+      ],
+      "files": [
+        "packages/microservices/client/client-tcp.ts",
+        "packages/microservices/test/json-socket/helpers.ts",
+        "packages/microservices/test/json-socket/connection.spec.ts",
+        "packages/microservices/helpers/tcp-socket.ts"
+      ]
+    },
+    "meta": {
+      "target": "TcpSocket.connect",
+      "path": "packages/microservices/helpers/tcp-socket.ts",
+      "line": 27,
+      "callSites": 4,
+      "files": 3,
+      "decoys": [
+        "ClientGrpcProxy.connect (packages/microservices/client/client-grpc.ts)",
+        "ClientKafka.connect (packages/microservices/client/client-kafka.ts)",
+        "ClientMqtt.connect (packages/microservices/client/client-mqtt.ts)",
+        "ClientNats.connect (packages/microservices/client/client-nats.ts)",
+        "ClientRedis.connect (packages/microservices/client/client-redis.ts)",
+        "ClientRMQ.connect (packages/microservices/client/client-rmq.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 51,
+      "naiveFailure": [
+        "no new type errors: 8301 diagnostics, 29 new (5435 ms) |   integration/microservices/e2e/concurrent-kafka.spec.ts:252 TS2554 Expected 0 arguments, but got 1. |   integration/microservices/src/kafka-concurrent/kafka-concurrent.controller.ts:53 TS2554 Expected 0 arguments, but got 1. |   integration/microservices/src/kafka/kafka.controller.ts:47 TS2554 Expected 0 arguments, but got 1."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-02-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `WsException.getError` (declared in `packages/websockets/errors/ws-exception.ts`) to `getErrorChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `getError` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-02-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/websockets/exceptions/base-ws-exception-filter.ts:28",
+        "packages/websockets/test/exceptions/ws-exception.spec.ts:10",
+        "packages/websockets/test/exceptions/ws-exception.spec.ts:23",
+        "packages/websockets/test/exceptions/ws-exception.spec.ts:34"
+      ],
+      "files": [
+        "packages/websockets/exceptions/base-ws-exception-filter.ts",
+        "packages/websockets/test/exceptions/ws-exception.spec.ts",
+        "packages/websockets/errors/ws-exception.ts"
+      ]
+    },
+    "meta": {
+      "target": "WsException.getError",
+      "path": "packages/websockets/errors/ws-exception.ts",
+      "line": 24,
+      "callSites": 4,
+      "files": 2,
+      "decoys": [
+        "KafkaRetriableException.getError (packages/microservices/exceptions/kafka-retriable-exception.ts)",
+        "RpcException.getError (packages/microservices/exceptions/rpc-exception.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 9,
+      "naiveFailure": [
+        "no new type errors: 8277 diagnostics, 5 new (5322 ms) |   packages/microservices/exceptions/base-rpc-exception-filter.ts:21 TS2339 Property 'getErrorChecked' does not exist on type 'T & RpcException'. |   packages/microservices/test/exceptions/rpc-exception.spec.ts:10 TS2339 Property 'getErrorChecked' does not exist on type 'RpcException'. |   packages/microservices/test/exceptions/rpc-exception.spec.ts:23 TS2339 Property 'getErrorChecked' does not exist on type 'RpcException'."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-03-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ClientMqtt.createResponseCallback` (declared in `packages/microservices/client/client-mqtt.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `createResponseCallback` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-03-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/client/client-mqtt.ts:68",
+        "packages/microservices/test/client/client-mqtt.spec.ts:174",
+        "packages/microservices/test/client/client-mqtt.spec.ts:191",
+        "packages/microservices/test/client/client-mqtt.spec.ts:219"
+      ],
+      "files": [
+        "packages/microservices/client/client-mqtt.ts",
+        "packages/microservices/test/client/client-mqtt.spec.ts",
+        "packages/microservices/client/client-mqtt.ts"
+      ]
+    },
+    "meta": {
+      "target": "ClientMqtt.createResponseCallback",
+      "path": "packages/microservices/client/client-mqtt.ts",
+      "line": 104,
+      "callSites": 4,
+      "files": 2,
+      "decoys": [
+        "ClientKafka.createResponseCallback (packages/microservices/client/client-kafka.ts)",
+        "ClientRedis.createResponseCallback (packages/microservices/client/client-redis.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 14,
+      "naiveFailure": [
+        "no new type errors: 8282 diagnostics, 10 new (5309 ms) |   packages/microservices/client/client-kafka.ts:185 TS2554 Expected 0 arguments, but got 1. |   packages/microservices/client/client-redis.ts:68 TS2554 Expected 0 arguments, but got 1. |   packages/microservices/test/client/client-kafka.spec.ts:470 TS2554 Expected 0 arguments, but got 1."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-04-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `ServerRedis.bindEvents` (declared in `packages/microservices/server/server-redis.ts`) to `bindEventsChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `bindEvents` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-04-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/server/server-redis.ts:62",
+        "packages/microservices/test/server/server-redis.spec.ts:85",
+        "packages/microservices/test/server/server-redis.spec.ts:92",
+        "packages/microservices/test/server/server-redis.spec.ts:102",
+        "packages/microservices/test/server/server-redis.spec.ts:115"
+      ],
+      "files": [
+        "packages/microservices/server/server-redis.ts",
+        "packages/microservices/test/server/server-redis.spec.ts",
+        "packages/microservices/server/server-redis.ts"
+      ]
+    },
+    "meta": {
+      "target": "ServerRedis.bindEvents",
+      "path": "packages/microservices/server/server-redis.ts",
+      "line": 68,
+      "callSites": 5,
+      "files": 2,
+      "decoys": [
+        "ClientTCP.bindEvents (packages/microservices/client/client-tcp.ts)",
+        "ServerGrpc.bindEvents (packages/microservices/server/server-grpc.ts)",
+        "ServerKafka.bindEvents (packages/microservices/server/server-kafka.ts)",
+        "ServerMqtt.bindEvents (packages/microservices/server/server-mqtt.ts)",
+        "ServerNats.bindEvents (packages/microservices/server/server-nats.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 20,
+      "naiveFailure": [
+        "no new type errors: 8287 diagnostics, 15 new (5338 ms) |   packages/microservices/client/client-tcp.ts:50 TS2339 Property 'bindEventsChecked' does not exist on type 'ClientTCP'. |   packages/microservices/server/server-grpc.ts:87 TS2339 Property 'bindEventsChecked' does not exist on type 'ServerGrpc'. |   packages/microservices/server/server-kafka.ts:111 TS2339 Property 'bindEventsChecked' does not exist on type 'ServerKafka'."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-05-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `RpcParamsFactory.exchangeKeyForValue` (declared in `packages/microservices/factories/rpc-params-factory.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `exchangeKeyForValue` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-05-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/context/rpc-context-creator.ts:239",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts:19",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts:24",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts:31",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts:38",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts:43"
+      ],
+      "files": [
+        "packages/microservices/context/rpc-context-creator.ts",
+        "packages/microservices/test/factories/rpc-params-factory.spec.ts",
+        "packages/microservices/factories/rpc-params-factory.ts"
+      ]
+    },
+    "meta": {
+      "target": "RpcParamsFactory.exchangeKeyForValue",
+      "path": "packages/microservices/factories/rpc-params-factory.ts",
+      "line": 4,
+      "callSites": 6,
+      "files": 2,
+      "decoys": [
+        "RouteParamsFactory.exchangeKeyForValue (packages/core/router/route-params-factory.ts)",
+        "WsParamsFactory.exchangeKeyForValue (packages/websockets/factories/ws-params-factory.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 7,
+      "naiveCallEdits": 28,
+      "naiveFailure": [
+        "no new type errors: 8275 diagnostics, 8 new (5361 ms) |   packages/core/helpers/external-context-creator.ts:286 TS2554 Expected 3 arguments, but got 4. |   packages/core/router/router-execution-context.ts:321 TS2554 Expected 3 arguments, but got 4. |   packages/websockets/context/ws-context-creator.ts:234 TS2554 Expected 3 arguments, but got 4."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-06-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `StreamableFile.getHeaders` (declared in `packages/common/file-stream/streamable-file.ts`) to `getHeadersChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `getHeaders` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-06-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/platform-express/adapters/express-adapter.ts:73",
+        "packages/platform-fastify/adapters/fastify-adapter.ts:361",
+        "packages/common/test/file-stream/streamable-file.spec.ts:24",
+        "packages/common/test/file-stream/streamable-file.spec.ts:39"
+      ],
+      "files": [
+        "packages/platform-express/adapters/express-adapter.ts",
+        "packages/platform-fastify/adapters/fastify-adapter.ts",
+        "packages/common/test/file-stream/streamable-file.spec.ts",
+        "packages/common/file-stream/streamable-file.ts"
+      ]
+    },
+    "meta": {
+      "target": "StreamableFile.getHeaders",
+      "path": "packages/common/file-stream/streamable-file.ts",
+      "line": 57,
+      "callSites": 4,
+      "files": 3,
+      "decoys": [
+        "NatsContext.getHeaders (packages/microservices/ctx-host/nats.context.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 7,
+      "naiveFailure": [
+        "no new type errors: 8274 diagnostics, 2 new (5284 ms) |   integration/microservices/src/nats/nats.controller.ts:84 TS2339 Property 'getHeadersChecked' does not exist on type 'NatsContext'. |   packages/microservices/test/ctx-host/nats.context.spec.ts:18 TS2339 Property 'getHeadersChecked' does not exist on type 'NatsContext'."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-07-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ApplicationConfig.enableVersioning` (declared in `packages/core/application-config.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `enableVersioning` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-07-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/nest-application.ts:289",
+        "packages/core/test/application-config.spec.ts:135",
+        "packages/core/test/application-config.spec.ts:142",
+        "packages/core/test/middleware/builder.spec.ts:29",
+        "packages/core/test/middleware/route-info-path-extractor.spec.ts:14",
+        "packages/core/test/middleware/route-info-path-extractor.spec.ts:103",
+        "packages/core/test/middleware/routes-mapper.spec.ts:31",
+        "packages/core/test/router/routes-resolver.spec.ts:175"
+      ],
+      "files": [
+        "packages/core/nest-application.ts",
+        "packages/core/test/application-config.spec.ts",
+        "packages/core/test/middleware/builder.spec.ts",
+        "packages/core/test/middleware/route-info-path-extractor.spec.ts",
+        "packages/core/test/middleware/routes-mapper.spec.ts",
+        "packages/core/test/router/routes-resolver.spec.ts",
+        "packages/core/application-config.ts"
+      ]
+    },
+    "meta": {
+      "target": "ApplicationConfig.enableVersioning",
+      "path": "packages/core/application-config.ts",
+      "line": 138,
+      "callSites": 8,
+      "files": 6,
+      "decoys": [
+        "NestApplication.enableVersioning (packages/core/nest-application.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 9,
+      "naiveCallEdits": 31,
+      "naiveFailure": [
+        "no new type errors: 8295 diagnostics, 23 new (5403 ms) |   integration/hello-world/e2e/middleware-with-versioning.spec.ts:164 TS2554 Expected 0-1 arguments, but got 2. |   integration/inspector/e2e/graph-inspector.spec.ts:47 TS2345 Argument of type 'false' is not assignable to parameter of type 'VersioningOptions | undefined'. |   integration/versioning/e2e/custom-versioning-fastify.spec.ts:38 TS2554 Expected 0-1 arguments, but got 2."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-08-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `ContextCreator.createContext` (declared in `packages/core/helpers/context-creator.ts`) to `createContextChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `createContext` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-08-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/exceptions/external-exception-filter-context.ts:32",
+        "packages/core/guards/guards-context-creator.ts:30",
+        "packages/core/interceptors/interceptors-context-creator.ts:29",
+        "packages/core/pipes/pipes-context-creator.ts:29",
+        "packages/core/router/router-exception-filters.ts:33",
+        "packages/microservices/context/exception-filters-context.ts:34",
+        "packages/websockets/context/exception-filters-context.ts:23"
+      ],
+      "files": [
+        "packages/core/exceptions/external-exception-filter-context.ts",
+        "packages/core/guards/guards-context-creator.ts",
+        "packages/core/interceptors/interceptors-context-creator.ts",
+        "packages/core/pipes/pipes-context-creator.ts",
+        "packages/core/router/router-exception-filters.ts",
+        "packages/microservices/context/exception-filters-context.ts",
+        "packages/websockets/context/exception-filters-context.ts",
+        "packages/core/helpers/context-creator.ts"
+      ]
+    },
+    "meta": {
+      "target": "ContextCreator.createContext",
+      "path": "packages/core/helpers/context-creator.ts",
+      "line": 16,
+      "callSites": 7,
+      "files": 7,
+      "decoys": [
+        "GuardsConsumer.createContext (packages/core/guards/guards-consumer.ts)",
+        "InterceptorsConsumer.createContext (packages/core/interceptors/interceptors-consumer.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 8,
+      "naiveCallEdits": 10,
+      "naiveFailure": [
+        "no new type errors: 8273 diagnostics, 3 new (5351 ms) |   packages/core/guards/guards-consumer.ts:18 TS2339 Property 'createContextChecked' does not exist on type 'GuardsConsumer'. |   packages/core/interceptors/interceptors-consumer.ts:25 TS2339 Property 'createContextChecked' does not exist on type 'InterceptorsConsumer'. |   packages/core/test/interceptors/interceptors-consumer.spec.ts:147 TS2339 Property 'createContextChecked' does not exist on type 'InterceptorsConsumer'."
+      ]
+    }
+  }
+]

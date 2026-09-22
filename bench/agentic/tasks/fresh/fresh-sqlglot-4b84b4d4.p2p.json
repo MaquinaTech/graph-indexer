@@ -1,0 +1,7 @@
+[
+  "tests/dialects/test_fabric.py::TestFabric::test_precision_capping",
+  "tests/dialects/test_fabric.py::TestFabric::test_timestamptz_with_at_time_zone",
+  "tests/dialects/test_fabric.py::TestFabric::test_timestamptz_without_at_time_zone",
+  "tests/dialects/test_fabric.py::TestFabric::test_unix_to_time",
+  "tests/dialects/test_fabric.py::TestFabric::test_varchar_precision_inference"
+]

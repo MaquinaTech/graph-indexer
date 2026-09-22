@@ -1,0 +1,5 @@
+[
+  "networkx/readwrite/tests/test_p2g.py::TestP2G::test_read_p2g",
+  "networkx/readwrite/tests/test_p2g.py::TestP2G::test_write_p2g",
+  "networkx/readwrite/tests/test_p2g.py::TestP2G::test_write_read_p2g"
+]

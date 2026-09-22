@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_mysql.py::TestMySQL::test_show_create_qualified"
+]

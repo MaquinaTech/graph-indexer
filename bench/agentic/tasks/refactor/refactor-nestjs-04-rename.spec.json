@@ -1,0 +1,41 @@
+{
+  "target": {
+    "file": "packages/microservices/server/server-redis.ts",
+    "cls": "ServerRedis",
+    "name": "bindEvents",
+    "newName": "bindEventsChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/client/client-tcp.ts",
+      "cls": "ClientTCP",
+      "name": "bindEvents",
+      "params": 1
+    },
+    {
+      "file": "packages/microservices/server/server-grpc.ts",
+      "cls": "ServerGrpc",
+      "name": "bindEvents",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/server/server-kafka.ts",
+      "cls": "ServerKafka",
+      "name": "bindEvents",
+      "params": 1
+    },
+    {
+      "file": "packages/microservices/server/server-mqtt.ts",
+      "cls": "ServerMqtt",
+      "name": "bindEvents",
+      "params": 1
+    },
+    {
+      "file": "packages/microservices/server/server-nats.ts",
+      "cls": "ServerNats",
+      "name": "bindEvents",
+      "params": 1
+    }
+  ]
+}
