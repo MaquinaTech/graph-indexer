@@ -1,126 +1,55 @@
 {
     "name": "graph-indexer",
-    "version": "2.1.1",
-    "description": "Air-gapped code-retrieval MCP server: AST chunking, hybrid RRF search and cross-language call graph, with an optional zero-dependency SQLite backend for monorepo scale and optional local-LLM semantic enrichment.",
+    "version": "3.0.0",
+    "description": "Live code graph and search for AI coding agents over MCP: tree-sitter (WASM) symbols, scope/import/type-aware references, call graphs, change impact and hybrid search — local, zero-dependency, no native builds.",
     "type": "module",
-    "main": "engine/memory.mjs",
+    "main": "src/query/intel.mjs",
     "exports": {
-        ".": "./engine/memory.mjs"
+        ".": "./src/query/intel.mjs",
+        "./mcp": "./src/mcp/server.mjs"
     },
     "bin": {
-        "graph-indexer": "init.mjs",
-        "idx-index": "indexer.mjs",
-        "idx-watch": "watch-daemon.mjs",
-        "idx-daemon": "daemon-ctl.mjs",
-        "idx-mcp": "mcp-server.mjs"
+        "graph-indexer": "bin/graph-indexer.mjs",
+        "idx-mcp": "bin/graph-indexer.mjs",
+        "idx-index": "bin/graph-indexer.mjs"
     },
     "files": [
-        "*.mjs",
-        "engine/",
-        "mcp/",
-        "parse/",
-        "embedders/setup-mlx.mjs",
-        "embedders/python/mlx_embed_server.py",
-        "embedders/python/requirements-mlx.txt",
-        "!embedders/python/test_servers.mjs",
-        "prompts/",
+        "bin/",
+        "src/",
+        "vendor/",
         "README.md",
         "CHANGELOG.md",
         "SECURITY.md",
         "TRADEMARK.md",
         "LICENSE"
     ],
+    "scripts": {
+        "test": "node --test test/*.test.mjs",
+        "bench": "node bench/eval-search.mjs",
+        "bench:graph": "node bench/eval-graph.mjs",
+        "bench:localize": "node bench/eval-localize.mjs",
+        "fixtures": "node bench/fixtures.mjs",
+        "start": "node bin/graph-indexer.mjs serve",
+        "index": "node bin/graph-indexer.mjs index"
+    },
+    "engines": {
+        "node": ">=22.5.0"
+    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/MaquinaTech/graph-indexer.git"
     },
-    "scripts": {
-        "start": "node ./mcp-server.mjs",
-        "test": "node test/run.mjs",
-        "test:unit": "node test/unit.mjs",
-        "test:sqlite": "node test/sqlite.mjs",
-        "test:enrich": "node test/enrichment.mjs",
-        "test:mcp": "node test/mcp.mjs",
-        "test:scale": "node test/scale.mjs",
-        "test:callgraph": "node test/callgraph.mjs",
-        "test:edges": "node test/edges.mjs",
-        "test:references": "node test/references.mjs",
-        "test:routes": "node test/routes.mjs",
-        "test:jsonout": "node test/json-output.mjs",
-        "test:gitsignals": "node test/git-signals.mjs",
-        "test:security": "node test/security.mjs",
-        "test:seal": "node test/seal.mjs",
-        "test:taint": "node test/taint.mjs",
-        "test:scip": "node test/scip.mjs",
-        "test:ranker": "node test/ranker.mjs",
-        "test:sparse": "node test/sparse.mjs",
-        "test:colbert": "node test/colbert.mjs",
-        "test:embed": "node test/embeddings.mjs",
-        "test:languages": "node test/languages.mjs",
-        "test:all": "node test/unit.mjs && node test/sqlite.mjs && node test/enrichment.mjs && node test/mcp.mjs && node test/scale.mjs && node test/callgraph.mjs && node test/edges.mjs && node test/references.mjs && node test/routes.mjs && node test/json-output.mjs && node test/git-signals.mjs && node test/security.mjs && node test/seal.mjs && node test/taint.mjs && node test/scip.mjs && node test/ranker.mjs && node test/sparse.mjs && node test/colbert.mjs && node test/embeddings.mjs && node test/languages.mjs",
-        "test:eval": "node test/evaluate.mjs",
-        "test:eval:embeddings": "OLLAMA_HOST=http://localhost:11434 node test/evaluate.mjs --embeddings",
-        "test:setup": "node test/setup.mjs",
-        "test:run": "node test/run.mjs",
-        "test:embeddings": "OLLAMA_HOST=http://localhost:11434 node test/run-embeddings.mjs",
-        "test:embeddings:skip": "OLLAMA_HOST=http://localhost:11434 node test/run-embeddings.mjs --skip-indexing",
-        "test:suite": "node test/run.mjs --suite",
-        "test:json": "node test/run.mjs --json",
-        "test:reset": "rm -rf test/fixtures && node test/setup.mjs",
-        "embed:setup:mlx": "node embedders/setup-mlx.mjs",
-        "embed:setup:local": "npm install @huggingface/transformers",
-        "mcp:index": "idx-index --repo .",
-        "mcp:index:sqlite": "node indexer.mjs --repo . --use-sqlite",
-        "mcp:index:enriched": "node indexer.mjs --repo . --enrichment",
-        "mcp:watch": "node watch-daemon.mjs",
-        "mcp:start": "idx-mcp",
-        "mcp:daemon": "node daemon-ctl.mjs status",
-        "mcp:daemon:start": "node daemon-ctl.mjs start",
-        "mcp:daemon:stop": "node daemon-ctl.mjs stop",
-        "mcp:daemon:restart": "node daemon-ctl.mjs restart",
-        "mcp:daemon:status": "node daemon-ctl.mjs status",
-        "mcp:daemon:logs": "node daemon-ctl.mjs logs"
-    },
-    "dependencies": {
-        "@modelcontextprotocol/sdk": "1.29.0",
-        "chokidar": "5.0.0",
-        "ignore": "5.3.2",
-        "tree-sitter": "0.21.1",
-        "zod": "^3.25.76"
-    },
-    "devDependencies": {
-        "@huggingface/transformers": "3.8.1",
-        "hnswlib-node": "3.0.0",
-        "tree-sitter-bash": "0.23.3",
-        "tree-sitter-c": "0.21.4",
-        "tree-sitter-c-sharp": "0.21.3",
-        "tree-sitter-css": "0.21.1",
-        "tree-sitter-go": "0.21.0",
-        "tree-sitter-java": "0.21.0",
-        "tree-sitter-javascript": "0.21.4",
-        "tree-sitter-kotlin": "0.3.8",
-        "tree-sitter-php": "0.23.1",
-        "tree-sitter-python": "0.21.0",
-        "tree-sitter-ruby": "0.23.1",
-        "tree-sitter-rust": "0.21.0",
-        "tree-sitter-scss": "1.0.0",
-        "tree-sitter-swift": "0.5.0",
-        "tree-sitter-typescript": "0.21.2"
-    },
-    "overrides": {
-        "sharp": "^0.35.4"
-    },
     "keywords": [
         "mcp",
         "model-context-protocol",
-        "indexer",
-        "ast",
-        "tree-sitter",
-        "rag",
-        "hybrid-search",
-        "rrf",
+        "code-search",
         "call-graph",
-        "ollama"
+        "tree-sitter",
+        "code-intelligence",
+        "ai-agents",
+        "claude-code",
+        "find-references",
+        "impact-analysis"
     ],
     "author": {
         "name": "MaquinaTech",
@@ -128,17 +57,10 @@
         "email": "nicolopezdelerma@gmail.com"
     },
     "license": "MIT",
-    "engines": {
-        "node": ">=18.0.0"
-    },
     "bugs": {
         "url": "https://github.com/MaquinaTech/graph-indexer/issues"
     },
     "homepage": "https://github.com/MaquinaTech/graph-indexer",
-    "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/MaquinaTech"
-    },
     "publishConfig": {
         "access": "public"
     }

@@ -1,0 +1,6121 @@
+{
+ "axios": {
+  "all": {
+   "n": 43,
+   "r1": 0.7209302325581395,
+   "s5": 0.9302325581395349,
+   "mrr": 0.8033222591362127
+  },
+  "semantic": {
+   "n": 11,
+   "r1": 0.36363636363636365,
+   "s5": 0.9090909090909091,
+   "mrr": 0.5515151515151516
+  },
+  "symbolic": {
+   "n": 32,
+   "r1": 0.84375,
+   "s5": 0.9375,
+   "mrr": 0.8898809523809524
+  },
+  "rows": [
+   {
+    "id": "AX01",
+    "q": "InterceptorManager",
+    "d": "easy",
+    "exp": [
+     "InterceptorManager"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "InterceptorManager",
+     "file": "lib/core/InterceptorManager.js"
+    }
+   },
+   {
+    "id": "AX02",
+    "q": "CancelToken",
+    "d": "easy",
+    "exp": [
+     "CancelToken"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CancelToken",
+     "file": "lib/cancel/CancelToken.js"
+    }
+   },
+   {
+    "id": "AX03",
+    "q": "dispatchRequest",
+    "d": "easy",
+    "exp": [
+     "dispatchRequest"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "dispatchRequest",
+     "file": "lib/core/dispatchRequest.js"
+    }
+   },
+   {
+    "id": "AX04",
+    "q": "mergeConfig",
+    "d": "easy",
+    "exp": [
+     "mergeConfig"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "mergeConfig",
+     "file": "lib/core/mergeConfig.js"
+    }
+   },
+   {
+    "id": "AX05",
+    "q": "CanceledError",
+    "d": "easy",
+    "exp": [
+     "CanceledError"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CanceledError",
+     "file": "lib/cancel/CanceledError.js"
+    }
+   },
+   {
+    "id": "AX06",
+    "q": "createInstance axios defaults",
+    "d": "medium",
+    "exp": [
+     "createInstance"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "createInstance",
+     "file": "lib/axios.js"
+    }
+   },
+   {
+    "id": "AX07",
+    "q": "settle promise resolve reject response",
+    "d": "medium",
+    "exp": [
+     "settle"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "settle",
+     "file": "lib/core/settle.js"
+    }
+   },
+   {
+    "id": "AX08",
+    "q": "buildURL params serializer",
+    "d": "medium",
+    "exp": [
+     "buildURL"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "buildURL",
+     "file": "lib/helpers/buildURL.js"
+    }
+   },
+   {
+    "id": "AX09",
+    "q": "http adapter node request",
+    "d": "medium",
+    "exp": [
+     "http_export_statement",
+     "setProxy",
+     "dispatchBeforeRedirect"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "http_export_statement",
+     "file": "lib/adapters/http.js"
+    }
+   },
+   {
+    "id": "AX10",
+    "q": "xhr adapter XMLHttpRequest browser",
+    "d": "medium",
+    "exp": [
+     "xhr_export_statement",
+     "progressEventReducer"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "index_export_statement",
+     "file": "lib/platform/browser/index.js"
+    }
+   },
+   {
+    "id": "AX11",
+    "q": "transform response data pipeline",
+    "d": "hard",
+    "exp": [
+     "transformData",
+     "transformResponse",
+     "transformRequest"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "transformData",
+     "file": "lib/core/transformData.js"
+    }
+   },
+   {
+    "id": "AX12",
+    "q": "cancel ongoing request abort controller",
+    "d": "hard",
+    "exp": [
+     "CancelToken",
+     "isCancel",
+     "CanceledError"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CancelToken",
+     "file": "lib/cancel/CancelToken.js"
+    }
+   },
+   {
+    "id": "AX13",
+    "q": "combine base url with relative path",
+    "d": "hard",
+    "exp": [
+     "combineURLs",
+     "buildFullPath"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "buildFullPath",
+     "file": "lib/core/buildFullPath.js"
+    }
+   },
+   {
+    "id": "AX14",
+    "q": "interceptor chain promise pipeline",
+    "d": "hard",
+    "exp": [
+     "Axios",
+     "request"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "InterceptorManager",
+     "file": "lib/core/InterceptorManager.js"
+    }
+   },
+   {
+    "id": "AX15",
+    "q": "Intercepting and modifying HTTP requests globally before they leave the browser to add authentication headers",
+    "d": "semantic",
+    "exp": [
+     "InterceptorManager",
+     "request"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "HttpStatusCode",
+     "file": "lib/helpers/HttpStatusCode.js"
+    }
+   },
+   {
+    "id": "AX16",
+    "q": "Stopping an HTTP network call that takes too long or is no longer needed by the user UI",
+    "d": "semantic",
+    "exp": [
+     "CancelToken",
+     "CanceledError",
+     "isCancel"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "HttpStatusCode",
+     "file": "lib/helpers/HttpStatusCode.js"
+    }
+   },
+   {
+    "id": "AX17",
+    "q": "Converting raw JSON strings from the server into JavaScript objects automatically upon receiving a 200 OK",
+    "d": "semantic",
+    "exp": [
+     "transformData",
+     "transformResponse",
+     "defaults"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "stringifySafely",
+     "file": "lib/defaults/index.js"
+    }
+   },
+   {
+    "id": "AX18",
+    "q": "The low-level layer that actually makes the network call using browser built-in APIs",
+    "d": "semantic",
+    "exp": [
+     "xhr_export_statement",
+     "progressEventReducer"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "isURLSameOrigin_export_statement",
+     "file": "lib/helpers/isURLSameOrigin.js"
+    }
+   },
+   {
+    "id": "AX19",
+    "q": "Combining default global configuration with user-provided settings for a specific API call",
+    "d": "semantic",
+    "exp": [
+     "mergeConfig"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "_global",
+     "file": "lib/utils.js"
+    }
+   },
+   {
+    "id": "AX20",
+    "q": "AxiosError",
+    "d": "easy",
+    "exp": [
+     "AxiosError"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "AxiosError",
+     "file": "lib/core/AxiosError.js"
+    }
+   },
+   {
+    "id": "AX21",
+    "q": "toFormData serialize object into multipart form data",
+    "d": "medium",
+    "exp": [
+     "toFormData"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "toFormData",
+     "file": "lib/helpers/toFormData.js"
+    }
+   },
+   {
+    "id": "AX22",
+    "q": "wrap the validateStatus check so a bad HTTP status rejects the promise with an error",
+    "d": "hard",
+    "exp": [
+     "settle"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "settle",
+     "file": "lib/core/settle.js"
+    }
+   },
+   {
+    "id": "AX23",
+    "q": "configure an HTTP proxy and inject Proxy-Authorization on the outgoing node request",
+    "d": "hard",
+    "exp": [
+     "setProxy"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "setProxy",
+     "file": "lib/adapters/http.js"
+    }
+   },
+   {
+    "id": "AX24",
+    "q": "parseHeaders parse a raw HTTP header block into an object",
+    "d": "medium",
+    "exp": [
+     "parseHeaders_export_statement",
+     "ignoreDuplicateOf"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "parseHeaders_export_statement",
+     "file": "lib/helpers/parseHeaders.js"
+    }
+   },
+   {
+    "id": "HO-AX1",
+    "q": "buildFullPath",
+    "d": "easy",
+    "exp": [
+     "buildFullPath"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "buildFullPath",
+     "file": "lib/core/buildFullPath.js"
+    }
+   },
+   {
+    "id": "HO-AX2",
+    "q": "combine a base URL with a relative path into one absolute request URL",
+    "d": "semantic",
+    "exp": [
+     "buildFullPath"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "buildFullPath",
+     "file": "lib/core/buildFullPath.js"
+    }
+   },
+   {
+    "id": "HO-AX3",
+    "q": "AxiosHeaders normalize set get header value",
+    "d": "medium",
+    "exp": [
+     "AxiosHeaders"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "set",
+     "file": "lib/core/AxiosHeaders.js"
+    }
+   },
+   {
+    "id": "HO-AX4",
+    "q": "AxiosURLSearchParams",
+    "d": "easy",
+    "exp": [
+     "AxiosURLSearchParams"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "AxiosURLSearchParams",
+     "file": "lib/helpers/AxiosURLSearchParams.js"
+    }
+   },
+   {
+    "id": "HO-AX5",
+    "q": "speedometer",
+    "d": "easy",
+    "exp": [
+     "speedometer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "speedometer",
+     "file": "lib/helpers/speedometer.js"
+    }
+   },
+   {
+    "id": "HO-AX6",
+    "q": "isAbsoluteURL",
+    "d": "easy",
+    "exp": [
+     "isAbsoluteURL"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "isAbsoluteURL",
+     "file": "lib/helpers/isAbsoluteURL.js"
+    }
+   },
+   {
+    "id": "HO-AX7",
+    "q": "knownAdapters getAdapter pick http or xhr adapter",
+    "d": "medium",
+    "exp": [
+     "knownAdapters"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "knownAdapters",
+     "file": "lib/adapters/adapters.js"
+    }
+   },
+   {
+    "id": "HO-AX8",
+    "q": "progressEventReducer throttle upload download progress events",
+    "d": "medium",
+    "exp": [
+     "progressEventReducer"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "throttle",
+     "file": "lib/helpers/throttle.js"
+    }
+   },
+   {
+    "id": "HO-AX9",
+    "q": "parseProtocol extract the scheme from a url string",
+    "d": "medium",
+    "exp": [
+     "parseProtocol"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "parseProtocol",
+     "file": "lib/helpers/parseProtocol.js"
+    }
+   },
+   {
+    "id": "HO-AX10",
+    "q": "formDataToJSON turn submitted form fields with bracket paths into a nested object",
+    "d": "medium",
+    "exp": [
+     "formDataToJSON",
+     "parsePropPath"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "formDataToJSON",
+     "file": "lib/helpers/formDataToJSON.js"
+    }
+   },
+   {
+    "id": "HO-AX11",
+    "q": "deep merge two plain config objects recursively combining nested keys",
+    "d": "hard",
+    "exp": [
+     "merge"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "merge",
+     "file": "lib/utils.js"
+    }
+   },
+   {
+    "id": "HO-AX12",
+    "q": "rate limiter that ignores calls happening more often than a fixed frequency",
+    "d": "hard",
+    "exp": [
+     "throttle"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "deprecatedMethod",
+     "file": "lib/helpers/deprecatedMethod.js"
+    }
+   },
+   {
+    "id": "HO-AX13",
+    "q": "throw a CanceledError if the token has already been aborted before sending",
+    "d": "hard",
+    "exp": [
+     "throwIfCancellationRequested",
+     "CanceledError"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CanceledError",
+     "file": "lib/cancel/CanceledError.js"
+    }
+   },
+   {
+    "id": "HO-AX14",
+    "q": "normalize a header name to lowercase and coerce its value before storing",
+    "d": "hard",
+    "exp": [
+     "normalizeHeader",
+     "normalizeValue"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "normalize",
+     "file": "lib/core/AxiosHeaders.js"
+    }
+   },
+   {
+    "id": "HO-AX15",
+    "q": "Building a single absolute request URL by serialising query parameters and joining the base URL with the relative path",
+    "d": "semantic",
+    "exp": [
+     "buildURL",
+     "combineURLs",
+     "buildFullPath"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "buildFullPath",
+     "file": "lib/core/buildFullPath.js"
+    }
+   },
+   {
+    "id": "HO-AX16",
+    "q": "Streaming a multipart upload body part by part so large files are not buffered entirely in memory",
+    "d": "semantic",
+    "exp": [
+     "formDataToStream",
+     "FormDataPart"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "formDataToStream",
+     "file": "lib/helpers/formDataToStream.js"
+    }
+   },
+   {
+    "id": "HO-AX17",
+    "q": "Following a redirect while re-applying the same proxy settings the original request used",
+    "d": "semantic",
+    "exp": [
+     "dispatchBeforeRedirect",
+     "setProxy"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "isURLSameOrigin_export_statement",
+     "file": "lib/helpers/isURLSameOrigin.js"
+    }
+   },
+   {
+    "id": "HO-AX18",
+    "q": "Decompressing a gzip or brotli encoded HTTP response body stream as it arrives",
+    "d": "semantic",
+    "exp": [
+     "zlibOptions",
+     "brotliOptions",
+     "supportedProtocols"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "http_export_statement",
+     "file": "lib/adapters/http.js"
+    }
+   },
+   {
+    "id": "HO-AX19",
+    "q": "Reading the value of a browser cookie by name to attach the XSRF token to a request",
+    "d": "semantic",
+    "exp": [
+     "cookies_export_statement"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cookies_export_statement",
+     "file": "lib/helpers/cookies.js"
+    }
+   }
+  ]
+ },
+ "express-js": {
+  "all": {
+   "n": 42,
+   "r1": 0.5952380952380952,
+   "s5": 0.8571428571428571,
+   "mrr": 0.7047902494331065
+  },
+  "semantic": {
+   "n": 13,
+   "r1": 0.3076923076923077,
+   "s5": 0.5384615384615384,
+   "mrr": 0.4116300366300366
+  },
+  "symbolic": {
+   "n": 29,
+   "r1": 0.7241379310344828,
+   "s5": 1,
+   "mrr": 0.836206896551724
+  },
+  "rows": [
+   {
+    "id": "EX01",
+    "q": "createApplication",
+    "d": "easy",
+    "exp": [
+     "createApplication"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "createApplication",
+     "file": "lib/express.js"
+    }
+   },
+   {
+    "id": "EX02",
+    "q": "Layer match path",
+    "d": "easy",
+    "exp": [
+     "Layer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Layer",
+     "file": "lib/router/layer.js"
+    }
+   },
+   {
+    "id": "EX03",
+    "q": "Route dispatch method",
+    "d": "easy",
+    "exp": [
+     "Route"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Route.prototype.dispatch",
+     "file": "lib/router/route.js"
+    }
+   },
+   {
+    "id": "EX04",
+    "q": "router handle request next",
+    "d": "medium",
+    "exp": [
+     "handle",
+     "proto.handle"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "router",
+     "file": "lib/router/index.js"
+    }
+   },
+   {
+    "id": "EX05",
+    "q": "application listen port server",
+    "d": "medium",
+    "exp": [
+     "listen"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "app.listen",
+     "file": "lib/application.js"
+    }
+   },
+   {
+    "id": "EX06",
+    "q": "response send body content type",
+    "d": "medium",
+    "exp": [
+     "send"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.send",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX07",
+    "q": "response json serialize object",
+    "d": "medium",
+    "exp": [
+     "json"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.json",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX08",
+    "q": "view render template engine",
+    "d": "medium",
+    "exp": [
+     "render",
+     "View"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "View",
+     "file": "lib/view.js"
+    }
+   },
+   {
+    "id": "EX09",
+    "q": "process params router middleware",
+    "d": "medium",
+    "exp": [
+     "process_params"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "proto.param",
+     "file": "lib/router/index.js"
+    }
+   },
+   {
+    "id": "EX10",
+    "q": "request get header accept",
+    "d": "medium",
+    "exp": [
+     "req.get",
+     "req.header",
+     "req.accepts"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "req.accepts",
+     "file": "lib/request.js"
+    }
+   },
+   {
+    "id": "EX11",
+    "q": "redirect response permanent temporary",
+    "d": "hard",
+    "exp": [
+     "redirect"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.redirect",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX12",
+    "q": "initialise request response locals app",
+    "d": "hard",
+    "exp": [
+     "exports.init",
+     "init"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "res.render",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX13",
+    "q": "mount sub application use path middleware stack",
+    "d": "hard",
+    "exp": [
+     "use"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "app.use",
+     "file": "lib/application.js"
+    }
+   },
+   {
+    "id": "EX14",
+    "q": "content negotiation accept header format",
+    "d": "hard",
+    "exp": [
+     "req.accepts",
+     "req.acceptsEncodings",
+     "req.acceptsCharsets",
+     "res.format",
+     "format"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.format",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX15",
+    "q": "iterate registered middleware functions in order passing request response and next callback",
+    "d": "semantic",
+    "exp": [
+     "handle",
+     "Layer"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "res.render",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX16",
+    "q": "serialize JavaScript value to JSON string and write body with correct content type header",
+    "d": "semantic",
+    "exp": [
+     "json"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.json",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX17",
+    "q": "How does the application parse incoming JSON payloads from the client?",
+    "d": "semantic",
+    "exp": [
+     "json"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.json",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX18",
+    "q": "Where is the logic that decides if a requested URL matches a registered route?",
+    "d": "semantic",
+    "exp": [
+     "match"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "Route",
+     "file": "lib/router/route.js"
+    }
+   },
+   {
+    "id": "EX19",
+    "q": "The global error handler that catches exceptions and sends a 500 status code",
+    "d": "semantic",
+    "exp": [
+     "logerror",
+     "handle"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "res.send",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX20",
+    "q": "Mechanism to render HTML templates and views for the user",
+    "d": "semantic",
+    "exp": [
+     "render"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "app.render",
+     "file": "lib/application.js"
+    }
+   },
+   {
+    "id": "EX21",
+    "q": "Constructing and formatting the final HTTP response to send back to the browser",
+    "d": "semantic",
+    "exp": [
+     "send",
+     "json",
+     "sendFile"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "res.sendStatus",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX22",
+    "q": "res.cookie set Set-Cookie header with options",
+    "d": "medium",
+    "exp": [
+     "res.cookie"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.cookie",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "EX23",
+    "q": "decode URL-encoded route parameter value",
+    "d": "hard",
+    "exp": [
+     "decode_param"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Route",
+     "file": "lib/router/route.js"
+    }
+   },
+   {
+    "id": "HO-EX1",
+    "q": "sendfile",
+    "d": "easy",
+    "exp": [
+     "sendfile"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "sendfile",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX2",
+    "q": "parse an Accept header into acceptable media types ordered by quality",
+    "d": "semantic",
+    "exp": [
+     "acceptParams"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "req.accepts",
+     "file": "lib/request.js"
+    }
+   },
+   {
+    "id": "HO-EX3",
+    "q": "Router",
+    "d": "easy",
+    "exp": [
+     "Router"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "router",
+     "file": "lib/router/index.js"
+    }
+   },
+   {
+    "id": "HO-EX4",
+    "q": "res.vary",
+    "d": "easy",
+    "exp": [
+     "res.vary"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.vary",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX5",
+    "q": "View prototype lookup resolve template file path",
+    "d": "easy",
+    "exp": [
+     "View.prototype.lookup"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "View",
+     "file": "lib/view.js"
+    }
+   },
+   {
+    "id": "HO-EX6",
+    "q": "app.set setting configuration value",
+    "d": "easy",
+    "exp": [
+     "app.set"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "createApplication",
+     "file": "lib/express.js"
+    }
+   },
+   {
+    "id": "HO-EX7",
+    "q": "req.range parse Range header byte ranges",
+    "d": "medium",
+    "exp": [
+     "req.range"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "req.range",
+     "file": "lib/request.js"
+    }
+   },
+   {
+    "id": "HO-EX8",
+    "q": "res.jsonp JSONP callback wrapped response",
+    "d": "medium",
+    "exp": [
+     "res.jsonp"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.jsonp",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX9",
+    "q": "app.lazyrouter create the router on first use",
+    "d": "medium",
+    "exp": [
+     "app.lazyrouter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "app.lazyrouter",
+     "file": "lib/application.js"
+    }
+   },
+   {
+    "id": "HO-EX10",
+    "q": "query string parsing middleware that populates req.query",
+    "d": "medium",
+    "exp": [
+     "module.exports"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "module.exports",
+     "file": "lib/middleware/query.js"
+    }
+   },
+   {
+    "id": "HO-EX11",
+    "q": "normalize a content-type shorthand like json into a full MIME type",
+    "d": "hard",
+    "exp": [
+     "exports.normalizeType",
+     "exports.normalizeTypes"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "res.json",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX12",
+    "q": "compile the trust proxy setting into a predicate function",
+    "d": "hard",
+    "exp": [
+     "exports.compileTrust"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "app.set",
+     "file": "lib/application.js"
+    }
+   },
+   {
+    "id": "HO-EX13",
+    "q": "generate an ETag value from the response body for cache validation",
+    "d": "hard",
+    "exp": [
+     "createETagGenerator",
+     "exports.compileETag"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "createETagGenerator",
+     "file": "lib/utils.js"
+    }
+   },
+   {
+    "id": "HO-EX14",
+    "q": "verify a submitted username and password against the stored salted hash",
+    "d": "semantic",
+    "exp": [
+     "authenticate"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "hash",
+     "file": "examples/auth/index.js"
+    }
+   },
+   {
+    "id": "HO-EX15",
+    "q": "block a request and bounce to the login page when there is no active session user",
+    "d": "semantic",
+    "exp": [
+     "restrict"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "res.download",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX16",
+    "q": "stream a file from disk to the client as the HTTP response",
+    "d": "semantic",
+    "exp": [
+     "res.sendFile",
+     "sendfile",
+     "res.download"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.sendfile",
+     "file": "lib/response.js"
+    }
+   },
+   {
+    "id": "HO-EX17",
+    "q": "merge captured route parameters from a parent router into the child request params",
+    "d": "semantic",
+    "exp": [
+     "mergeParams"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "proto.param",
+     "file": "lib/router/index.js"
+    }
+   },
+   {
+    "id": "HO-EX18",
+    "q": "find which registered layer matches the current request path during dispatch",
+    "d": "semantic",
+    "exp": [
+     "matchLayer",
+     "Layer.prototype.match"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "Layer",
+     "file": "lib/router/layer.js"
+    }
+   },
+   {
+    "id": "HO-EX19",
+    "q": "res.location set Location header resolve back referrer",
+    "d": "medium",
+    "exp": [
+     "res.location"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "res.location",
+     "file": "lib/response.js"
+    }
+   }
+  ]
+ },
+ "gin": {
+  "all": {
+   "n": 39,
+   "r1": 0.717948717948718,
+   "s5": 0.9487179487179487,
+   "mrr": 0.7914529914529914
+  },
+  "semantic": {
+   "n": 6,
+   "r1": 0.16666666666666666,
+   "s5": 0.8333333333333334,
+   "mrr": 0.33888888888888885
+  },
+  "symbolic": {
+   "n": 33,
+   "r1": 0.8181818181818182,
+   "s5": 0.9696969696969697,
+   "mrr": 0.8737373737373736
+  },
+  "rows": [
+   {
+    "id": "GN01",
+    "q": "Engine",
+    "d": "easy",
+    "exp": [
+     "Engine",
+     "New",
+     "Default"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "engine",
+     "file": "ginS/gins.go"
+    }
+   },
+   {
+    "id": "GN02",
+    "q": "RouterGroup",
+    "d": "easy",
+    "exp": [
+     "RouterGroup"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "RouterGroup",
+     "file": "routergroup.go"
+    }
+   },
+   {
+    "id": "GN03",
+    "q": "Recovery panic",
+    "d": "easy",
+    "exp": [
+     "Recovery"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Recovery",
+     "file": "recovery.go"
+    }
+   },
+   {
+    "id": "GN04",
+    "q": "BasicAuth",
+    "d": "easy",
+    "exp": [
+     "BasicAuth"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "BasicAuth",
+     "file": "auth.go"
+    }
+   },
+   {
+    "id": "GN05",
+    "q": "Context JSON response write",
+    "d": "medium",
+    "exp": [
+     "JSON",
+     "WriteJSON"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Write",
+     "file": "response_writer.go"
+    }
+   },
+   {
+    "id": "GN06",
+    "q": "ShouldBindJSON bind request body",
+    "d": "medium",
+    "exp": [
+     "ShouldBindJSON",
+     "ShouldBind",
+     "BindJSON"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ShouldBindJSON",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "GN07",
+    "q": "Logger middleware request log",
+    "d": "medium",
+    "exp": [
+     "Logger",
+     "LoggerWithConfig",
+     "LoggerWithWriter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Logger",
+     "file": "logger.go"
+    }
+   },
+   {
+    "id": "GN08",
+    "q": "GET POST route handler register",
+    "d": "medium",
+    "exp": [
+     "GET",
+     "POST",
+     "Handle",
+     "handle",
+     "Any"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "POST",
+     "file": "routergroup.go"
+    }
+   },
+   {
+    "id": "GN09",
+    "q": "Run listen address port",
+    "d": "medium",
+    "exp": [
+     "Run"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Run",
+     "file": "gin.go"
+    }
+   },
+   {
+    "id": "GN10",
+    "q": "radix tree route insertion node",
+    "d": "hard",
+    "exp": [
+     "addRoute",
+     "insertChild",
+     "getValue",
+     "node"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "node",
+     "file": "tree.go"
+    }
+   },
+   {
+    "id": "GN11",
+    "q": "path parameter url segment extract",
+    "d": "hard",
+    "exp": [
+     "Param",
+     "Params",
+     "getValue"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "cleanPath",
+     "file": "path.go"
+    }
+   },
+   {
+    "id": "GN12",
+    "q": "abort request middleware chain stop",
+    "d": "hard",
+    "exp": [
+     "Abort",
+     "AbortWithStatus",
+     "AbortWithError"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Abort",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "GN13",
+    "q": "group route prefix middleware use",
+    "d": "hard",
+    "exp": [
+     "Group",
+     "Use"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Group",
+     "file": "routergroup.go"
+    }
+   },
+   {
+    "id": "GN14",
+    "q": "Extracting string data submitted via an HTML form POST request safely",
+    "d": "semantic",
+    "exp": [
+     "PostForm",
+     "DefaultPostForm"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "Instance",
+     "file": "render/html.go"
+    }
+   },
+   {
+    "id": "GN15",
+    "q": "Safely recovering from a runtime crash to prevent the entire web server process from dying",
+    "d": "semantic",
+    "exp": [
+     "Recovery",
+     "RecoveryWithWriter"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "function",
+     "file": "recovery.go"
+    }
+   },
+   {
+    "id": "GN16",
+    "q": "Writing an HTTP response containing HTML rendered from a predefined template file",
+    "d": "semantic",
+    "exp": [
+     "HTML"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Render",
+     "file": "render/html.go"
+    }
+   },
+   {
+    "id": "GN17",
+    "q": "Creating the central application object that holds all route definitions and global settings",
+    "d": "semantic",
+    "exp": [
+     "New",
+     "Default",
+     "Engine"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Engine",
+     "file": "gin.go"
+    }
+   },
+   {
+    "id": "GN18",
+    "q": "Grouping multiple API endpoints under a shared version path to apply middleware to all of them",
+    "d": "semantic",
+    "exp": [
+     "Group",
+     "RouterGroup"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "Handle",
+     "file": "routergroup.go"
+    }
+   },
+   {
+    "id": "GN19",
+    "q": "ServeHTTP entrypoint dispatch request to handler",
+    "d": "medium",
+    "exp": [
+     "ServeHTTP",
+     "handleHTTPRequest"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ServeHTTP",
+     "file": "gin.go"
+    }
+   },
+   {
+    "id": "GN20",
+    "q": "ClientIP",
+    "d": "easy",
+    "exp": [
+     "ClientIP"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ClientIP",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "GN21",
+    "q": "call the next handler in the middleware chain",
+    "d": "hard",
+    "exp": [
+     "Next",
+     "combineHandlers"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Next",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "GN22",
+    "q": "serve static files from a directory on disk",
+    "d": "hard",
+    "exp": [
+     "Static",
+     "StaticFS",
+     "createStaticHandler"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Static",
+     "file": "ginS/gins.go"
+    }
+   },
+   {
+    "id": "HO-GN1",
+    "q": "RunTLS",
+    "d": "easy",
+    "exp": [
+     "RunTLS"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "RunTLS",
+     "file": "ginS/gins.go"
+    }
+   },
+   {
+    "id": "HO-GN2",
+    "q": "join two URL path segments while preserving a trailing slash",
+    "d": "semantic",
+    "exp": [
+     "joinPaths"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "cleanPath",
+     "file": "path.go"
+    }
+   },
+   {
+    "id": "HO-GN3",
+    "q": "SecureJSON",
+    "d": "easy",
+    "exp": [
+     "SecureJSON"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "SecureJSON",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN4",
+    "q": "Negotiate",
+    "d": "easy",
+    "exp": [
+     "Negotiate",
+     "NegotiateFormat"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Negotiate",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN5",
+    "q": "validate that a request comes from a trusted reverse proxy before trusting forwarded headers",
+    "d": "hard",
+    "exp": [
+     "SetTrustedProxies",
+     "isTrustedProxy",
+     "validateHeader"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "ClientIP",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN6",
+    "q": "save an uploaded multipart file to disk",
+    "d": "medium",
+    "exp": [
+     "SaveUploadedFile",
+     "FormFile",
+     "MultipartForm"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "SaveUploadedFile",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN7",
+    "q": "Render interface WriteContentType",
+    "d": "medium",
+    "exp": [
+     "Render",
+     "WriteContentType",
+     "writeContentType"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Render",
+     "file": "render/render.go"
+    }
+   },
+   {
+    "id": "HO-GN8",
+    "q": "set a cookie on the HTTP response",
+    "d": "medium",
+    "exp": [
+     "SetCookie",
+     "Cookie"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Cookie",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN9",
+    "q": "longestCommonPrefix",
+    "d": "easy",
+    "exp": [
+     "longestCommonPrefix"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "longestCommonPrefix",
+     "file": "tree.go"
+    }
+   },
+   {
+    "id": "HO-GN10",
+    "q": "redirect to the canonical path when a trailing slash mismatches",
+    "d": "hard",
+    "exp": [
+     "redirectTrailingSlash",
+     "redirectFixedPath",
+     "cleanPath"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Redirect",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN11",
+    "q": "resolve the listen address falling back to the PORT environment variable",
+    "d": "hard",
+    "exp": [
+     "resolveAddress"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "resolveAddress",
+     "file": "utils.go"
+    }
+   },
+   {
+    "id": "HO-GN12",
+    "q": "render JSONP with a callback wrapper",
+    "d": "medium",
+    "exp": [
+     "JSONP"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "JSONP",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN13",
+    "q": "HTMLProduction HTMLDebug template render engine",
+    "d": "medium",
+    "exp": [
+     "HTMLProduction",
+     "HTMLDebug",
+     "HTMLRender",
+     "Instance"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "HTMLProduction",
+     "file": "render/html.go"
+    }
+   },
+   {
+    "id": "HO-GN14",
+    "q": "the most recent error attached to the request context",
+    "d": "hard",
+    "exp": [
+     "Last",
+     "Error"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Context",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN15",
+    "q": "combine a group prefix with a relative route path",
+    "d": "medium",
+    "exp": [
+     "calculateAbsolutePath"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Group",
+     "file": "routergroup.go"
+    }
+   },
+   {
+    "id": "HO-GN16",
+    "q": "read the raw request body bytes",
+    "d": "medium",
+    "exp": [
+     "GetRawData"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "GetRawData",
+     "file": "context.go"
+    }
+   },
+   {
+    "id": "HO-GN17",
+    "q": "stream a response body progressively to the client",
+    "d": "hard",
+    "exp": [
+     "Stream",
+     "SSEvent"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Stream",
+     "file": "context.go"
+    }
+   }
+  ]
+ },
+ "spring": {
+  "all": {
+   "n": 42,
+   "r1": 0.5714285714285714,
+   "s5": 0.9285714285714286,
+   "mrr": 0.7119047619047618
+  },
+  "semantic": {
+   "n": 12,
+   "r1": 0.3333333333333333,
+   "s5": 0.8333333333333334,
+   "mrr": 0.5166666666666667
+  },
+  "symbolic": {
+   "n": 30,
+   "r1": 0.6666666666666666,
+   "s5": 0.9666666666666667,
+   "mrr": 0.7899999999999999
+  },
+  "rows": [
+   {
+    "id": "SP01",
+    "q": "OwnerRepository",
+    "d": "easy",
+    "exp": [
+     "OwnerRepository"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "OwnerRepository",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java"
+    }
+   },
+   {
+    "id": "SP02",
+    "q": "PetValidator",
+    "d": "easy",
+    "exp": [
+     "PetValidator"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetValidator",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/PetValidator.java"
+    }
+   },
+   {
+    "id": "SP03",
+    "q": "CrashController",
+    "d": "easy",
+    "exp": [
+     "CrashController"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CrashController",
+     "file": "src/main/java/org/springframework/samples/petclinic/system/CrashController.java"
+    }
+   },
+   {
+    "id": "SP04",
+    "q": "owner repository find by last name pageable",
+    "d": "medium",
+    "exp": [
+     "OwnerRepository"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "SP05",
+    "q": "PetTypeFormatter parse print pet type",
+    "d": "medium",
+    "exp": [
+     "PetTypeFormatter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetTypeFormatter",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/PetTypeFormatter.java"
+    }
+   },
+   {
+    "id": "SP06",
+    "q": "vet controller list veterinarians paginated model",
+    "d": "medium",
+    "exp": [
+     "VetController",
+     "Vets"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Vets",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/Vets.java"
+    }
+   },
+   {
+    "id": "SP07",
+    "q": "handle the web form submission that creates a new pet owner and saves it",
+    "d": "semantic",
+    "exp": [
+     "OwnerController"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "SP08",
+    "q": "reject the form when a pet is missing its name, type, or birth date",
+    "d": "semantic",
+    "exp": [
+     "PetValidator"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "SP09",
+    "q": "record a new appointment booking for a pet belonging to an owner",
+    "d": "semantic",
+    "exp": [
+     "VisitController",
+     "Visit"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "SP10",
+    "q": "set up an in-memory cache so the veterinarian list is not recomputed on every request",
+    "d": "hard",
+    "exp": [
+     "CacheConfiguration"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "CacheConfiguration",
+     "file": "src/main/java/org/springframework/samples/petclinic/system/CacheConfiguration.java"
+    }
+   },
+   {
+    "id": "SP11",
+    "q": "base persistent entity giving every domain object an auto-generated database id",
+    "d": "semantic",
+    "exp": [
+     "BaseEntity",
+     "NamedEntity"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "BaseEntity",
+     "file": "src/main/java/org/springframework/samples/petclinic/model/BaseEntity.java"
+    }
+   },
+   {
+    "id": "SP12",
+    "q": "VetRepository",
+    "d": "easy",
+    "exp": [
+     "VetRepository"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "VetRepository",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/VetRepository.java"
+    }
+   },
+   {
+    "id": "SP13",
+    "q": "PetController",
+    "d": "easy",
+    "exp": [
+     "PetController"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetController",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/PetController.java"
+    }
+   },
+   {
+    "id": "SP14",
+    "q": "Specialty vet specialty entity",
+    "d": "easy",
+    "exp": [
+     "Specialty"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Vet",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/Vet.java"
+    }
+   },
+   {
+    "id": "SP15",
+    "q": "owner entity address city telephone pets list",
+    "d": "medium",
+    "exp": [
+     "Owner"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "SP16",
+    "q": "pet entity birth date type and visits one to many",
+    "d": "medium",
+    "exp": [
+     "Pet"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "SP17",
+    "q": "pet type lookup query order by name find pet types",
+    "d": "medium",
+    "exp": [
+     "PetTypeRepository"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "SP18",
+    "q": "paginate owners by last name prefix and either redirect or show the results list",
+    "d": "medium",
+    "exp": [
+     "OwnerController"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "SP19",
+    "q": "block a duplicate pet name and reject a future birth date before saving the pet",
+    "d": "hard",
+    "exp": [
+     "PetController"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "SP20",
+    "q": "let users switch the UI language through a query parameter and remember it in the session",
+    "d": "hard",
+    "exp": [
+     "WebConfiguration"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "WebConfiguration",
+     "file": "src/main/java/org/springframework/samples/petclinic/system/WebConfiguration.java"
+    }
+   },
+   {
+    "id": "SP21",
+    "q": "convert a typed pet type to and from its display name string for form binding",
+    "d": "semantic",
+    "exp": [
+     "PetTypeFormatter"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "SP22",
+    "q": "shared mapped superclasses giving entities an id and a validated name field",
+    "d": "semantic",
+    "exp": [
+     "BaseEntity",
+     "NamedEntity"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "BaseEntity",
+     "file": "src/main/java/org/springframework/samples/petclinic/model/BaseEntity.java"
+    }
+   },
+   {
+    "id": "SP23",
+    "q": "expose the veterinarian list as both an HTML page and a JSON/XML resource",
+    "d": "hard",
+    "exp": [
+     "VetController",
+     "Vets"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "VetController",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/VetController.java"
+    }
+   },
+   {
+    "id": "HO-SP1",
+    "q": "PetTypeRepository",
+    "d": "easy",
+    "exp": [
+     "PetTypeRepository"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetTypeRepository",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/PetTypeRepository.java"
+    }
+   },
+   {
+    "id": "HO-SP2",
+    "q": "render the application landing page at the site root",
+    "d": "semantic",
+    "exp": [
+     "WelcomeController"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "PetClinicApplication",
+     "file": "src/main/java/org/springframework/samples/petclinic/PetClinicApplication.java"
+    }
+   },
+   {
+    "id": "HO-SP3",
+    "q": "register reflection and serialization hints so the app runs as a GraalVM native image",
+    "d": "semantic",
+    "exp": [
+     "PetClinicRuntimeHints"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetClinicRuntimeHints",
+     "file": "src/main/java/org/springframework/samples/petclinic/PetClinicRuntimeHints.java"
+    }
+   },
+   {
+    "id": "HO-SP4",
+    "q": "VetController",
+    "d": "easy",
+    "exp": [
+     "VetController"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "VetController",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/VetController.java"
+    }
+   },
+   {
+    "id": "HO-SP5",
+    "q": "WebConfiguration",
+    "d": "easy",
+    "exp": [
+     "WebConfiguration"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "WebConfiguration",
+     "file": "src/main/java/org/springframework/samples/petclinic/system/WebConfiguration.java"
+    }
+   },
+   {
+    "id": "HO-SP6",
+    "q": "Vet entity",
+    "d": "easy",
+    "exp": [
+     "Vet"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Vet",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/Vet.java"
+    }
+   },
+   {
+    "id": "HO-SP7",
+    "q": "PetClinicApplication",
+    "d": "easy",
+    "exp": [
+     "PetClinicApplication"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PetClinicApplication",
+     "file": "src/main/java/org/springframework/samples/petclinic/PetClinicApplication.java"
+    }
+   },
+   {
+    "id": "HO-SP8",
+    "q": "visit entity appointment date and description",
+    "d": "easy",
+    "exp": [
+     "Visit"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Visit",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Visit.java"
+    }
+   },
+   {
+    "id": "HO-SP9",
+    "q": "pet type entity cat dog hamster",
+    "d": "medium",
+    "exp": [
+     "PetType"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "HO-SP10",
+    "q": "vet repository cacheable findAll transactional read only",
+    "d": "medium",
+    "exp": [
+     "VetRepository"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Vets",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/Vets.java"
+    }
+   },
+   {
+    "id": "HO-SP11",
+    "q": "store an owner's pet collection and look up a pet by id or by name",
+    "d": "medium",
+    "exp": [
+     "Owner"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "HO-SP12",
+    "q": "book a new appointment for a pet and ensure the visit date is in the future",
+    "d": "hard",
+    "exp": [
+     "VisitController"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "HO-SP13",
+    "q": "where is the shared first name and last name defined for owners and vets",
+    "d": "hard",
+    "exp": [
+     "Person"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "Owner",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Owner.java"
+    }
+   },
+   {
+    "id": "HO-SP14",
+    "q": "deliberately throw an exception to demonstrate the error page",
+    "d": "semantic",
+    "exp": [
+     "CrashController"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "OwnerController",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java"
+    }
+   },
+   {
+    "id": "HO-SP15",
+    "q": "enforce that a pet has a name, a type, and a birth date before it can be saved",
+    "d": "semantic",
+    "exp": [
+     "PetValidator"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Pet",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/Pet.java"
+    }
+   },
+   {
+    "id": "HO-SP16",
+    "q": "check that every UI string is internationalized and translated in all language bundles",
+    "d": "semantic",
+    "exp": [
+     "I18nPropertiesSyncTest"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "VisitController",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/VisitController.java"
+    }
+   },
+   {
+    "id": "HO-SP17",
+    "q": "look up an entity from a collection by its id and class throwing if not found",
+    "d": "hard",
+    "exp": [
+     "EntityUtils"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "OwnerRepository",
+     "file": "src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java"
+    }
+   },
+   {
+    "id": "HO-SP18",
+    "q": "spin up a MySQL Testcontainer and run the app against it",
+    "d": "hard",
+    "exp": [
+     "MysqlTestApplication",
+     "MySqlIntegrationTests"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "MySqlIntegrationTests",
+     "file": "src/test/java/org/springframework/samples/petclinic/MySqlIntegrationTests.java"
+    }
+   },
+   {
+    "id": "HO-SP19",
+    "q": "model a veterinarian's specialties as a many to many relationship",
+    "d": "semantic",
+    "exp": [
+     "Vet",
+     "Specialty"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Vet",
+     "file": "src/main/java/org/springframework/samples/petclinic/vet/Vet.java"
+    }
+   }
+  ]
+ },
+ "rust": {
+  "all": {
+   "n": 40,
+   "r1": 0.325,
+   "s5": 0.45,
+   "mrr": 0.37280753968253966
+  },
+  "semantic": {
+   "n": 8,
+   "r1": 0,
+   "s5": 0,
+   "mrr": 0.013888888888888888
+  },
+  "symbolic": {
+   "n": 32,
+   "r1": 0.40625,
+   "s5": 0.5625,
+   "mrr": 0.46253720238095236
+  },
+  "rows": [
+   {
+    "id": "RS01",
+    "q": "Deserializer",
+    "d": "easy",
+    "exp": [
+     "Deserializer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Deserializer",
+     "file": "src/de.rs"
+    }
+   },
+   {
+    "id": "RS02",
+    "q": "Number is_i64 as_f64",
+    "d": "easy",
+    "exp": [
+     "Number",
+     "as_i64",
+     "as_f64",
+     "is_i64"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Number",
+     "file": "src/number.rs"
+    }
+   },
+   {
+    "id": "RS03",
+    "q": "RawValue",
+    "d": "easy",
+    "exp": [
+     "RawValue"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "RawValue",
+     "file": "src/raw.rs"
+    }
+   },
+   {
+    "id": "RS04",
+    "q": "PrettyFormatter pretty print indent",
+    "d": "easy",
+    "exp": [
+     "PrettyFormatter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "PrettyFormatter",
+     "file": "src/ser.rs"
+    }
+   },
+   {
+    "id": "RS05",
+    "q": "parse json from string slice reader",
+    "d": "medium",
+    "exp": [
+     "from_str",
+     "from_slice",
+     "from_reader"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/from.rs"
+    }
+   },
+   {
+    "id": "RS06",
+    "q": "serialize value to json string writer",
+    "d": "medium",
+    "exp": [
+     "to_string",
+     "to_string_pretty",
+     "to_writer"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/mod.rs"
+    }
+   },
+   {
+    "id": "RS07",
+    "q": "map insert get entry by key",
+    "d": "medium",
+    "exp": [
+     "Map",
+     "insert",
+     "get",
+     "entry"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "entry",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS08",
+    "q": "error category classify io syntax data eof",
+    "d": "medium",
+    "exp": [
+     "Error",
+     "Category",
+     "classify"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Error",
+     "file": "src/error.rs"
+    }
+   },
+   {
+    "id": "RS09",
+    "q": "decode a backslash escape sequence and a \\u four-hex-digit unicode code point including surrogate pairs",
+    "d": "hard",
+    "exp": [
+     "parse_escape",
+     "parse_unicode_escape",
+     "decode_four_hex_digits"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "parse_unicode_escape",
+     "file": "src/read.rs"
+    }
+   },
+   {
+    "id": "RS10",
+    "q": "look up a deeply nested value inside a document using a slash-separated path expression",
+    "d": "semantic",
+    "exp": [
+     "pointer",
+     "pointer_mut"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/index.rs"
+    }
+   },
+   {
+    "id": "RS11",
+    "q": "convert any serializable Rust data structure into an in-memory dynamic JSON value tree without going through text",
+    "d": "semantic",
+    "exp": [
+     "to_value",
+     "from_value"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/index.rs"
+    }
+   },
+   {
+    "id": "RS12",
+    "q": "iterate over a stream of concatenated JSON documents one after another from a single input",
+    "d": "semantic",
+    "exp": [
+     "StreamDeserializer"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "de_impl_item",
+     "file": "src/de.rs"
+    }
+   },
+   {
+    "id": "RS13",
+    "q": "contains_key get_key_value",
+    "d": "easy",
+    "exp": [
+     "contains_key",
+     "get_key_value"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "get",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS14",
+    "q": "remove a map entry by key shifting versus swapping the last element",
+    "d": "medium",
+    "exp": [
+     "shift_remove",
+     "swap_remove"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "entry",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS15",
+    "q": "keep only the map entries that satisfy a predicate closure",
+    "d": "medium",
+    "exp": [
+     "retain"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "map_impl_item",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS16",
+    "q": "borrow the inner object map, array vector or string slice out of a Value if it has that shape",
+    "d": "hard",
+    "exp": [
+     "as_object",
+     "as_array",
+     "as_str"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/index.rs"
+    }
+   },
+   {
+    "id": "RS17",
+    "q": "Entry OccupiedEntry VacantEntry",
+    "d": "easy",
+    "exp": [
+     "Entry",
+     "OccupiedEntry",
+     "VacantEntry"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "entry",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS18",
+    "q": "serialize a value into a byte vector of JSON instead of a String",
+    "d": "medium",
+    "exp": [
+     "to_vec",
+     "to_vec_pretty"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/mod.rs"
+    }
+   },
+   {
+    "id": "RS19",
+    "q": "interpret an array index token from a JSON pointer path segment as a usize",
+    "d": "hard",
+    "exp": [
+     "parse_index"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "pointer",
+     "file": "src/value/mod.rs"
+    }
+   },
+   {
+    "id": "RS20",
+    "q": "move a Value out leaving Null behind in its place",
+    "d": "semantic",
+    "exp": [
+     "take"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/index.rs"
+    }
+   },
+   {
+    "id": "RS21",
+    "q": "reject object keys that are not strings or are non-finite floats while serializing a map",
+    "d": "hard",
+    "exp": [
+     "key_must_be_a_string",
+     "float_key_must_be_finite"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "keys",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "RS22",
+    "q": "Iter IterMut Keys Values ValuesMut",
+    "d": "easy",
+    "exp": [
+     "Iter",
+     "IterMut",
+     "Keys",
+     "Values",
+     "ValuesMut"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ValuesMut",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "HO-RS1",
+    "q": "sort_keys",
+    "d": "easy",
+    "exp": [
+     "sort_keys"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "keys",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "HO-RS2",
+    "q": "turn off the maximum nesting depth guard that protects against stack overflow on deeply nested input",
+    "d": "semantic",
+    "exp": [
+     "disable_recursion_limit"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Category",
+     "file": "src/error.rs"
+    }
+   },
+   {
+    "id": "HO-RS3",
+    "q": "write a string field to the output while escaping characters that are not valid raw JSON",
+    "d": "semantic",
+    "exp": [
+     "format_escaped_str"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Error",
+     "file": "src/error.rs"
+    }
+   },
+   {
+    "id": "HO-RS4",
+    "q": "append",
+    "d": "easy",
+    "exp": [
+     "append"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "append",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "HO-RS5",
+    "q": "with_capacity",
+    "d": "easy",
+    "exp": [
+     "with_capacity"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "with_capacity",
+     "file": "src/map.rs"
+    }
+   },
+   {
+    "id": "HO-RS6",
+    "q": "consume the map and iterate over just its owned values discarding the keys",
+    "d": "medium",
+    "exp": [
+     "into_values"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/mod.rs"
+    }
+   },
+   {
+    "id": "HO-RS7",
+    "q": "check whether a JSON number can be represented exactly as a signed 64-bit, unsigned 64-bit or floating point",
+    "d": "hard",
+    "exp": [
+     "is_i64",
+     "is_u64",
+     "is_f64"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Number",
+     "file": "src/number.rs"
+    }
+   },
+   {
+    "id": "HO-RS8",
+    "q": "build a Number from a 128-bit integer when it fits, signed or unsigned",
+    "d": "medium",
+    "exp": [
+     "from_i128",
+     "from_u128"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Number",
+     "file": "src/number.rs"
+    }
+   },
+   {
+    "id": "HO-RS9",
+    "q": "from_string_unchecked",
+    "d": "easy",
+    "exp": [
+     "from_string_unchecked"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "from_string_unchecked",
+     "file": "src/number.rs"
+    }
+   },
+   {
+    "id": "HO-RS10",
+    "q": "convert decimal mantissa and exponent digits into a binary float on the fast and truncated paths",
+    "d": "hard",
+    "exp": [
+     "parse_concise_float",
+     "parse_truncated_float"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "Float",
+     "file": "src/lexical/num.rs"
+    }
+   },
+   {
+    "id": "HO-RS11",
+    "q": "tiered strategy for parsing a floating point: exact hardware multiply then extended precision then big-integer fallback",
+    "d": "semantic",
+    "exp": [
+     "fast_path",
+     "moderate_path",
+     "fallback_path"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1111111111111111,
+    "top1": {
+     "name": "multiply_exponent_extended",
+     "file": "src/lexical/algorithm.rs"
+    }
+   },
+   {
+    "id": "HO-RS12",
+    "q": "compare a JSON value for equality against a raw Rust integer, float, bool or string",
+    "d": "hard",
+    "exp": [
+     "eq_i64",
+     "eq_u64",
+     "eq_f64",
+     "eq_bool",
+     "eq_str"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/mod.rs"
+    }
+   },
+   {
+    "id": "HO-RS13",
+    "q": "read the next byte from the input but raise an end-of-file error if the stream is exhausted",
+    "d": "medium",
+    "exp": [
+     "next_or_eof",
+     "peek_or_eof"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Read",
+     "file": "src/read.rs"
+    }
+   },
+   {
+    "id": "HO-RS14",
+    "q": "push_wtf8_codepoint",
+    "d": "easy",
+    "exp": [
+     "push_wtf8_codepoint"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "push_wtf8_codepoint",
+     "file": "src/read.rs"
+    }
+   },
+   {
+    "id": "HO-RS15",
+    "q": "skip over an escape sequence without decoding it while ignoring a string value",
+    "d": "medium",
+    "exp": [
+     "ignore_escape"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/index.rs"
+    }
+   },
+   {
+    "id": "HO-RS16",
+    "q": "decide whether an incoming object key should be treated as a map key or a struct field name",
+    "d": "hard",
+    "exp": [
+     "KeyClassifier",
+     "KeyClass"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "serialize_struct",
+     "file": "src/ser.rs"
+    }
+   },
+   {
+    "id": "HO-RS17",
+    "q": "input source readers wrapping an io::Read, a byte slice and a UTF-8 string",
+    "d": "medium",
+    "exp": [
+     "IoRead",
+     "SliceRead",
+     "StrRead"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Read",
+     "file": "src/read.rs"
+    }
+   },
+   {
+    "id": "HO-RS18",
+    "q": "recursively reorder every nested object in a value so keys are alphabetically sorted",
+    "d": "semantic",
+    "exp": [
+     "sort_all_objects"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Value",
+     "file": "src/value/mod.rs"
+    }
+   }
+  ]
+ },
+ "cjson": {
+  "all": {
+   "n": 41,
+   "r1": 0.43902439024390244,
+   "s5": 0.6829268292682927,
+   "mrr": 0.5561943476577623
+  },
+  "semantic": {
+   "n": 6,
+   "r1": 0.16666666666666666,
+   "s5": 0.5,
+   "mrr": 0.2625
+  },
+  "symbolic": {
+   "n": 35,
+   "r1": 0.4857142857142857,
+   "s5": 0.7142857142857143,
+   "mrr": 0.6065419501133787
+  },
+  "rows": [
+   {
+    "id": "CJ01",
+    "q": "cJSON_Minify",
+    "d": "easy",
+    "exp": [
+     "cJSON_Minify"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_Minify",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ02",
+    "q": "cJSON_Delete free item",
+    "d": "easy",
+    "exp": [
+     "cJSON_Delete"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_Delete",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ03",
+    "q": "duplicate clone a JSON item recursively",
+    "d": "easy",
+    "exp": [
+     "cJSON_Duplicate"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_Duplicate",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ04",
+    "q": "get object item by key string lookup",
+    "d": "medium",
+    "exp": [
+     "cJSON_GetObjectItem",
+     "cJSON_GetObjectItemCaseSensitive"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1111111111111111,
+    "top1": {
+     "name": "add_item_to_object",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ05",
+    "q": "print render JSON tree to string formatted unformatted",
+    "d": "medium",
+    "exp": [
+     "cJSON_Print",
+     "cJSON_PrintUnformatted",
+     "cJSON_PrintBuffered"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "print",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ06",
+    "q": "create object array string number node",
+    "d": "medium",
+    "exp": [
+     "cJSON_CreateObject",
+     "cJSON_CreateArray",
+     "cJSON_CreateString",
+     "cJSON_CreateNumber"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "create_objects",
+     "file": "test.c"
+    }
+   },
+   {
+    "id": "CJ07",
+    "q": "add item to object set key value pair",
+    "d": "medium",
+    "exp": [
+     "cJSON_AddItemToObject",
+     "cJSON_AddStringToObject",
+     "add_item_to_object"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "add_item_to_object",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ08",
+    "q": "parse a JSON text string into an in-memory tree of value nodes",
+    "d": "semantic",
+    "exp": [
+     "cJSON_Parse",
+     "cJSON_ParseWithOpts",
+     "cJSON_ParseWithLength"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "parse_value",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ09",
+    "q": "remove the whitespace and comments from a block of text so it becomes compact",
+    "d": "semantic",
+    "exp": [
+     "cJSON_Minify",
+     "minify_string",
+     "skip_oneline_comment",
+     "skip_multiline_comment"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "buffer_skip_whitespace",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ10",
+    "q": "decode an escaped unicode character sequence into its actual UTF-8 bytes",
+    "d": "semantic",
+    "exp": [
+     "utf16_literal_to_utf8",
+     "parse_hex4"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "utf16_literal_to_utf8",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ11",
+    "q": "compare two JSON values for deep structural equality",
+    "d": "hard",
+    "exp": [
+     "cJSON_Compare"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_Compare",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ12",
+    "q": "navigate into a nested document by following a slash-separated path expression",
+    "d": "semantic",
+    "exp": [
+     "cJSONUtils_GetPointer",
+     "get_item_from_pointer",
+     "cJSONUtils_GetPointerCaseSensitive"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "parse_array",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ13",
+    "q": "cJSON_GetArraySize",
+    "d": "easy",
+    "exp": [
+     "cJSON_GetArraySize"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "cJSON",
+     "file": "cJSON.h"
+    }
+   },
+   {
+    "id": "CJ14",
+    "q": "cJSON_GetStringValue cJSON_GetNumberValue accessors",
+    "d": "easy",
+    "exp": [
+     "cJSON_GetStringValue",
+     "cJSON_GetNumberValue"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "cJSON",
+     "file": "cJSON.h"
+    }
+   },
+   {
+    "id": "CJ15",
+    "q": "type predicate check whether item is array object string number",
+    "d": "medium",
+    "exp": [
+     "cJSON_IsArray",
+     "cJSON_IsObject",
+     "cJSON_IsString",
+     "cJSON_IsNumber",
+     "cJSON_IsBool"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "add_item_to_object",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ16",
+    "q": "detach an item from a parent without freeing it",
+    "d": "medium",
+    "exp": [
+     "cJSON_DetachItemViaPointer",
+     "cJSON_DetachItemFromArray",
+     "cJSON_DetachItemFromObject"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "detach_path",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "CJ17",
+    "q": "convert four hex digits of a unicode escape into a code point",
+    "d": "hard",
+    "exp": [
+     "parse_hex4"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "get_decimal_point",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ18",
+    "q": "grow the output buffer reallocating when more space is needed while printing",
+    "d": "hard",
+    "exp": [
+     "ensure"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ensure",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ19",
+    "q": "create reference node that shares a child without owning it",
+    "d": "hard",
+    "exp": [
+     "create_reference",
+     "cJSON_CreateObjectReference",
+     "cJSON_CreateArrayReference",
+     "cJSON_CreateStringReference"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "create_reference",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ20",
+    "q": "skip a UTF-8 byte order mark at the start of input",
+    "d": "medium",
+    "exp": [
+     "skip_utf8_bom"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "skip_utf8_bom",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ21",
+    "q": "build a cJSON array directly from a C array of ints or floats",
+    "d": "medium",
+    "exp": [
+     "cJSON_CreateIntArray",
+     "cJSON_CreateFloatArray",
+     "cJSON_CreateDoubleArray",
+     "cJSON_CreateStringArray"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "parse_array",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ22",
+    "q": "render a single number node into text choosing the shortest precise representation",
+    "d": "hard",
+    "exp": [
+     "print_number"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "print_number",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "CJ23",
+    "q": "cJSON_SetValuestring cJSON_SetNumberHelper mutate value in place",
+    "d": "medium",
+    "exp": [
+     "cJSON_SetValuestring",
+     "cJSON_SetNumberHelper",
+     "cJSON_SetBoolValue"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "cJSON",
+     "file": "cJSON.h"
+    }
+   },
+   {
+    "id": "HO-CJ1",
+    "q": "override the default memory allocator with custom malloc and free hooks",
+    "d": "semantic",
+    "exp": [
+     "cJSON_InitHooks"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "cJSON_Hooks",
+     "file": "cJSON.h"
+    }
+   },
+   {
+    "id": "HO-CJ2",
+    "q": "apply a sequence of JSON patch operations to mutate a document",
+    "d": "semantic",
+    "exp": [
+     "cJSONUtils_ApplyPatches",
+     "cJSONUtils_ApplyPatchesCaseSensitive"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "apply_patch",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ3",
+    "q": "cJSON_GetArrayItem",
+    "d": "easy",
+    "exp": [
+     "cJSON_GetArrayItem"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "cJSON",
+     "file": "cJSON.h"
+    }
+   },
+   {
+    "id": "HO-CJ4",
+    "q": "cJSON_HasObjectItem",
+    "d": "easy",
+    "exp": [
+     "cJSON_HasObjectItem"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_HasObjectItem",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ5",
+    "q": "cJSON_ReplaceItemInObject",
+    "d": "easy",
+    "exp": [
+     "cJSON_ReplaceItemInObject",
+     "cJSON_ReplaceItemInObjectCaseSensitive",
+     "replace_item_in_object"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_ReplaceItemInObject",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ6",
+    "q": "cJSONUtils_MergePatch",
+    "d": "easy",
+    "exp": [
+     "cJSONUtils_MergePatch",
+     "cJSONUtils_MergePatchCaseSensitive"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSONUtils_MergePatch",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ7",
+    "q": "install a custom memory allocator pair for malloc and free",
+    "d": "medium",
+    "exp": [
+     "internal_malloc",
+     "internal_free",
+     "internal_realloc"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1,
+    "top1": {
+     "name": "cJSON_malloc",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ8",
+    "q": "insert a new element at a specific position inside an array",
+    "d": "medium",
+    "exp": [
+     "cJSON_InsertItemInArray",
+     "insert_item_in_array"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "parse_array",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ9",
+    "q": "attach a child as a non-owning reference so it is not freed twice",
+    "d": "hard",
+    "exp": [
+     "cJSON_AddItemReferenceToObject",
+     "cJSON_AddItemReferenceToArray"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "create_reference",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ10",
+    "q": "sort the keys of an object alphabetically",
+    "d": "hard",
+    "exp": [
+     "cJSONUtils_SortObject",
+     "sort_object",
+     "sort_list",
+     "cJSONUtils_SortObjectCaseSensitive"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "sort_object",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ11",
+    "q": "compute the diff between two documents and emit patch operations",
+    "d": "hard",
+    "exp": [
+     "cJSONUtils_GeneratePatches",
+     "create_patches",
+     "cJSONUtils_GeneratePatchesCaseSensitive"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "generate_merge_patch",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ12",
+    "q": "percent-encode a key segment so it can be embedded in a JSON pointer",
+    "d": "hard",
+    "exp": [
+     "encode_string_as_pointer",
+     "pointer_encoded_length"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "encode_string_as_pointer",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ13",
+    "q": "translate the op field of a patch entry into an enum operation code",
+    "d": "hard",
+    "exp": [
+     "decode_patch_operation"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "decode_patch_operation",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ14",
+    "q": "find the JSON pointer path that leads from a root object to a target node",
+    "d": "hard",
+    "exp": [
+     "cJSONUtils_FindPointerFromObjectTo"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "detach_path",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ15",
+    "q": "recursively decide if two value trees are structurally equal",
+    "d": "hard",
+    "exp": [
+     "compare_json"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "print_value",
+     "file": "cJSON.c"
+    }
+   },
+   {
+    "id": "HO-CJ16",
+    "q": "remove the node addressed by a slash path then return it to the caller",
+    "d": "hard",
+    "exp": [
+     "detach_path"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "detach_path",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ17",
+    "q": "compare two strings for equality optionally ignoring case",
+    "d": "medium",
+    "exp": [
+     "case_insensitive_strcmp"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "compare_strings",
+     "file": "cJSON_Utils.c"
+    }
+   },
+   {
+    "id": "HO-CJ18",
+    "q": "cJSON_AddNumberToObject cJSON_AddBoolToObject typed convenience adders",
+    "d": "medium",
+    "exp": [
+     "cJSON_AddNumberToObject",
+     "cJSON_AddBoolToObject",
+     "cJSON_AddNullToObject",
+     "cJSON_AddTrueToObject",
+     "cJSON_AddFalseToObject"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "cJSON_AddBoolToObject",
+     "file": "cJSON.c"
+    }
+   }
+  ]
+ },
+ "nvm": {
+  "all": {
+   "n": 42,
+   "r1": 0.5238095238095238,
+   "s5": 0.7619047619047619,
+   "mrr": 0.6351473922902494
+  },
+  "semantic": {
+   "n": 12,
+   "r1": 0.6666666666666666,
+   "s5": 0.8333333333333334,
+   "mrr": 0.7514880952380952
+  },
+  "symbolic": {
+   "n": 30,
+   "r1": 0.4666666666666667,
+   "s5": 0.7333333333333333,
+   "mrr": 0.5886111111111111
+  },
+  "rows": [
+   {
+    "id": "NV01",
+    "q": "nvm_get_arch",
+    "d": "easy",
+    "exp": [
+     "nvm_get_arch"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_arch",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV02",
+    "q": "nvm_get_os operating system",
+    "d": "easy",
+    "exp": [
+     "nvm_get_os"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.16666666666666666,
+    "top1": {
+     "name": "nvm_print_versions",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV03",
+    "q": "nvm_ls_remote list available versions",
+    "d": "easy",
+    "exp": [
+     "nvm_ls_remote",
+     "nvm_ls_remote_index_tab"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "nvm_remote_versions",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV04",
+    "q": "is version installed check directory exists",
+    "d": "medium",
+    "exp": [
+     "nvm_is_version_installed"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "nvm_ensure_version_installed",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV05",
+    "q": "resolve alias name to version number",
+    "d": "medium",
+    "exp": [
+     "nvm_resolve_alias",
+     "nvm_resolve_local_alias"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_resolve_local_alias",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV06",
+    "q": "compare two semantic version numbers greater",
+    "d": "medium",
+    "exp": [
+     "nvm_version_greater",
+     "nvm_version_greater_than_or_equal_to"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "nvm_is_merged_node_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV07",
+    "q": "detect shell profile file bashrc zshrc",
+    "d": "medium",
+    "exp": [
+     "nvm_detect_profile"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_detect_profile",
+     "file": "install.sh"
+    }
+   },
+   {
+    "id": "NV08",
+    "q": "download a remote node binary tarball over the network for a version",
+    "d": "semantic",
+    "exp": [
+     "nvm_download"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "nvm_install_binary",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV09",
+    "q": "compute a cryptographic hash of a downloaded file to verify its integrity",
+    "d": "semantic",
+    "exp": [
+     "nvm_compute_checksum",
+     "nvm_compare_checksum",
+     "nvm_get_checksum"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_compare_checksum",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV10",
+    "q": "figure out which Node version to use from a .nvmrc file in the project tree",
+    "d": "semantic",
+    "exp": [
+     "nvm_find_nvmrc",
+     "nvm_find_up",
+     "nvm_rc_version"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "nvm_process_nvmrc",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV11",
+    "q": "upgrade to the newest npm for the active node version",
+    "d": "hard",
+    "exp": [
+     "nvm_install_latest_npm"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_install_latest_npm",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV12",
+    "q": "add and remove the active version directory from the PATH environment variable",
+    "d": "hard",
+    "exp": [
+     "nvm_change_path",
+     "nvm_strip_path"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1,
+    "top1": {
+     "name": "nvm_rc_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV13",
+    "q": "nvm_get_mirror",
+    "d": "easy",
+    "exp": [
+     "nvm_get_mirror"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_mirror",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV14",
+    "q": "nvm_ls list installed versions",
+    "d": "easy",
+    "exp": [
+     "nvm_ls"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.125,
+    "top1": {
+     "name": "nvm_print_versions",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV15",
+    "q": "nvm_install_source",
+    "d": "easy",
+    "exp": [
+     "nvm_install_source"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "nvm_do_install",
+     "file": "install.sh"
+    }
+   },
+   {
+    "id": "NV16",
+    "q": "build the download slug filename flavor os arch for a binary",
+    "d": "medium",
+    "exp": [
+     "nvm_get_download_slug"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_download_slug",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV17",
+    "q": "pick tarball compression format zip tar.gz tar.xz",
+    "d": "medium",
+    "exp": [
+     "nvm_get_artifact_compression"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "nvm_extract_tarball",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV18",
+    "q": "current active node version in use right now",
+    "d": "medium",
+    "exp": [
+     "nvm_ls_current"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "nvm_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV19",
+    "q": "pad a version string to full major.minor.patch form",
+    "d": "medium",
+    "exp": [
+     "nvm_format_version",
+     "nvm_num_version_groups"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1,
+    "top1": {
+     "name": "nvm_get_minor_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV20",
+    "q": "fetch a node artifact from the mirror checking binary availability",
+    "d": "semantic",
+    "exp": [
+     "nvm_download_artifact"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_download_artifact",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV21",
+    "q": "translate a node version into the iojs- prefixed form and strip it back off",
+    "d": "hard",
+    "exp": [
+     "nvm_add_iojs_prefix",
+     "nvm_strip_iojs_prefix",
+     "nvm_iojs_prefix"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "nvm_get_minor_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV22",
+    "q": "warn the user about globally installed npm packages on their system node",
+    "d": "semantic",
+    "exp": [
+     "nvm_check_global_modules"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "nvm_install_default_packages",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "NV23",
+    "q": "redact the NVM_DIR and HOME prefixes from a path before printing it",
+    "d": "semantic",
+    "exp": [
+     "nvm_sanitize_path"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "nvm_die_on_prefix",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV1",
+    "q": "download and unpack a precompiled binary archive into the version directory",
+    "d": "semantic",
+    "exp": [
+     "nvm_install_binary",
+     "nvm_extract_tarball"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_install_binary",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV2",
+    "q": "nvm_check_file_permissions",
+    "d": "easy",
+    "exp": [
+     "nvm_check_file_permissions"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_check_file_permissions",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV3",
+    "q": "compile node from source code with the platform make jobs",
+    "d": "semantic",
+    "exp": [
+     "nvm_install_source",
+     "nvm_get_make_jobs"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_install_source",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV4",
+    "q": "nvm_normalize_lts",
+    "d": "easy",
+    "exp": [
+     "nvm_normalize_lts"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_normalize_lts",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV5",
+    "q": "nvm_get_make_jobs",
+    "d": "easy",
+    "exp": [
+     "nvm_get_make_jobs"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_make_jobs",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV6",
+    "q": "nvm_curl_use_compression",
+    "d": "easy",
+    "exp": [
+     "nvm_curl_use_compression",
+     "nvm_curl_libz_support"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_curl_use_compression",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV7",
+    "q": "nvm_supports_xz xz tarball",
+    "d": "easy",
+    "exp": [
+     "nvm_supports_xz"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "nvm_extract_tarball",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV8",
+    "q": "map the configured color letters to terminal escape codes",
+    "d": "medium",
+    "exp": [
+     "nvm_get_colors",
+     "nvm_print_color_code"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "nvm_stdout_is_terminal",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV9",
+    "q": "extract just the major dot minor part of a version",
+    "d": "medium",
+    "exp": [
+     "nvm_get_minor_version"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_minor_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV10",
+    "q": "check whether a profile path is a bash or zsh rc file",
+    "d": "medium",
+    "exp": [
+     "nvm_profile_is_bash_or_zsh"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "nvm_detect_profile",
+     "file": "install.sh"
+    }
+   },
+   {
+    "id": "HO-NV11",
+    "q": "is the user using a node from outside nvm a system node",
+    "d": "medium",
+    "exp": [
+     "nvm_has_system_node",
+     "nvm_has_system_iojs"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "nvm_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV12",
+    "q": "resolve a version pattern with no network using only local installs and cache",
+    "d": "semantic",
+    "exp": [
+     "nvm_offline_version",
+     "nvm_ls_cached"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_offline_version",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV13",
+    "q": "follow the latest.nvm.sh redirect to discover the newest nvm release tag",
+    "d": "semantic",
+    "exp": [
+     "nvm_get_latest"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_get_latest",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV14",
+    "q": "abort installation when a stray npm prefix or globalconfig is set",
+    "d": "semantic",
+    "exp": [
+     "nvm_die_on_prefix",
+     "nvm_npmrc_bad_news_bears"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_die_on_prefix",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV15",
+    "q": "clone or update the nvm repository from git during bootstrap",
+    "d": "semantic",
+    "exp": [
+     "install_nvm_from_git"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "install_nvm_from_git",
+     "file": "install.sh"
+    }
+   },
+   {
+    "id": "HO-NV16",
+    "q": "create the default alias pointing at a freshly installed version",
+    "d": "hard",
+    "exp": [
+     "nvm_ensure_default_set"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "nvm_print_formatted_alias",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV17",
+    "q": "recursively verify that a version directory and its files are writable and self-owned",
+    "d": "hard",
+    "exp": [
+     "nvm_check_file_permissions"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_check_file_permissions",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV18",
+    "q": "resolve the implicit stable or lts alias to a real remote version number",
+    "d": "hard",
+    "exp": [
+     "nvm_validate_implicit_alias",
+     "nvm_print_implicit_alias"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_print_implicit_alias",
+     "file": "nvm.sh"
+    }
+   },
+   {
+    "id": "HO-NV19",
+    "q": "nvm_install_binary_extract",
+    "d": "easy",
+    "exp": [
+     "nvm_install_binary_extract"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "nvm_install_binary_extract",
+     "file": "nvm.sh"
+    }
+   }
+  ]
+ },
+ "fastapi": {
+  "all": {
+   "n": 44,
+   "r1": 0.5681818181818182,
+   "s5": 0.7272727272727273,
+   "mrr": 0.6413780663780664
+  },
+  "semantic": {
+   "n": 11,
+   "r1": 0.18181818181818182,
+   "s5": 0.36363636363636365,
+   "mrr": 0.25252525252525254
+  },
+  "symbolic": {
+   "n": 33,
+   "r1": 0.696969696969697,
+   "s5": 0.8484848484848485,
+   "mrr": 0.770995670995671
+  },
+  "rows": [
+   {
+    "id": "FA01",
+    "q": "FastAPI",
+    "d": "easy",
+    "exp": [
+     "FastAPI"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "FastAPI",
+     "file": "fastapi/applications.py"
+    }
+   },
+   {
+    "id": "FA02",
+    "q": "APIRouter",
+    "d": "easy",
+    "exp": [
+     "APIRouter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "APIRouter",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "FA03",
+    "q": "HTTPException",
+    "d": "easy",
+    "exp": [
+     "HTTPException"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "HTTPException",
+     "file": "fastapi/exceptions.py"
+    }
+   },
+   {
+    "id": "FA04",
+    "q": "jsonable_encoder",
+    "d": "easy",
+    "exp": [
+     "jsonable_encoder"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "jsonable_encoder",
+     "file": "fastapi/encoders.py"
+    }
+   },
+   {
+    "id": "FA05",
+    "q": "OAuth2PasswordBearer",
+    "d": "easy",
+    "exp": [
+     "OAuth2PasswordBearer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "OAuth2PasswordBearer",
+     "file": "fastapi/security/oauth2.py"
+    }
+   },
+   {
+    "id": "FA06",
+    "q": "get_dependant parameters function",
+    "d": "medium",
+    "exp": [
+     "get_dependant"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Dependant",
+     "file": "fastapi/dependencies/models.py"
+    }
+   },
+   {
+    "id": "FA07",
+    "q": "solve_dependencies injection request",
+    "d": "medium",
+    "exp": [
+     "solve_dependencies"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "solve_dependencies",
+     "file": "fastapi/dependencies/utils.py"
+    }
+   },
+   {
+    "id": "FA08",
+    "q": "HTTPBearer authorization header",
+    "d": "medium",
+    "exp": [
+     "HTTPBearer",
+     "HTTPAuthorizationCredentials"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "HTTPBearer",
+     "file": "fastapi/security/http.py"
+    }
+   },
+   {
+    "id": "FA09",
+    "q": "BackgroundTask async after response",
+    "d": "medium",
+    "exp": [
+     "BackgroundTask",
+     "BackgroundTasks",
+     "send_notification",
+     "solve_dependencies",
+     "get_request_handler"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "BackgroundTasks",
+     "file": "fastapi/background.py"
+    }
+   },
+   {
+    "id": "FA10",
+    "q": "APIRoute endpoint path method",
+    "d": "medium",
+    "exp": [
+     "APIRoute"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "APIRoute",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "FA11",
+    "q": "validate request body schema pydantic",
+    "d": "hard",
+    "exp": [
+     "Body",
+     "get_dependant",
+     "solve_dependencies"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "get_openapi_operation_request_body",
+     "file": "fastapi/openapi/utils.py"
+    }
+   },
+   {
+    "id": "FA12",
+    "q": "generate OpenAPI schema documentation",
+    "d": "hard",
+    "exp": [
+     "get_openapi",
+     "openapi"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "OpenAPI",
+     "file": "fastapi/openapi/models.py"
+    }
+   },
+   {
+    "id": "FA13",
+    "q": "API key header cookie query authentication",
+    "d": "hard",
+    "exp": [
+     "APIKeyHeader",
+     "APIKeyCookie",
+     "APIKeyQuery"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "APIKeyCookie",
+     "file": "fastapi/security/api_key.py"
+    }
+   },
+   {
+    "id": "FA14",
+    "q": "path operation decorator route registration",
+    "d": "hard",
+    "exp": [
+     "add_api_route",
+     "get",
+     "post"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.14285714285714285,
+    "top1": {
+     "name": "route",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "FA15",
+    "q": "extract bearer token from Authorization header and pass to route handler for authentication",
+    "d": "semantic",
+    "exp": [
+     "HTTPBearer",
+     "OAuth2PasswordBearer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "HTTPBearer",
+     "file": "fastapi/security/http.py"
+    }
+   },
+   {
+    "id": "FA16",
+    "q": "run a function asynchronously after the HTTP response has been sent to the client",
+    "d": "semantic",
+    "exp": [
+     "BackgroundTask",
+     "BackgroundTasks"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "run_endpoint_function",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "FA17",
+    "q": "Extracting and parsing query string parameters from the requested URL with automatic type conversion",
+    "d": "semantic",
+    "exp": [
+     "Query"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "OAuth2PasswordRequestForm",
+     "file": "fastapi/security/oauth2.py"
+    }
+   },
+   {
+    "id": "FA18",
+    "q": "Middleware that allows web browsers from different domains to make API requests securely avoiding origin errors",
+    "d": "semantic",
+    "exp": [
+     "CORSMiddleware"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1111111111111111,
+    "top1": {
+     "name": "Request",
+     "file": "fastapi/requests.py"
+    }
+   },
+   {
+    "id": "FA19",
+    "q": "Injecting reusable logic like database connections into route handlers automatically before execution",
+    "d": "semantic",
+    "exp": [
+     "Depends",
+     "get_dependant",
+     "solve_dependencies"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "route",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "FA20",
+    "q": "Creating a grouped set of API endpoints under a common URL prefix like v1 or v2",
+    "d": "semantic",
+    "exp": [
+     "APIRouter"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "Schema",
+     "file": "fastapi/openapi/models.py"
+    }
+   },
+   {
+    "id": "FA21",
+    "q": "Returning a structured error payload to the client when validation rules fail",
+    "d": "semantic",
+    "exp": [
+     "HTTPException",
+     "RequestValidationError"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "ParameterBase",
+     "file": "fastapi/openapi/models.py"
+    }
+   },
+   {
+    "id": "FA22",
+    "q": "OAuth2PasswordRequestForm",
+    "d": "easy",
+    "exp": [
+     "OAuth2PasswordRequestForm"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "OAuth2PasswordRequestForm",
+     "file": "fastapi/security/oauth2.py"
+    }
+   },
+   {
+    "id": "FA23",
+    "q": "declare a form field and an uploaded file in a multipart request body",
+    "d": "medium",
+    "exp": [
+     "Form",
+     "File",
+     "UploadFile"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0.1,
+    "top1": {
+     "name": "get_body_field",
+     "file": "fastapi/dependencies/utils.py"
+    }
+   },
+   {
+    "id": "FA24",
+    "q": "swagger UI and redoc HTML documentation pages",
+    "d": "medium",
+    "exp": [
+     "get_swagger_ui_html",
+     "get_redoc_html"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "get_swagger_ui_html",
+     "file": "fastapi/openapi/docs.py"
+    }
+   },
+   {
+    "id": "HO-FA1",
+    "q": "jsonable_encoder",
+    "d": "easy",
+    "exp": [
+     "jsonable_encoder"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "jsonable_encoder",
+     "file": "fastapi/encoders.py"
+    }
+   },
+   {
+    "id": "HO-FA2",
+    "q": "convert a pydantic model or dataclass into JSON-serialisable primitives",
+    "d": "semantic",
+    "exp": [
+     "jsonable_encoder"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "jsonable_encoder",
+     "file": "fastapi/encoders.py"
+    }
+   },
+   {
+    "id": "HO-FA3",
+    "q": "solve_dependencies",
+    "d": "medium",
+    "exp": [
+     "solve_dependencies"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "solve_dependencies",
+     "file": "fastapi/dependencies/utils.py"
+    }
+   },
+   {
+    "id": "HO-FA4",
+    "q": "create_access_token",
+    "d": "easy",
+    "exp": [
+     "create_access_token"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "login_for_access_token",
+     "file": "docs_src/security/tutorial005_py39.py"
+    }
+   },
+   {
+    "id": "HO-FA5",
+    "q": "get_current_active_user",
+    "d": "easy",
+    "exp": [
+     "get_current_active_user"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "get_current_active_user",
+     "file": "docs_src/security/tutorial003_py310.py"
+    }
+   },
+   {
+    "id": "HO-FA6",
+    "q": "get_authorization_scheme_param",
+    "d": "easy",
+    "exp": [
+     "get_authorization_scheme_param"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "get_authorization_scheme_param",
+     "file": "fastapi/security/utils.py"
+    }
+   },
+   {
+    "id": "HO-FA7",
+    "q": "include_router prefix tags",
+    "d": "easy",
+    "exp": [
+     "include_router"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "include_router",
+     "file": "fastapi/applications.py"
+    }
+   },
+   {
+    "id": "HO-FA8",
+    "q": "run_endpoint_function call sync or async handler",
+    "d": "medium",
+    "exp": [
+     "run_endpoint_function"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "run_endpoint_function",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "HO-FA9",
+    "q": "serialize and validate response model before sending",
+    "d": "medium",
+    "exp": [
+     "serialize_response"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "serialize_response",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "HO-FA10",
+    "q": "WebSocket endpoint accept connection receive and send messages",
+    "d": "medium",
+    "exp": [
+     "websocket_endpoint",
+     "WebSocket",
+     "WebSocketDisconnect"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "WebSocket",
+     "file": "fastapi/websockets.py"
+    }
+   },
+   {
+    "id": "HO-FA11",
+    "q": "common_parameters shared query dependency",
+    "d": "medium",
+    "exp": [
+     "common_parameters",
+     "CommonQueryParams"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "common_parameters",
+     "file": "docs_src/dependency_testing/tutorial001_an_py39.py"
+    }
+   },
+   {
+    "id": "HO-FA12",
+    "q": "application settings loaded from environment variables",
+    "d": "medium",
+    "exp": [
+     "Settings"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Settings",
+     "file": "docs_src/settings/app03_an/config.py"
+    }
+   },
+   {
+    "id": "HO-FA13",
+    "q": "redirect the client to another URL and stream a large response body in chunks",
+    "d": "medium",
+    "exp": [
+     "RedirectResponse",
+     "StreamingResponse"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "FastAPI",
+     "file": "fastapi/applications.py"
+    }
+   },
+   {
+    "id": "HO-FA14",
+    "q": "verify username and password against the database and issue a signed token on login",
+    "d": "hard",
+    "exp": [
+     "authenticate_user",
+     "create_access_token",
+     "login_for_access_token"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "OAuth2PasswordRequestForm",
+     "file": "fastapi/security/oauth2.py"
+    }
+   },
+   {
+    "id": "HO-FA15",
+    "q": "decode the bearer token, look up the user it identifies, and reject invalid credentials",
+    "d": "hard",
+    "exp": [
+     "get_current_user",
+     "fake_decode_token"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "HTTPBasic",
+     "file": "fastapi/security/http.py"
+    }
+   },
+   {
+    "id": "HO-FA16",
+    "q": "build the OpenAPI path item and security definitions for each registered route",
+    "d": "hard",
+    "exp": [
+     "get_openapi_path",
+     "get_openapi_security_definitions",
+     "get_openapi"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "OpenAPI",
+     "file": "fastapi/openapi/models.py"
+    }
+   },
+   {
+    "id": "HO-FA17",
+    "q": "parse the incoming request body into the declared parameters and report validation errors",
+    "d": "hard",
+    "exp": [
+     "request_body_to_args",
+     "request_params_to_args"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "_normalize_errors",
+     "file": "fastapi/_compat.py"
+    }
+   },
+   {
+    "id": "HO-FA18",
+    "q": "run a blocking synchronous function in a worker thread so it does not block the event loop",
+    "d": "semantic",
+    "exp": [
+     "run_in_threadpool"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "run_endpoint_function",
+     "file": "fastapi/routing.py"
+    }
+   },
+   {
+    "id": "HO-FA19",
+    "q": "measure request handling time and add it as a custom response header via middleware",
+    "d": "semantic",
+    "exp": [
+     "add_process_time_header"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "middleware",
+     "file": "fastapi/applications.py"
+    }
+   },
+   {
+    "id": "HO-FA20",
+    "q": "subclass the route class to customize request parsing and decode gzip bodies",
+    "d": "semantic",
+    "exp": [
+     "GzipRoute",
+     "TimedRoute",
+     "ValidationErrorLoggingRoute"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "get_fields_from_routes",
+     "file": "fastapi/openapi/utils.py"
+    }
+   }
+  ]
+ },
+ "nestjs": {
+  "all": {
+   "n": 44,
+   "r1": 0.5,
+   "s5": 0.7272727272727273,
+   "mrr": 0.5916666666666667
+  },
+  "semantic": {
+   "n": 13,
+   "r1": 0.15384615384615385,
+   "s5": 0.38461538461538464,
+   "mrr": 0.2564102564102564
+  },
+  "symbolic": {
+   "n": 31,
+   "r1": 0.6451612903225806,
+   "s5": 0.8709677419354839,
+   "mrr": 0.732258064516129
+  },
+  "rows": [
+   {
+    "id": "NJ01",
+    "q": "NestFactory",
+    "d": "easy",
+    "exp": [
+     "NestFactory"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "NestFactoryStatic",
+     "file": "packages/core/nest-factory.ts"
+    }
+   },
+   {
+    "id": "NJ02",
+    "q": "NestApplication",
+    "d": "easy",
+    "exp": [
+     "NestApplication"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "NestApplication",
+     "file": "packages/core/nest-application.ts"
+    }
+   },
+   {
+    "id": "NJ03",
+    "q": "Controller",
+    "d": "easy",
+    "exp": [
+     "Controller"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Controller",
+     "file": "packages/common/decorators/core/controller.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ04",
+    "q": "Module",
+    "d": "easy",
+    "exp": [
+     "Module"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "LazyModuleLoader",
+     "file": "packages/core/injector/lazy-module-loader/lazy-module-loader.ts"
+    }
+   },
+   {
+    "id": "NJ05",
+    "q": "Injectable",
+    "d": "easy",
+    "exp": [
+     "Injectable"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Injectable",
+     "file": "packages/common/decorators/core/injectable.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ06",
+    "q": "HttpServer express adapter",
+    "d": "medium",
+    "exp": [
+     "HttpServer",
+     "ExpressAdapter"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "initHttpServer",
+     "file": "packages/platform-express/adapters/express-adapter.ts"
+    }
+   },
+   {
+    "id": "NJ07",
+    "q": "Router route handler mapping",
+    "d": "medium",
+    "exp": [
+     "RouterExplorer",
+     "RoutesResolver",
+     "RouterModule"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "RoutesResolver",
+     "file": "packages/core/router/routes-resolver.ts"
+    }
+   },
+   {
+    "id": "NJ08",
+    "q": "Guard middleware authentication",
+    "d": "medium",
+    "exp": [
+     "CanActivate",
+     "Guard"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Guard",
+     "file": "integration/scopes/src/hello/guards/request-scoped.guard.ts"
+    }
+   },
+   {
+    "id": "NJ09",
+    "q": "Pipe transform validate input",
+    "d": "medium",
+    "exp": [
+     "PipeTransform",
+     "Pipe"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "validate",
+     "file": "packages/common/pipes/validation.pipe.ts"
+    }
+   },
+   {
+    "id": "NJ10",
+    "q": "Interceptor request response",
+    "d": "medium",
+    "exp": [
+     "NestInterceptor",
+     "Interceptor"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Interceptor",
+     "file": "integration/scopes/src/hello/interceptors/logging.interceptor.ts"
+    }
+   },
+   {
+    "id": "NJ11",
+    "q": "dependency injection container resolve providers",
+    "d": "hard",
+    "exp": [
+     "Injector",
+     "Container",
+     "resolve"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "providers",
+     "file": "packages/core/injector/module.ts"
+    }
+   },
+   {
+    "id": "NJ12",
+    "q": "bootstrap application module startup",
+    "d": "hard",
+    "exp": [
+     "create",
+     "bootstrap",
+     "listen"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "bootstrap",
+     "file": "integration/scopes/src/main.ts"
+    }
+   },
+   {
+    "id": "NJ13",
+    "q": "middleware chain pipeline execution",
+    "d": "hard",
+    "exp": [
+     "use",
+     "middleware",
+     "apply"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Middleware",
+     "file": "integration/hello-world/e2e/middleware-run-match-route.ts"
+    }
+   },
+   {
+    "id": "NJ14",
+    "q": "decorator metadata reflection class",
+    "d": "hard",
+    "exp": [
+     "Reflector",
+     "MetadataScanner",
+     "SetMetadata"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "SetMetadata",
+     "file": "packages/common/decorators/core/set-metadata.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ15",
+    "q": "class-based HTTP endpoint handler binding route path prefix to controller methods",
+    "d": "semantic",
+    "exp": [
+     "Controller"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Controller",
+     "file": "packages/common/decorators/core/controller.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ16",
+    "q": "mark TypeScript class as provider available for automatic constructor injection",
+    "d": "semantic",
+    "exp": [
+     "Injectable"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.3333333333333333,
+    "top1": {
+     "name": "getInjectionProviders",
+     "file": "packages/common/module-utils/utils/get-injection-providers.util.ts"
+    }
+   },
+   {
+    "id": "NJ17",
+    "q": "validate or transform incoming request data payload before route handler executes",
+    "d": "semantic",
+    "exp": [
+     "ValidationPipe",
+     "PipesConsumer",
+     "Pipe"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "Payload",
+     "file": "packages/microservices/decorators/payload.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ18",
+    "q": "Catching unhandled errors globally across the app and formatting them into standard HTTP responses",
+    "d": "semantic",
+    "exp": [
+     "ExceptionFilter",
+     "Catch",
+     "BaseExceptionFilter"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "ForbiddenException",
+     "file": "packages/common/exceptions/forbidden.exception.ts"
+    }
+   },
+   {
+    "id": "NJ19",
+    "q": "Restricting access to certain endpoints based on user roles or active session permissions",
+    "d": "semantic",
+    "exp": [
+     "Guard",
+     "CanActivate"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Session",
+     "file": "packages/common/decorators/http/route-params.decorator.ts"
+    }
+   },
+   {
+    "id": "NJ20",
+    "q": "Bootstrapping the server engine, binding it to a port, and starting the HTTP listener to accept traffic",
+    "d": "semantic",
+    "exp": [
+     "create",
+     "listen",
+     "bootstrap"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "engine",
+     "file": "packages/platform-express/adapters/express-adapter.ts"
+    }
+   },
+   {
+    "id": "NJ21",
+    "q": "Wrapping a request handler to measure execution time or mutate the final returned JSON object",
+    "d": "semantic",
+    "exp": [
+     "NestInterceptor",
+     "Interceptor"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "RequestTimeoutException",
+     "file": "packages/common/exceptions/request-timeout.exception.ts"
+    }
+   },
+   {
+    "id": "NJ22",
+    "q": "RouterExplorer",
+    "d": "easy",
+    "exp": [
+     "RouterExplorer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "RouterExplorer",
+     "file": "packages/core/router/router-explorer.ts"
+    }
+   },
+   {
+    "id": "NJ23",
+    "q": "InstanceWrapper provider instance scope metadata",
+    "d": "medium",
+    "exp": [
+     "InstanceWrapper"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "InstanceWrapper",
+     "file": "packages/core/injector/instance-wrapper.ts"
+    }
+   },
+   {
+    "id": "NJ24",
+    "q": "walk every module to collect controllers providers and dynamic imports into the container",
+    "d": "hard",
+    "exp": [
+     "DependenciesScanner"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "Module",
+     "file": "packages/core/injector/module.ts"
+    }
+   },
+   {
+    "id": "HO-NJ1",
+    "q": "Reflector",
+    "d": "easy",
+    "exp": [
+     "Reflector"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "Reflector",
+     "file": "packages/core/services/reflector.service.ts"
+    }
+   },
+   {
+    "id": "HO-NJ2",
+    "q": "read decorator metadata attached to a class or route handler",
+    "d": "semantic",
+    "exp": [
+     "Reflector",
+     "MetadataScanner"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Controller",
+     "file": "packages/common/decorators/core/controller.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ3",
+    "q": "ExceptionsHandler",
+    "d": "easy",
+    "exp": [
+     "ExceptionsHandler"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ExceptionsHandler",
+     "file": "packages/core/exceptions/exceptions-handler.ts"
+    }
+   },
+   {
+    "id": "HO-NJ4",
+    "q": "NestContainer",
+    "d": "easy",
+    "exp": [
+     "NestContainer"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "NestContainer",
+     "file": "packages/core/injector/container.ts"
+    }
+   },
+   {
+    "id": "HO-NJ5",
+    "q": "ConfigurableModuleBuilder",
+    "d": "easy",
+    "exp": [
+     "ConfigurableModuleBuilder"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ConfigurableModuleBuilder",
+     "file": "packages/common/module-utils/configurable-module.builder.ts"
+    }
+   },
+   {
+    "id": "HO-NJ6",
+    "q": "WebSocketGateway",
+    "d": "easy",
+    "exp": [
+     "WebSocketGateway"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "WebSocketGateway",
+     "file": "packages/websockets/decorators/socket-gateway.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ7",
+    "q": "ValidationPipe",
+    "d": "easy",
+    "exp": [
+     "ValidationPipe"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ValidationPipe",
+     "file": "packages/common/pipes/validation.pipe.ts"
+    }
+   },
+   {
+    "id": "HO-NJ8",
+    "q": "StreamableFile",
+    "d": "easy",
+    "exp": [
+     "StreamableFile"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "StreamableFile",
+     "file": "packages/common/file-stream/streamable-file.ts"
+    }
+   },
+   {
+    "id": "HO-NJ9",
+    "q": "lazy module loader register import on demand",
+    "d": "medium",
+    "exp": [
+     "LazyModuleLoader"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "InternalCoreModuleFactory",
+     "file": "packages/core/injector/internal-core-module/internal-core-module-factory.ts"
+    }
+   },
+   {
+    "id": "HO-NJ10",
+    "q": "instance loader create singleton provider instances",
+    "d": "medium",
+    "exp": [
+     "InstanceLoader"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "LazyModuleLoader",
+     "file": "packages/core/injector/lazy-module-loader/lazy-module-loader.ts"
+    }
+   },
+   {
+    "id": "HO-NJ11",
+    "q": "grpc microservice transport server",
+    "d": "medium",
+    "exp": [
+     "ServerGrpc"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.5,
+    "top1": {
+     "name": "ServerFactory",
+     "file": "packages/microservices/server/server-factory.ts"
+    }
+   },
+   {
+    "id": "HO-NJ12",
+    "q": "console logger colorized output log levels",
+    "d": "medium",
+    "exp": [
+     "ConsoleLogger"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.25,
+    "top1": {
+     "name": "Logger",
+     "file": "packages/common/services/logger.service.ts"
+    }
+   },
+   {
+    "id": "HO-NJ13",
+    "q": "compose multiple class and method decorators into one",
+    "d": "hard",
+    "exp": [
+     "applyDecorators"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "applyDecorators",
+     "file": "packages/common/decorators/core/apply-decorators.ts"
+    }
+   },
+   {
+    "id": "HO-NJ14",
+    "q": "break a circular reference between two modules that import each other",
+    "d": "hard",
+    "exp": [
+     "forwardRef"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Module",
+     "file": "packages/common/decorators/modules/module.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ15",
+    "q": "build the per-request execution context object exposing the handler and class",
+    "d": "hard",
+    "exp": [
+     "ExecutionContextHost"
+    ],
+    "r1": 0,
+    "s5": 1,
+    "rr": 0.2,
+    "top1": {
+     "name": "Request",
+     "file": "packages/common/decorators/http/route-params.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ16",
+    "q": "subscribe a gateway method to a named websocket event message",
+    "d": "semantic",
+    "exp": [
+     "SubscribeMessage"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "WebSocketsController",
+     "file": "packages/websockets/web-sockets-controller.ts"
+    }
+   },
+   {
+    "id": "HO-NJ17",
+    "q": "bind a controller method to handle a message pattern over a microservice transport",
+    "d": "semantic",
+    "exp": [
+     "MessagePattern",
+     "EventPattern"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Controller",
+     "file": "packages/common/decorators/core/controller.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ18",
+    "q": "run each registered guard and deny the request when one returns false",
+    "d": "semantic",
+    "exp": [
+     "GuardsConsumer"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "bindEvents",
+     "file": "packages/microservices/server/server-kafka.ts"
+    }
+   },
+   {
+    "id": "HO-NJ19",
+    "q": "convert a thrown error into the right error response for rpc and websocket channels",
+    "d": "semantic",
+    "exp": [
+     "BaseRpcExceptionFilter",
+     "BaseWsExceptionFilter",
+     "RpcExceptionsHandler",
+     "WsExceptionsHandler"
+    ],
+    "r1": 0,
+    "s5": 0,
+    "rr": 0,
+    "top1": {
+     "name": "Response",
+     "file": "packages/common/decorators/http/route-params.decorator.ts"
+    }
+   },
+   {
+    "id": "HO-NJ20",
+    "q": "parse and coerce a route parameter string into an integer or uuid before the handler",
+    "d": "semantic",
+    "exp": [
+     "ParseIntPipe",
+     "ParseUUIDPipe",
+     "ParseFloatPipe",
+     "ParseBoolPipe",
+     "ParseArrayPipe"
+    ],
+    "r1": 1,
+    "s5": 1,
+    "rr": 1,
+    "top1": {
+     "name": "ParseIntPipe",
+     "file": "packages/common/pipes/parse-int.pipe.ts"
+    }
+   }
+  ]
+ }
+}

@@ -73,3 +73,5 @@ BENCH_V2_REPORT.md
 
 # Local scratch / dev scripts (not part of the test suite)
 bench_embedders_test.mjs
+# local scratch area used during development
+scratch/

@@ -1,0 +1,358 @@
+/**
+ * Indexer: keeps the SQLite store in sync with the working tree.
+ *
+ *   sync()          full reconciliation (discover → stat → hash → parse changed → resolve)
+ *   syncPaths(ps)   targeted refresh for a handful of files (watcher events, query-time checks)
+ *
+ * Change detection follows git's model: (size, mtime) is the cheap signature, the content hash
+ * decides. Symbol ids are stable across re-indexing (matched by qualified name + kind + ordinal),
+ * so references from untouched files stay valid; only references that pointed at deleted symbols,
+ * or that could now bind to newly added names, are re-resolved.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { discoverFiles, isIndexablePath, looksMinified, MAX_FILE_BYTES } from './discover.mjs';
+import { ModuleResolver } from './modules.mjs';
+import { SymbolTable, Resolver } from './resolver.mjs';
+import { extractFile } from '../parse/extract.mjs';
+import { specForPath, LANGUAGES } from '../parse/languages.mjs';
+import { tokenString, codeTokens } from '../search/tokenize.mjs';
+
+const SPECS = Object.fromEntries(LANGUAGES.map(l => [l.id, l]));
+const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
+const BODY_TOKEN_CAP = 1200;
+
+function sha1(s) { return crypto.createHash('sha1').update(s).digest('hex'); }
+
+function lineStarts(src) {
+    const starts = [0];
+    for (let i = 0; i < src.length; i++) if (src.charCodeAt(i) === 10) starts.push(i + 1);
+    return starts;
+}
+
+export class Indexer {
+    constructor({ root, store, log = () => {}, include = null }) {
+        this.root = path.resolve(root);
+        this.store = store;
+        this.log = log;
+        this.include = include;
+        this.table = new SymbolTable();
+        this.resolver = new Resolver(this.table, SPECS);
+        this.modules = null;
+        this.loaded = false;
+        this.version = 0; // bumps on every change; caches key off it
+    }
+
+    // ── bootstrap from the store ─────────────────────────────────────────────────
+    load() {
+        const s = this.store;
+        const files = s.all('SELECT id, path, lang, package, is_test FROM files');
+        for (const f of files) this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
+        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, start_line, end_line FROM symbols')) {
+            this.table.addSym(rowToSym(r));
+        }
+        const imps = new Map();
+        for (const r of s.all('SELECT file_id, source, imported, local, reexport, wildcard, target_file_id, target_dir, target_path FROM imports')) {
+            const list = imps.get(r.file_id) ?? imps.set(r.file_id, []).get(r.file_id);
+            list.push(rowToImport(r, r.target_dir, r.target_path));
+        }
+        for (const [fid, list] of imps) this.table.setImports(fid, list);
+        const fields = new Map();
+        for (const r of s.all('SELECT file_id, owner_qname, name, type FROM fields')) (fields.get(r.file_id) ?? fields.set(r.file_id, []).get(r.file_id)).push(r);
+        for (const [fid, rows] of fields) this.table.setFieldTypes(fid, rows);
+        this.modules = new ModuleResolver(this.root, files.map(f => f.path));
+        this.loaded = true;
+    }
+
+    // ── public API ──────────────────────────────────────────────────────────────
+    /** Full reconciliation with the working tree. */
+    async sync({ onProgress = null } = {}) {
+        if (!this.loaded) this.load();
+        const t0 = Date.now();
+        const { files } = discoverFiles(this.root, { include: this.include });
+        const known = new Map(this.store.all('SELECT id, path, size, mtime_ms, hash FROM files').map(r => [r.path, r]));
+        const present = new Set(files);
+        const removed = [...known.keys()].filter(p => !present.has(p));
+        this.modules.setFiles(files);
+        const toParse = [];
+        for (const rel of files) {
+            const st = safeStat(path.join(this.root, rel));
+            if (!st || st.size > MAX_FILE_BYTES) { if (known.has(rel)) removed.push(rel); continue; }
+            const k = known.get(rel);
+            if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
+            toParse.push({ rel, st, prev: k ?? null });
+        }
+        const res = await this.#apply(toParse, removed, { onProgress });
+        this.store.setMeta('last_sync', String(Date.now()));
+        this.store.setMeta('root', this.root);
+        return { ...res, total: files.length, ms: Date.now() - t0 };
+    }
+
+    /** Re-check specific paths (created/modified/deleted). Cheap; used before answering queries. */
+    async syncPaths(paths) {
+        if (!this.loaded) this.load();
+        const toParse = [];
+        const removed = [];
+        for (const p of new Set(paths)) {
+            const rel = path.isAbsolute(p) ? path.relative(this.root, p).split(path.sep).join('/') : p;
+            if (rel.startsWith('..') || !isIndexablePath(rel, { include: this.include })) continue;
+            const st = safeStat(path.join(this.root, rel));
+            const k = this.store.get('SELECT id, path, size, mtime_ms, hash FROM files WHERE path = ?', rel);
+            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES) { if (k) removed.push(rel); continue; }
+            if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
+            toParse.push({ rel, st, prev: k ?? null });
+            this.modules.addFile(rel);
+        }
+        for (const r of removed) this.modules.removeFile(r);
+        if (!toParse.length && !removed.length) return { changed: 0, removed: 0 };
+        return this.#apply(toParse, removed, {});
+    }
+
+    /** Which of these indexed paths differ from disk right now (size/mtime)? */
+    staleAmong(paths) {
+        const out = [];
+        for (const rel of new Set(paths)) {
+            const k = this.store.get('SELECT size, mtime_ms FROM files WHERE path = ?', rel);
+            const st = safeStat(path.join(this.root, rel));
+            if (!k || !st || k.size !== st.size || k.mtime_ms !== Math.floor(st.mtimeMs)) out.push(rel);
+        }
+        return out;
+    }
+
+    // ── internals ────────────────────────────────────────────────────────────────
+    async #apply(toParse, removed, { onProgress }) {
+        const s = this.store;
+        let changed = 0, unchangedContent = 0, added = 0;
+        const touchedFileIds = [];
+        const removedSymIds = [];
+        const addedNames = new Set();
+
+        // remove deleted files
+        if (removed.length) {
+            s.tx(() => {
+                for (const rel of removed) {
+                    const f = s.get('SELECT id FROM files WHERE path = ?', rel);
+                    if (!f) continue;
+                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); }
+                    for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, f.id);
+                    s.run('DELETE FROM files WHERE id = ?', f.id);
+                    this.table.removeFile(f.id);
+                    this.modules?.removeFile(rel);
+                }
+            });
+        }
+
+        // parse changed/new files (async extraction), write in batches
+        const BATCH = 200;
+        let done = 0;
+        for (let i = 0; i < toParse.length; i += BATCH) {
+            const batch = toParse.slice(i, i + BATCH);
+            const parsed = [];
+            for (const item of batch) {
+                const abs = path.join(this.root, item.rel);
+                let source;
+                try { source = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+                const hash = sha1(source);
+                if (item.prev && item.prev.hash === hash) {
+                    s.run('UPDATE files SET size = ?, mtime_ms = ? WHERE id = ?', item.st.size, Math.floor(item.st.mtimeMs), item.prev.id);
+                    unchangedContent++;
+                    continue;
+                }
+                const spec = specForPath(item.rel);
+                if (!spec) continue;
+                let extraction;
+                if (looksMinified(source)) extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 0 };
+                else {
+                    try { extraction = await extractFile(spec, source, item.rel); }
+                    catch (e) { this.log(`parse failed for ${item.rel}: ${e.message}`); extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1 }; }
+                }
+                parsed.push({ ...item, source, hash, spec, extraction });
+            }
+            s.tx(() => {
+                for (const p of parsed) {
+                    const r = this.#writeFile(p);
+                    touchedFileIds.push(r.fileId);
+                    removedSymIds.push(...r.removedIds);
+                    for (const n of r.addedNames) addedNames.add(n);
+                    if (p.prev) changed++; else added++;
+                }
+            });
+            done += batch.length;
+            onProgress?.(done, toParse.length);
+        }
+
+        // resolve: refs of touched files + refs that pointed at removed symbols + refs that may bind to new names
+        this.resolver.resetMemo();
+        const refIds = new Set();
+        if (touchedFileIds.length) {
+            for (const fid of touchedFileIds) for (const r of s.all('SELECT id FROM refs WHERE file_id = ?', fid)) refIds.add(r.id);
+        }
+        const dangling = [];
+        if (removedSymIds.length) {
+            for (let i = 0; i < removedSymIds.length; i += 500) {
+                const chunk = removedSymIds.slice(i, i + 500);
+                for (const r of s.all(`SELECT id FROM refs WHERE dst_id IN (${chunk.map(() => '?').join(',')})`, ...chunk)) { refIds.add(r.id); dangling.push(r.id); }
+            }
+        }
+        const isIncremental = touchedFileIds.length < this.table.files.size;
+        if (addedNames.size && isIncremental) {
+            const names = [...addedNames];
+            for (let i = 0; i < names.length; i += 500) {
+                const chunk = names.slice(i, i + 500);
+                for (const r of s.all(`SELECT id FROM refs WHERE name IN (${chunk.map(() => '?').join(',')}) AND (dst_id IS NULL OR conf < 0.9)`, ...chunk)) refIds.add(r.id);
+            }
+        }
+        const resolved = this.#resolveRefs([...refIds]);
+        if (touchedFileIds.length || removed.length) this.version++;
+        return { added, changed, removed: removed.length, unchangedContent, resolved };
+    }
+
+    #writeFile({ rel, st, prev, source, hash, spec, extraction }) {
+        const s = this.store;
+        const { symbols, refs, imports, fields, fileInfo, errors } = extraction;
+        const lines = lineStarts(source);
+        const isTest = spec.testFile?.test(rel) ? 1 : 0;
+        const pkg = fileInfo?.package ?? null;
+        let fileId;
+        let oldSyms = [];
+        if (prev) {
+            fileId = prev.id;
+            oldSyms = s.all('SELECT id, qname, kind, ordinal FROM symbols WHERE file_id = ?', fileId);
+            for (const o of oldSyms) s.run('DELETE FROM fts WHERE rowid = ?', o.id);
+            for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
+            s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, indexed_at = ? WHERE id = ?',
+                spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now(), fileId);
+            this.table.removeFile(fileId);
+        } else {
+            const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now());
+            fileId = Number(r.lastInsertRowid);
+        }
+        this.table.addFile({ id: fileId, path: rel, lang: spec.id, package: pkg, isTest: !!isTest });
+
+        // stable ids: reuse by (qname, kind, ordinal)
+        const oldByKey = new Map(oldSyms.map(o => [o.qname + '\0' + o.kind + '\0' + o.ordinal, o.id]));
+        const ordinals = new Map();
+        const ids = new Array(symbols.length);
+        const reused = new Set();
+        const addedNames = [];
+        const pathTokens = tokenString(rel.replace(/\.[^.]+$/, ''));
+        for (let i = 0; i < symbols.length; i++) {
+            const sym = symbols[i];
+            const k0 = sym.qname + '\0' + sym.kind;
+            const ord = ordinals.get(k0) ?? 0;
+            ordinals.set(k0, ord + 1);
+            const key = k0 + '\0' + ord;
+            const reuse = oldByKey.get(key);
+            const parentId = sym.parentIdx >= 0 ? ids[sym.parentIdx] : null;
+            const decorators = sym.decorators?.length ? JSON.stringify(sym.decorators) : null;
+            const bases = sym.bases?.length ? JSON.stringify(sym.bases) : null;
+            const r = s.run(`INSERT INTO symbols (id, file_id, name, name_lc, qname, kind, parent_id, owner, start_line, start_col, end_line, end_col, name_line, name_col, sig, doc, type, exported, visibility, decorators, bases, ordinal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                reuse ?? null, fileId, sym.name, sym.name.toLowerCase(), sym.qname, sym.kind, parentId, sym.owner, sym.startLine, sym.startCol, sym.endLine, sym.endCol,
+                sym.nameLine, sym.nameCol, sym.sig || null, sym.doc || null, sym.type, sym.exported ? 1 : 0, sym.visibility, decorators, bases, ord);
+            const id = reuse ?? Number(r.lastInsertRowid);
+            ids[i] = id;
+            if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
+            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, startLine: sym.startLine, endLine: sym.endLine });
+        }
+        // FTS documents
+        for (let i = 0; i < symbols.length; i++) {
+            const sym = symbols[i];
+            let body;
+            if (TYPE_KINDS.has(sym.kind)) {
+                const kids = [];
+                for (let j = i + 1; j < symbols.length && kids.length < 200; j++) if (symbols[j].parentIdx === i) kids.push(symbols[j].name, symbols[j].sig ?? '');
+                body = tokenString(kids.join(' '), { maxTokens: BODY_TOKEN_CAP });
+            } else if (sym.kind === 'macro' || sym.kind === 'selector' || sym.kind === 'variable' && sym.endLine - sym.startLine > 30) {
+                // macro_rules bodies, CSS blocks and big literal tables are token soup: index their head only
+                const a = lines[sym.startLine - 1] ?? 0;
+                const b = lines[Math.min(sym.startLine + 2, lines.length - 1)] ?? source.length;
+                body = codeTokens(source.slice(a, b), { maxTokens: 60 }).join(' ');
+            } else {
+                const a = lines[sym.startLine - 1] ?? 0;
+                const b = lines[Math.min(sym.endLine, lines.length - 1)] ?? source.length;
+                body = codeTokens(source.slice(a, sym.endLine >= lines.length ? source.length : b), { maxTokens: BODY_TOKEN_CAP }).join(' ');
+            }
+            s.run('INSERT INTO fts (rowid, name, qname, sig, doc, path, body) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                ids[i], tokenString(sym.name), tokenString(sym.qname), tokenString(sym.sig ?? ''), tokenString(sym.doc ?? ''), pathTokens, body);
+        }
+        // refs (unresolved for now)
+        for (const r of refs) {
+            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                fileId, r.symIdx >= 0 ? ids[r.symIdx] : null, r.name, r.kind, r.line, r.col, r.recv || null, r.recvType || null);
+        }
+        // imports (module resolution needs only the file list)
+        const impRows = [];
+        for (const imp of imports) {
+            const target = this.modules.resolve(spec.id, rel, imp.source);
+            let targetFileId = null;
+            if (target?.file) targetFileId = s.get('SELECT id FROM files WHERE path = ?', target.file)?.id ?? null;
+            const row = { source: imp.source ?? null, imported: imp.imported ?? null, local: imp.local ?? null, reexport: imp.reexport ?? null, wildcard: imp.wildcard ? 1 : 0, line: imp.line ?? null, target_file_id: targetFileId, target_dir: target?.dir ?? null };
+            s.run('INSERT INTO imports (file_id, source, imported, local, reexport, wildcard, line, target_file_id, target_dir, target_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                fileId, row.source, row.imported, row.local, row.reexport, row.wildcard, row.line, row.target_file_id, row.target_dir, target?.file ?? null);
+            impRows.push(rowToImport(row, target?.dir ?? null, target?.file ?? null));
+        }
+        this.table.setImports(fileId, impRows);
+        for (const f of fields ?? []) s.run('INSERT INTO fields (file_id, owner_qname, name, type) VALUES (?, ?, ?, ?)', fileId, f.owner, f.name, f.type);
+        this.table.setFieldTypes(fileId, (fields ?? []).map(f => ({ owner_qname: f.owner, name: f.name, type: f.type })));
+        const removedIds = oldSyms.filter(o => !reused.has(o.id)).map(o => o.id);
+        return { fileId, removedIds, addedNames };
+    }
+
+    /** Import targets whose file was not indexed yet at write time are fixed up lazily here. */
+    #fixImportTargets() {
+        const s = this.store;
+        for (const [fid, imps] of this.table.imports) {
+            const f = this.table.file(fid);
+            if (!f) continue;
+            let changed = false;
+            for (const imp of imps) {
+                if (imp.targetFileId != null || imp.targetDir || !imp.targetPath) continue;
+                const t = this.table.fileByPath.get(imp.targetPath);
+                if (t) { imp.targetFileId = t.id; changed = true; }
+            }
+            if (changed) {
+                for (const imp of imps) if (imp.targetFileId != null && imp.targetPath) s.run('UPDATE imports SET target_file_id = ? WHERE file_id = ? AND target_path = ? AND target_file_id IS NULL', imp.targetFileId, fid, imp.targetPath);
+                this.table.setImports(fid, imps);
+            }
+        }
+    }
+
+    #resolveRefs(refIds) {
+        if (!refIds.length) return 0;
+        const s = this.store;
+        this.#fixImportTargets();
+        let n = 0;
+        s.tx(() => {
+            for (let i = 0; i < refIds.length; i += 900) {
+                const chunk = refIds.slice(i, i + 900);
+                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+                for (const r of rows) {
+                    const res = this.resolver.resolve(r);
+                    if (res.id == null && (r.kind === 'value' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }
+                    s.run('UPDATE refs SET dst_id = ?, conf = ?, ncand = ? WHERE id = ?', res.id, res.conf, res.ncand ?? 0, r.id);
+                    if (res.id != null) n++;
+                }
+            }
+        });
+        return n;
+    }
+}
+
+function safeStat(p) { try { return fs.statSync(p); } catch { return null; } }
+
+function rowToSym(r) {
+    return {
+        id: r.id, fileId: r.file_id, name: r.name, qname: r.qname, kind: r.kind, parentId: r.parent_id ?? null, owner: r.owner ?? null,
+        type: r.type ?? null, bases: r.bases ? JSON.parse(r.bases) : [], exported: !!r.exported, startLine: r.start_line, endLine: r.end_line,
+    };
+}
+
+function rowToImport(r, dir = null, targetPath = null) {
+    return {
+        source: r.source, imported: r.imported, local: r.local, reexport: r.reexport, wildcard: !!r.wildcard,
+        targetFileId: r.target_file_id ?? null, targetDir: dir ?? r.target_dir ?? null, targetPath,
+    };
+}
