@@ -7,6 +7,7 @@ const QUERY = `
 (module (expression_statement (assignment left: (identifier) @name)) @def.variable)
 (class_definition body: (block (expression_statement (assignment left: (identifier) @name type: (type) @type)) @def.field))
 (class_definition body: (block (expression_statement (assignment left: (identifier) @name)) @def.field))
+(expression_statement (assignment left: (attribute object: (identifier) @_self attribute: (identifier) @name) (#eq? @_self "self")) @def.field)
 
 (call function: (identifier) @name) @ref.call
 (call function: (attribute object: (_) @recv attribute: (identifier) @name)) @ref.call
@@ -20,9 +21,13 @@ const QUERY = `
 (type (attribute object: (_) @recv attribute: (identifier) @name)) @ref.type
 (type (generic_type (identifier) @name)) @ref.type
 (type (generic_type (type_parameter (type (identifier) @name)))) @ref.type
+(type (string (string_content) @name)) @ref.type
 (argument_list (identifier) @name) @ref.value
 (keyword_argument value: (identifier) @name) @ref.value
 (list (identifier) @name) @ref.value
+(pair value: (identifier) @name) @ref.value
+(assignment right: (identifier) @name) @ref.value
+(attribute object: (_) @recv attribute: (identifier) @name) @ref.read
 
 [(lambda) (list_comprehension) (set_comprehension) (dictionary_comprehension) (generator_expression)] @scope
 (return_statement (_) @ret)
@@ -111,6 +116,8 @@ function isModuleLevel(node) {
 
 export const python = {
     id: 'python',
+    // `self.x = …` inside a method declares an instance attribute of the class (first assignment wins)
+    hoistMemberFields: true,
     grammar: 'python',
     extensions: ['.py', '.pyi'],
     family: 'python',

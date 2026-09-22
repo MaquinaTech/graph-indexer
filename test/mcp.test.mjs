@@ -50,10 +50,10 @@ test('handshake negotiates a supported version and carries instructions', async 
     assert.equal(unknownVersion.result.protocolVersion, '2025-11-25');
 });
 
-test('tools/list exposes six read-only tools with short descriptions', async () => {
+test('tools/list exposes the read-only tools with short descriptions', async () => {
     const r = await srv.request('tools/list', {});
     const names = r.result.tools.map(t => t.name);
-    assert.deepEqual(names, ['search_code', 'get_symbol', 'find_references', 'call_graph', 'change_impact', 'outline']);
+    assert.deepEqual(names, ['search_code', 'search_text', 'get_symbol', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
     for (const t of r.result.tools) {
         assert.equal(t.annotations.readOnlyHint, true);
         assert.ok(t.description.length <= 2048, t.name);

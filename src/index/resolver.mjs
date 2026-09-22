@@ -22,6 +22,25 @@ const PACKAGE_LANGS = new Set(['java', 'kotlin', 'scala', 'csharp', 'php']);
 const DIR_PACKAGE_LANGS = new Set(['go']);
 const MAX_GLOBAL_CANDIDATES = 12;
 
+/**
+ * Method names that standard-library types of each language family also define (`map.get(k)`,
+ * `promise.then()`, `w.Header().Get()`, `list.append()`). A call with an unknown receiver and one
+ * of these names is never bound by name alone: it is far more often the library's method than a
+ * same-named method in the repository.
+ */
+const COMMON_MEMBERS = {
+    ecma: 'get set has delete add clear forEach map filter reduce reduceRight find findIndex findLast findLastIndex some every includes indexOf lastIndexOf join split slice splice concat push pop shift unshift sort reverse keys values entries fill flat flatMap at apply call bind then catch finally toString valueOf toJSON emit on once off addListener removeListener removeAllListeners listeners send write end close open read pipe resolve reject next return throw test exec match matchAll replace replaceAll trim trimStart trimEnd startsWith endsWith padStart padEnd charAt charCodeAt codePointAt substring substr toLowerCase toUpperCase localeCompare normalize repeat assign create freeze defineProperty hasOwnProperty isArray from of parse stringify log error warn info debug trace json status sendStatus header set setHeader getHeader removeHeader writeHead redirect render use listen subscribe unsubscribe complete pipe lift toPromise getTime toISOString setTimeout clone copy dispose destroy init start stop run update create remove insert append',
+    python: 'get set items keys values update pop popitem append extend insert remove clear copy sort reverse index count join split rsplit splitlines strip lstrip rstrip replace format startswith endswith lower upper title encode decode read write close open readline readlines seek tell flush send recv add discard union intersection difference issubset setdefault fromkeys sleep info debug warning warn error exception critical log search match fullmatch findall finditer sub compile group groups groupdict dumps loads dump load exists mkdir makedirs is_file is_dir resolve cast run start stop wait acquire release put get_nowait put_nowait result done cancel',
+    go: 'Get Set Add Del Delete Has Len Less Swap String Error Write Read Close Next Value Done Err Lock Unlock RLock RUnlock Wait Load Store LoadOrStore Header WriteHeader Printf Println Print Sprintf Errorf Fatal Fatalf Log Logf Run Cleanup Helper Skip Parse Format Unix Now Since Sub Before After Equal Scan Query QueryRow Exec Begin Commit Rollback Marshal Unmarshal Encode Decode New Copy Reset Bytes Seek Flush Cancel Deadline WithValue Context Body Cookie Query',
+    jvm: 'get set add addAll put putAll remove contains containsKey containsValue size isEmpty clear iterator stream map filter collect forEach equals hashCode toString valueOf of apply accept test length charAt substring append build close write read flush println print printf format getName getClass orElse orElseThrow isPresent ifPresent join compareTo keySet values entrySet getKey getValue sort',
+    csharp: 'Add AddRange Remove Contains ContainsKey Get Set ToString Equals GetHashCode Count Any All Select Where First FirstOrDefault Last ToList ToArray Dispose Write WriteLine Read ReadLine Close Invoke GetValue SetValue TryGetValue Append Clear Insert IndexOf Join Split Trim Replace Format',
+    rust: 'get get_mut set insert remove push pop len is_empty iter iter_mut into_iter map filter collect unwrap expect clone to_string to_owned as_str as_ref as_mut borrow borrow_mut lock read write send recv next fmt eq cmp partial_cmp hash from into new default ok err is_some is_none and_then unwrap_or unwrap_or_else map_err contains extend join split trim',
+    ruby: 'each map select reject find detect include? push pop shift unshift each_with_index each_with_object to_s to_i to_a to_h to_sym keys values fetch merge join split strip call new puts print send respond_to? nil? empty? any? all? first last count size length',
+    php: 'get set has add remove count toArray all first last map filter each push pop merge keys values',
+    c: 'push_back pop_back size begin end find insert erase at c_str get reset clear empty front back emplace emplace_back data swap',
+};
+const COMMON_BY_FAMILY = Object.fromEntries(Object.entries(COMMON_MEMBERS).map(([k, v]) => [k, new Set(v.split(/\s+/))]));
+
 function push(map, key, val) {
     const a = map.get(key);
     if (a) a.push(val); else map.set(key, [val]);
@@ -241,7 +260,11 @@ export class Resolver {
         const head = parts[0];
         let cur = null;
         if (head.name.startsWith('call:')) {
-            const r = this.#resolveName(head.name.slice(5), 'call', fileId, srcId);
+            const callee = head.name.slice(5);
+            const dot = callee.lastIndexOf('.');
+            // `call:pkg.New`: the function is reached through a module / import alias
+            const r = dot > 0 ? this.#resolveMember(callee.slice(dot + 1), 'call', callee.slice(0, dot), null, fileId, srcId)
+                : this.#resolveName(callee, 'call', fileId, srcId);
             const s = r?.id != null ? this.t.sym(r.id) : null;
             if (s) {
                 if (TYPE_KINDS.has(s.kind)) cur = head.elem ? null : s; // constructor call
@@ -632,17 +655,24 @@ export class Resolver {
         return same.length ? same : ids;
     }
 
+    /**
+     * Unknown receiver: bind by name only when the repository has exactly one member with that name
+     * and the name is not also a standard-library method of the language (`get`, `set`, `apply`…).
+     * Everything else stays unbound with its candidate count — a guessed edge that is wrong most of
+     * the time costs an agent more than an honest "unknown".
+     */
     #anyMember(name, kind, fileId) {
         const file = this.t.file(fileId);
+        const fam = familyOf(file.lang);
         const ids = (this.t.byName.get(name) ?? []).filter(id => {
             const s = this.t.sym(id);
             if (!s || !(s.kind === 'method' || s.kind === 'field' || s.kind === 'property' || s.kind === 'function' && s.owner)) return false;
             const f = this.t.file(s.fileId);
-            return f && familyOf(f.lang) === familyOf(file.lang);
+            return f && familyOf(f.lang) === fam;
         });
         if (!ids.length) return null;
-        if (ids.length > MAX_GLOBAL_CANDIDATES) return { id: null, conf: 0, ncand: ids.length };
-        return this.#pick(ids, kind, ids.length === 1 ? 0.5 : 0.25, fileId);
+        if (ids.length > 1 || COMMON_BY_FAMILY[fam]?.has(name)) return { id: null, conf: 0, ncand: ids.length };
+        return this.#pick(ids, kind, 0.5, fileId);
     }
 }
 

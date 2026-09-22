@@ -56,7 +56,17 @@ async function openIntel({ watch = false, background = false, quiet = false } = 
     return intel;
 }
 
+/** Options left over after a command took its own are typos, not part of the query. */
+function rejectUnknownOptions() {
+    const bad = argv.filter(a => /^--?[A-Za-z][\w-]*$/.test(a));
+    if (!bad.length) return false;
+    process.stderr.write(`Unknown option${bad.length > 1 ? 's' : ''} for "${cmd}": ${bad.join(' ')}\n\n${HELP}\n`);
+    process.exitCode = 2;
+    return true;
+}
+
 async function runTool(name, args) {
+    if (rejectUnknownOptions()) return;
     const intel = await openIntel({ quiet: true });
     const { callTool } = await import('../src/mcp/tools.mjs');
     try { process.stdout.write((await callTool(intel, name, args)) + '\n'); }
@@ -71,11 +81,13 @@ Usage:
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
+  graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer symbol <name> [--no-code]
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
+  graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
 
 The index lives in <repo>/.graph-indexer/ and is kept in sync automatically.`;
 
@@ -118,6 +130,11 @@ async function main() {
             const pathF = opt('--path'); const kind = opt('--kind'); const limit = Number(opt('--limit', 8));
             return runTool('search_code', { query: argv.join(' '), path: pathF, kind, limit });
         }
+        case 'grep': {
+            const pathF = opt('--path'); const literal = flag('--literal') || flag('-F'); const ic = flag('-i') || flag('--ignore-case'); const limit = Number(opt('--limit', 60));
+            const pattern = argv.shift();
+            return runTool('search_text', { pattern, path: pathF, literal, ignore_case: ic, limit });
+        }
         case 'symbol': {
             const noCode = flag('--no-code'); const maxLines = Number(opt('--max-lines', 200));
             return runTool('get_symbol', { symbol: argv.join(' '), include_code: !noCode, max_lines: maxLines });
@@ -135,6 +152,10 @@ async function main() {
             const files = (opt('--files') ?? '').split(',').filter(Boolean);
             const diff = flag('--diff'); const depth = Number(opt('--depth', 3));
             return runTool('change_impact', { symbols, files, diff, depth });
+        }
+        case 'check': {
+            const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');
+            return runTool('check_changes', { files, base });
         }
         case 'outline': {
             const focus = opt('--focus'); const maxTokens = Number(opt('--max-tokens', 1500));

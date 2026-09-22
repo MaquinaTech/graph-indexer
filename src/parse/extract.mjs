@@ -35,7 +35,9 @@ function collapse(s) { return s.replace(/\s+/g, ' ').trim(); }
 
 /** Signature = definition text up to its body, whitespace-collapsed. */
 function signatureOf(defNode, spec, source) {
-    const body = spec.bodyField ? defNode.childForFieldName(spec.bodyField) : null;
+    // `const f = (a, b) => {…}` / `f = lambda …`: the function is the value, its body ends the signature
+    const body = (spec.bodyField ? defNode.childForFieldName(spec.bodyField) : null)
+        ?? defNode.childForFieldName('value')?.childForFieldName('body') ?? null;
     let end = body ? body.startIndex : defNode.endIndex;
     let text = source.slice(defNode.startIndex, end);
     if (!body) {
@@ -134,7 +136,7 @@ function receiverDescriptor(node, spec) {
     if (NULL_NODES.has(t)) return 'null';
     if (LITERAL_NODES.has(t)) return '!';
     if (spec.selfNames.includes(text) || t === 'this' || t === 'self') return 'this';
-    if (t === 'super' || text === 'super') return 'super';
+    if (t === 'super' || text === 'super' || /^super\s*\([^()]*\)$/.test(text)) return 'super'; // Python `super()` / `super(Cls, self)`
     if (CASTS.has(t)) {
         const tn = node.childForFieldName('type') ?? node.namedChildren[node.namedChildCount - 1];
         const tt = tn && tn !== node.namedChildren[0] ? normalizeType(tn.text, spec) : null;
@@ -258,6 +260,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     filtered.sort((a, b) => a.node.startIndex - b.node.startIndex || b.node.endIndex - a.node.endIndex);
 
     const byNodeId = new Map();
+    const hoisted = new Set();
     const defNameIds = new Set();
     const symbols = [];
     for (const d of filtered) {
@@ -273,6 +276,14 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const lexParent = parentIdx;
         // constructor parameter properties (`constructor(private repo: Repo)`) are class members
         if (d.kind === 'field' && parentIdx >= 0 && CONSTRUCTOR_NAMES.has(symbols[parentIdx].name) && symbols[parentIdx].parentIdx >= 0) parentIdx = symbols[parentIdx].parentIdx;
+        // attributes assigned on self inside any method (Python) belong to the class, once each
+        else if (d.kind === 'field' && spec.hoistMemberFields && parentIdx >= 0 && CALLABLE_KINDS.has(symbols[parentIdx].kind) && symbols[parentIdx].parentIdx >= 0
+            && CLASS_KINDS.has(symbols[symbols[parentIdx].parentIdx].kind)) {
+            const cls = symbols[parentIdx].parentIdx;
+            if (hoisted.has(cls + ':' + name) || symbols.some(x => x.parentIdx === cls && x.name === name)) continue;
+            hoisted.add(cls + ':' + name);
+            parentIdx = cls;
+        }
         let kind = d.kind;
         const parent = parentIdx >= 0 ? symbols[parentIdx] : null;
         if (kind === 'function' && parent && (parent.kind === 'class' || parent.kind === 'interface' || parent.kind === 'struct' || parent.kind === 'trait' || parent.kind === 'impl' || parent.kind === 'object')) kind = 'method';
@@ -407,6 +418,14 @@ function extractFromTree(spec, query, tree, source, relPath) {
         }
         return null;
     };
+    /** A local binding of `name` (typed or not) is visible at ctx: it shadows globals and builtins. */
+    const isDeclared = (ctx, name) => {
+        for (let k = ctx.scope; ; k = scopes[k].parent) {
+            if (localTypes.has(k + ':' + name)) return true;
+            if (k < 0) break;
+        }
+        return false;
+    };
     const fieldTypes = new Map();   // `${classIdx}:${field}` -> type string (see above)
 
     /** Apply `()` / `[]` operators to a type string; null when the result is unknown. */
@@ -478,6 +497,11 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
             // `Type.staticField…`: a capitalised root that is not a local names a type
             if (!t && !v && segs.length > 1 && !first.ops.length && /^[A-Z]/.test(first.name)) t = first.name;
+            // `pkg.New()` / `utils.makeFoo()`: a call through a module or import alias returns the callee's type
+            else if (!t && !v && segs.length > 1 && !first.ops.length && segs[1].ops[0] === '()') {
+                t = applyOps('call:' + first.name + '.' + segs[1].name, segs[1].ops.slice(1));
+                i = 2;
+            }
         }
         for (; i < segs.length && t; i++) {
             const seg = segs[i];
@@ -566,12 +590,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (!name || name.length > 128) continue;
         const kind = r.kind;
         const recv = r.recvNode ? receiverDescriptor(r.recvNode, spec) : '';
-        if (kind === 'call' && !recv && spec.builtinCalls?.has(name)) continue;
+        const ctx = ctxAt(r.nameNode.startIndex);
+        if (kind === 'call' && !recv && spec.builtinCalls?.has(name) && !isDeclared(ctx, name)) continue;
         const root = recv.split('.')[0];
-        if (recv && spec.externalReceivers?.has(root)) continue;
+        // `module.x()` is the CommonJS global only when no local `module` is in scope
+        if (recv && spec.externalReceivers?.has(root) && !isDeclared(ctx, root)) continue;
         if (kind === 'value' && spec.isNoiseValue?.(name)) continue;
         const pos = r.nameNode.startPosition;
-        const ctx = ctxAt(r.nameNode.startIndex);
         const encl = ctx.sym;
         const recvType = inferReceiverType(recv, ctx);
         refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl });

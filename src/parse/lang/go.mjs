@@ -32,7 +32,10 @@ const QUERY = `
 (interface_type (type_elem (type_identifier) @name)) @ref.inherit
 (argument_list (identifier) @name) @ref.value
 (argument_list (selector_expression operand: (identifier) @recv field: (field_identifier) @name)) @ref.value
-(keyed_element (literal_element (identifier) @name)) @ref.value
+(keyed_element (literal_element) (literal_element (identifier) @name)) @ref.value
+(composite_literal type: [(map_type) (slice_type) (array_type)] body: (literal_value (keyed_element . (literal_element (identifier) @name)))) @ref.value
+(composite_literal type: [(type_identifier) (qualified_type) (generic_type)] body: (literal_value (keyed_element . (literal_element (identifier) @name)))) @recv @ref.read
+(selector_expression operand: (_) @recv field: (field_identifier) @name) @ref.read
 
 (func_literal) @scope
 (return_statement (expression_list . (_) @ret))

@@ -215,8 +215,10 @@ export class Indexer {
                 for (const r of s.all(`SELECT id FROM refs WHERE name IN (${chunk.map(() => '?').join(',')}) AND (dst_id IS NULL OR conf < 0.9)`, ...chunk)) refIds.add(r.id);
             }
         }
+        const goTouched = this.resolveAll || removed.some(r => r.endsWith('.go')) || toParse.some(p => p.rel.endsWith('.go'));
         if (this.resolveAll) for (const r of s.all('SELECT id FROM refs')) refIds.add(r.id);
         const resolved = this.#resolveRefs([...refIds]);
+        if (goTouched) this.#goImplements();
         this.resolveAll = false;
         if (toParse.length || removed.length) s.setMeta('resolve_pending', '0');
         if (touchedFileIds.length || removed.length) this.version++;
@@ -327,7 +329,8 @@ export class Indexer {
             if (!f) continue;
             let changed = false;
             for (const imp of imps) {
-                if (imp.targetFileId != null || imp.targetDir || !imp.targetPath) continue;
+                // a package import can have both a directory and an entry file (Python `pkg/__init__.py`)
+                if (imp.targetFileId != null || !imp.targetPath) continue;
                 const t = this.table.fileByPath.get(imp.targetPath);
                 if (t) { imp.targetFileId = t.id; changed = true; }
             }
@@ -336,6 +339,70 @@ export class Indexer {
                 this.table.setImports(fid, imps);
             }
         }
+    }
+
+    /**
+     * Go interfaces are satisfied implicitly: a named type implements an interface when its method
+     * set (methods declared on the type or its pointer, in its package) contains every method the
+     * interface declares, embedded interfaces included. Recorded as `inherit` edges marked
+     * `~structural`, recomputed whenever a Go file changes, and added to the type's bases so calls
+     * through the interface count as calls to the implementations and vice versa.
+     */
+    #goImplements() {
+        const s = this.store, t = this.table;
+        s.tx(() => {
+            const old = s.all("SELECT src_id, name FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
+            s.run("DELETE FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
+            for (const o of old) {
+                const sym = t.sym(o.src_id);
+                if (sym && sym.structural?.has(o.name)) { sym.bases = sym.bases.filter(b => b !== o.name || sym.declaredBases?.includes(b)); sym.structural.delete(o.name); }
+            }
+            const goFile = (fid) => t.file(fid)?.lang === 'go';
+            const dirOf = (fid) => { const f = t.file(fid); return f ? path.posix.dirname(f.path) : null; };
+            const ifaces = [], types = [];
+            for (const sym of t.syms.values()) {
+                if (!goFile(sym.fileId)) continue;
+                if (sym.kind === 'interface') ifaces.push(sym);
+                else if (sym.kind === 'struct' || sym.kind === 'type' || sym.kind === 'class') types.push(sym);
+            }
+            if (!ifaces.length || !types.length) return;
+            const ifaceByName = new Map();
+            for (const i of ifaces) (ifaceByName.get(i.name) ?? ifaceByName.set(i.name, []).get(i.name)).push(i);
+            // method names of an interface, following embedded interfaces declared in the same package
+            const methodSet = (i, seen = new Set()) => {
+                if (seen.has(i.id)) return new Set();
+                seen.add(i.id);
+                const out = new Set([...(t.byParent.get(i.id)?.keys() ?? [])].filter(n => (t.byParent.get(i.id).get(n) ?? []).some(id => t.sym(id)?.kind === 'method')));
+                for (const b of i.declaredBases ?? i.bases ?? []) for (const e of ifaceByName.get(b) ?? []) if (dirOf(e.fileId) === dirOf(i.fileId)) for (const n of methodSet(e, seen)) out.add(n);
+                return out;
+            };
+            // method names per type (methods live outside the type body in Go: owner = type name)
+            const byMethod = new Map();
+            for (const ty of types) {
+                const dir = dirOf(ty.fileId);
+                for (const id of t.byOwner.get(ty.name) ?? []) {
+                    const m = t.sym(id);
+                    if (!m || m.kind !== 'method' || dirOf(m.fileId) !== dir) continue;
+                    (byMethod.get(m.name) ?? byMethod.set(m.name, new Set()).get(m.name)).add(ty.id);
+                }
+            }
+            for (const i of ifaces) {
+                const need = [...methodSet(i)];
+                if (!need.length) continue;
+                need.sort((a, b) => (byMethod.get(a)?.size ?? 0) - (byMethod.get(b)?.size ?? 0));
+                let cands = byMethod.get(need[0]);
+                if (!cands) continue;
+                for (const tyId of cands) {
+                    if (!need.every(n => byMethod.get(n)?.has(tyId))) continue;
+                    const ty = t.sym(tyId);
+                    s.run("INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, dst_id, conf, ncand) VALUES (?, ?, ?, 'inherit', ?, 0, NULL, '~structural', ?, 0.8, 1)",
+                        ty.fileId, ty.id, i.name, ty.startLine, i.id);
+                    ty.declaredBases ??= [...ty.bases];
+                    ty.structural ??= new Set();
+                    if (!ty.bases.includes(i.name)) { ty.bases.push(i.name); ty.structural.add(i.name); }
+                }
+            }
+        });
     }
 
     #resolveRefs(refIds) {

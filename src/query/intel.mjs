@@ -17,7 +17,10 @@ import { dataDir } from '../util/paths.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
-const DEP_KINDS = ['call', 'new', 'inherit', 'type', 'decorator', 'value'];
+const DEP_KINDS = ['call', 'new', 'inherit', 'type', 'decorator', 'value', 'read'];
+const CONSTRUCTORS = new Set(['constructor', '__init__', '__new__', 'initialize', '__construct']);
+// examples, docs snippets and sample apps are visited after library code and tests
+const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|playground)\//i;
 
 export class CodeIntel {
     constructor({ root, dbPath = null, log = () => {}, watch = false }) {
@@ -149,7 +152,8 @@ export class CodeIntel {
      * @returns {{ matches: object[], how: string }}
      */
     findSymbols(target, { limit = 20 } = {}) {
-        const t = String(target).trim().replace(/\(\)$/, '');
+        let t = String(target).trim().replace(/\(\)$/, '');
+        if (t.startsWith(this.root + '/')) t = t.slice(this.root.length + 1); // absolute path inside the repository
         let m = /^(.+?\.[A-Za-z0-9]+):(\d+)$/.exec(t);
         if (m) {
             const [, file, line] = m;
@@ -175,12 +179,18 @@ export class CodeIntel {
         return { matches: this.#rank(rows.map(r => r.id)).slice(0, limit).map(id => this.sym(id)), how: 'name' };
     }
 
+    /**
+     * Order same-name candidates the way a developer means them: library code before tests and
+     * example/sample apps, definitions that are used before unused copies, central before peripheral.
+     */
     #rank(ids) {
         const cen = this.centrality();
-        const meta = new Map(ids.map(id => [id, this.store.get('SELECT f.is_test, s.kind, s.exported FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?', id)]));
+        const meta = new Map(ids.map(id => [id, this.store.get(`SELECT f.is_test, f.path, s.kind, s.exported, (SELECT COUNT(*) FROM refs r WHERE r.dst_id = s.id) AS nrefs
+            FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?`, id)]));
         const score = (id) => {
             const m = meta.get(id);
-            return (cen.get(id) ?? 0) + (m?.is_test ? -1 : 0) + (m?.exported ? 0.2 : 0) + (TYPE_KINDS.has(m?.kind) || CALLABLE.has(m?.kind) ? 0.3 : 0);
+            return (cen.get(id) ?? 0) + (m?.is_test ? -1 : 0) + (m && EXAMPLE_PATH.test(m.path) ? -0.8 : 0) + (m?.exported ? 0.2 : 0)
+                + (TYPE_KINDS.has(m?.kind) || CALLABLE.has(m?.kind) ? 0.3 : 0) + Math.log1p(m?.nrefs ?? 0) * 0.1;
         };
         return [...ids].sort((a, b) => score(b) - score(a) || a - b);
     }
@@ -212,11 +222,26 @@ export class CodeIntel {
             for (const b of typeSym.bases ?? []) {
                 const bt = r.resolveTypeName(b, typeSym.fileId);
                 if (!bt) continue;
-                for (const mid of t.byParent.get(bt.id)?.get(sym.name) ?? []) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: bt.name });
+                for (const mid of this.#membersNamed(bt.id, sym.name)) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: bt.name });
                 visit(bt, depth + 1);
             }
         };
         if (type.id != null) visit(t.sym(type.id), 0);
+        return out;
+    }
+
+    /** Members of a type with a name: declared in its body, or outside it with the type as owner (Go, Rust, C++). */
+    #membersNamed(typeId, name) {
+        const t = this.ix.table;
+        const ty = t.sym(typeId);
+        const out = [...(t.byParent.get(typeId)?.get(name) ?? [])];
+        if (ty) {
+            const dir = path.posix.dirname(t.file(ty.fileId)?.path ?? '');
+            for (const id of t.byOwner.get(ty.name) ?? []) {
+                const m = t.sym(id);
+                if (m && m.name === name && m.parentId !== typeId && path.posix.dirname(t.file(m.fileId)?.path ?? '') === dir && !out.includes(id)) out.push(id);
+            }
+        }
         return out;
     }
 
@@ -243,7 +268,7 @@ export class CodeIntel {
                     seen.add(src_id);
                     next.push(src_id);
                     const st = t.sym(src_id);
-                    for (const mid of t.byParent.get(src_id)?.get(sym.name) ?? []) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: st?.name ?? '?' });
+                    for (const mid of this.#membersNamed(src_id, sym.name)) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: st?.name ?? '?' });
                 }
             }
             frontier = next;
@@ -276,14 +301,56 @@ export class CodeIntel {
             if (r.conf < minConf) continue;
             out.push({ ...r, via: via.get(r.dst_id) ?? null, confidence: confidenceLabel(via.has(r.dst_id) ? r.conf * 0.8 : r.conf) });
         }
-        const unresolved = this.store.get(`SELECT COUNT(*) AS n FROM refs WHERE name = ? AND dst_id IS NULL AND kind IN ('call','new','inherit','decorator')`, sym.name)?.n ?? 0;
+        const unbound = this.#unboundSameName(sym, ids, { includeTests });
+        const unresolved = unbound.total;
         // where the other references with this name went (lets an agent rule them out without grepping)
         const elsewhere = this.store.all(`SELECT d.qname, df.path, COUNT(*) AS n FROM refs r JOIN symbols d ON d.id = r.dst_id JOIN files df ON df.id = d.file_id
             JOIN files f ON f.id = r.file_id WHERE r.name = ? AND r.dst_id NOT IN (${ids.map(() => '?').join(',')})${includeTests ? '' : ' AND f.is_test = 0'}
             GROUP BY r.dst_id ORDER BY n DESC LIMIT 4`, sym.name, ...ids);
         const groups = new Map();
         for (const r of out) (groups.get(r.path) ?? groups.set(r.path, []).get(r.path)).push(r);
-        return { sym, groups, total: out.length, unresolvedSameName: unresolved, elsewhere };
+        return { sym, groups, total: out.length, unresolvedSameName: unresolved, unbound, elsewhere };
+    }
+
+    /**
+     * Same-name call sites whose receiver type is unknown, split by plausibility: a call to
+     * `Reflector.get` has to obtain a Reflector somewhere, so a site is plausible when its file
+     * mentions the declaring type (or a related type) or its receiver is named after it
+     * (`this.reflector.get`). The rest are in files that never mention the type.
+     */
+    #unboundSameName(sym, ids, { includeTests = true } = {}) {
+        const rows = this.store.all(`SELECT r.line, r.recv, f.path FROM refs r JOIN files f ON f.id = r.file_id
+            WHERE r.name = ? AND r.dst_id IS NULL AND r.kind IN ('call','new','decorator')${includeTests ? '' : ' AND f.is_test = 0'} ORDER BY f.is_test, f.path, r.line`, sym.name);
+        if (!rows.length) return { total: 0, plausible: [], typeNames: [] };
+        const typeNames = new Set();
+        const owner = sym.parent_id != null ? this.sym(sym.parent_id) : null;
+        if (owner && TYPE_KINDS.has(owner.kind)) typeNames.add(owner.name);
+        for (const id of ids) {
+            const s = id === sym.id ? null : this.sym(id);
+            const o = s?.parent_id != null ? this.sym(s.parent_id) : null;
+            if (o && TYPE_KINDS.has(o.kind)) typeNames.add(o.name);
+        }
+        if (!typeNames.size) {
+            // a free function: plausible where its file is imported, or next to it
+            const dir = path.posix.dirname(sym.path);
+            const importers = new Set(this.store.all('SELECT DISTINCT f.path FROM imports i JOIN files f ON f.id = i.file_id WHERE i.target_file_id = ?', sym.file_id).map(r => r.path));
+            const plausible = rows.filter(r => importers.has(r.path) || path.posix.dirname(r.path) === dir);
+            return { total: rows.length, plausible, typeNames: [] };
+        }
+        const names = [...typeNames];
+        const wordRe = new RegExp(`\\b(${names.map(n => n.replace(/[$]/g, '\\$')).join('|')})\\b`);
+        const lower = names.map(n => n.toLowerCase());
+        const mentions = new Map();
+        const plausible = rows.filter(r => {
+            const recv = (r.recv || '').toLowerCase();
+            if (recv && lower.some(n => recv.includes(n))) return true;
+            if (!mentions.has(r.path)) {
+                const lines = this.fileLines(r.path);
+                mentions.set(r.path, !!lines && lines.some(l => wordRe.test(l)));
+            }
+            return mentions.get(r.path);
+        });
+        return { total: rows.length, plausible, typeNames: names };
     }
 
     /** Outgoing references of a symbol (what it calls/uses), including nested closures. */
@@ -299,39 +366,74 @@ export class CodeIntel {
 
     /** Transitive callers/dependents (BFS over reverse edges), confidence multiplied along paths. */
     dependents(startIds, { depth = 3, maxNodes = 300, minConf = 0.3, kinds = DEP_KINDS } = {}) {
-        const seen = new Map(); // id -> { depth, conf, via }
-        let frontier = startIds.map(id => ({ id, conf: 1 }));
-        for (const s of startIds) seen.set(s, { depth: 0, conf: 1, via: null });
-        const fileLevel = new Map(); // path -> {depth, conf} for module-level references
+        const seen = new Map(); // id -> { depth, conf, via, kind, sites }
+        const fileLevel = new Map(); // path -> { depth, conf, via, sites } for module-level references
+        const overflow = new Set();  // dependents beyond maxNodes: counted, not expanded
+        let frontier = [];
+        for (const id of startIds) {
+            seen.set(id, { depth: 0, conf: 1, via: null });
+            frontier.push({ id, conf: 1 });
+        }
+        // overrides / implementations of a changed method must keep matching its signature
+        for (const id of startIds) {
+            const sym = this.sym(id);
+            if (!sym || sym.is_static || sym.kind !== 'method') continue;
+            for (const m of this.#subtypeMembers(sym)) {
+                if (seen.has(m.id)) continue;
+                seen.set(m.id, { depth: 1, conf: 0.9, via: id, kind: 'override', sites: [] });
+                frontier.push({ id: m.id, conf: 0.9 });
+            }
+        }
         for (let d = 1; d <= depth && frontier.length; d++) {
             const next = [];
             for (const { id, conf } of frontier) {
                 const sym = this.sym(id);
                 const targets = [id];
                 if (sym && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property')) for (const s of this.#supertypeMembers(sym)) targets.push(s.id);
-                const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, f.path FROM refs r JOIN files f ON f.id = r.file_id
+                // a constructor is invoked through its class: `new Foo()` / `Foo()` (Python)
+                if (sym && CONSTRUCTORS.has(sym.name) && sym.parent_id != null) targets.push(sym.parent_id);
+                const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, r.line, r.dst_id, f.path, f.is_test FROM refs r JOIN files f ON f.id = r.file_id
                     WHERE r.dst_id IN (${targets.map(() => '?').join(',')}) AND r.kind IN (${kinds.map(() => '?').join(',')})`, ...targets, ...kinds);
+                const rank = (r) => (EXAMPLE_PATH.test(r.path) ? 2 : r.is_test ? 1 : 0);
+                rows.sort((a, b) => rank(a) - rank(b));
                 for (const r of rows) {
+                    // through the class only its instantiations reach the constructor
+                    if (r.dst_id !== id && sym && CONSTRUCTORS.has(sym.name) && r.dst_id === sym.parent_id && r.kind !== 'call' && r.kind !== 'new') continue;
                     const c = conf * r.conf;
                     if (c < minConf) continue;
                     if (r.src_id == null) {
                         const prev = fileLevel.get(r.path);
-                        if (!prev || prev.conf < c) fileLevel.set(r.path, { depth: d, conf: c, via: id });
+                        if (!prev) fileLevel.set(r.path, { depth: d, conf: c, via: id, sites: [r.line] });
+                        else { if (prev.conf < c) Object.assign(prev, { depth: d, conf: c, via: id }); if (prev.sites.length < 20) prev.sites.push(r.line); }
                         continue;
                     }
                     const prev = seen.get(r.src_id);
-                    if (prev && prev.conf >= c) continue;
-                    seen.set(r.src_id, { depth: prev ? Math.min(prev.depth, d) : d, conf: c, via: id, kind: r.kind });
+                    if (prev) {
+                        if (prev.via === id && prev.sites && prev.sites.length < 20) prev.sites.push({ path: r.path, line: r.line });
+                        if (prev.conf >= c) continue;
+                    }
+                    if (!prev && seen.size >= maxNodes + startIds.length) { overflow.add(r.src_id); continue; } // count, don't expand
+                    seen.set(r.src_id, { depth: prev ? Math.min(prev.depth, d) : d, conf: c, via: id, kind: r.kind, sites: prev?.via === id ? prev.sites : [{ path: r.path, line: r.line }] });
                     if (!prev) next.push({ id: r.src_id, conf: c });
-                    if (seen.size > maxNodes) break;
                 }
-                if (seen.size > maxNodes) break;
             }
             frontier = next;
-            if (seen.size > maxNodes) break;
         }
         for (const s of startIds) seen.delete(s);
-        return { nodes: seen, fileLevel, truncated: seen.size > maxNodes };
+        return { nodes: seen, fileLevel, truncated: overflow.size > 0, overflow: overflow.size };
+    }
+
+    /** Members this method overrides/implements (up) and members overriding it (down). */
+    methodFamily(sym) {
+        const load = (list) => list.map(x => this.sym(x.id)).filter(Boolean);
+        return { up: load(this.#supertypeMembers(sym)), down: load(this.#subtypeMembers(sym)) };
+    }
+
+    /** Unbound same-name call sites that may be uses of a symbol (see #unboundSameName). */
+    unboundFor(id, opts = {}) {
+        const sym = this.sym(id);
+        if (!sym) return { total: 0, plausible: [], typeNames: [] };
+        return this.#unboundSameName(sym, [id, ...this.overloads(sym)], opts);
     }
 
     // ── impact ───────────────────────────────────────────────────────────────────

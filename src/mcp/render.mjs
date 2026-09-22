@@ -57,4 +57,4 @@ export function matchingLines(lines, s, terms, max = 2) {
     return out;
 }
 
-export function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+export function plural(n, word, pluralWord = word + 's') { return `${n} ${n === 1 ? word : pluralWord}`; }

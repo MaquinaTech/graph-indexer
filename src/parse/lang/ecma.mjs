@@ -80,6 +80,8 @@ const DEFS_TS = `
 const REFS_COMMON = `
 (call_expression function: (identifier) @name) @ref.call
 (call_expression function: (member_expression object: (_) @recv property: (_) @name)) @ref.call
+(call_expression function: (await_expression (identifier) @name)) @ref.call
+(call_expression function: (await_expression (member_expression object: (_) @recv property: (_) @name))) @ref.call
 (new_expression constructor: (identifier) @name) @ref.new
 (new_expression constructor: (member_expression object: (_) @recv property: (_) @name)) @ref.new
 (decorator (identifier) @name) @ref.decorator
@@ -92,6 +94,9 @@ const REFS_COMMON = `
 (member_expression object: (_) @recv property: (property_identifier) @name) @ref.read
 (member_expression object: (identifier) @name) @ref.value
 (binary_expression operator: "instanceof" right: (identifier) @name) @ref.type
+(computed_property_name (identifier) @name) @ref.value
+(computed_property_name (member_expression object: (_) @recv property: (property_identifier) @name)) @ref.read
+(unary_expression operator: "typeof" argument: (identifier) @name) @ref.value
 `;
 
 const REFS_JSX = `
@@ -115,6 +120,8 @@ const REFS_TS = `
 (extends_type_clause type: (generic_type name: (type_identifier) @name)) @ref.inherit
 (type_identifier) @name @ref.type
 (nested_type_identifier module: (_) @recv name: (type_identifier) @name) @ref.type
+(type_query (identifier) @name) @ref.type
+(type_query (member_expression object: (_) @recv property: (property_identifier) @name)) @ref.type
 `;
 
 const IMPORTS_COMMON = `
@@ -162,7 +169,8 @@ const TRANSPARENT_TYPES = new Set(['Promise', 'PromiseLike', 'Awaited', 'Readonl
 // Collections: `x[i]`, `for (const e of x)` and `x.forEach(e => …)` see the element type.
 const ELEMENT_TYPES = new Set(['Array', 'ReadonlyArray', 'Set', 'ReadonlySet', 'Iterable', 'IterableIterator', 'Iterator', 'AsyncIterable', 'AsyncIterableIterator', 'Generator', 'AsyncGenerator']);
 // Types whose members never live in the repository.
-const PRIMITIVE_TYPES = new Set(['string', 'number', 'boolean', 'bigint', 'symbol', 'any', 'unknown', 'object', 'void', 'never', 'undefined', 'null',
+// (`any` / `unknown` are not here: a value of that type may well be an instance of a repository class)
+const PRIMITIVE_TYPES = new Set(['string', 'number', 'boolean', 'bigint', 'symbol', 'object', 'void', 'never', 'undefined', 'null',
     'String', 'Number', 'Boolean', 'Object', 'Function', 'Date', 'RegExp', 'Map', 'WeakMap', 'WeakSet', 'Record', 'Error', 'Buffer',
     'ArrayBuffer', 'Uint8Array', 'DataView', 'URL', 'URLSearchParams', 'Headers', 'Request', 'Response', 'AbortController', 'AbortSignal']);
 
