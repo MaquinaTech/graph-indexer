@@ -81,29 +81,77 @@ function docOf(defNode, spec, source) {
     return doc.length > MAX_DOC ? doc.slice(0, MAX_DOC - 1) + '…' : doc;
 }
 
-/** Compact receiver descriptor: this | super | this.x | x | a.b | f() | new X | ? */
+// Expression wrappers that do not change the static type of what they wrap.
+const PASS_THROUGH = new Set(['parenthesized_expression', 'non_null_expression', 'await_expression', 'await', 'try_expression', 'reference_expression']);
+// Literal constructions: `Foo{…}` (Go), `Foo { … }` (Rust), `new Foo(…)` (Java/C#/PHP)
+const CONSTRUCTIONS = { composite_literal: 'type', struct_expression: 'name', object_creation_expression: 'type', new_expression: 'constructor' };
+// Casts / assertions: the asserted type is the static type.
+const CASTS = new Set(['as_expression', 'satisfies_expression', 'cast_expression', 'type_assertion_expression']);
+// Literal values: their members are the language's (`'x'.trim()`); null-ish ones carry no type.
+const LITERAL_NODES = new Set(['string', 'template_string', 'number', 'true', 'false', 'string_literal', 'integer', 'float', 'integer_literal',
+    'decimal_integer_literal', 'decimal_floating_point_literal', 'interpreted_string_literal', 'raw_string_literal', 'int_literal', 'float_literal',
+    'boolean', 'boolean_literal', 'char_literal', 'character_literal', 'real_literal', 'concatenated_string', 'rune_literal', 'regex']);
+const NULL_NODES = new Set(['null', 'undefined', 'none', 'nil', 'null_literal']);
+const CHAIN_RE = /^[A-Za-z_$@][\w$]*(?:\(\)|\[\])*(?:\.[A-Za-z_$][\w$]*(?:\(\)|\[\])*){0,7}$/;
+
+/**
+ * `a.b(x).c[i]` → `a.b().c[]`: argument lists and subscripts collapsed, operators normalised
+ * (`?.` `!.` `->` `::` `!!`), string literals neutralised. Null when not a plain access chain.
+ */
+function simplifyChain(text) {
+    if (text.length > 400) return null;
+    let s = text.replace(/\bawait\s+/g, '').replace(/^new\s+/, '');
+    if (/["'`]/.test(s)) s = s.replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '0');
+    s = s.replace(/\s+/g, '').replace(/<[^<>()]*>(?=\()/g, '');
+    for (let i = 0; i < 12 && /[()[\]]/.test(s); i++) {
+        const next = s.replace(/\([^()[\]]*\)/g, '\u0001').replace(/\[[^()[\]]*\]/g, '\u0002');
+        if (next === s) return null; // unbalanced
+        s = next;
+    }
+    s = s.replace(/\u0001/g, '()').replace(/\u0002/g, '[]')
+        .replace(/!!/g, '').replace(/\?\.|!\.|->|::/g, '.').replace(/[!?]+(?=\.|$)/g, '');
+    return CHAIN_RE.test(s) ? s : null;
+}
+
+/**
+ * Compact descriptor of an expression, used for receivers and for variable initialisers:
+ *   `this` · `super` · `x` · `a.b().c[]` (access chain) · `new X` · `as T` (cast) · `?` (opaque)
+ */
 function receiverDescriptor(node, spec) {
     if (!node) return '';
+    for (let i = 0; i < 6 && node.namedChildCount >= 1; i++) {
+        if (PASS_THROUGH.has(node.type)) node = node.namedChildren[0];
+        else if (node.type === 'unary_expression' && node.childForFieldName('operator')?.text === '&') node = node.childForFieldName('operand') ?? node.namedChildren[0]; // Go &T{}
+        else break;
+    }
     const t = node.type;
+    if (CONSTRUCTIONS[t]) {
+        const tn = node.childForFieldName(CONSTRUCTIONS[t]);
+        const tt = tn ? normalizeType(tn.text, spec) : null;
+        if (tt) return 'new ' + tt;
+    }
     const text = node.text;
+    if (NULL_NODES.has(t)) return 'null';
+    if (LITERAL_NODES.has(t)) return '!';
     if (spec.selfNames.includes(text) || t === 'this' || t === 'self') return 'this';
     if (t === 'super' || text === 'super') return 'super';
+    if (CASTS.has(t)) {
+        const tn = node.childForFieldName('type') ?? node.namedChildren[node.namedChildCount - 1];
+        const tt = tn && tn !== node.namedChildren[0] ? normalizeType(tn.text, spec) : null;
+        return tt ? 'as ' + tt : '?';
+    }
     if (spec.receiverDescriptor) {
         const d = spec.receiverDescriptor(node);
         if (d !== undefined) return d;
     }
     if (/^[A-Za-z_$][\w$]*$/.test(text)) return text;
-    // member chain: a.b.c / this.x / self.x / $this->x / a::b
-    const norm = text.replace(/\s+/g, '').replace(/->|::|\?\./g, '.');
-    if (/^[A-Za-z_$@][\w$]*(\.[A-Za-z_$][\w$]*){1,4}$/.test(norm)) {
-        const parts = norm.split('.');
-        if (spec.selfNames.includes(parts[0]) || parts[0] === 'this' || parts[0] === '$this') parts[0] = 'this';
-        return parts.join('.');
-    }
-    if (/^(new\s+)[A-Za-z_$][\w$.]*\s*(\(.*\))?$/s.test(text)) return 'new ' + text.replace(/^new\s+/, '').replace(/\(.*$/s, '').trim();
-    const call = /^([A-Za-z_$][\w$]*)\s*(<[^>]*>)?\s*\(.*\)$/s.exec(text);
-    if (call) return call[1] + '()';
-    return '?';
+    const ctor = /^new\s+([A-Za-z_$][\w$.]*)\s*(?:<[^()]*>)?\s*(?:\([^]*\))?$/.exec(text);
+    if (ctor && !/\)\s*[.[]/.test(text)) return 'new ' + ctor[1];
+    const chain = simplifyChain(text);
+    if (!chain) return '?';
+    const parts = chain.split('.');
+    if (spec.selfNames.includes(parts[0]) || parts[0] === 'this' || parts[0] === '$this') parts[0] = 'this';
+    return parts.join('.');
 }
 
 /**
@@ -132,10 +180,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const fields = [];        // { node, name, type|new }
     const seenDef = new Map();
     const seenRef = new Map();
+    const bindSites = new Map();
+    const scopeNodes = [];    // anonymous functions / lambdas / comprehensions: lexical scopes
+    const retNodes = [];      // returned expressions (return-type inference)
 
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
-        let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, srcNode = null;
+        let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, srcNode = null;
         for (const c of m.captures) {
             const n = c.name;
             if (n === 'name') nameNode = c.node;
@@ -154,7 +205,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.new' || n === 'field.new') bindNew = c.node.text;
             else if (n === 'bind.call' || n === 'field.call') bindCall = c.node.text;
             else if (n === 'field.var') bindVar = c.node.text;
+            else if (n === 'bind.expr' || n === 'field.expr') bindExpr = c.node;
+            else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
+            else if (n === 'scope') { role = 'scope'; main = c.node; }
+            else if (n === 'ret') { role = 'ret'; main = c.node; }
         }
+        if (role === 'scope') { scopeNodes.push(main); continue; }
+        if (role === 'ret') { retNodes.push(main); continue; }
         if (role === 'def' && nameNode) {
             // several patterns may match one definition (with/without return type, owner); merge them
             const prev = seenDef.get(main.id);
@@ -178,8 +235,16 @@ function extractFromTree(spec, query, tree, source, relPath) {
             rawRefs.push({ node: main, nameNode, kind, recvNode });
         } else if (role === 'import') importNodes.push(main);
         else if (role === 'require' && srcNode) requireCalls.push({ node: main, srcNode });
-        else if (role === 'bind' && bindName) binds.push({ node: main, name: bindName, type: bindType, new: bindNew, call: bindCall });
-        else if (role === 'field' && bindName) fields.push({ node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar });
+        else if ((role === 'bind' || role === 'field') && bindName) {
+            // one record per binding site; an explicit type annotation beats an initialiser
+            const list = role === 'bind' ? binds : fields;
+            const key = role + ':' + main.id + ':' + bindName;
+            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar,
+                expr: bindExpr ? receiverDescriptor(bindExpr, spec) : null, elem: bindElem ? receiverDescriptor(bindElem, spec) : null };
+            const prev = bindSites.get(key);
+            if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
+            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem']) p[k] ??= rec[k]; }
+        }
     }
 
     // ── definitions ────────────────────────────────────────────────────────────
@@ -205,6 +270,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const idx = byNodeId.get(p.id);
             if (idx !== undefined) { parentIdx = idx; break; }
         }
+        const lexParent = parentIdx;
+        // constructor parameter properties (`constructor(private repo: Repo)`) are class members
+        if (d.kind === 'field' && parentIdx >= 0 && CONSTRUCTOR_NAMES.has(symbols[parentIdx].name) && symbols[parentIdx].parentIdx >= 0) parentIdx = symbols[parentIdx].parentIdx;
         let kind = d.kind;
         const parent = parentIdx >= 0 ? symbols[parentIdx] : null;
         if (kind === 'function' && parent && (parent.kind === 'class' || parent.kind === 'interface' || parent.kind === 'struct' || parent.kind === 'trait' || parent.kind === 'impl' || parent.kind === 'object')) kind = 'method';
@@ -220,6 +288,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             qname,
             kind,
             parentIdx,
+            lexParent,
             owner: owner || (parent && ['class', 'interface', 'struct', 'trait', 'impl', 'enum', 'object', 'module'].includes(parent.kind) ? parent.name : null),
             startLine: node.startPosition.row + 1,
             startCol: node.startPosition.column,
@@ -233,10 +302,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
             visibility: d.isDefault ? 'default' : (spec.visibility ? spec.visibility(node, name) : null),
             decorators: spec.decoratorsOf ? spec.decoratorsOf(node) : [],
             bases: [],
-            type: d.type ? cleanTypeName(d.type, spec) : null,
+            type: d.type ? normalizeType(typeParamBound(node, d.type) ?? d.type, spec) : null,
+            isStatic: isStaticMember(node, d.nameNode, spec),
             startIndex: node.startIndex,
             endIndex: node.endIndex,
         };
+        // `-> Self` / `: this` (fluent APIs) return the enclosing type
+        if (sym.type === 'Self' || sym.type === 'this' || sym.type === 'static') sym.type = parent && MEMBER_PARENT.has(parent.kind) ? (parent.kind === 'impl' ? parent.owner ?? parent.name : parent.name) : owner || null;
         // members are part of the public surface when their container is and they are not private
         if (parent && MEMBER_PARENT.has(parent.kind)) sym.exported = parent.exported && sym.visibility !== 'private';
         else sym.exported = spec.isExported ? Boolean(spec.isExported(node, name)) : true;
@@ -254,10 +326,10 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const mid = (lo + hi) >> 1;
             if (symbols[mid].startIndex <= offset) { cand = mid; lo = mid + 1; } else hi = mid - 1;
         }
-        for (let i = cand; i >= 0; i = symbols[i].parentIdx) {
+        for (let i = cand; i >= 0; i = symbols[i].lexParent) {
             if (symbols[i].endIndex >= offset) { best = i; break; }
             // not containing: try previous siblings/ancestors
-            if (symbols[i].parentIdx < 0) {
+            if (symbols[i].lexParent < 0) {
                 // scan backwards for a container that encloses offset
                 for (let j = i - 1; j >= 0; j--) if (symbols[j].startIndex <= offset && symbols[j].endIndex >= offset) { best = j; break; }
                 break;
@@ -266,38 +338,167 @@ function extractFromTree(spec, query, tree, source, relPath) {
         return best;
     };
 
-    // ── type evidence (local bindings, class fields) ──────────────────────────
-    const localTypes = new Map();   // `${scopeIdx}:${name}` -> { type?, call? }
+    // ── lexical scopes: callables and types, plus anonymous functions (closures, lambdas) ──
+    const scopes = [];        // { start, end, sym (owning symbol or -1), parent }
+    for (let i = 0; i < symbols.length; i++) if (!VALUE_KINDS.has(symbols[i].kind)) scopes.push({ start: symbols[i].startIndex, end: symbols[i].endIndex, sym: i });
+    for (const n of scopeNodes) {
+        // `const f = () => …` / `m: function () {}`: the closure is the body of that symbol
+        const own = n.parent ? byNodeId.get(n.parent.id) : undefined;
+        scopes.push({ start: n.startIndex, end: n.endIndex, sym: own ?? -1 });
+    }
+    scopes.sort((a, b) => a.start - b.start || b.end - a.end);
+    {
+        const stack = [];
+        for (let k = 0; k < scopes.length; k++) {
+            while (stack.length && scopes[stack[stack.length - 1]].end <= scopes[k].start) stack.pop();
+            scopes[k].parent = stack.length ? stack[stack.length - 1] : -1;
+            stack.push(k);
+        }
+    }
+    const scopeAt = (offset) => {
+        let lo = 0, hi = scopes.length - 1, cand = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (scopes[mid].start <= offset) { cand = mid; lo = mid + 1; } else hi = mid - 1; }
+        for (let k = cand; k >= 0; k = scopes[k].parent) if (scopes[k].end > offset) return k;
+        return -1;
+    };
+    /** Where an expression is evaluated: enclosing symbol (for `this`/fields) + lexical scope (for locals). */
+    const ctxAt = (offset) => ({ sym: enclosingIdx(offset), scope: scopeAt(offset) });
+
+    // ── type evidence (local bindings, class fields, returns) ────────────────
+    //
+    // Types are strings the resolver understands:
+    //   'T' / 'T[]'   (a collection of) a named type
+    //   'call:f'      the return type of callable f (resolved globally)
+    //   '…#a#b'       member a, then member b, of the preceding type (crosses files)
+    //   '[]' after a call/member part: the element type of that part
+    //   '!'           a value whose members never live in the repository (primitives, arrays)
+    const deferred = (t) => t.startsWith('call:') || t.includes('#');
+    const typeText = (t) => {
+        const n = normalizeType(t, spec);
+        if (!n) return null;
+        return spec.isPrimitiveType?.(n.endsWith('[]') ? n.slice(0, -2) : n) && !n.endsWith('[]') ? '!' : n;
+    };
+    const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
+    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem;
     const setLocal = (scope, name, val) => {
         const k = scope + ':' + name;
         const prev = localTypes.get(k);
         if (!prev) localTypes.set(k, val);
-        else if (prev.type !== val.type || prev.call !== val.call) localTypes.set(k, { conflict: true });
+        else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true });
     };
     for (const b of binds) {
-        const scope = enclosingIdx(b.node.startIndex);
-        const type = b.type ? cleanTypeName(b.type, spec) : (b.new ? cleanTypeName(b.new, spec) : null);
-        if (type && spec.isPrimitiveType?.(type)) continue;
-        if (type) setLocal(scope, b.name, { type });
-        else if (b.call) setLocal(scope, b.name, { call: b.call });
+        const ctx = ctxAt(b.node.startIndex);
+        const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
+        const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
+        if (type) setLocal(ctx.scope, b.name, { type, ctx });
+        else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx });
+        else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx });
+        else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx });
+        else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx }); // shadows outer bindings
     }
-    const lookupLocal = (scopeIdx, name) => {
-        for (let i = scopeIdx; ; i = symbols[i].parentIdx) {
-            const v = localTypes.get(i + ':' + name);
-            if (v && !v.conflict) return v;
-            if (i < 0) break;
+    const lookupLocal = (ctx, name) => {
+        for (let k = ctx.scope; ; k = scopes[k].parent) {
+            const v = localTypes.get(k + ':' + name);
+            if (v) return v.conflict || v.opaque ? null : v;
+            if (k < 0) break;
         }
         return null;
     };
-    const fieldTypes = new Map();   // `${classIdx}:${field}` -> type | 'call:f'
+    const fieldTypes = new Map();   // `${classIdx}:${field}` -> type string (see above)
+
+    /** Apply `()` / `[]` operators to a type string; null when the result is unknown. */
+    const applyOps = (t, ops) => {
+        for (const op of ops) {
+            if (!t) return null;
+            if (op === '()') { if (!deferred(t)) return null; continue; } // a method's type is its return type
+            if (deferred(t)) t += '[]';
+            else if (t.endsWith('[]')) t = t.slice(0, -2);
+            else return null; // indexing a map/record/string
+        }
+        return t;
+    };
+    const elemOf = (t) => (!t ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2) : null);
+    const bindingType = (v, depth) => {
+        if (v.type) return v.type;
+        if (v.call) return 'call:' + v.call;
+        if (v.expr) return inferType(v.expr, v.ctx, depth + 1);
+        if (v.elem) return elemOf(inferType(v.elem, v.ctx, depth + 1));
+        return null;
+    };
+    const SEG_RE = /^([A-Za-z_$@][\w$]*)((?:\(\)|\[\])*)$/;
+    // the type `this`/`self` denotes inside a symbol: its class, or the receiver type of an
+    // out-of-body method (Rust impl blocks, Go receivers) — { idx: class symbol or -1, name }
+    const classByName = new Map();
+    const selfType = (encl) => {
+        const cls = classOf(encl, symbols);
+        if (cls >= 0) return { idx: cls, name: symbols[cls].qname };
+        for (let i = encl; i >= 0; i = symbols[i].parentIdx) {
+            const o = symbols[i].owner;
+            if (!o) continue;
+            if (!classByName.has(o)) classByName.set(o, symbols.findIndex(x => x.name === o && CLASS_KINDS.has(x.kind)));
+            const j = classByName.get(o);
+            return { idx: j, name: j >= 0 ? symbols[j].qname : o };
+        }
+        return null;
+    };
+
+    /** Static type of an expression descriptor evaluated in `ctx`, as far as this file tells. */
+    const inferType = (desc, ctx, depth = 0) => {
+        if (!desc || depth > 5 || desc === '?' || desc === 'super' || desc === 'null') return null;
+        if (desc === '!') return '!';
+        if (desc.startsWith('new ') || desc.startsWith('as ')) {
+            const tn = desc.slice(3).trim();
+            if (tn === 'Self' || tn === 'self' || tn === 'static' || tn === 'this') return selfType(ctx.sym)?.name ?? null;
+            return typeText(tn);
+        }
+        const segs = [];
+        for (const p of desc.split('.')) {
+            const m = SEG_RE.exec(p);
+            if (!m) return null;
+            segs.push({ name: m[1], ops: m[2].match(/\(\)|\[\]/g) ?? [] });
+        }
+        let t = null, i = 1;
+        const first = segs[0];
+        if (first.name === 'this') {
+            const st = selfType(ctx.sym);
+            if (!st) return null;
+            if (segs.length === 1) return first.ops.length ? null : st.name;
+            const ft = st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null;
+            t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
+            i = 2;
+        } else {
+            const isCall = first.ops[0] === '()';
+            const v = isCall ? null : lookupLocal(ctx, first.name);
+            if (v) t = applyOps(bindingType(v, depth), first.ops);
+            else if (isCall) t = applyOps('call:' + first.name, first.ops.slice(1));
+            else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
+            // `Type.staticField…`: a capitalised root that is not a local names a type
+            if (!t && !v && segs.length > 1 && !first.ops.length && /^[A-Z]/.test(first.name)) t = first.name;
+        }
+        for (; i < segs.length && t; i++) {
+            const seg = segs[i];
+            const call = seg.ops[0] === '()';
+            if (call && spec.identityMethods?.has(seg.name)) { t = applyOps(t, seg.ops.slice(1)); continue; }
+            if (t === '!') return '!';
+            if (!deferred(t) && t.endsWith('[]')) {
+                // `list.get(0)`, `xs.first()`: collection accessors hand back an element
+                if (call && spec.elementMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2), seg.ops.slice(1)); continue; }
+                return '!'; // any other member of a collection is the language's
+            }
+            t = applyOps(t + '#' + seg.name, seg.ops);
+        }
+        return t;
+    };
+
     for (const f of fields) {
-        const scope = enclosingIdx(f.node.startIndex);
-        const cls = classOf(scope, symbols);
+        const ctx = ctxAt(f.node.startIndex);
+        const cls = classOf(ctx.sym, symbols);
         if (cls < 0) continue;
-        let type = f.type ? cleanTypeName(f.type, spec) : (f.new ? cleanTypeName(f.new, spec) : null);
-        if (!type && f.var) { const v = lookupLocal(scope, f.var); type = v?.type ?? (v?.call ? 'call:' + v.call : null); }
+        let type = f.type ? typeText(f.type) : (f.new ? typeText(f.new) : null);
+        if (!type && f.var) { const v = lookupLocal(ctx, f.var); type = v ? bindingType(v, 0) : null; }
         if (!type && f.call) type = 'call:' + f.call;
-        if (!type || spec.isPrimitiveType?.(type)) continue;
+        if (!type && f.expr) type = inferType(f.expr, ctx);
+        if (!type) continue;
         if (!fieldTypes.has(cls + ':' + f.name)) fieldTypes.set(cls + ':' + f.name, type);
     }
     // declared field/property symbols carry their type too (struct fields, typed class attributes)
@@ -305,8 +506,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const s = symbols[i];
         if ((s.kind === 'field' || s.kind === 'property') && s.parentIdx >= 0) {
             const k = s.parentIdx + ':' + s.name;
-            if (s.type && !spec.isPrimitiveType?.(s.type)) { if (!fieldTypes.has(k)) fieldTypes.set(k, s.type); }
-            else if (!s.type && fieldTypes.has(k)) s.type = fieldTypes.get(k);
+            if (s.type) { if (!fieldTypes.has(k) && typeText(s.type) !== '!') fieldTypes.set(k, s.type); }
+            else if (fieldTypes.has(k)) s.type = fieldTypes.get(k);
         }
     }
     // record inferred (assignment-based) field types as field symbols' type when the field itself
@@ -316,37 +517,34 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const [clsIdx, fname] = [Number(k.slice(0, k.indexOf(':'))), k.slice(k.indexOf(':') + 1)];
         inferredFields.push({ owner: symbols[clsIdx].qname, name: fname, type });
     }
+    // module-level values typed by their initialiser (`export const api = new ApiClient()`), so
+    // importers can reach the members of such singletons
+    for (let i = 0; i < symbols.length; i++) {
+        const s = symbols[i];
+        if (s.type || (s.kind !== 'variable' && s.kind !== 'constant')) continue;
+        const v = localTypes.get(scopeAt(s.startIndex) + ':' + s.name);
+        if (v && !v.conflict && !v.opaque) s.type = bindingType(v, 0);
+    }
+    // undeclared return types: all `return` expressions of a callable agree on one type
+    const returns = new Map(); // symIdx -> [types]
+    for (const n of retNodes) {
+        const k = scopeAt(n.startIndex);
+        const owner = k >= 0 ? scopes[k].sym : -1;
+        if (owner < 0 || symbols[owner].type || !CALLABLE_KINDS.has(symbols[owner].kind)) continue;
+        const desc = receiverDescriptor(n, spec);
+        if (desc === 'null') continue; // `return null` / `return None` keeps the other paths' type
+        const list = returns.get(owner) ?? returns.set(owner, []).get(owner);
+        list.push(inferType(desc, { sym: owner, scope: k }));
+    }
+    for (const [owner, types] of returns) {
+        const uniq = new Set(types);
+        if (uniq.size === 1 && !uniq.has(null)) symbols[owner].type = types[0];
+    }
 
-    /**
-     * Static type of a receiver, when inferable from this file alone. Encodings:
-     *   'T'          concrete type name
-     *   'call:f'     return type of callable f (resolved globally)
-     *   'T#a#b'      type of member b of member a of T (resolved globally, crosses files)
-     */
-    const inferReceiverType = (recv, encl) => {
-        if (!recv || recv === 'this' || recv === 'super' || recv === '?') return null;
-        if (recv.startsWith('new ')) return cleanTypeName(recv.slice(4), spec);
-        if (recv.endsWith('()')) return 'call:' + recv.slice(0, -2);
-        const parts = recv.split('.');
-        let base;
-        if (parts[0] === 'this') {
-            const cls = classOf(encl, symbols);
-            if (cls < 0 || parts.length === 1) return null;
-            const ft = fieldTypes.get(cls + ':' + parts[1]);
-            base = ft ?? (symbols[cls].qname + '#' + parts[1]);
-            if (!ft && spec.implicitFieldLookupOnly) return null;
-            return parts.length > 2 ? base + '#' + parts.slice(2).join('#') : base;
-        }
-        const v = lookupLocal(encl, parts[0]);
-        if (v) base = v.type ?? (v.call ? 'call:' + v.call : null);
-        else if (spec.implicitThis) {
-            // a bare identifier that is not a local may be a field of the enclosing class
-            // (Java/Kotlin/C#/Scala/C++ access fields without `this.`)
-            const cls = classOf(encl, symbols);
-            if (cls >= 0) base = fieldTypes.get(cls + ':' + parts[0]) ?? null;
-        }
-        if (!base) return null;
-        return parts.length > 1 ? base + '#' + parts.slice(1).join('#') : base;
+    const inferReceiverType = (recv, ctx) => {
+        if (!recv || recv === 'this') return null;
+        const t = inferType(recv, ctx);
+        return t && !deferred(t) && t.endsWith('[]') ? '!' : t; // a collection's own methods are the language's
     };
 
     // ── references ─────────────────────────────────────────────────────────────
@@ -363,8 +561,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (recv && spec.externalReceivers?.has(root)) continue;
         if (kind === 'value' && spec.isNoiseValue?.(name)) continue;
         const pos = r.nameNode.startPosition;
-        const encl = enclosingIdx(r.nameNode.startIndex);
-        const recvType = inferReceiverType(recv, encl);
+        const ctx = ctxAt(r.nameNode.startIndex);
+        const encl = ctx.sym;
+        const recvType = inferReceiverType(recv, ctx);
         refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl });
     }
 
@@ -385,20 +584,99 @@ function extractFromTree(spec, query, tree, source, relPath) {
     }
     const extra = spec.fileInfo ? spec.fileInfo(root, source) : null;
 
-    for (const s of symbols) { delete s.startIndex; delete s.endIndex; }
+    for (const s of symbols) { delete s.startIndex; delete s.endIndex; delete s.lexParent; }
     return { symbols, refs, imports, fields: inferredFields, fileInfo: extra, errors: root.hasError ? 1 : 0 };
 }
 
-/** `*Foo`, `&mut Foo`, `Foo<T>`, `pkg.Foo`, `Foo[]`, `?Foo` → `Foo` (the nominal head a member lookup needs). */
-export function cleanTypeName(t, spec) {
-    if (!t) return null;
+const NULLISH_TYPES = new Set(['null', 'undefined', 'None', 'void', 'nil', 'never', 'NoneType', 'Nothing', 'Unit']);
+// declared-by-inference keywords in type position: the initialiser decides
+const INFERRED_TYPES = new Set(['var', 'auto', 'let', 'val', 'dynamic', '_', 'implicit_type']);
+
+/** Split at top-level occurrences of `sep` (outside <> [] () {}; `=>` is not a bracket). */
+function splitTop(s, sep) {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c === '<' || c === '[' || c === '(' || c === '{') depth++;
+        else if ((c === '>' && s[i - 1] !== '=' && s[i - 1] !== '-') || c === ']' || c === ')' || c === '}') depth--;
+        else if (c === sep && depth === 0) { out.push(s.slice(start, i)); start = i + 1; }
+    }
+    out.push(s.slice(start));
+    return out;
+}
+
+const arrayOf = (e) => (e && !e.endsWith('[]') ? e + '[]' : null);
+
+/**
+ * Static type text → what member lookup needs: `Foo`, `Foo[]` (a collection of Foo, so `x[i]`
+ * and loop variables are Foo) or null. Optional/nullable unions collapse (`Foo | undefined`,
+ * `Optional[Foo]`, `Foo?`), transparent wrappers unwrap per language (`Promise<Foo>`,
+ * `Box<Foo>`, `Task<Foo>`), pointers/references/qualifiers and namespaces are dropped.
+ */
+export function normalizeType(t, spec, depth = 0) {
+    if (t == null || depth > 5) return null;
     let s = String(t).trim();
     if (spec?.cleanType) { s = spec.cleanType(s); if (!s) return null; }
-    s = s.replace(/^[&*?\s]+|mut\s+|const\s+|readonly\s+/g, '').replace(/[?!\[\]\s]+$/g, '');
-    s = s.replace(/<.*$/s, '').replace(/\[.*$/s, '').replace(/\(.*$/s, '');
+    s = s.replace(/^["']|["']$/g, '')
+        .replace(/^(?:(?:readonly|const|mut|dyn|impl|typeof|unique|volatile|struct|enum|class|final|ref|in|out|inout)\s+|[&*^]\s*|'[A-Za-z_]\w*\s+)+/, '')
+        .replace(/(?:\s*(?:[?!*&]|\.\.\.))+$/, '')
+        .trim();
+    if (!s || /^keyof\s/.test(s) || INFERRED_TYPES.has(s)) return null;
+    const alts = splitTop(s, '|').map(x => x.trim()).filter(Boolean);
+    if (alts.length > 1) {
+        const norm = [...new Set(alts.filter(a => !NULLISH_TYPES.has(a)).map(a => normalizeType(a, spec, depth + 1)))];
+        return norm.length === 1 ? norm[0] : null;
+    }
+    if (splitTop(s, '&').length > 1 || splitTop(s, ',').length > 1) return null; // intersections / tuples
+    let m;
+    if ((m = /^\((.*)\)$/s.exec(s))) return normalizeType(m[1], spec, depth + 1);
+    if ((m = /^(.+?)\s*\[\s*\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));      // T[]
+    if ((m = /^\[\s*\]\s*(.+)$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));        // Go []T
+    if ((m = /^\[([^;\]]+?)\s*(?:;[^\]]*)?\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1)); // Rust [T] / [T; N]
+    if ((m = /^([A-Za-z_$][\w$]*(?:(?:\.|::|\\)[A-Za-z_$][\w$]*)*)\s*[<[](.*)[>\]]$/s.exec(s))) {
+        const head = m[1].split(/\.|::|\\/).pop();
+        const args = splitTop(m[2], ',').map(x => x.trim());
+        if (spec?.transparentTypes?.has(head)) return normalizeType(args[0], spec, depth + 1);
+        if (spec?.elementTypes?.has(head)) return arrayOf(normalizeType(args[0], spec, depth + 1));
+        if (head === 'Union') return normalizeType(args.join('|'), spec, depth + 1);
+        s = m[1];
+    }
+    s = s.replace(/<.*$/s, '').replace(/\(.*$/s, '').replace(/\[.*$/s, '').trim();
     const segs = s.split(/::|\.|\\/).filter(Boolean);
     s = segs.length ? segs[segs.length - 1] : s;
     return /^[A-Za-z_$][\w$]*$/.test(s) ? s : null;
+}
+
+/** @deprecated nominal head only (kept for callers that need a plain name). */
+export function cleanTypeName(t, spec) {
+    const n = normalizeType(t, spec);
+    return n && n.endsWith('[]') ? n.slice(0, -2) : n;
+}
+
+const CLASS_KINDS = new Set(['class', 'struct', 'impl', 'object', 'trait', 'interface', 'enum']);
+const VALUE_KINDS = new Set(['variable', 'constant', 'field', 'property']);
+const CALLABLE_KINDS = new Set(['function', 'method']);
+const CONSTRUCTOR_NAMES = new Set(['constructor', '__construct']);
+
+/** `get<T extends Foo = Foo>(): T` → the declared return type `T` means `Foo` (bound or default). */
+function typeParamBound(defNode, typeText) {
+    const name = String(typeText).trim();
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return undefined;
+    const tps = defNode.childForFieldName?.('type_parameters') ?? defNode.namedChildren?.find(c => c.type === 'type_parameters');
+    if (!tps) return undefined;
+    for (const p of tps.namedChildren) {
+        const m = /^(?:(?:in|out|const|reified)\s+)*([A-Za-z_$][\w$]*)\s*(?:(?:extends|:)\s*([^=]+?))?\s*(?:=\s*(.+))?$/s.exec(p.text);
+        if (m && m[1] === name) return (m[3] ?? m[2] ?? '').trim() || null;
+    }
+    return undefined;
+}
+
+/** Static members (`static`, `@staticmethod`/`@classmethod`) never share a family with instance members. */
+function isStaticMember(node, nameNode, spec) {
+    if (spec.isStatic) return spec.isStatic(node);
+    const head = node.text.slice(0, Math.max(0, nameNode.startIndex - node.startIndex));
+    return /(^|\s)static\s/.test(head);
 }
 
 function classOf(idx, symbols) {

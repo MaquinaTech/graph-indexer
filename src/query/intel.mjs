@@ -212,7 +212,7 @@ export class CodeIntel {
             for (const b of typeSym.bases ?? []) {
                 const bt = r.resolveTypeName(b, typeSym.fileId);
                 if (!bt) continue;
-                for (const mid of t.byParent.get(bt.id)?.get(sym.name) ?? []) out.push({ id: mid, via: bt.name });
+                for (const mid of t.byParent.get(bt.id)?.get(sym.name) ?? []) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: bt.name });
                 visit(bt, depth + 1);
             }
         };
@@ -222,7 +222,8 @@ export class CodeIntel {
 
     /** Overload set: same qualified name, same file, same container (TS/Java/C#/C++ overloads). */
     overloads(sym) {
-        return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?)', sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id).map(r => r.id);
+        return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?) AND is_static = ?',
+            sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id, sym.is_static ? 1 : 0).map(r => r.id);
     }
 
     /** Members with the same name in subtypes (overrides/implementations), transitively. */
@@ -242,7 +243,7 @@ export class CodeIntel {
                     seen.add(src_id);
                     next.push(src_id);
                     const st = t.sym(src_id);
-                    for (const mid of t.byParent.get(src_id)?.get(sym.name) ?? []) out.push({ id: mid, via: st?.name ?? '?' });
+                    for (const mid of t.byParent.get(src_id)?.get(sym.name) ?? []) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: st?.name ?? '?' });
                 }
             }
             frontier = next;
@@ -261,7 +262,7 @@ export class CodeIntel {
         if (!sym) return null;
         const ids = [...new Set([id, ...this.overloads(sym)])];
         const via = new Map();
-        if (family && (sym.kind === 'method' || sym.kind === 'property' || sym.kind === 'field')) {
+        if (family && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property' || sym.kind === 'field')) {
             for (const s of this.#supertypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
             for (const s of this.#subtypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
         }
@@ -303,7 +304,7 @@ export class CodeIntel {
             for (const { id, conf } of frontier) {
                 const sym = this.sym(id);
                 const targets = [id];
-                if (sym && (sym.kind === 'method' || sym.kind === 'property')) for (const s of this.#supertypeMembers(sym)) targets.push(s.id);
+                if (sym && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property')) for (const s of this.#supertypeMembers(sym)) targets.push(s.id);
                 const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, f.path FROM refs r JOIN files f ON f.id = r.file_id
                     WHERE r.dst_id IN (${targets.map(() => '?').join(',')}) AND r.kind IN (${kinds.map(() => '?').join(',')})`, ...targets, ...kinds);
                 for (const r of rows) {

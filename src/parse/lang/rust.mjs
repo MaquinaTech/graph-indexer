@@ -1,11 +1,13 @@
 /** Rust extraction spec. `impl Type { fn m() }` methods are qualified as Type.m. */
 
 const TH = (cap) => `[(type_identifier) @${cap} (generic_type type: (type_identifier) @${cap}) (scoped_type_identifier name: (type_identifier) @${cap}) (reference_type type: (type_identifier) @${cap}) (reference_type type: (generic_type type: (type_identifier) @${cap}))]`;
+// a whole type (normalizeType unwraps references, Box/Rc/Arc/Option/Result, and sees Vec<T> as T[])
+const TW = (cap) => `[(type_identifier) (generic_type) (scoped_type_identifier) (reference_type) (array_type) (pointer_type)] @${cap}`;
 
 const QUERY = `
-(function_item name: (identifier) @name return_type: ${TH('type')}) @def.function
+(function_item name: (identifier) @name return_type: ${TW('type')}) @def.function
 (function_item name: (identifier) @name) @def.function
-(function_signature_item name: (identifier) @name return_type: ${TH('type')}) @def.function
+(function_signature_item name: (identifier) @name return_type: ${TW('type')}) @def.function
 (function_signature_item name: (identifier) @name) @def.function
 (struct_item name: (type_identifier) @name) @def.struct
 (enum_item name: (type_identifier) @name) @def.enum
@@ -16,7 +18,7 @@ const QUERY = `
 (static_item name: (identifier) @name) @def.constant
 (mod_item name: (identifier) @name body: (_)) @def.module
 (macro_definition name: (identifier) @name) @def.macro
-(field_declaration name: (field_identifier) @name type: ${TH('type')}) @def.field
+(field_declaration name: (field_identifier) @name type: ${TW('type')}) @def.field
 (field_declaration name: (field_identifier) @name) @def.field
 (enum_variant name: (identifier) @name) @def.constant
 
@@ -35,19 +37,25 @@ const QUERY = `
 (arguments (identifier) @name) @ref.value
 (arguments (scoped_identifier path: (_) @recv name: (identifier) @name)) @ref.value
 
+(closure_expression) @scope
+(return_expression (_) @ret)
+(function_item body: (block [(call_expression) (struct_expression) (field_expression) (identifier) (self) (reference_expression) (try_expression) (scoped_identifier)] @ret .))
 (use_declaration) @import
 
-(let_declaration pattern: (identifier) @bind.name type: ${TH('bind.type')}) @bind
-(let_declaration pattern: (mut_pattern (identifier) @bind.name) type: ${TH('bind.type')}) @bind
+(let_declaration pattern: (identifier) @bind.name type: ${TW('bind.type')}) @bind
+(let_declaration pattern: (mut_pattern (identifier) @bind.name) type: ${TW('bind.type')}) @bind
+(let_declaration pattern: (identifier) @bind.name value: (_) @bind.expr) @bind
+(let_declaration pattern: (mut_pattern (identifier) @bind.name) value: (_) @bind.expr) @bind
+(for_expression pattern: (identifier) @bind.name value: (_) @bind.elem) @bind
 (let_declaration pattern: (identifier) @bind.name value: (struct_expression name: (type_identifier) @bind.new)) @bind
 (let_declaration pattern: (identifier) @bind.name value: (call_expression function: (scoped_identifier path: (identifier) @bind.new name: (identifier) @_ctor))) @bind
 (let_declaration pattern: (mut_pattern (identifier) @bind.name) value: (call_expression function: (scoped_identifier path: (identifier) @bind.new name: (identifier) @_ctor))) @bind
 (let_declaration pattern: (identifier) @bind.name value: (call_expression function: (identifier) @bind.call)) @bind
-(parameter pattern: (identifier) @bind.name type: ${TH('bind.type')}) @bind
+(parameter pattern: (identifier) @bind.name type: ${TW('bind.type')}) @bind
 `;
 
 const PRIMITIVES = new Set(['i8', 'i16', 'i32', 'i64', 'i128', 'isize', 'u8', 'u16', 'u32', 'u64', 'u128', 'usize',
-    'f32', 'f64', 'bool', 'char', 'str', 'String', 'Self', 'Option', 'Result', 'Vec', 'Box', 'Rc', 'Arc', 'RefCell',
+    'f32', 'f64', 'bool', 'char', 'str', 'String', 'Option', 'Result', 'Vec', 'Box', 'Rc', 'Arc', 'RefCell',
     'Cell', 'HashMap', 'HashSet', 'BTreeMap', 'BTreeSet', 'Cow', 'Mutex', 'RwLock', 'Pin', 'PhantomData']);
 const BUILTIN_MACROS = new Set(['println', 'print', 'eprintln', 'eprint', 'format', 'vec', 'panic', 'assert',
     'assert_eq', 'assert_ne', 'debug_assert', 'debug_assert_eq', 'write', 'writeln', 'unreachable', 'unimplemented',
@@ -135,6 +143,12 @@ export const rust = {
     isExported: (node) => node.namedChildren.some(c => c.type === 'visibility_modifier') || node.parent?.parent?.type === 'trait_item',
     visibility,
     isPrimitiveType: (t) => PRIMITIVES.has(t),
+    transparentTypes: new Set(['Box', 'Rc', 'Arc', 'Cow', 'RefCell', 'Cell', 'Mutex', 'RwLock', 'MutexGuard', 'RwLockReadGuard', 'RwLockWriteGuard', 'Ref', 'RefMut', 'Pin', 'Option', 'Result', 'Weak']),
+    elementTypes: new Set(['Vec', 'VecDeque', 'HashSet', 'BTreeSet', 'BinaryHeap', 'LinkedList', 'IntoIter', 'Iter', 'IterMut', 'Drain']),
+    elementMethods: new Set(['first', 'last', 'get', 'get_mut', 'first_mut', 'last_mut', 'pop', 'pop_front', 'pop_back', 'front', 'back', 'remove', 'swap_remove', 'next', 'peek', 'find']),
+    // calls that hand back (a view of) the same value: unwrap, clone, borrow, lock, iter …
+    identityMethods: new Set(['unwrap', 'expect', 'unwrap_or_default', 'unwrap_or', 'unwrap_or_else', 'as_ref', 'as_mut', 'as_deref', 'as_deref_mut',
+        'clone', 'borrow', 'borrow_mut', 'lock', 'read', 'write', 'to_owned', 'deref', 'deref_mut', 'cloned', 'copied', 'iter', 'iter_mut', 'into_iter', 'drain', 'upgrade']),
     normalizeRefName: (name, r) => (r.node.type === 'macro_invocation' ? (BUILTIN_MACROS.has(name) ? null : name) : name),
     bodyField: 'body',
 };

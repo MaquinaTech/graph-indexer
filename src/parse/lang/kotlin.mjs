@@ -1,6 +1,7 @@
 /** Kotlin extraction spec (fwcd/tree-sitter-kotlin; the grammar has no field names, so patterns are positional). */
 
 const QUERY = `
+[(lambda_literal) (anonymous_function)] @scope
 (class_declaration (type_identifier) @name) @def.class
 (object_declaration (type_identifier) @name) @def.object
 (function_declaration (simple_identifier) @name (user_type (type_identifier) @type)) @def.function
@@ -73,6 +74,8 @@ export const kotlin = {
     isExported: (node) => !/\b(private|internal)\b/.test(modifiers(node)),
     visibility: (node) => { const m = modifiers(node); return /\bprivate\b/.test(m) ? 'private' : /\bprotected\b/.test(m) ? 'protected' : null; },
     isPrimitiveType: (t) => PRIMITIVES.has(t),
+    elementTypes: new Set(['List', 'MutableList', 'ArrayList', 'Set', 'MutableSet', 'HashSet', 'LinkedHashSet', 'Collection', 'MutableCollection', 'Iterable', 'Sequence', 'Array']),
+    elementMethods: new Set(['get', 'first', 'last', 'firstOrNull', 'lastOrNull', 'single', 'singleOrNull', 'elementAt', 'getOrNull', 'find', 'random', 'removeFirst', 'removeLast']),
     refineKind(kind, d) {
         if (d.node.type === 'class_declaration') {
             const head = d.node.text.slice(0, d.node.text.indexOf(d.nameNode.text));

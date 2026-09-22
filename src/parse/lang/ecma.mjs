@@ -6,8 +6,9 @@
  *   @ref.<kind> + @name [+ @recv]         a reference (call/new/type/inherit/decorator/value)
  *   @import                               an import/export-from statement (parsed by the hook)
  *   @import.require + @src                a CommonJS require() call
- *   @bind + @bind.name + @bind.(type|new|call)    local variable → type evidence
- *   @field + @field.name + @field.(type|new)      class field → type evidence
+ *   @bind + @bind.name + @bind.(type|new|call|expr|elem)    local variable → type evidence
+ *   @field + @field.name + @field.(type|new|expr)           class field → type evidence
+ * (`expr` = the initialiser expression, `elem` = a collection whose element the name is bound to)
  */
 
 const DEFS_COMMON = `
@@ -18,6 +19,7 @@ const DEFS_COMMON = `
 (method_definition name: (_) @name) @def.method
 (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression) (generator_function)]) @def.function)
 (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression) (generator_function)]) @def.function)
+(variable_declarator name: (identifier) @name value: (class)) @def.class
 (lexical_declaration (variable_declarator name: (identifier) @name value: (_) @_v) @def.variable (#not-match? @_v "^(async\\\\s*)?(function|\\\\(|[A-Za-z_$][A-Za-z0-9_$]*\\\\s*=>)"))
 (variable_declaration (variable_declarator name: (identifier) @name value: (_) @_v) @def.variable (#not-match? @_v "^(async\\\\s*)?(function|\\\\(|[A-Za-z_$][A-Za-z0-9_$]*\\\\s*=>)"))
 (assignment_expression
@@ -54,8 +56,23 @@ const DEFS_TS = `
 (method_signature name: (_) @name) @def.method
 (abstract_method_signature name: (_) @name) @def.method
 (public_field_definition name: (_) @name value: [(arrow_function) (function_expression)]) @def.method
+(public_field_definition name: (_) @name value: (class)) @def.class
 (public_field_definition name: (_) @name) @def.field
+(required_parameter (accessibility_modifier) pattern: (identifier) @name) @def.field
+(required_parameter "readonly" pattern: (identifier) @name) @def.field
+(optional_parameter (accessibility_modifier) pattern: (identifier) @name) @def.field
 (property_signature name: (_) @name) @def.field
+(function_declaration name: (identifier) @name return_type: (type_annotation (_) @type)) @def.function
+(function_signature name: (identifier) @name return_type: (type_annotation (_) @type)) @def.function
+(method_definition name: (_) @name return_type: (type_annotation (_) @type)) @def.method
+(method_signature name: (_) @name return_type: (type_annotation (_) @type)) @def.method
+(abstract_method_signature name: (_) @name return_type: (type_annotation (_) @type)) @def.method
+(lexical_declaration (variable_declarator name: (identifier) @name value: (arrow_function return_type: (type_annotation (_) @type))) @def.function)
+(public_field_definition name: (_) @name type: (type_annotation (_) @type)) @def.field
+(property_signature name: (_) @name type: (type_annotation (_) @type)) @def.field
+(required_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
+(required_parameter "readonly" pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
+(optional_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
 `;
 
 const REFS_COMMON = `
@@ -102,26 +119,50 @@ const IMPORTS_COMMON = `
 (import_statement) @import
 (export_statement source: (string)) @import
 (call_expression function: (identifier) @_req arguments: (arguments . (string) @src) (#eq? @_req "require")) @import.require
+
+[(arrow_function) (function_expression) (generator_function)] @scope
+(return_statement (_) @ret)
+(arrow_function body: [(call_expression) (new_expression) (member_expression) (identifier) (await_expression) (parenthesized_expression) (this) (subscript_expression)] @ret)
 `;
 
+// `xs.forEach(x => …)`: the first callback parameter of an element-wise array method is an element.
+const callbackParam = (param) => `(call_expression
+  function: (member_expression object: (_) @bind.elem property: (property_identifier) @_m)
+  arguments: (arguments . (arrow_function ${param}))
+  (#match? @_m "^(forEach|map|filter|find|findLast|findIndex|findLastIndex|some|every|flatMap)$")) @bind`;
+
 const BINDINGS_COMMON = `
-(variable_declarator name: (identifier) @bind.name value: (new_expression constructor: (identifier) @bind.new)) @bind
-(variable_declarator name: (identifier) @bind.name value: (await_expression (new_expression constructor: (identifier) @bind.new))) @bind
-(variable_declarator name: (identifier) @bind.name value: (call_expression function: (identifier) @bind.call)) @bind
-(variable_declarator name: (identifier) @bind.name value: (await_expression (call_expression function: (identifier) @bind.call))) @bind
-(assignment_expression left: (member_expression object: (this) property: (property_identifier) @field.name) right: (new_expression constructor: (identifier) @field.new)) @field
+(variable_declarator name: (identifier) @bind.name value: (_) @bind.expr) @bind
+(for_in_statement left: (identifier) @bind.name "of" right: (_) @bind.elem) @bind
+${callbackParam('parameter: (identifier) @bind.name')}
+(assignment_expression left: (member_expression object: (this) property: (property_identifier) @field.name) right: (_) @field.expr) @field
 `;
 
 const BINDINGS_TS = `
-(variable_declarator name: (identifier) @bind.name type: (type_annotation [(type_identifier) @bind.type (generic_type name: (type_identifier) @bind.type)])) @bind
-(required_parameter pattern: (identifier) @bind.name type: (type_annotation [(type_identifier) @bind.type (generic_type name: (type_identifier) @bind.type)])) @bind
-(optional_parameter pattern: (identifier) @bind.name type: (type_annotation [(type_identifier) @bind.type (generic_type name: (type_identifier) @bind.type)])) @bind
-(public_field_definition name: (property_identifier) @field.name type: (type_annotation [(type_identifier) @field.type (generic_type name: (type_identifier) @field.type)])) @field
-(public_field_definition name: (property_identifier) @field.name value: (new_expression constructor: (identifier) @field.new)) @field
-(required_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation [(type_identifier) @field.type (generic_type name: (type_identifier) @field.type)])) @field
-(required_parameter "readonly" pattern: (identifier) @field.name type: (type_annotation [(type_identifier) @field.type (generic_type name: (type_identifier) @field.type)])) @field
-(optional_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation [(type_identifier) @field.type (generic_type name: (type_identifier) @field.type)])) @field
+${callbackParam('parameters: (formal_parameters . (required_parameter pattern: (identifier) @bind.name))')}
+(variable_declarator name: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
+(required_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
+(optional_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
+(public_field_definition name: (property_identifier) @field.name type: (type_annotation (_) @field.type)) @field
+(public_field_definition name: (property_identifier) @field.name value: (_) @field.expr) @field
+(required_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation (_) @field.type)) @field
+(required_parameter "readonly" pattern: (identifier) @field.name type: (type_annotation (_) @field.type)) @field
+(optional_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation (_) @field.type)) @field
 `;
+
+const BINDINGS_JS = `
+${callbackParam('parameters: (formal_parameters . (identifier) @bind.name)')}
+(field_definition property: (property_identifier) @field.name value: (_) @field.expr) @field
+`;
+
+// Wrappers whose members are reached through the wrapped type (after await / by convention).
+const TRANSPARENT_TYPES = new Set(['Promise', 'PromiseLike', 'Awaited', 'Readonly', 'Partial', 'Required', 'NonNullable', 'DeepPartial', 'DeepReadonly', 'Mutable']);
+// Collections: `x[i]`, `for (const e of x)` and `x.forEach(e => …)` see the element type.
+const ELEMENT_TYPES = new Set(['Array', 'ReadonlyArray', 'Set', 'ReadonlySet', 'Iterable', 'IterableIterator', 'Iterator', 'AsyncIterable', 'AsyncIterableIterator', 'Generator', 'AsyncGenerator']);
+// Types whose members never live in the repository.
+const PRIMITIVE_TYPES = new Set(['string', 'number', 'boolean', 'bigint', 'symbol', 'any', 'unknown', 'object', 'void', 'never', 'undefined', 'null',
+    'String', 'Number', 'Boolean', 'Object', 'Function', 'Date', 'RegExp', 'Map', 'WeakMap', 'WeakSet', 'Record', 'Error', 'Buffer',
+    'ArrayBuffer', 'Uint8Array', 'DataView', 'URL', 'URLSearchParams', 'Headers', 'Request', 'Response', 'AbortController', 'AbortSignal']);
 
 // Ubiquitous globals whose members never resolve into the repository.
 const EXTERNAL_RECEIVERS = new Set([
@@ -256,12 +297,16 @@ function makeSpec(id, grammar, extensions, { ts, jsx }) {
         query: [
             DEFS_COMMON, ts ? DEFS_TS : DEFS_JS,
             REFS_COMMON, ts ? REFS_TS : REFS_JS, jsx ? REFS_JSX : '',
-            IMPORTS_COMMON, BINDINGS_COMMON, ts ? BINDINGS_TS : '',
+            IMPORTS_COMMON, BINDINGS_COMMON, ts ? BINDINGS_TS : BINDINGS_JS,
         ].join('\n'),
         implicitThis: false,
         selfNames: ['this'],
         externalReceivers: EXTERNAL_RECEIVERS,
         builtinCalls: BUILTIN_CALLS,
+        transparentTypes: TRANSPARENT_TYPES,
+        elementTypes: ELEMENT_TYPES,
+        isPrimitiveType: (t) => PRIMITIVE_TYPES.has(t),
+        elementMethods: new Set(['at', 'find', 'findLast', 'pop', 'shift']),
         testFile: TEST_FILE_RE,
         commentTypes: ['comment'],
         containerKinds: new Set(['class', 'interface', 'module', 'enum', 'function', 'method']),

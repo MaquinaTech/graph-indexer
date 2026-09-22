@@ -1,7 +1,8 @@
 /** Go extraction spec. Methods are qualified by their receiver type (Engine.Run). */
 
 const RECV_TYPE = `[(type_identifier) @owner (pointer_type (type_identifier) @owner) (generic_type type: (type_identifier) @owner) (pointer_type (generic_type type: (type_identifier) @owner))]`;
-const TYPE_HEAD = `[(type_identifier) @type (pointer_type (type_identifier) @type) (qualified_type name: (type_identifier) @type) (pointer_type (qualified_type name: (type_identifier) @type)) (generic_type type: (type_identifier) @type)]`;
+// a whole (single) type; normalizeType reduces it to what member lookup needs (`[]*pkg.T` → T[])
+const TYPE_HEAD = `[(type_identifier) (pointer_type) (qualified_type) (generic_type) (slice_type) (array_type) (map_type) (channel_type)] @type`;
 
 const QUERY = `
 (function_declaration name: (identifier) @name result: ${TYPE_HEAD}) @def.function
@@ -33,11 +34,15 @@ const QUERY = `
 (argument_list (selector_expression operand: (identifier) @recv field: (field_identifier) @name)) @ref.value
 (keyed_element (literal_element (identifier) @name)) @ref.value
 
+(func_literal) @scope
+(return_statement (expression_list . (_) @ret))
 (import_spec) @import
 
 (short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (composite_literal type: (type_identifier) @bind.new))) @bind
 (short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (unary_expression operand: (composite_literal type: (type_identifier) @bind.new)))) @bind
-(short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (call_expression function: (identifier) @bind.call))) @bind
+(short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (_) @bind.expr)) @bind
+(var_spec name: (identifier) @bind.name value: (expression_list . (_) @bind.expr)) @bind
+(for_statement (range_clause left: (expression_list . (_) . (identifier) @bind.name) right: (_) @bind.elem)) @bind
 (var_spec name: (identifier) @bind.name type: ${TYPE_HEAD.replaceAll('@type', '@bind.type')}) @bind
 (parameter_declaration name: (identifier) @bind.name type: ${TYPE_HEAD.replaceAll('@type', '@bind.type')}) @bind
 `;
@@ -47,7 +52,7 @@ const BUILTIN_CALLS = new Set(['make', 'new', 'len', 'cap', 'append', 'copy', 'd
     'uint64', 'uint32', 'float64', 'float32', 'byte', 'rune', 'bool', 'error', 'uintptr']);
 const PRIMITIVES = new Set(['string', 'int', 'int8', 'int16', 'int32', 'int64', 'uint', 'uint8', 'uint16', 'uint32',
     'uint64', 'uintptr', 'float32', 'float64', 'complex64', 'complex128', 'byte', 'rune', 'bool', 'error', 'any',
-    'interface']);
+    'interface', 'map', 'chan', 'func']);
 
 function parseImport(node) {
     const pathNode = node.childForFieldName('path');
@@ -96,6 +101,8 @@ export const go = {
     isExported: (node, name) => /^[A-Z]/.test(name),
     visibility: (node, name) => (name && /^[a-z_]/.test(name) ? 'private' : null),
     isPrimitiveType: (t) => PRIMITIVES.has(t),
+    // `(T, error)` results: the value is the first element
+    cleanType: (t) => t.replace(/^\(\s*(?:\w+\s+)?([^,()]+?)\s*,\s*(?:\w+\s+)?error\s*\)$/s, '$1'),
     refineKind(kind, d, parent) {
         if (d.node.type === 'method_elem') return 'method';
         return kind;

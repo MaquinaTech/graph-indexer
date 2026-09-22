@@ -8,10 +8,10 @@ const JAVA_QUERY = `
 (enum_declaration name: (identifier) @name) @def.enum
 (record_declaration name: (identifier) @name) @def.class
 (annotation_type_declaration name: (identifier) @name) @def.interface
-(method_declaration type: ${T('type')} name: (identifier) @name) @def.method
+(method_declaration type: (_) @type name: (identifier) @name) @def.method
 (method_declaration name: (identifier) @name) @def.method
 (constructor_declaration name: (identifier) @name) @def.constructor
-(field_declaration type: ${T('type')} declarator: (variable_declarator name: (identifier) @name)) @def.field
+(field_declaration type: (_) @type declarator: (variable_declarator name: (identifier) @name)) @def.field
 (field_declaration declarator: (variable_declarator name: (identifier) @name)) @def.field
 (enum_constant name: (identifier) @name) @def.constant
 
@@ -27,20 +27,23 @@ const JAVA_QUERY = `
 (method_reference . (identifier) @recv (identifier) @name) @ref.value
 (argument_list (identifier) @name) @ref.value
 
+(lambda_expression) @scope
+(return_statement (_) @ret)
 (import_declaration) @import
 
-(local_variable_declaration type: ${T('bind.type')} declarator: (variable_declarator name: (identifier) @bind.name)) @bind
+(local_variable_declaration type: (_) @bind.type declarator: (variable_declarator name: (identifier) @bind.name)) @bind
 (local_variable_declaration declarator: (variable_declarator name: (identifier) @bind.name value: (object_creation_expression type: ${T('bind.new')}))) @bind
-(formal_parameter type: ${T('bind.type')} name: (identifier) @bind.name) @bind
-(enhanced_for_statement type: ${T('bind.type')} name: (identifier) @bind.name) @bind
-(field_declaration type: ${T('field.type')} declarator: (variable_declarator name: (identifier) @field.name)) @field
+(local_variable_declaration declarator: (variable_declarator name: (identifier) @bind.name value: (_) @bind.expr)) @bind
+(formal_parameter type: (_) @bind.type name: (identifier) @bind.name) @bind
+(enhanced_for_statement type: (_) @bind.type name: (identifier) @bind.name value: (_) @bind.elem) @bind
+(field_declaration type: (_) @field.type declarator: (variable_declarator name: (identifier) @field.name)) @field
 `;
 
 const JAVA_BUILTIN_TYPES = new Set(['String', 'Object', 'Integer', 'Long', 'Double', 'Float', 'Boolean', 'Character',
     'Byte', 'Short', 'Void', 'List', 'Map', 'Set', 'Collection', 'Optional', 'Stream', 'Iterable', 'Iterator',
     'ArrayList', 'HashMap', 'HashSet', 'LinkedList', 'Arrays', 'Collections', 'Objects', 'Math', 'System',
     'StringBuilder', 'Exception', 'RuntimeException', 'Throwable', 'Class', 'Thread', 'Override', 'Deprecated',
-    'SuppressWarnings', 'FunctionalInterface', 'var']);
+    'SuppressWarnings', 'FunctionalInterface']);
 
 function javaImport(node) {
     const text = node.text.replace(/^import\s+(static\s+)?/, '').replace(/;\s*$/, '').trim();
@@ -81,6 +84,9 @@ export const java = {
     isExported: (node) => /\bpublic\b/.test(modifiersText(node)) || node.parent?.type === 'interface_body',
     visibility: (node) => { const m = modifiersText(node); return /\bprivate\b/.test(m) ? 'private' : /\bprotected\b/.test(m) ? 'protected' : /\bpublic\b/.test(m) ? 'public' : null; },
     isPrimitiveType: (t) => JAVA_BUILTIN_TYPES.has(t) || /^(int|long|double|float|boolean|char|byte|short|void)$/.test(t),
+    elementTypes: new Set(['List', 'ArrayList', 'LinkedList', 'Collection', 'Set', 'HashSet', 'TreeSet', 'LinkedHashSet', 'SortedSet', 'NavigableSet',
+        'Iterable', 'Iterator', 'Stream', 'Queue', 'Deque', 'ArrayDeque', 'PriorityQueue', 'Vector', 'CopyOnWriteArrayList', 'BlockingQueue']),
+    elementMethods: new Set(['get', 'getFirst', 'getLast', 'peek', 'poll', 'pop', 'element', 'first', 'last', 'next', 'remove', 'take']),
     decoratorsOf(node) {
         const m = node.namedChildren.find(c => c.type === 'modifiers');
         if (!m) return [];

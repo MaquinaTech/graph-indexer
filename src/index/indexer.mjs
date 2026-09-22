@@ -58,7 +58,7 @@ export class Indexer {
         this.resolveAll = s.getMeta('resolve_pending') === '1';
         const files = s.all('SELECT id, path, lang, package, is_test FROM files');
         for (const f of files) this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
-        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, start_line, end_line FROM symbols')) {
+        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, is_static, start_line, end_line FROM symbols')) {
             this.table.addSym(rowToSym(r));
         }
         const imps = new Map();
@@ -261,14 +261,14 @@ export class Indexer {
             const parentId = sym.parentIdx >= 0 ? ids[sym.parentIdx] : null;
             const decorators = sym.decorators?.length ? JSON.stringify(sym.decorators) : null;
             const bases = sym.bases?.length ? JSON.stringify(sym.bases) : null;
-            const r = s.run(`INSERT INTO symbols (id, file_id, name, name_lc, qname, kind, parent_id, owner, start_line, start_col, end_line, end_col, name_line, name_col, sig, doc, type, exported, visibility, decorators, bases, ordinal)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            const r = s.run(`INSERT INTO symbols (id, file_id, name, name_lc, qname, kind, parent_id, owner, start_line, start_col, end_line, end_col, name_line, name_col, sig, doc, type, exported, visibility, decorators, bases, ordinal, is_static)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 reuse ?? null, fileId, sym.name, sym.name.toLowerCase(), sym.qname, sym.kind, parentId, sym.owner, sym.startLine, sym.startCol, sym.endLine, sym.endCol,
-                sym.nameLine, sym.nameCol, sym.sig || null, sym.doc || null, sym.type, sym.exported ? 1 : 0, sym.visibility, decorators, bases, ord);
+                sym.nameLine, sym.nameCol, sym.sig || null, sym.doc || null, sym.type, sym.exported ? 1 : 0, sym.visibility, decorators, bases, ord, sym.isStatic ? 1 : 0);
             const id = reuse ?? Number(r.lastInsertRowid);
             ids[i] = id;
             if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
-            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, startLine: sym.startLine, endLine: sym.endLine });
+            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine });
         }
         // FTS documents
         for (let i = 0; i < symbols.length; i++) {
@@ -359,7 +359,7 @@ function safeStat(p) { try { return fs.statSync(p); } catch { return null; } }
 function rowToSym(r) {
     return {
         id: r.id, fileId: r.file_id, name: r.name, qname: r.qname, kind: r.kind, parentId: r.parent_id ?? null, owner: r.owner ?? null,
-        type: r.type ?? null, bases: r.bases ? JSON.parse(r.bases) : [], exported: !!r.exported, startLine: r.start_line, endLine: r.end_line,
+        type: r.type ?? null, bases: r.bases ? JSON.parse(r.bases) : [], exported: !!r.exported, isStatic: !!r.is_static, startLine: r.start_line, endLine: r.end_line,
     };
 }
 

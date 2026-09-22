@@ -18,6 +18,7 @@ const C_DEFS = `
 `;
 
 const C_REFS = `
+(return_statement (_) @ret)
 (call_expression function: (identifier) @name) @ref.call
 (call_expression function: (field_expression argument: (_) @recv field: (field_identifier) @name)) @ref.call
 (type_identifier) @name @ref.type
@@ -49,6 +50,8 @@ const CPP_DEFS = `
 `;
 
 const CPP_REFS = `
+(lambda_expression) @scope
+(return_statement (_) @ret)
 (call_expression function: (identifier) @name) @ref.call
 (call_expression function: (field_expression argument: (_) @recv field: (field_identifier) @name)) @ref.call
 (call_expression function: (qualified_identifier scope: (_) @recv name: (identifier) @name)) @ref.call
@@ -114,5 +117,8 @@ export const cpp = {
     family: 'c',
     implicitThis: true,
     query: CPP_DEFS + CPP_REFS,
-    cleanType: (t) => t.replace(/^(std|boost)::/, ''),
+    cleanType: (t) => t.replace(/\b(std|boost)::/g, ''),
+    transparentTypes: new Set(['unique_ptr', 'shared_ptr', 'weak_ptr', 'optional', 'reference_wrapper', 'atomic']),
+    elementTypes: new Set(['vector', 'list', 'deque', 'set', 'unordered_set', 'multiset', 'array', 'span', 'forward_list']),
+    elementMethods: new Set(['at', 'front', 'back', 'top']),
 };

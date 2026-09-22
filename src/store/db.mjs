@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS symbols (
   visibility TEXT,
   decorators TEXT,
   bases TEXT,
-  ordinal INTEGER NOT NULL DEFAULT 0
+  ordinal INTEGER NOT NULL DEFAULT 0,
+  is_static INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name_lc);

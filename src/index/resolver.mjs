@@ -27,6 +27,16 @@ function push(map, key, val) {
     if (a) a.push(val); else map.set(key, [val]);
 }
 
+/** Receiver type whose members never live in the repository (primitives, builtins, collections). */
+export const EXTERNAL = Object.freeze({ external: true });
+
+/** `name[][]` → { name, elem: 2 } (element access applied to a descriptor part). */
+function splitElem(part) {
+    let elem = 0;
+    while (part.endsWith('[]')) { part = part.slice(0, -2); elem++; }
+    return { name: part, elem };
+}
+
 export class SymbolTable {
     constructor() {
         this.syms = new Map();          // id -> sym
@@ -190,7 +200,7 @@ export class Resolver {
 
     /** Resolve a type name visible from a file to a type symbol. */
     resolveTypeName(name, fileId) {
-        if (!name) return null;
+        if (!name || name.endsWith('[]') || name === '!') return null;
         const k = 't|' + fileId + '|' + name;
         if (this.memo.has(k)) return this.memo.get(k);
         this.memo.set(k, null); // cycle guard
@@ -201,49 +211,79 @@ export class Resolver {
         return res;
     }
 
-    /** Resolve an extraction-time receiver type descriptor to a type {id,name,fileId}. */
+    /**
+     * A stored type string (see extract.mjs) → type {id,name,fileId}, EXTERNAL (members never live
+     * in the repository: primitives, builtins, collections) or null (unknown). `elem` applies
+     * element access that many times (`xs[i]`, loop variables).
+     */
+    typeFromString(str, fileId, elem = 0) {
+        if (!str) return null;
+        if (str.startsWith('call:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
+        let s = str;
+        for (let i = 0; i < elem; i++) { if (!s.endsWith('[]')) return null; s = s.slice(0, -2); }
+        if (s === '!') return EXTERNAL;
+        if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
+        const t = this.resolveTypeName(s, fileId);
+        if (t) return t;
+        const spec = this.specs[this.t.file(fileId)?.lang];
+        return spec?.isPrimitiveType?.(s) ? EXTERNAL : null;
+    }
+
+    /** Resolve an extraction-time receiver type descriptor to a type {id,name,fileId} or EXTERNAL. */
     resolveRecvType(desc, fileId, srcId) {
         if (!desc) return null;
+        if (desc === '!') return EXTERNAL;
         const k = 'r|' + fileId + '|' + desc;
         if (this.memo.has(k)) return this.memo.get(k);
         this.memo.set(k, null);
-        let res = null;
-        const parts = desc.split('#');
-        let head = parts[0];
+        const parts = desc.split('#').map(splitElem);
+        const head = parts[0];
         let cur = null;
-        if (head.startsWith('call:')) {
-            const fn = head.slice(5);
-            const r = this.#resolveName(fn, 'call', fileId, srcId);
+        if (head.name.startsWith('call:')) {
+            const r = this.#resolveName(head.name.slice(5), 'call', fileId, srcId);
             const s = r?.id != null ? this.t.sym(r.id) : null;
             if (s) {
-                if (TYPE_KINDS.has(s.kind)) cur = s;
-                else if (s.type) cur = this.resolveTypeName(s.type, s.fileId);
+                if (TYPE_KINDS.has(s.kind)) cur = head.elem ? null : s; // constructor call
+                else if (s.type) cur = this.typeFromString(s.type, s.fileId, head.elem);
             }
-        } else {
+            if (cur?.arrayOf != null && parts.length === 1) cur = EXTERNAL;
+        } else if (!head.elem) {
             // same-file qualified name first (this.x → Class#x uses the class qname)
-            const q = (this.t.byQname.get(head) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
-            cur = q ?? this.resolveTypeName(head.split('.').pop(), fileId);
-            if (!cur && parts.length === 1) res = null;
-            if (!cur && head.includes('.')) {
+            const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
+            cur = q ?? this.typeFromString(head.name.split('.').pop(), fileId);
+            if (!cur && head.name.includes('.')) {
                 // enclosing class that is not a symbol itself (e.g. JS prototype owner)
-                cur = { id: null, name: head.split('.').pop(), fileId };
+                cur = { id: null, name: head.name.split('.').pop(), fileId };
             }
         }
-        for (let i = 1; i < parts.length && cur; i++) {
-            const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, parts[i]);
-            let nextType = null;
+        const spec = this.specs[this.t.file(fileId)?.lang];
+        for (let i = 1; i < parts.length && cur && cur !== EXTERNAL; i++) {
+            const { name, elem } = parts[i];
+            if (cur.arrayOf != null) {
+                // `list.get(0)` / `xs.first()` reach the element; other members are the language's
+                cur = spec?.elementMethods?.has(name) ? this.typeFromString(cur.arrayOf + '[]'.repeat(elem), cur.fileId) : EXTERNAL;
+                continue;
+            }
+            const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, name);
+            let next = null;
             for (const id of mem) {
                 const m = this.t.sym(id);
-                if (m.type) { nextType = this.resolveTypeName(m.type, m.fileId); if (nextType) break; }
+                if (m.type) { next = this.typeFromString(m.type, m.fileId, elem); if (next) break; }
             }
-            if (!nextType) {
-                // inferred field types (self.x = X() / this.x = new X())
-                const ft = this.t.fieldTypes.get(cur.qname ?? cur.name)?.get(parts[i]);
-                if (ft) nextType = ft.startsWith('call:') ? this.resolveRecvType(ft, cur.fileId ?? fileId, null) : this.resolveTypeName(ft, cur.fileId ?? fileId);
+            if (!next) {
+                // inferred field types (self.x = X() / this.x = new X() / this.x = param), also inherited
+                let owner = cur;
+                for (let d = 0; owner && !next && d < 5; d++) {
+                    const ft = this.t.fieldTypes.get(owner.qname ?? owner.name)?.get(name);
+                    if (ft) { next = this.typeFromString(ft, owner.fileId ?? fileId, elem); break; }
+                    const os = owner.id != null ? this.t.sym(owner.id) : null;
+                    const base = os?.bases?.[0];
+                    owner = base ? this.resolveTypeName(base, os.fileId) : null;
+                }
             }
-            cur = nextType;
+            cur = next;
         }
-        if (cur) res = { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null };
+        const res = cur === EXTERNAL || cur?.arrayOf != null ? EXTERNAL : cur ? { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null } : null;
         this.memo.set(k, res);
         return res;
     }
@@ -481,7 +521,7 @@ export class Resolver {
                         ids = [];
                         for (const b of ts?.bases ?? []) { const bt = this.resolveTypeName(b, ts.fileId); if (bt) ids.push(...this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name)); }
                     } else ids = this.membersOf(type, name);
-                    const r = this.#pick(ids, kind, 0.95, fileId);
+                    const r = this.#pick(this.#byStatic(ids, false), kind, 0.95, fileId);
                     if (r) return r;
                     return { id: null, conf: 0, ncand: 0 };
                 }
@@ -490,8 +530,9 @@ export class Resolver {
         // inferred receiver type (locals, params, fields, factories; chains across files)
         if (recvType) {
             const type = this.resolveRecvType(recvType, fileId, srcId);
+            if (type === EXTERNAL) return { id: null, conf: 0, ncand: 0, external: true };
             if (type) {
-                const ids = this.membersOf(type, name);
+                const ids = this.#byStatic(this.membersOf(type, name), false);
                 const r = this.#pick(ids, kind, 0.9, fileId);
                 if (r) return r;
                 // interface / abstract receiver: the member may be declared only on implementations
@@ -508,10 +549,7 @@ export class Resolver {
                 // `import { Foo } from './foo'; Foo.bar()` → static member of Foo, or module object's member
                 let owners = imp.targetFileId != null ? this.exportedFrom(imp.targetFileId, importedName) : [];
                 if (!owners.length && PACKAGE_LANGS.has(file.lang)) owners = this.#symbolsInPackage(imp.source, importedName);
-                for (const oid of owners) {
-                    const o = this.t.sym(oid);
-                    ids.push(...this.membersOf({ id: o.id, name: o.name, fileId: o.fileId }, name));
-                }
+                for (const oid of owners) ids.push(...this.#membersVia(this.t.sym(oid), name));
                 if (!ids.length && imp.targetFileId != null && owners.length === 0) {
                     // `from pkg import submodule` then submodule.fn()
                     ids = this.exportedFrom(imp.targetFileId, name);
@@ -520,12 +558,9 @@ export class Resolver {
                 if (imp.targetFileId != null) ids = this.exportedFrom(imp.targetFileId, name);
                 if (!ids.length && imp.targetDir) ids = this.#symbolsInDir(imp.targetDir, name, fileId);
             } else if (imp.targetFileId != null || imp.targetDir) {
-                // ns.Class.method / pkg.sub.fn
+                // ns.Class.method / pkg.sub.fn / pkg.DefaultClient.Do
                 let owners = imp.targetFileId != null ? this.exportedFrom(imp.targetFileId, rest[0]) : this.#symbolsInDir(imp.targetDir, rest[0], fileId);
-                for (const oid of owners) {
-                    const o = this.t.sym(oid);
-                    ids.push(...this.membersOf({ id: o.id, name: o.name, fileId: o.fileId }, name));
-                }
+                if (rest.length === 1) for (const oid of owners) ids.push(...this.#membersVia(this.t.sym(oid), name));
             }
             if (ids.length) {
                 const r = this.#pick(ids, kind, 0.95, fileId);
@@ -538,12 +573,19 @@ export class Resolver {
             const r0 = this.#resolveName(root, 'type', fileId, srcId);
             let typeSym = r0?.id != null ? this.t.sym(r0.id) : null;
             if (!typeSym) {
+                // a typed package-level value (`DefaultClient.Do()`, a module singleton in the same package)
+                const rv = this.#resolveName(root, 'read', fileId, srcId);
+                const v = rv?.id != null ? this.t.sym(rv.id) : null;
+                if (v && v.type && (v.kind === 'variable' || v.kind === 'constant')) {
+                    const r = this.#pick(this.#membersVia(v, name), kind, Math.min(0.9, rv.conf), fileId);
+                    if (r) return r;
+                }
                 // JS object namespaces (`proto.handle`, `utils.merge`): same-file owner
                 const owned = (this.t.byOwner.get(root) ?? []).filter(id => this.t.sym(id).name === name);
                 const r = this.#pick(owned, kind, owned.some(id => this.t.sym(id).fileId === fileId) ? 0.8 : 0.6, fileId);
                 if (r) return r;
             } else {
-                const ids = this.membersOf({ id: typeSym.id, name: typeSym.name, fileId: typeSym.fileId }, name);
+                const ids = this.#byStatic(this.membersOf({ id: typeSym.id, name: typeSym.name, fileId: typeSym.fileId }, name), true);
                 const r = this.#pick(ids, kind, Math.min(0.9, r0.conf), fileId);
                 if (r) return r;
             }
@@ -552,6 +594,29 @@ export class Resolver {
         // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
         if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
         return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
+    }
+
+    /**
+     * Members named `name` reached through an imported/package symbol: a type's static members, a
+     * typed value's instance members (`export const api = new Api()`), or members declared on the
+     * symbol itself (JS object namespaces).
+     */
+    #membersVia(o, name) {
+        if (!o) return [];
+        if (!TYPE_KINDS.has(o.kind) && o.type) {
+            const t = this.typeFromString(o.type, o.fileId);
+            if (t && t !== EXTERNAL && t.arrayOf == null) return this.#byStatic(this.membersOf(t, name), false);
+            if (t) return [];
+        }
+        const ids = this.membersOf({ id: o.id, name: o.name, fileId: o.fileId }, name);
+        return TYPE_KINDS.has(o.kind) ? this.#byStatic(ids, true) : ids;
+    }
+
+    /** Keep members of the wanted staticness when both kinds share the name (`Logger.error` vs `logger.error`). */
+    #byStatic(ids, wantStatic) {
+        if (ids.length < 2) return ids;
+        const same = ids.filter(id => !!this.t.sym(id)?.isStatic === wantStatic);
+        return same.length ? same : ids;
     }
 
     #anyMember(name, kind, fileId) {

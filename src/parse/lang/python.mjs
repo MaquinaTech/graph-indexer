@@ -1,11 +1,11 @@
 /** Python extraction spec. See ../extract.mjs for the capture convention. */
 
 const QUERY = `
-(function_definition name: (identifier) @name return_type: (type (identifier) @type)) @def.function
+(function_definition name: (identifier) @name return_type: (type) @type) @def.function
 (function_definition name: (identifier) @name) @def.function
 (class_definition name: (identifier) @name) @def.class
 (module (expression_statement (assignment left: (identifier) @name)) @def.variable)
-(class_definition body: (block (expression_statement (assignment left: (identifier) @name type: (type (identifier) @type))) @def.field))
+(class_definition body: (block (expression_statement (assignment left: (identifier) @name type: (type) @type)) @def.field))
 (class_definition body: (block (expression_statement (assignment left: (identifier) @name)) @def.field))
 
 (call function: (identifier) @name) @ref.call
@@ -24,18 +24,21 @@ const QUERY = `
 (keyword_argument value: (identifier) @name) @ref.value
 (list (identifier) @name) @ref.value
 
+[(lambda) (list_comprehension) (set_comprehension) (dictionary_comprehension) (generator_expression)] @scope
+(return_statement (_) @ret)
 (import_statement) @import
 (import_from_statement) @import
 
-(assignment left: (identifier) @bind.name right: (call function: (identifier) @bind.call)) @bind
-(assignment left: (identifier) @bind.name right: (await (call function: (identifier) @bind.call))) @bind
-(assignment left: (identifier) @bind.name type: (type (identifier) @bind.type)) @bind
-(typed_parameter (identifier) @bind.name type: (type (identifier) @bind.type)) @bind
-(typed_default_parameter name: (identifier) @bind.name type: (type (identifier) @bind.type)) @bind
-(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @field.name) right: (call function: (identifier) @field.call) (#eq? @_self "self")) @field
-(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @field.name) type: (type (identifier) @field.type) (#eq? @_self "self")) @field
-(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @field.name) right: (identifier) @field.var (#eq? @_self "self")) @field
-(class_definition body: (block (expression_statement (assignment left: (identifier) @field.name type: (type (identifier) @field.type))) @field))
+(assignment left: (identifier) @bind.name right: (_) @bind.expr) @bind
+(assignment left: (identifier) @bind.name type: (type) @bind.type) @bind
+(typed_parameter (identifier) @bind.name type: (type) @bind.type) @bind
+(typed_default_parameter name: (identifier) @bind.name type: (type) @bind.type) @bind
+(for_statement left: (identifier) @bind.name right: (_) @bind.elem) @bind
+(for_in_clause left: (identifier) @bind.name right: (_) @bind.elem) @bind
+(with_item value: (as_pattern (_) @bind.expr alias: (as_pattern_target (identifier) @bind.name))) @bind
+(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @field.name) right: (_) @field.expr (#eq? @_self "self")) @field
+(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @field.name) type: (type) @field.type (#eq? @_self "self")) @field
+(class_definition body: (block (expression_statement (assignment left: (identifier) @field.name type: (type) @field.type)) @field))
 `;
 
 const BUILTIN_CALLS = new Set([
@@ -125,6 +128,11 @@ export const python = {
     isExported: (node, name) => !name.startsWith('_') || /^__\w+__$/.test(name),
     visibility: (node, name) => (name && name.startsWith('_') && !/^__\w+__$/.test(name) ? 'private' : null),
     isPrimitiveType: (t) => PRIMITIVES.has(t),
+    isStatic: (node) => node.parent?.type === 'decorated_definition' && node.parent.namedChildren.some(c => c.type === 'decorator' && /^@(staticmethod|classmethod)\b/.test(c.text)),
+    transparentTypes: new Set(['Optional', 'Final', 'ClassVar', 'Annotated', 'Type', 'type', 'Awaitable', 'Required', 'NotRequired', 'ReadOnly']),
+    elementTypes: new Set(['list', 'List', 'Sequence', 'MutableSequence', 'Iterable', 'Iterator', 'AsyncIterable', 'AsyncIterator',
+        'Generator', 'AsyncGenerator', 'set', 'Set', 'frozenset', 'FrozenSet', 'AbstractSet', 'MutableSet', 'Collection', 'Deque', 'deque', 'tuple', 'Tuple']),
+    elementMethods: new Set(['pop', 'popleft']),
     decoratorsOf(node) {
         const p = node.parent;
         if (p?.type !== 'decorated_definition') return [];

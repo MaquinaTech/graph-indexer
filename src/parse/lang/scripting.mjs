@@ -3,6 +3,7 @@
 // ─── Ruby ──────────────────────────────────────────────────────────────────────
 const RUBY_CALLBACKS = 'before_action|after_action|around_action|skip_before_action|prepend_before_action|before_filter|after_filter|validate|validates_with|before_save|after_save|around_save|after_commit|after_create_commit|after_update_commit|before_validation|after_validation|before_create|after_create|before_update|after_update|before_destroy|after_destroy|helper_method|delegate|alias_method';
 const RUBY_QUERY = `
+[(block) (do_block) (lambda)] @scope
 (method name: (_) @name) @def.method
 (singleton_method name: (_) @name) @def.method
 (class name: [(constant) @name (scope_resolution name: (constant) @name)]) @def.class
@@ -65,6 +66,8 @@ export const ruby = {
 // ─── PHP ───────────────────────────────────────────────────────────────────────
 const PT = (cap) => `[(named_type (name) @${cap}) (named_type (qualified_name (name) @${cap} .)) (optional_type (named_type (name) @${cap}))]`;
 const PHP_QUERY = `
+[(anonymous_function) (arrow_function)] @scope
+(return_statement (_) @ret)
 (function_definition name: (name) @name) @def.function
 (class_declaration name: (name) @name) @def.class
 (interface_declaration name: (name) @name) @def.interface

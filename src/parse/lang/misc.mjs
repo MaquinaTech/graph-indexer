@@ -63,6 +63,9 @@ export const scala = {
     isExported: (node) => !/^\s*(private|protected)\b/.test(node.text),
     visibility: (node) => (/^\s*private\b/.test(node.text) ? 'private' : null),
     isPrimitiveType: (t) => /^(Int|Long|Double|Float|Boolean|Char|Byte|Short|Unit|String|Any|AnyRef|Nothing|Option|List|Seq|Map|Set|Vector|Array|Future)$/.test(t),
+    transparentTypes: new Set(['Option', 'Some']),
+    elementTypes: new Set(['List', 'Seq', 'IndexedSeq', 'Vector', 'Set', 'Array', 'Iterable', 'Iterator', 'ArrayBuffer', 'ListBuffer']),
+    elementMethods: new Set(['head', 'last', 'apply', 'find', 'headOption', 'lastOption']),
     refineKind(kind, d, parent) {
         if (kind === 'variable' && parent && ['class', 'object', 'trait'].includes(parent.kind)) return 'field';
         return kind;

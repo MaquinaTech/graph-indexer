@@ -5,7 +5,13 @@
  * For a seeded random sample of functions/methods/classes, compare the references graph-indexer
  * reports (find_references) with the TypeScript LanguageService's findReferences (the compiler's
  * own symbol binding), at (file, line) granularity. Import/export specifiers and the declaration
- * itself are excluded on both sides. Two baselines are scored on the same sample:
+ * itself are excluded on both sides. Two oracles are derived from the compiler's answer:
+ *   - rename:   everything findReferences returns (the editor's Find All References / rename set;
+ *               for a method this includes calls to sibling overrides that share a base member);
+ *   - dispatch: only references to the member itself, the members it overrides/implements
+ *               (calls through a base type may dispatch here) and its own overrides — i.e. sibling
+ *               implementations' call sites are dropped. This is what find_references promises.
+ * Two baselines are scored on the same sample:
  *   - grep:      every line containing the name as a whole word (what an agent does by default);
  *   - name-only: every syntactic reference (call/new/type/…) with the same name, unresolved.
  *
@@ -71,15 +77,62 @@ function isDeclarationName(sf, pos) {
         || ts.isSetAccessorDeclaration(p)) && p.name === tok;
 }
 
-function oracleRefs(sym) {
+const checker = program.getTypeChecker();
+
+/**
+ * For a member declaration at a position: the class/interface symbol declaring it (null for
+ * object-literal or anonymous-class members). `undefined` when the position is not a member
+ * declaration (functions, classes, import aliases…), where both oracles coincide.
+ */
+function memberOwnerAt(fileName, pos) {
+    const sf = program.getSourceFile(fileName);
+    if (!sf) return undefined;
+    const tok = ts.getTokenAtPosition(sf, pos);
+    const d = tok?.parent;
+    if (!d || d.name !== tok) return undefined;
+    let owner;
+    if (ts.isMethodDeclaration(d) || ts.isMethodSignature(d) || ts.isPropertyDeclaration(d) || ts.isPropertySignature(d) || ts.isGetAccessorDeclaration(d) || ts.isSetAccessorDeclaration(d)) owner = d.parent;
+    else if (ts.isParameter(d) && ts.isConstructorDeclaration(d.parent) && ts.getEffectiveModifierFlags?.(d)) owner = d.parent.parent; // parameter property
+    else return undefined;
+    if ((ts.isClassLike(owner) || ts.isInterfaceDeclaration(owner)) && owner.name) return checker.getSymbolAtLocation(owner.name) ?? null;
+    return null;
+}
+
+const superCache = new Map();
+/** All transitive supertypes (extends + implements) of a class/interface symbol. */
+function supertypes(typeSym) {
+    if (superCache.has(typeSym)) return superCache.get(typeSym);
+    const out = new Set();
+    superCache.set(typeSym, out);
+    const visit = (sym, depth) => {
+        if (!sym || depth > 12) return;
+        for (const d of sym.declarations ?? []) {
+            for (const hc of d.heritageClauses ?? []) for (const t of hc.types) {
+                let b = checker.getSymbolAtLocation(t.expression);
+                if (b && (b.flags & ts.SymbolFlags.Alias)) b = checker.getAliasedSymbol(b);
+                if (b && !out.has(b)) { out.add(b); visit(b, depth + 1); }
+            }
+        }
+    };
+    visit(typeSym, 0);
+    return out;
+}
+
+function oracleRefs(sym, { dispatch = false } = {}) {
     const file = path.join(root, sym.path);
     const sf = program.getSourceFile(file);
     if (!sf) return null;
     const pos = ts.getPositionOfLineAndCharacter(sf, sym.name_line - 1, sym.name_col);
     const groups = ls.findReferences(file, pos);
     if (!groups) return null;
+    const self = memberOwnerAt(file, pos);
     const out = new Set();
     for (const g of groups) {
+        if (dispatch && self) {
+            const owner = memberOwnerAt(g.definition.fileName, g.definition.textSpan.start);
+            const related = owner === undefined || owner === self || (owner && (supertypes(self).has(owner) || supertypes(owner).has(self)));
+            if (!related) continue;
+        }
         for (const r of g.references) {
             if (r.isDefinition) continue;
             const rsf = program.getSourceFile(r.fileName);
@@ -97,10 +150,11 @@ function oracleRefs(sym) {
     return out;
 }
 
-function oursRefs(sym) {
-    const r = intel.references(sym.id);
+const TS_FILE = /\.(ts|tsx|mts|cts)$/; // the oracle's universe (the TS program does not include JS files)
+function oursRefs(sym, { minConf = 0 } = {}) {
+    const r = intel.references(sym.id, { minConf });
     const out = new Set();
-    for (const rows of r.groups.values()) for (const x of rows) if (x.kind !== 'import') out.add(`${x.path}:${x.line}`);
+    for (const rows of r.groups.values()) for (const x of rows) if (x.kind !== 'import' && TS_FILE.test(x.path)) out.add(`${x.path}:${x.line}`);
     out.delete(`${sym.path}:${sym.name_line}`);
     return out;
 }
@@ -139,13 +193,16 @@ const sample = [];
 const pool = [...cands];
 while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
 
-const systems = { 'graph-indexer': oursRefs, 'name-only': nameOnlyRefs, grep: grepRefs };
-const agg = Object.fromEntries(Object.keys(systems).map(k => [k, { tp: 0, fp: 0, fn: 0, pSum: 0, rSum: 0, n: 0, perfect: 0 }]));
+const systems = { 'graph-indexer': oursRefs, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs };
+const ORACLES = ['dispatch', 'rename'];
+const newAgg = () => Object.fromEntries(Object.keys(systems).map(k => [k, { tp: 0, fp: 0, fn: 0, pSum: 0, rSum: 0, n: 0, perfect: 0 }]));
+const aggs = Object.fromEntries(ORACLES.map(o => [o, newAgg()]));
 let evaluated = 0, withRefs = 0;
 const t1 = Date.now();
 for (const sym of sample) {
-    const gold = oracleRefs(sym);
-    if (!gold) continue;
+    const golds = { dispatch: oracleRefs(sym, { dispatch: true }), rename: oracleRefs(sym) };
+    if (!golds.rename) continue;
+    const gold = golds.dispatch;
     evaluated++;
     if (gold.size) withRefs++;
     if (args.includes('--debug')) {
@@ -160,24 +217,31 @@ for (const sym of sample) {
     }
     for (const [name, fn] of Object.entries(systems)) {
         const got = fn(sym);
-        let tp = 0;
-        for (const x of got) if (gold.has(x)) tp++;
-        const fp = got.size - tp, fnn = gold.size - tp;
-        const a = agg[name];
-        a.tp += tp; a.fp += fp; a.fn += fnn;
-        const p = got.size ? tp / got.size : (gold.size ? 0 : 1);
-        const r = gold.size ? tp / gold.size : 1;
-        a.pSum += p; a.rSum += r; a.n++;
-        if (fp === 0 && fnn === 0) a.perfect++;
+        for (const o of ORACLES) {
+            const g = golds[o];
+            let tp = 0;
+            for (const x of got) if (g.has(x)) tp++;
+            const fp = got.size - tp, fnn = g.size - tp;
+            const a = aggs[o][name];
+            a.tp += tp; a.fp += fp; a.fn += fnn;
+            const p = got.size ? tp / got.size : (g.size ? 0 : 1);
+            const r = g.size ? tp / g.size : 1;
+            a.pSum += p; a.rSum += r; a.n++;
+            if (fp === 0 && fnn === 0) a.perfect++;
+        }
     }
 }
-console.log(`\n${fixture} (${scope.join(', ')}): ${evaluated} sampled symbols (${withRefs} with ≥1 oracle reference), oracle = TypeScript findReferences, ${Date.now() - t1} ms`);
-console.log('system          micro-P  micro-R  micro-F1 | macro-P  macro-R | exact-set');
+console.log(`\n${fixture} (${scope.join(', ')}): ${evaluated} sampled symbols (${withRefs} with ≥1 dispatch-oracle reference), oracle = TypeScript findReferences, ${Date.now() - t1} ms`);
 const result = {};
-for (const [name, a] of Object.entries(agg)) {
-    const P = a.tp / Math.max(1, a.tp + a.fp), R = a.tp / Math.max(1, a.tp + a.fn), F = 2 * P * R / Math.max(1e-9, P + R);
-    result[name] = { microP: P, microR: R, microF1: F, macroP: a.pSum / a.n, macroR: a.rSum / a.n, exactSet: a.perfect / a.n };
-    console.log(`${name.padEnd(15)} ${P.toFixed(3).padStart(7)}  ${R.toFixed(3).padStart(7)}  ${F.toFixed(3).padStart(8)} | ${(a.pSum / a.n).toFixed(3).padStart(7)}  ${(a.rSum / a.n).toFixed(3).padStart(7)} | ${(a.perfect / a.n).toFixed(3)}`);
+for (const o of ORACLES) {
+    console.log(`\noracle: ${o === 'dispatch' ? 'dispatch (self + overridden + overriding members)' : 'rename (full Find All References, incl. sibling overrides)'}`);
+    console.log('system          micro-P  micro-R  micro-F1 | macro-P  macro-R | exact-set');
+    result[o] = {};
+    for (const [name, a] of Object.entries(aggs[o])) {
+        const P = a.tp / Math.max(1, a.tp + a.fp), R = a.tp / Math.max(1, a.tp + a.fn), F = 2 * P * R / Math.max(1e-9, P + R);
+        result[o][name] = { microP: P, microR: R, microF1: F, macroP: a.pSum / a.n, macroR: a.rSum / a.n, exactSet: a.perfect / a.n };
+        console.log(`${name.padEnd(15)} ${P.toFixed(3).padStart(7)}  ${R.toFixed(3).padStart(7)}  ${F.toFixed(3).padStart(8)} | ${(a.pSum / a.n).toFixed(3).padStart(7)}  ${(a.rSum / a.n).toFixed(3).padStart(7)} | ${(a.perfect / a.n).toFixed(3)}`);
+    }
 }
 if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ fixture, scope, n: evaluated, result }, null, 2));
 intel.close();

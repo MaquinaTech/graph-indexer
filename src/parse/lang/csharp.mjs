@@ -9,12 +9,12 @@ const QUERY = `
 (enum_declaration name: (identifier) @name) @def.enum
 (record_declaration name: (identifier) @name) @def.class
 (delegate_declaration name: (identifier) @name) @def.type
-(method_declaration returns: ${T('type')} name: (identifier) @name) @def.method
+(method_declaration returns: (_) @type name: (identifier) @name) @def.method
 (method_declaration name: (identifier) @name) @def.method
 (constructor_declaration name: (identifier) @name) @def.constructor
-(property_declaration type: ${T('type')} name: (identifier) @name) @def.property
+(property_declaration type: (_) @type name: (identifier) @name) @def.property
 (property_declaration name: (identifier) @name) @def.property
-(field_declaration (variable_declaration type: ${T('type')} (variable_declarator name: (identifier) @name))) @def.field
+(field_declaration (variable_declaration type: (_) @type (variable_declarator name: (identifier) @name))) @def.field
 (field_declaration (variable_declaration (variable_declarator name: (identifier) @name))) @def.field
 (enum_member_declaration name: (identifier) @name) @def.constant
 
@@ -33,17 +33,21 @@ const QUERY = `
 (typeof_expression type: ${T('name')}) @ref.type
 (argument (identifier) @name) @ref.value
 
+[(lambda_expression) (anonymous_method_expression)] @scope
+(return_statement (_) @ret)
 (using_directive) @import
 
-(variable_declaration type: ${T('bind.type')} (variable_declarator name: (identifier) @bind.name)) @bind
+(variable_declaration type: (_) @bind.type (variable_declarator name: (identifier) @bind.name)) @bind
 (variable_declaration (variable_declarator name: (identifier) @bind.name (object_creation_expression type: ${T('bind.new')}))) @bind
-(parameter type: ${T('bind.type')} name: (identifier) @bind.name) @bind
-(field_declaration (variable_declaration type: ${T('field.type')} (variable_declarator name: (identifier) @field.name))) @field
-(property_declaration type: ${T('field.type')} name: (identifier) @field.name) @field
+(variable_declaration (variable_declarator name: (identifier) @bind.name (_) @bind.expr)) @bind
+(parameter type: (_) @bind.type name: (identifier) @bind.name) @bind
+(foreach_statement type: (_) @bind.type left: (identifier) @bind.name right: (_) @bind.elem) @bind
+(field_declaration (variable_declaration type: (_) @field.type (variable_declarator name: (identifier) @field.name))) @field
+(property_declaration type: (_) @field.type name: (identifier) @field.name) @field
 `;
 
 const BUILTIN = new Set(['string', 'String', 'int', 'long', 'bool', 'double', 'float', 'decimal', 'object', 'Object',
-    'void', 'var', 'dynamic', 'List', 'Dictionary', 'IEnumerable', 'IList', 'ICollection', 'Task', 'Guid', 'DateTime',
+    'void', 'dynamic', 'List', 'Dictionary', 'IEnumerable', 'IList', 'ICollection', 'Task', 'Guid', 'DateTime',
     'TimeSpan', 'Exception', 'Func', 'Action', 'IReadOnlyList', 'IReadOnlyCollection', 'HashSet', 'Nullable',
     'CancellationToken', 'Array', 'Type', 'byte', 'char', 'short', 'uint', 'ulong']);
 
@@ -85,6 +89,10 @@ export const csharp = {
     isExported: (node) => /\b(public|internal)\b/.test(modifiers(node)) || node.parent?.parent?.type === 'interface_declaration',
     visibility: (node) => { const m = modifiers(node); return /\bprivate\b/.test(m) ? 'private' : /\bprotected\b/.test(m) ? 'protected' : /\bpublic\b/.test(m) ? 'public' : null; },
     isPrimitiveType: (t) => BUILTIN.has(t),
+    transparentTypes: new Set(['Task', 'ValueTask', 'Nullable']),
+    elementTypes: new Set(['List', 'IList', 'IEnumerable', 'ICollection', 'IReadOnlyList', 'IReadOnlyCollection', 'HashSet', 'ISet', 'Queue', 'Stack',
+        'LinkedList', 'Collection', 'ObservableCollection', 'ImmutableList', 'ImmutableArray', 'IAsyncEnumerable', 'IQueryable', 'Span', 'ReadOnlySpan', 'Memory']),
+    elementMethods: new Set(['First', 'FirstOrDefault', 'Last', 'LastOrDefault', 'Single', 'SingleOrDefault', 'ElementAt', 'ElementAtOrDefault', 'Find', 'Dequeue', 'Peek', 'Pop']),
     decoratorsOf(node) {
         return node.namedChildren.filter(c => c.type === 'attribute_list')
             .flatMap(l => l.namedChildren.filter(a => a.type === 'attribute').map(a => a.childForFieldName('name')?.text))
