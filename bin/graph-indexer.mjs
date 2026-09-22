@@ -76,7 +76,7 @@ async function runTool(name, args) {
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
 
 Usage:
-  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex] [--all] [--local] [--dry-run] [--no-instructions]
+  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex] [--all] [--hooks] [--local] [--dry-run] [--no-instructions]
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
@@ -88,6 +88,7 @@ Usage:
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
+  graph-indexer hook post-tool|session-start|subagent-start   agent hook (JSON on stdin)
 
 The index lives in <repo>/.graph-indexer/ and is kept in sync automatically.`;
 
@@ -152,6 +153,10 @@ async function main() {
             const files = (opt('--files') ?? '').split(',').filter(Boolean);
             const diff = flag('--diff'); const depth = Number(opt('--depth', 3));
             return runTool('change_impact', { symbols, files, diff, depth });
+        }
+        case 'hook': {
+            const { runHook } = await import('../src/cli/hook.mjs');
+            return runHook(argv.shift() ?? '', { repo: repoArg });
         }
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');

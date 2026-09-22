@@ -1,0 +1,8 @@
+{
+  "name": "graph-indexer",
+  "version": "3.1.0",
+  "description": "Live code graph for Claude Code: exact references, structural grep, change impact and a post-edit check, from a local index with no model or network.",
+  "author": { "name": "MaquinaTech", "url": "https://github.com/MaquinaTech" },
+  "homepage": "https://github.com/MaquinaTech/graph-indexer",
+  "license": "MIT"
+}

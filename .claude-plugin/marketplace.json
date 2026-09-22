@@ -1,0 +1,11 @@
+{
+  "name": "graph-indexer",
+  "owner": { "name": "MaquinaTech", "url": "https://github.com/MaquinaTech" },
+  "plugins": [
+    {
+      "name": "graph-indexer",
+      "source": "./integrations/claude-code",
+      "description": "Live code graph for Claude Code: exact references, structural grep, change impact and a post-edit check, from a local index with no model or network."
+    }
+  ]
+}

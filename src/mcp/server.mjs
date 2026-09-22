@@ -92,7 +92,7 @@ export class McpServer {
                     this.#result(id, {});
                     return;
                 case 'tools/list': {
-                    const res = { tools: TOOLS.map(({ name, title, description, inputSchema, annotations }) => ({ name, title, description, inputSchema, annotations })) };
+                    const res = { tools: TOOLS.map(({ name, title, description, inputSchema, annotations, _meta }) => ({ name, title, description, inputSchema, annotations, ...(_meta ? { _meta } : {}) })) };
                     if (this.#requestVersion(params) === '2026-07-28') Object.assign(res, { ttlMs: 3_600_000, cacheScope: 'private' });
                     this.#result(id, res);
                     return;

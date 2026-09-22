@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Grep|Bash",
+        "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook post-tool", "timeout": 10 }]
+      }
+    ],
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook session-start", "timeout": 10 }] }
+    ],
+    "SubagentStart": [
+      { "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook subagent-start", "timeout": 10 }] }
+    ]
+  }
+}

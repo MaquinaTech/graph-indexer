@@ -73,12 +73,15 @@ async function analyse(spec, source, rel, tree = null) {
     return { tree, symbols: ex.symbols };
 }
 
+/** The outermost node spanning exactly the symbol's range (the definition, not its name token). */
 function defNodeAt(tree, s) {
     let n = tree.rootNode.descendantForPosition({ row: s.startLine - 1, column: s.startCol });
+    let best = null;
     for (let g = 0; n && g < 12; g++, n = n.parent) {
-        if (n.startPosition.row === s.startLine - 1 && n.startPosition.column === s.startCol && n.endPosition.row === s.endLine - 1) return n;
+        if (n.startPosition.row !== s.startLine - 1 || n.startPosition.column !== s.startCol) { if (best) break; continue; }
+        if (n.endPosition.row === s.endLine - 1) best = n;
     }
-    return null;
+    return best;
 }
 
 /** New syntax errors: ERROR / MISSING nodes whose line text was not already broken in the base. */
@@ -123,11 +126,13 @@ function unionFits(argc, arities) {
     return list.some(r => fits(argc, r));
 }
 
-export async function checkChanges(intel, { base = 'HEAD', files = null } = {}) {
+export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true } = {}) {
     const root = intel.root;
     const changed = changedFiles(root, base);
     if (!changed) return { error: `git diff against ${base} failed — is this a git repository with that commit?` };
+    // the edited files must be re-indexed now, whatever the file watcher has seen so far
     await intel.ensureFresh();
+    await intel.ix.syncPaths([...changed.keys()]);
     const targets = [...changed.keys()].filter(f => specForPath(f) && (!files || files.some(x => f === x || f.startsWith(x.replace(/\/?$/, '/')))));
     const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], tests: [], commands: [], notes: [] };
     if (!targets.length) return report;
@@ -268,7 +273,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null } = {}) 
     }
 
     // ── tests to run ─────────────────────────────────────────────────────────────
-    const seeds = intel.diffSeeds(base).seeds ?? [];
+    const seeds = tests ? intel.diffSeeds(base).seeds ?? [] : [];
     if (seeds.length) {
         const { nodes, fileLevel } = intel.dependents(seeds, { depth: 3, maxNodes: 300 });
         const tests = new Set();

@@ -67,7 +67,7 @@ export const TOOLS = [
     {
         name: 'find_references',
         title: 'Find references',
-        description: 'List every place that uses a symbol — calls, instantiations, type annotations, inheritance, decorators and function references passed as values — grouped by file with line numbers, the enclosing function and the source line. Use it before renaming or changing a signature, or to learn how something is used. References are bound through scopes, imports and inferred receiver types (including dependency-injected fields); each carries a confidence (exact/high/likely/possible), calls through a parent class/interface are included and marked, and the footer states how many same-name call sites could not be bound (dynamic receivers) so you know when a grep cross-check is worthwhile.',
+        description: 'Every place that uses a symbol — calls, instantiations, type annotations, inheritance, decorators, field reads and function references passed as values — grouped by file with the enclosing function and the source line. Methods that merely share the name (other classes, standard-library `get`/`set`…) are kept apart. Use it before renaming or changing a signature, or to learn how something is used. References are bound through scopes, imports and inferred receiver types (including injected fields); calls through a parent class or interface are included and marked. The footer lists same-name calls whose receiver type is unknown and says whether any of them is plausible (its file mentions the type), so a grep cross-check is only needed when it says so.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -99,7 +99,7 @@ export const TOOLS = [
     {
         name: 'change_impact',
         title: 'Change impact',
-        description: 'Blast radius of a change before (or after) you make it: the code that transitively depends on the given symbols or files, grouped by distance, the tests that exercise it, exported/public surface affected, and files that historically change together (git). Pass `symbols` and/or `files`, or set `diff: true` to analyse your current uncommitted changes (git working tree vs HEAD). Use it before editing a widely used function, and again before finishing a task to check what else might need updating or testing.',
+        description: 'What a change to some symbols or files affects: the call sites to update (file:line), overrides and implementations that must stay in line, callers of callers, the tests that exercise the code, the public surface, files that historically change together (git), and what the index cannot see. Pass `symbols` and/or `files`, or `diff: true` for your uncommitted changes. Use it before changing a widely used function or a signature; after editing, check_changes verifies what you actually changed.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -140,17 +140,25 @@ export const TOOLS = [
     },
 ];
 
+// loaded up front even when the client defers MCP tools behind a tool search: the three tools an
+// agent needs at the moments it would otherwise guess (which uses? what text? what did I break?)
+const ALWAYS_LOAD = new Set(['search_text', 'find_references', 'check_changes']);
 for (const t of TOOLS) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+    if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
-export const SERVER_INSTRUCTIONS = `graph-indexer serves a live structural index of this repository (definitions, references, call graph, tests) built with tree-sitter. It re-syncs with the files on disk before every answer, so results reflect your latest edits.
-Typical workflow:
-1. search_code to locate the code for a behaviour or identifier (or outline for a map of an unfamiliar area).
-2. get_symbol to read just the definition you need (with line numbers) instead of whole files.
-3. find_references / call_graph before changing a signature or behaviour: every caller with file:line.
-4. change_impact (symbols, files or diff:true) to see what else depends on the change and which tests to run.
-Confidence: exact/high = bound via scope, import or receiver type; likely/possible = name-based. Footers report unbound same-name call sites; grep them when you need certainty. Use grep/read for string literals, config and non-code files.`;
+export const SERVER_INSTRUCTIONS = `graph-indexer keeps a live structural index of this repository: definitions, references bound through scopes, imports and receiver types, the call graph, and the tests that exercise each function. It re-syncs with the files before every answer, so results include edits made seconds ago.
+
+Where it saves work compared with grep and reading whole files:
+- Uses of a known symbol, even when other classes have methods with the same name: find_references gives the exact call sites and says which other same-name calls could not be bound and whether they are plausible.
+- Anything grep would find (identifiers, strings, config keys, any file): search_text returns grep-style lines plus, for each code match, its enclosing function and the definition an identifier refers to.
+- Code for a behaviour described in words: search_code, then get_symbol to read only that definition, with line numbers.
+- Before changing a signature or behaviour: change_impact lists the call sites to update, overrides and implementations, transitive dependents and the tests to run.
+- After editing: check_changes reports syntax errors introduced, calls that no longer fit a changed signature, removed or renamed names still in use, and the command that runs the affected tests.
+- Callers of callers and request flows: call_graph. A map of an unfamiliar area: outline.
+
+Every answer carries a confidence (exact, high, likely) and states what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why. Reading a file directly remains the right step once the location is known.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 
