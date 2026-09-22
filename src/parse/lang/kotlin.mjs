@@ -76,6 +76,9 @@ export const kotlin = {
     isPrimitiveType: (t) => PRIMITIVES.has(t),
     elementTypes: new Set(['List', 'MutableList', 'ArrayList', 'Set', 'MutableSet', 'HashSet', 'LinkedHashSet', 'Collection', 'MutableCollection', 'Iterable', 'Sequence', 'Array']),
     elementMethods: new Set(['get', 'first', 'last', 'firstOrNull', 'lastOrNull', 'single', 'singleOrNull', 'elementAt', 'getOrNull', 'find', 'random', 'removeFirst', 'removeLast']),
+    mapTypes: new Set(['Map', 'MutableMap', 'HashMap', 'LinkedHashMap']),
+    mapMethods: new Set(['get', 'getValue', 'getOrDefault', 'getOrElse', 'getOrPut', 'remove']),
+    mapValueMethods: new Set(['values']),
     refineKind(kind, d) {
         if (d.node.type === 'class_declaration') {
             const head = d.node.text.slice(0, d.node.text.indexOf(d.nameNode.text));

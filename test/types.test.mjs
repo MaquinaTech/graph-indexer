@@ -15,7 +15,9 @@ test('normalizeType: optional unions, wrappers, collections, qualifiers', () => 
     assert.equal(n('Promise<Foo[]>'), 'Foo[]');
     assert.equal(n('ReadonlyArray<Foo>'), 'Foo[]');
     assert.equal(n('Foo[]'), 'Foo[]');
-    assert.equal(n('Map<string, Foo>'), 'Map');
+    assert.equal(n('Map<string, Foo>'), 'Foo{}');
+    assert.equal(n('Record<string, Foo[]>'), null, 'nested collections are not guessed');
+    assert.equal(n('dict[str, Foo]', python), 'Foo{}');
     assert.equal(n('(a: Foo) => Bar'), null);
     assert.equal(n('Optional[Foo]', python), 'Foo');
     assert.equal(n('list[Foo]', python), 'Foo[]');
@@ -26,6 +28,21 @@ const FILES = {
     'src/logger.ts': `export class Logger {\n  error(msg: string) {}\n  static create(): Logger { return new Logger(); }\n}\n`,
     'src/item.ts': `export class Item {\n  price = 0;\n  total(): number { return this.price; }\n}\n`,
     'src/repo.ts': `import { Item } from './item';\nexport class Repo {\n  items: Item[] = [];\n  async findAll(): Promise<Item[]> { return this.items; }\n  first(): Item | undefined { return this.items[0]; }\n}\n`,
+    'src/registry.ts': [
+        `import { Item } from './item';`,
+        `export class Registry extends Map<string, Item> {}`,
+        `export class Store {`,
+        `  private readonly items = new Registry();`,
+        `  private readonly byId: Map<string, Item> = new Map();`,
+        `  run(key: string) {`,
+        `    const it = this.items.get(key);`,
+        `    it.total();`,                                   // 8: class extending Map<K, V>
+        `    this.byId.get(key).total();`,                   // 9: Map<K, V>.get
+        `    for (const v of this.byId.values()) v.total();`, // 10: values()
+        `  }`,
+        `}`,
+        ``,
+    ].join('\n'),
     'src/service.ts': [
         `import { Logger } from './logger';`,
         `import { Repo } from './repo';`,
@@ -73,6 +90,10 @@ test('types receivers through static fields, optional fields and casts', () => {
 
 test('types elements of awaited collections, loop variables and callback parameters', () => {
     assert.deepEqual(lines('Item.total', 'src/service.ts'), [13, 14, 15, 16]);
+});
+
+test('types values of maps and of classes that extend a map', () => {
+    assert.deepEqual(lines('Item.total', 'src/registry.ts'), [8, 9, 10]);
 });
 
 test('members of arrays and primitives never bind to same-named repository functions', () => {

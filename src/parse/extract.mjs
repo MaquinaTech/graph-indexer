@@ -307,6 +307,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             startIndex: node.startIndex,
             endIndex: node.endIndex,
         };
+        // a class's type records what collection it behaves as (`extends Map<string, Module>`)
+        if (MEMBER_PARENT.has(kind) && sym.type && !/(\[\]|\{\})$/.test(sym.type)) sym.type = null;
         // `-> Self` / `: this` (fluent APIs) return the enclosing type
         if (sym.type === 'Self' || sym.type === 'this' || sym.type === 'static') sym.type = parent && MEMBER_PARENT.has(parent.kind) ? (parent.kind === 'impl' ? parent.owner ?? parent.name : parent.name) : owner || null;
         // members are part of the public surface when their container is and they are not private
@@ -368,6 +370,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     //
     // Types are strings the resolver understands:
     //   'T' / 'T[]'   (a collection of) a named type
+    //   'T{}'         a map (dictionary) whose values are T
     //   'call:f'      the return type of callable f (resolved globally)
     //   '…#a#b'       member a, then member b, of the preceding type (crosses files)
     //   '[]' after a call/member part: the element type of that part
@@ -376,7 +379,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const typeText = (t) => {
         const n = normalizeType(t, spec);
         if (!n) return null;
-        return spec.isPrimitiveType?.(n.endsWith('[]') ? n.slice(0, -2) : n) && !n.endsWith('[]') ? '!' : n;
+        return !/(\[\]|\{\})$/.test(n) && spec.isPrimitiveType?.(n) ? '!' : n;
     };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
     const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem;
@@ -412,12 +415,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
             if (!t) return null;
             if (op === '()') { if (!deferred(t)) return null; continue; } // a method's type is its return type
             if (deferred(t)) t += '[]';
-            else if (t.endsWith('[]')) t = t.slice(0, -2);
-            else return null; // indexing a map/record/string
+            else if (t.endsWith('[]') || t.endsWith('{}')) t = t.slice(0, -2); // element / map value
+            else return null; // indexing a string or an untyped object
         }
         return t;
     };
-    const elemOf = (t) => (!t ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2) : null);
+    // iterating a map yields keys or entries except where the language hands out values (Go's `range`)
+    const elemOf = (t) => (!t ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2) : t.endsWith('{}') && spec.mapIterValues ? t.slice(0, -2) : null);
     const bindingType = (v, depth) => {
         if (v.type) return v.type;
         if (v.call) return 'call:' + v.call;
@@ -485,6 +489,12 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 if (call && spec.elementMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2), seg.ops.slice(1)); continue; }
                 return '!'; // any other member of a collection is the language's
             }
+            if (!deferred(t) && t.endsWith('{}')) {
+                // `m.get(k)` hands back a value, `m.values()` a collection of values
+                if (call && spec.mapMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2), seg.ops.slice(1)); continue; }
+                if (call && spec.mapValueMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2) + '[]', seg.ops.slice(1)); continue; }
+                return '!';
+            }
             t = applyOps(t + '#' + seg.name, seg.ops);
         }
         return t;
@@ -544,7 +554,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const inferReceiverType = (recv, ctx) => {
         if (!recv || recv === 'this') return null;
         const t = inferType(recv, ctx);
-        return t && !deferred(t) && t.endsWith('[]') ? '!' : t; // a collection's own methods are the language's
+        return t && !deferred(t) && /(\[\]|\{\})$/.test(t) ? '!' : t; // a collection's own methods are the language's
     };
 
     // ── references ─────────────────────────────────────────────────────────────
@@ -606,11 +616,12 @@ function splitTop(s, sep) {
     return out;
 }
 
-const arrayOf = (e) => (e && !e.endsWith('[]') ? e + '[]' : null);
+const arrayOf = (e) => (e && !/(\[\]|\{\})$/.test(e) ? e + '[]' : null);
+const mapOf = (v) => (v && !/(\[\]|\{\})$/.test(v) ? v + '{}' : null);
 
 /**
  * Static type text → what member lookup needs: `Foo`, `Foo[]` (a collection of Foo, so `x[i]`
- * and loop variables are Foo) or null. Optional/nullable unions collapse (`Foo | undefined`,
+ * and loop variables are Foo), `Foo{}` (a map whose values are Foo: `m[k]`, `m.get(k)`) or null. Optional/nullable unions collapse (`Foo | undefined`,
  * `Optional[Foo]`, `Foo?`), transparent wrappers unwrap per language (`Promise<Foo>`,
  * `Box<Foo>`, `Task<Foo>`), pointers/references/qualifiers and namespaces are dropped.
  */
@@ -633,12 +644,14 @@ export function normalizeType(t, spec, depth = 0) {
     if ((m = /^\((.*)\)$/s.exec(s))) return normalizeType(m[1], spec, depth + 1);
     if ((m = /^(.+?)\s*\[\s*\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));      // T[]
     if ((m = /^\[\s*\]\s*(.+)$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));        // Go []T
+    if ((m = /^map\s*\[[^\]]*\]\s*(.+)$/s.exec(s))) return mapOf(normalizeType(m[1], spec, depth + 1));  // Go map[K]V
     if ((m = /^\[([^;\]]+?)\s*(?:;[^\]]*)?\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1)); // Rust [T] / [T; N]
     if ((m = /^([A-Za-z_$][\w$]*(?:(?:\.|::|\\)[A-Za-z_$][\w$]*)*)\s*[<[](.*)[>\]]$/s.exec(s))) {
         const head = m[1].split(/\.|::|\\/).pop();
         const args = splitTop(m[2], ',').map(x => x.trim());
         if (spec?.transparentTypes?.has(head)) return normalizeType(args[0], spec, depth + 1);
         if (spec?.elementTypes?.has(head)) return arrayOf(normalizeType(args[0], spec, depth + 1));
+        if (spec?.mapTypes?.has(head)) return mapOf(normalizeType(args[args.length - 1], spec, depth + 1));
         if (head === 'Union') return normalizeType(args.join('|'), spec, depth + 1);
         s = m[1];
     }

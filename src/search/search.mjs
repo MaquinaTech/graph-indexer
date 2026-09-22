@@ -37,11 +37,14 @@ export const DEFAULT_WEIGHTS = {
     declaration: -1.4,  // .d.ts declarations (implementations are what agents want)
     example: -1.2,      // examples/, samples/, sandbox/, docs/, benchmarks/ trees
     nlField: -0.93,     // fields/properties/variables for natural-language (behavioural) queries
+    file: 1.0,          // file-level BM25 of the symbol's file (hierarchical: file relevance first)
+    fileNL: 0.5,        // extra file-level weight for natural-language (behavioural) queries
 };
 
 const EXAMPLE_PATH = /(^|\/)(examples?|samples?|demos?|sandbox|playground|docs?(_src|_source|_examples?)?|documentation|benchmarks?|bench|scripts?|fixtures?|testdata|tutorials?|website|\.github)\//i;
 const DECLARATION_PATH = /\.d\.[cm]?ts$/;
 const BM25_FLOOR = 1.0;
+const FILE_GATE = 0.25; // own normalized BM25 at which the file boost applies in full (tuning split)
 
 function stem(w) {
     // light stemmer for coverage features (FTS5 does the real stemming for retrieval)
@@ -123,6 +126,20 @@ export class SearchEngine {
             const rows = this.store.all(`SELECT rowid AS id, bm25(fts, ${FTS_WEIGHTS.join(', ')}) AS s FROM fts WHERE fts MATCH ? ORDER BY s LIMIT 150`, q2);
             for (const r of rows) { const v = -r.s; bag(r.id).concept = v; if (v > maxCx) maxCx = v; }
         }
+        // 4. file channel: files whose whole text matches the query best; their best-matching
+        //    symbols become candidates even when long-body length normalisation buried them
+        const fileScore = new Map();
+        if (q1 && (this.w.file || this.w.fileNL)) {
+            const frows = this.store.all('SELECT rowid AS fid, bm25(file_fts, 2.0, 1.0) AS s FROM file_fts WHERE file_fts MATCH ? ORDER BY s LIMIT 40', q1);
+            const maxF = frows.length ? -frows[0].s : 0;
+            for (const r of frows) fileScore.set(r.fid, -r.s / Math.max(maxF, BM25_FLOOR));
+            const top = frows.slice(0, 8).map(r => r.fid);
+            if (top.length) {
+                const rows = this.store.all(`SELECT rowid AS id, bm25(fts, ${FTS_WEIGHTS.join(', ')}) AS s FROM fts WHERE fts MATCH ?
+                    AND rowid IN (SELECT id FROM symbols WHERE file_id IN (${top.map(() => '?').join(',')})) ORDER BY s LIMIT 200`, q1, ...top);
+                for (const r of rows) { const f = bag(r.id); if (f.bm25 == null) { f.bm25 = -r.s; if (-r.s > maxBm) maxBm = -r.s; } }
+            }
+        }
         if (!cands.size) return { results: [], analysis: a };
 
         // 4. features + rerank
@@ -130,7 +147,7 @@ export class SearchEngine {
         const rows = new Map();
         for (let i = 0; i < ids.length; i += 500) {
             const chunk = ids.slice(i, i + 500);
-            for (const r of this.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.exported, s.doc IS NOT NULL AS has_doc, s.parent_id, f.path, f.lang, f.is_test,
+            for (const r of this.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.exported, s.doc IS NOT NULL AS has_doc, s.parent_id, s.file_id, f.path, f.lang, f.is_test,
                 (SELECT kind FROM symbols p WHERE p.id = s.parent_id) AS parent_kind
                 FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id IN (${chunk.map(() => '?').join(',')})`, ...chunk)) rows.set(r.id, r);
         }
@@ -165,6 +182,10 @@ export class SearchEngine {
             if (r.exported) s += w.exported;
             if (r.has_doc) s += w.doc;
             if (central) s += w.central * (central.get(r.id) ?? 0);
+            // hierarchical evidence: a relevant file lifts its symbols in proportion to their own
+            // lexical match (P(file) × P(symbol | file)), never symbols that merely live there
+            const fs = fileScore.get(r.file_id);
+            if (fs && f.bm25 && r.kind !== 'selector' && r.kind !== 'keyframes') s += (w.file + (a.natural ? w.fileNL : 0)) * fs * Math.min(1, (f.bm25 / Math.max(maxBm, BM25_FLOOR)) / FILE_GATE);
             if (r.parent_kind === 'function' || r.parent_kind === 'method') s += w.nested;
             if (DECLARATION_PATH.test(r.path)) s += w.declaration;
             if (EXAMPLE_PATH.test(r.path) && !(pathFilter && EXAMPLE_PATH.test(pathFilter))) s += w.example;

@@ -93,6 +93,9 @@ export const csharp = {
     elementTypes: new Set(['List', 'IList', 'IEnumerable', 'ICollection', 'IReadOnlyList', 'IReadOnlyCollection', 'HashSet', 'ISet', 'Queue', 'Stack',
         'LinkedList', 'Collection', 'ObservableCollection', 'ImmutableList', 'ImmutableArray', 'IAsyncEnumerable', 'IQueryable', 'Span', 'ReadOnlySpan', 'Memory']),
     elementMethods: new Set(['First', 'FirstOrDefault', 'Last', 'LastOrDefault', 'Single', 'SingleOrDefault', 'ElementAt', 'ElementAtOrDefault', 'Find', 'Dequeue', 'Peek', 'Pop']),
+    mapTypes: new Set(['Dictionary', 'IDictionary', 'IReadOnlyDictionary', 'ConcurrentDictionary', 'SortedDictionary', 'ImmutableDictionary']),
+    mapMethods: new Set(['GetValueOrDefault', 'GetOrAdd']),
+    mapValueMethods: new Set(['Values']),
     decoratorsOf(node) {
         return node.namedChildren.filter(c => c.type === 'attribute_list')
             .flatMap(l => l.namedChildren.filter(a => a.type === 'attribute').map(a => a.childForFieldName('name')?.text))

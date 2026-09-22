@@ -126,9 +126,17 @@ function describe(r, max = 140) {
     return SELF_DESCRIBING.test(sig) ? clip(sig, max) : `${r.kind} ${clip(sig, max)}`;
 }
 
+/** Matches for a target, with overloads of one method collapsed (they are one definition to an agent). */
 function pickSymbol(intel, target) {
     const { matches } = intel.findSymbols(target);
-    return matches;
+    const seen = new Set();
+    return matches.filter(m => { const k = `${m.file_id}|${m.qname}|${m.kind}|${m.is_static}`; return !seen.has(k) && seen.add(k); });
+}
+
+/** "other definitions" note: each alternative as a ready-to-use qualified target with its use count. */
+function otherDefinitions(intel, matches, max = 5) {
+    const alts = matches.slice(1, 1 + max).map(m => `${m.path}:${m.qname} (${plural(refSummary(intel, m.id).n, 'ref')})`);
+    return alts.join(', ') + (matches.length > 1 + max ? `, … ${matches.length - 1 - max} more` : '');
 }
 
 function notFound(intel, target) {
@@ -236,7 +244,7 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
     for (const rows of res.groups.values()) for (const r of rows) counts[r.confidence] = (counts[r.confidence] ?? 0) + 1;
     const cstr = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
     const out = [`References to ${s.qname} (${s.kind}) ${loc(s)} — ${res.total} in ${plural(files.length, 'file')}${cstr ? ` (${cstr})` : ''}`];
-    if (matches.length > 1) out.push(`note: "${symbol}" is ambiguous (${matches.length} definitions); showing ${s.path}. Qualify it (e.g. ${matches[1].path}:${matches[1].qname}) for another.`);
+    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${s.qname} in ${s.path}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
     let shown = 0;
     for (const [file, rows] of res.groups) {
         if (shown >= limit) break;
@@ -253,6 +261,7 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
     }
     if (res.total > shown) out.push(`… ${res.total - shown} more (raise limit, or filter with kind / include_tests=false)`);
     if (!res.total) out.push('No bound references. It may be unused, an entry point, invoked by a framework/reflection, or only called through dynamic receivers.');
+    if (res.elsewhere?.length) out.push(`Other references named "${s.name}" resolve elsewhere: ${res.elsewhere.map(e => `${e.n} → ${e.qname} (${e.path})`).join(', ')}.`);
     if (res.unresolvedSameName) out.push(`Unbound: ${res.unresolvedSameName === 1 ? '1 other call site' : `${res.unresolvedSameName} other call sites`} named "${s.name}" ${res.unresolvedSameName === 1 ? 'has a receiver' : 'have receivers'} of unknown type and ${res.unresolvedSameName === 1 ? 'is' : 'are'} not counted — grep "${s.name}(" if you need an exhaustive list.`);
     return out.join('\n');
 }
@@ -304,7 +313,7 @@ async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, lim
         const external = intel.callees(s.id).filter(c => c.dst_id == null).map(c => (c.recv ? `${c.recv}.` : '') + c.name);
         if (external.length) out.push(`  external/unbound: ${[...new Set(external)].slice(0, 12).join(', ')}${external.length > 12 ? ', …' : ''}`);
     }
-    if (matches.length > 1) out.push(`note: ${matches.length} definitions match "${symbol}"; showing ${loc(s)}.`);
+    if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${s.qname} in ${s.path}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
     return out.join('\n');
 }
 

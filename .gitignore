@@ -1,10 +1,7 @@
-# graph-indexer generated artifacts — all consolidated under .graph-indexer/
-# (index, vectors, SQLite db, enrichment cache, daemon pid/log, resolved config).
+# graph-indexer's own index when run on this repository
 .graph-indexer/
-.graph-indexer.json
-*.tmp
 
-# Environment & Secrets
+# Environment & secrets
 .env
 .env.local
 .env.*.local
@@ -16,12 +13,17 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.tgz
 
-# Rust / Build
-target/
-Cargo.lock
+# Benchmark fixtures (fetch with: node bench/fixtures.mjs) and generated outputs
+test/fixtures/
+test/reports/
+bench/results/
+coverage/
+*.lcov
+junit.xml
 
-# IDE / Editor
+# IDE / editor
 .vscode/
 .idea/
 .cursor/
@@ -29,49 +31,18 @@ Cargo.lock
 *.swp
 *.swo
 *~
-.DS_Store
-Thumbs.db
-
-# Test Coverage & Reports
-coverage/
-.nyc_output/
-*.lcov
-junit.xml
-test/fixtures/
-test/reports/
-
-# Prompt-benchmark harness outputs (generated — regenerate via `node test/agent/assemble.mjs`)
-test/agent/built/
-test/agent/traces/
 
 # System
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
 *.log
-.graph-indexer.json
+*.tmp
 
-# Prompt-eval results (generated)
-test/agent/results/
-
-# Multi-language benchmark — generated artifacts (regenerate via bench/*.mjs + bench/run-*.sh).
-# Harness scripts (bench/*.mjs, bench/*.sh) and bench/provenance.json stay tracked;
-# per-cell results carry machine-specific timing/RSS, _chunks are scaffolding dumps, logs are transient.
-bench/results/
-bench/_chunks/
-bench/logs/
-# One-off authoring scaffolding — already applied (its outputs, the test/suites/*.mjs query
-# sets, are committed and gated by bench/verify-ground-truth.mjs); not part of the repro path.
-bench/_apply-queries.mjs
-bench/_author-queries.workflow.mjs
-
-embedders/venv-mlx/
-
-# Local agent / working files (kept on disk, never published or committed).
+# Local agent / working files (kept on disk, never published or committed)
 CLAUDE.md
 BENCH_V2_REPORT.md
 
-# Local scratch / dev scripts (not part of the test suite)
-bench_embedders_test.mjs
-# local scratch area used during development
+# Local scratch area used during development
 scratch/

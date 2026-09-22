@@ -146,6 +146,9 @@ export const rust = {
     transparentTypes: new Set(['Box', 'Rc', 'Arc', 'Cow', 'RefCell', 'Cell', 'Mutex', 'RwLock', 'MutexGuard', 'RwLockReadGuard', 'RwLockWriteGuard', 'Ref', 'RefMut', 'Pin', 'Option', 'Result', 'Weak']),
     elementTypes: new Set(['Vec', 'VecDeque', 'HashSet', 'BTreeSet', 'BinaryHeap', 'LinkedList', 'IntoIter', 'Iter', 'IterMut', 'Drain']),
     elementMethods: new Set(['first', 'last', 'get', 'get_mut', 'first_mut', 'last_mut', 'pop', 'pop_front', 'pop_back', 'front', 'back', 'remove', 'swap_remove', 'next', 'peek', 'find']),
+    mapTypes: new Set(['HashMap', 'BTreeMap', 'IndexMap', 'DashMap']),
+    mapMethods: new Set(['get', 'get_mut', 'remove', 'insert']),
+    mapValueMethods: new Set(['values', 'values_mut', 'into_values']),
     // calls that hand back (a view of) the same value: unwrap, clone, borrow, lock, iter …
     identityMethods: new Set(['unwrap', 'expect', 'unwrap_or_default', 'unwrap_or', 'unwrap_or_else', 'as_ref', 'as_mut', 'as_deref', 'as_deref_mut',
         'clone', 'borrow', 'borrow_mut', 'lock', 'read', 'write', 'to_owned', 'deref', 'deref_mut', 'cloned', 'copied', 'iter', 'iter_mut', 'into_iter', 'drain', 'upgrade']),

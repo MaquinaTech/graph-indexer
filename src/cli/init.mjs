@@ -56,8 +56,8 @@ function upsertBlock(file, dryRun) {
     return exists ? 'updated' : 'created';
 }
 
-export async function runInit({ opt, flag, log }) {
-    const repo = path.resolve(opt('--repo') ?? findRepoRoot(process.cwd()));
+export async function runInit({ opt, flag, repo: repoArg = null }) {
+    const repo = path.resolve(repoArg ?? opt('--repo') ?? findRepoRoot(process.cwd()));
     const dryRun = flag('--dry-run');
     const local = flag('--local');
     const noInstructions = flag('--no-instructions');

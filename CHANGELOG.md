@@ -4,7 +4,75 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
-## [Unreleased]
+## [3.0.0] — 2026-09-22
+
+A rewrite around one goal: give coding agents answers that are exact, current and small.
+Search, a real reference graph and change impact, from a zero-dependency package that needs no
+model, network or native build.
+
+### Breaking
+
+- **Node.js 22.5+** is required (the index uses the built-in `node:sqlite`).
+- **New tool surface** (six read-only MCP tools): `search_code`, `get_symbol`, `find_references`,
+  `call_graph`, `change_impact`, `outline`. The 2.x tools and their option set are gone.
+- **Removed:** dense embeddings, Ollama/MLX/in-process embedders, LLM enrichment and reranking,
+  the watch daemon, sealed mode and its attestation, taint tools, and the grammar auto-installer.
+  Search is lexical + structural and needs no model.
+- **CLI:** `graph-indexer init | serve | index | status | search | symbol | refs | callgraph |
+  impact | outline`. `idx-mcp` and `idx-index` remain as aliases of `serve` and `index`.
+- The index lives in `.graph-indexer/index.db` (SQLite); 2.x index files are ignored.
+
+### Added
+
+- **Bundled parsing.** web-tree-sitter 0.25 and 16 grammars (JavaScript, TypeScript, TSX,
+  Python, Go, Java, Kotlin, Scala, C#, Rust, C, C++, Ruby, PHP, Bash, CSS) vendored as
+  WebAssembly with pinned versions and checksums; nothing is downloaded or compiled.
+- **Reference graph.** Every call, instantiation, type use, inheritance, decorator, value and
+  member-read reference is bound to its definition through lexical scopes, the enclosing type and
+  its bases, imports (barrels, tsconfig paths, workspaces, Go modules, Python packages, Rust
+  crates, C includes), packages and globals, with a confidence label. `find_references` includes
+  overload sets and calls through base types, labelled.
+- **Receiver type inference** across languages: annotations, initialisers, casts, `await`,
+  declared and inferred return types (including generic bounds and `Self`/`this`), fields and
+  constructor-injected dependencies, collections and their elements (`xs[i]`, loops, array
+  callbacks, `list.get(0)`), optional/nullable and wrapper types, closures and access chains.
+  Members of primitives and collections are never guessed.
+- **Hybrid search** over symbols: exact/qualified name channel, BM25F over name, signature, doc,
+  path and body, file-level relevance, a concept thesaurus, interpretable priors and PageRank
+  centrality, with per-file diversification.
+- **Maps and dictionaries** in the type model (`Map<K, V>`, `dict[K, V]`, `HashMap<K, V>`, Go
+  `map[K]V`, classes that extend them): `m.get(k)`, `m[k]` and `m.values()` reach the value type.
+- `find_references` states where other same-name references resolve, and ambiguous names list the
+  alternatives as ready-to-use qualified targets (overloads count as one definition).
+- **Change impact:** transitive dependents by distance, tests that exercise them, public surface,
+  git co-change history, and `diff: true` for the uncommitted working tree.
+- **Freshness:** file watcher plus stat sweeps; changed files are re-indexed before every answer
+  and re-validated before their lines are rendered. Symbol ids stay stable across edits.
+- **Robustness:** the index rebuilds itself when the extractor changes (fingerprint), recovers
+  from interrupted runs, never reuses row ids, skips minified/generated/huge files, and ignores
+  symlinks that point outside the repository.
+- **MCP** implemented without an SDK: stdio JSON-RPC, protocol versions 2024-11-05 to
+  2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), concise server
+  instructions, read-only tool annotations, plain-text replies with token caps.
+- **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI and Codex, and adds a
+  short managed block to `CLAUDE.md`/`AGENTS.md`.
+- **Benchmarks** (`bench/`): symbol-search suites (377 queries, 9 repositories), reference
+  accuracy against the TypeScript compiler, and localization replayed from real commits, with
+  pinned fixtures (`bench/fixtures.mjs`).
+
+### Results (see docs/BENCHMARKS.md)
+
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.979, recall 0.895
+  (grep: 0.128 / 0.993; name-only: 0.246 / 0.921).
+- Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
+  ranking 0.485 / 0.374; BM25 0.373 / 0.293).
+- Symbol search (377 queries): rank-1 0.706, MRR 0.761 (2.x on the same queries: 0.552 / 0.646).
+- Paired agent test (5 tasks): same answers with and without graph-indexer; 20 vs 44 tool calls on
+  a two-level impact question.
+
+---
+
+## [Unreleased 2.x — superseded by 3.0.0]
 
 ### Install-size fix: heavy optional packages no longer ship by default
 

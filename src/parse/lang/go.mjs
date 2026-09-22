@@ -102,6 +102,7 @@ export const go = {
     visibility: (node, name) => (name && /^[a-z_]/.test(name) ? 'private' : null),
     isPrimitiveType: (t) => PRIMITIVES.has(t),
     // `(T, error)` results: the value is the first element
+    mapIterValues: true, // `for _, v := range m` binds values
     cleanType: (t) => t.replace(/^\(\s*(?:\w+\s+)?([^,()]+?)\s*,\s*(?:\w+\s+)?error\s*\)$/s, '$1'),
     refineKind(kind, d, parent) {
         if (d.node.type === 'method_elem') return 'method';

@@ -66,6 +66,9 @@ export const scala = {
     transparentTypes: new Set(['Option', 'Some']),
     elementTypes: new Set(['List', 'Seq', 'IndexedSeq', 'Vector', 'Set', 'Array', 'Iterable', 'Iterator', 'ArrayBuffer', 'ListBuffer']),
     elementMethods: new Set(['head', 'last', 'apply', 'find', 'headOption', 'lastOption']),
+    mapTypes: new Set(['Map', 'HashMap', 'TreeMap', 'mutable.Map']),
+    mapMethods: new Set(['apply', 'get', 'getOrElse']),
+    mapValueMethods: new Set(['values']),
     refineKind(kind, d, parent) {
         if (kind === 'variable' && parent && ['class', 'object', 'trait'].includes(parent.kind)) return 'field';
         return kind;

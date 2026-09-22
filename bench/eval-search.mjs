@@ -9,6 +9,7 @@
  *   node bench/eval-search.mjs [--fixtures a,b] [--rebuild] [--verbose] [--json out.json]
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../src/store/db.mjs';
@@ -21,7 +22,7 @@ const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const FIXTURES = (opt('--fixtures', 'axios,express-js,gin,spring,rust,cjson,nvm,fastapi,nestjs')).split(',');
 const FIXDIR = path.resolve(opt('--fixture-dir', path.join(here, '../test/fixtures')));
-const DBDIR = path.resolve(opt('--db-dir', '/tmp/claude-0/idx'));
+const DBDIR = path.resolve(opt('--db-dir', path.join(os.tmpdir(), 'graph-indexer-bench')));
 const verbose = args.includes('--verbose');
 const rebuild = args.includes('--rebuild');
 const baseline = fs.existsSync(path.join(here, 'baseline-v2.json')) ? JSON.parse(fs.readFileSync(path.join(here, 'baseline-v2.json'), 'utf8')) : null;

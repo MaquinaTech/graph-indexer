@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { discoverFiles, isIndexablePath, looksMinified, MAX_FILE_BYTES } from './discover.mjs';
+import { discoverFiles, isIndexablePath, insideRoot, looksMinified, MAX_FILE_BYTES } from './discover.mjs';
 import { ModuleResolver } from './modules.mjs';
 import { SymbolTable, Resolver } from './resolver.mjs';
 import { extractFile } from '../parse/extract.mjs';
@@ -23,6 +23,7 @@ import { indexFingerprint } from './fingerprint.mjs';
 const SPECS = Object.fromEntries(LANGUAGES.map(l => [l.id, l]));
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const BODY_TOKEN_CAP = 1200;
+const FILE_TOKEN_CAP = 30000;
 
 function sha1(s) { return crypto.createHash('sha1').update(s).digest('hex'); }
 
@@ -108,7 +109,7 @@ export class Indexer {
             if (rel.startsWith('..') || !isIndexablePath(rel, { include: this.include })) continue;
             const st = safeStat(path.join(this.root, rel));
             const k = this.store.get('SELECT id, path, size, mtime_ms, hash FROM files WHERE path = ?', rel);
-            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES) { if (k) removed.push(rel); continue; }
+            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES || !insideRoot(this.root, rel)) { if (k) removed.push(rel); continue; }
             if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
             toParse.push({ rel, st, prev: k ?? null });
             this.modules.addFile(rel);
@@ -144,6 +145,7 @@ export class Indexer {
                     const f = s.get('SELECT id FROM files WHERE path = ?', rel);
                     if (!f) continue;
                     for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); }
+                    s.run('DELETE FROM file_fts WHERE rowid = ?', f.id);
                     for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, f.id);
                     s.run('DELETE FROM files WHERE id = ?', f.id);
                     this.table.removeFile(f.id);
@@ -233,6 +235,7 @@ export class Indexer {
             fileId = prev.id;
             oldSyms = s.all('SELECT id, qname, kind, ordinal FROM symbols WHERE file_id = ?', fileId);
             for (const o of oldSyms) s.run('DELETE FROM fts WHERE rowid = ?', o.id);
+            s.run('DELETE FROM file_fts WHERE rowid = ?', fileId);
             for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
             s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, indexed_at = ? WHERE id = ?',
                 spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now(), fileId);
@@ -291,6 +294,8 @@ export class Indexer {
             s.run('INSERT INTO fts (rowid, name, qname, sig, doc, path, body) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 ids[i], tokenString(sym.name), tokenString(sym.qname), tokenString(sym.sig ?? ''), tokenString(sym.doc ?? ''), pathTokens, body);
         }
+        // file document (hierarchical ranking: which files talk about the query at all)
+        s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
         // refs (unresolved for now)
         for (const r of refs) {
             s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

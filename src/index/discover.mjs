@@ -97,9 +97,28 @@ export function discoverFiles(root, opts = {}) {
         viaGit = rels !== null;
     }
     if (!rels) rels = walk(root, loadGitignore(root));
-    const files = rels.map(r => r.replace(/\\/g, '/')).filter(r => isIndexablePath(r, opts));
+    const files = rels.map(r => r.replace(/\\/g, '/')).filter(r => isIndexablePath(r, opts) && (!viaGit || insideRoot(root, r)));
     files.sort();
     return { files, viaGit };
+}
+
+const realRoots = new Map();
+
+/**
+ * A tracked file must resolve inside the repository: symlinks are followed only when their target
+ * stays under the root, so a link to /etc/… or ~/.ssh/… is never read, indexed or served.
+ */
+export function insideRoot(root, rel) {
+    const abs = path.join(root, rel);
+    let st;
+    try { st = fs.lstatSync(abs); } catch { return true; } // vanished: the caller handles deletion
+    if (!st.isSymbolicLink()) return true;
+    let realRoot = realRoots.get(root);
+    if (!realRoot) { try { realRoot = fs.realpathSync(root); } catch { realRoot = root; } realRoots.set(root, realRoot); }
+    try {
+        const target = fs.realpathSync(abs);
+        return target === realRoot || target.startsWith(realRoot + path.sep);
+    } catch { return false; } // dangling link
 }
 
 /** Heuristic: minified / generated content that slipped past the name filters. */

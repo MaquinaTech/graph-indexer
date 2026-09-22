@@ -23,6 +23,26 @@ export function splitIdentifier(id) {
     return parts;
 }
 
+// Identifiers repeat heavily across a code base: cache each one's token expansion.
+const TOKEN_CACHE = new Map();
+const TOKEN_CACHE_MAX = 200_000;
+
+function identifierTokens(id) {
+    let t = TOKEN_CACHE.get(id);
+    if (t) return t;
+    if (/^[0-9]+$/.test(id)) t = id.length <= 6 ? [id] : [];
+    else {
+        const lower = id.toLowerCase().replace(/^[$_]+|[$_]+$/g, '');
+        const parts = splitIdentifier(id);
+        t = [];
+        if (lower.length >= 2 && (parts.length !== 1 || parts[0] !== lower)) t.push(lower.replace(/[$]/g, ''));
+        for (const p of parts) if (p.length >= 2 || parts.length === 1) t.push(p);
+    }
+    if (TOKEN_CACHE.size >= TOKEN_CACHE_MAX) TOKEN_CACHE.clear();
+    TOKEN_CACHE.set(id, t);
+    return t;
+}
+
 /** Tokens for indexing a piece of code/text (identifier forms + sub-words). */
 export function codeTokens(text, { maxTokens = Infinity } = {}) {
     const out = [];
@@ -30,12 +50,7 @@ export function codeTokens(text, { maxTokens = Infinity } = {}) {
     IDENT_RE.lastIndex = 0;
     let m;
     while ((m = IDENT_RE.exec(text)) && out.length < maxTokens) {
-        const id = m[0];
-        if (/^[0-9]+$/.test(id)) { if (id.length <= 6) out.push(id); continue; }
-        const lower = id.toLowerCase().replace(/^[$_]+|[$_]+$/g, '');
-        const parts = splitIdentifier(id);
-        if (lower.length >= 2 && (parts.length !== 1 || parts[0] !== lower)) out.push(lower.replace(/[$]/g, ''));
-        for (const p of parts) if (p.length >= 2 || parts.length === 1) out.push(p);
+        for (const t of identifierTokens(m[0])) out.push(t);
     }
     return out;
 }

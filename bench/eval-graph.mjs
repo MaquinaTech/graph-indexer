@@ -18,6 +18,7 @@
  *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7]
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +37,7 @@ const ts = createRequire(import.meta.url)(tsPath);
 
 function rng(s) { return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
 
-const intel = new CodeIntel({ root, dbPath: path.join('/tmp/claude-0/idx', fixture + '.db') });
+const intel = new CodeIntel({ root, dbPath: path.join(opt('--db-dir', path.join(os.tmpdir(), 'graph-indexer-bench')), fixture + '.db') });
 await intel.open();
 
 // ── TypeScript language service over the whole repo's .ts files ───────────────────

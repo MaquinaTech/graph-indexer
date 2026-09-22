@@ -4,6 +4,7 @@ const T = (cap) => `[(type_identifier) @${cap} (generic_type (type_identifier) @
 
 const JAVA_QUERY = `
 (class_declaration name: (identifier) @name) @def.class
+(class_declaration name: (identifier) @name superclass: (superclass (_) @type)) @def.class
 (interface_declaration name: (identifier) @name) @def.interface
 (enum_declaration name: (identifier) @name) @def.enum
 (record_declaration name: (identifier) @name) @def.class
@@ -87,6 +88,9 @@ export const java = {
     elementTypes: new Set(['List', 'ArrayList', 'LinkedList', 'Collection', 'Set', 'HashSet', 'TreeSet', 'LinkedHashSet', 'SortedSet', 'NavigableSet',
         'Iterable', 'Iterator', 'Stream', 'Queue', 'Deque', 'ArrayDeque', 'PriorityQueue', 'Vector', 'CopyOnWriteArrayList', 'BlockingQueue']),
     elementMethods: new Set(['get', 'getFirst', 'getLast', 'peek', 'poll', 'pop', 'element', 'first', 'last', 'next', 'remove', 'take']),
+    mapTypes: new Set(['Map', 'HashMap', 'TreeMap', 'LinkedHashMap', 'ConcurrentHashMap', 'SortedMap', 'NavigableMap', 'ConcurrentMap', 'EnumMap']),
+    mapMethods: new Set(['get', 'getOrDefault', 'remove', 'put', 'putIfAbsent', 'computeIfAbsent', 'compute', 'merge']),
+    mapValueMethods: new Set(['values']),
     decoratorsOf(node) {
         const m = node.namedChildren.find(c => c.type === 'modifiers');
         if (!m) return [];

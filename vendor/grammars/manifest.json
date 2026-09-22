@@ -3,7 +3,17 @@
     "package": "web-tree-sitter",
     "version": "0.25.10",
     "source": "https://github.com/tree-sitter/tree-sitter/releases/tag/v0.25.10",
-    "license": "MIT"
+    "license": "MIT",
+    "files": {
+      "web-tree-sitter.js": {
+        "sha256": "d4fc466df6358055253bc4cdaab23cdf84fe00741fa5a4ff56506c06c533da42",
+        "bytes": 150999
+      },
+      "web-tree-sitter.wasm": {
+        "sha256": "f38dcc4b43b818f9a0785bc1c6d5611a75ac4cdd428ff3f02757c34ca4e46d7f",
+        "bytes": 205488
+      }
+    }
   },
   "grammars": {
     "bash": {

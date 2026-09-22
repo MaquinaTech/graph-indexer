@@ -220,9 +220,10 @@ export class Resolver {
         if (!str) return null;
         if (str.startsWith('call:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
         let s = str;
-        for (let i = 0; i < elem; i++) { if (!s.endsWith('[]')) return null; s = s.slice(0, -2); }
+        for (let i = 0; i < elem; i++) { if (!s.endsWith('[]') && !s.endsWith('{}')) return null; s = s.slice(0, -2); }
         if (s === '!') return EXTERNAL;
         if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
+        if (s.endsWith('{}')) return { mapOf: s.slice(0, -2), fileId };   // a map value
         const t = this.resolveTypeName(s, fileId);
         if (t) return t;
         const spec = this.specs[this.t.file(fileId)?.lang];
@@ -246,7 +247,7 @@ export class Resolver {
                 if (TYPE_KINDS.has(s.kind)) cur = head.elem ? null : s; // constructor call
                 else if (s.type) cur = this.typeFromString(s.type, s.fileId, head.elem);
             }
-            if (cur?.arrayOf != null && parts.length === 1) cur = EXTERNAL;
+            if ((cur?.arrayOf != null || cur?.mapOf != null) && parts.length === 1) cur = EXTERNAL;
         } else if (!head.elem) {
             // same-file qualified name first (this.x → Class#x uses the class qname)
             const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
@@ -264,7 +265,19 @@ export class Resolver {
                 cur = spec?.elementMethods?.has(name) ? this.typeFromString(cur.arrayOf + '[]'.repeat(elem), cur.fileId) : EXTERNAL;
                 continue;
             }
+            if (cur.mapOf != null) {
+                // `m.get(k)` reaches a value, `m.values()` the collection of values
+                cur = spec?.mapMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]'.repeat(elem), cur.fileId)
+                    : spec?.mapValueMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]' + '[]'.repeat(elem), cur.fileId) : EXTERNAL;
+                continue;
+            }
             const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, name);
+            if (!mem.length && cur.id != null) {
+                // a class that is a collection (`class Registry extends Map<string, Module>`): `get` & co.
+                const ct = this.t.sym(cur.id)?.type;
+                const c = ct ? this.typeFromString(ct, cur.fileId) : null;
+                if (c && (c.arrayOf != null || c.mapOf != null)) { cur = c; i--; continue; }
+            }
             let next = null;
             for (const id of mem) {
                 const m = this.t.sym(id);
@@ -283,7 +296,7 @@ export class Resolver {
             }
             cur = next;
         }
-        const res = cur === EXTERNAL || cur?.arrayOf != null ? EXTERNAL : cur ? { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null } : null;
+        const res = cur === EXTERNAL || cur?.arrayOf != null || cur?.mapOf != null ? EXTERNAL : cur ? { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null } : null;
         this.memo.set(k, res);
         return res;
     }
@@ -605,7 +618,7 @@ export class Resolver {
         if (!o) return [];
         if (!TYPE_KINDS.has(o.kind) && o.type) {
             const t = this.typeFromString(o.type, o.fileId);
-            if (t && t !== EXTERNAL && t.arrayOf == null) return this.#byStatic(this.membersOf(t, name), false);
+            if (t && t !== EXTERNAL && t.arrayOf == null && t.mapOf == null) return this.#byStatic(this.membersOf(t, name), false);
             if (t) return [];
         }
         const ids = this.membersOf({ id: o.id, name: o.name, fileId: o.fileId }, name);

@@ -133,6 +133,9 @@ export const python = {
     elementTypes: new Set(['list', 'List', 'Sequence', 'MutableSequence', 'Iterable', 'Iterator', 'AsyncIterable', 'AsyncIterator',
         'Generator', 'AsyncGenerator', 'set', 'Set', 'frozenset', 'FrozenSet', 'AbstractSet', 'MutableSet', 'Collection', 'Deque', 'deque', 'tuple', 'Tuple']),
     elementMethods: new Set(['pop', 'popleft']),
+    mapTypes: new Set(['dict', 'Dict', 'Mapping', 'MutableMapping', 'DefaultDict', 'defaultdict', 'OrderedDict']),
+    mapMethods: new Set(['get', 'pop', 'setdefault']),
+    mapValueMethods: new Set(['values']),
     decoratorsOf(node) {
         const p = node.parent;
         if (p?.type !== 'decorated_definition') return [];

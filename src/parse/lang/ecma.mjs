@@ -70,6 +70,8 @@ const DEFS_TS = `
 (lexical_declaration (variable_declarator name: (identifier) @name value: (arrow_function return_type: (type_annotation (_) @type))) @def.function)
 (public_field_definition name: (_) @name type: (type_annotation (_) @type)) @def.field
 (property_signature name: (_) @name type: (type_annotation (_) @type)) @def.field
+(class_declaration name: (_) @name (class_heritage (extends_clause) @type)) @def.class
+(abstract_class_declaration name: (_) @name (class_heritage (extends_clause) @type)) @def.class
 (required_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
 (required_parameter "readonly" pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
 (optional_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
@@ -178,7 +180,8 @@ const BUILTIN_CALLS = new Set([
     'describe', 'it', 'test', 'expect', 'beforeEach', 'afterEach', 'beforeAll', 'afterAll', 'suite', 'context',
 ]);
 
-const TEST_FILE_RE = /(^|\/)(__tests__|__mocks__|tests?|spec|e2e)\/|\.(test|spec|e2e-spec|cy)\.[cm]?[jt]sx?$/;
+// a top-level integration/ directory holds integration-test apps (nestjs, many monorepos)
+const TEST_FILE_RE = /(^|\/)(__tests__|__mocks__|tests?|spec|e2e)\/|^integration\/|\.(test|spec|e2e-spec|cy)\.[cm]?[jt]sx?$/;
 
 function stripQuotes(s) { return s.replace(/^['"`]|['"`]$/g, ''); }
 
@@ -307,6 +310,10 @@ function makeSpec(id, grammar, extensions, { ts, jsx }) {
         elementTypes: ELEMENT_TYPES,
         isPrimitiveType: (t) => PRIMITIVE_TYPES.has(t),
         elementMethods: new Set(['at', 'find', 'findLast', 'pop', 'shift']),
+        mapTypes: new Set(['Map', 'ReadonlyMap', 'WeakMap', 'Record']),
+        mapMethods: new Set(['get']),
+        mapValueMethods: new Set(['values']),
+        cleanType: (t) => t.replace(/^extends\s+/, ''),
         testFile: TEST_FILE_RE,
         commentTypes: ['comment'],
         containerKinds: new Set(['class', 'interface', 'module', 'enum', 'function', 'method']),

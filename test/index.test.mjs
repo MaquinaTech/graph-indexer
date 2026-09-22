@@ -132,3 +132,34 @@ test('an index written by another extractor version is rebuilt; an interrupted r
     await intel.open();
     assert.ok(refsTo('UserRepository.findById').some(r => r.path === 'src/users/user.service.ts'), 'references re-resolved after an interrupted run');
 });
+
+test('re-indexing the most recently indexed file never collides with its own stable ids', async () => {
+    // the file indexed last owns the highest ids; inserting a new symbol before the existing ones
+    // must not take an id that a later (stable) symbol of the same file is about to reclaim
+    writeFile(root, 'src/zz/last.ts', `export function a() {}\nexport function b() {}\nexport function c() {}\n`);
+    await intel.ix.syncPaths(['src/zz/last.ts']);
+    const before = ['a', 'b', 'c'].map(n => intel.findSymbols('src/zz/last.ts:' + n).matches[0].id);
+    writeFile(root, 'src/zz/last.ts', `export function z0() {}\nexport function z1() {}\nexport function a() {}\nexport function b() {}\nexport function c() {}\n`);
+    await intel.ix.syncPaths(['src/zz/last.ts']);
+    const after = ['a', 'b', 'c'].map(n => intel.findSymbols('src/zz/last.ts:' + n).matches[0].id);
+    assert.deepEqual(after, before);
+    const fresh = ['z0', 'z1'].map(n => intel.findSymbols('src/zz/last.ts:' + n).matches[0].id);
+    assert.ok(fresh.every(id => !before.includes(id)));
+});
+
+test('symlinks that escape the repository are never indexed', { skip: process.platform === 'win32' && 'symlinks need elevated rights on Windows' }, async () => {
+    const outside = fs.mkdtempSync(path.join(path.dirname(root), 'gi-outside-'));
+    fs.writeFileSync(path.join(outside, 'secret.ts'), 'export function leakedSecret() { return "s3cr3t"; }\n');
+    fs.symlinkSync(path.join(outside, 'secret.ts'), path.join(root, 'src/leak.ts'));
+    fs.symlinkSync(path.join(root, 'src/users/base.service.ts'), path.join(root, 'src/alias.ts')); // stays inside: allowed
+    const { spawnSync } = await import('node:child_process');
+    spawnSync('git', ['add', '-A'], { cwd: root });
+    intel.lastSweep = 0;
+    await intel.ensureFresh();
+    await intel.ix.syncPaths(['src/leak.ts', 'src/alias.ts']);
+    assert.equal(intel.findSymbols('leakedSecret').matches.length, 0);
+    assert.ok(intel.findSymbols('src/alias.ts:BaseService').matches.length, 'in-repo symlink still indexed');
+    fs.unlinkSync(path.join(root, 'src/leak.ts'));
+    fs.unlinkSync(path.join(root, 'src/alias.ts'));
+    rmrf(outside);
+});

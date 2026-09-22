@@ -121,4 +121,6 @@ export const cpp = {
     transparentTypes: new Set(['unique_ptr', 'shared_ptr', 'weak_ptr', 'optional', 'reference_wrapper', 'atomic']),
     elementTypes: new Set(['vector', 'list', 'deque', 'set', 'unordered_set', 'multiset', 'array', 'span', 'forward_list']),
     elementMethods: new Set(['at', 'front', 'back', 'top']),
+    mapTypes: new Set(['map', 'unordered_map', 'multimap', 'unordered_multimap']),
+    mapMethods: new Set(['at']),
 };

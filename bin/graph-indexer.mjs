@@ -39,11 +39,12 @@ function opt(name, dflt = null) {
 }
 
 const log = (m) => process.stderr.write(`[graph-indexer] ${m}\n`);
+// global options are consumed before any command joins the remaining words into a query
+const repoArg = opt('--repo') ?? process.env.GRAPH_INDEXER_REPO ?? process.env.MCP_PROJECT_ROOT ?? null;
 
 async function openIntel({ watch = false, background = false, quiet = false } = {}) {
     const { CodeIntel } = await import('../src/query/intel.mjs');
     const { findRepoRoot } = await import('../src/util/paths.mjs');
-    const repoArg = opt('--repo') ?? process.env.GRAPH_INDEXER_REPO ?? process.env.MCP_PROJECT_ROOT ?? null;
     const root = repoArg ? path.resolve(repoArg) : findRepoRoot(process.cwd());
     const intel = new CodeIntel({ root, log, watch });
     let last = 0;
@@ -65,7 +66,7 @@ async function runTool(name, args) {
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
 
 Usage:
-  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,codex,gemini,windsurf] [--yes]
+  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex] [--all] [--local] [--dry-run] [--no-instructions]
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
@@ -110,7 +111,7 @@ async function main() {
         }
         case 'init': {
             const { runInit } = await import('../src/cli/init.mjs');
-            await runInit({ argv, opt, flag, log, version: pkg.version });
+            await runInit({ argv, opt, flag, log, version: pkg.version, repo: repoArg });
             return;
         }
         case 'search': {

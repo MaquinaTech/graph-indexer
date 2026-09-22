@@ -15,12 +15,12 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS files (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT NOT NULL UNIQUE,
   lang TEXT NOT NULL,
   size INTEGER NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS files (
   indexed_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS symbols (
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, -- ids are never reused: stable ids of re-indexed symbols are re-inserted explicitly
   file_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   name_lc TEXT NOT NULL,
@@ -101,6 +101,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
   tokenize = 'porter unicode61 remove_diacritics 2',
   content = '', contentless_delete = 1
 );
+-- one document per file (rowid = files.id): file-level relevance for hierarchical ranking
+CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
+  path, body,
+  tokenize = 'porter unicode61 remove_diacritics 2',
+  content = '', contentless_delete = 1
+);
 `;
 
 export class Store {
@@ -151,6 +157,7 @@ export class Store {
         this.tx(() => {
             for (const t of ['files', 'symbols', 'refs', 'imports', 'fields']) this.db.exec(`DELETE FROM ${t}`);
             this.db.exec("INSERT INTO fts(fts) VALUES ('delete-all')");
+            this.db.exec("INSERT INTO file_fts(file_fts) VALUES ('delete-all')");
         });
     }
 

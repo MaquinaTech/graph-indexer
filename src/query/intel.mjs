@@ -268,7 +268,7 @@ export class CodeIntel {
         }
         const rows = this.store.all(`SELECT r.id, r.kind, r.line, r.col, r.conf, r.ncand, r.recv, r.dst_id, f.path, f.is_test, src.qname AS src_qname, src.kind AS src_kind
             FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols src ON src.id = r.src_id
-            WHERE r.dst_id IN (${ids.map(() => '?').join(',')}) ORDER BY f.path, r.line`, ...ids);
+            WHERE r.dst_id IN (${ids.map(() => '?').join(',')}) ORDER BY f.is_test, f.path, r.line`, ...ids); // production code before tests
         const out = [];
         for (const r of rows) {
             if (kinds && !kinds.includes(r.kind)) continue;
@@ -277,9 +277,13 @@ export class CodeIntel {
             out.push({ ...r, via: via.get(r.dst_id) ?? null, confidence: confidenceLabel(via.has(r.dst_id) ? r.conf * 0.8 : r.conf) });
         }
         const unresolved = this.store.get(`SELECT COUNT(*) AS n FROM refs WHERE name = ? AND dst_id IS NULL AND kind IN ('call','new','inherit','decorator')`, sym.name)?.n ?? 0;
+        // where the other references with this name went (lets an agent rule them out without grepping)
+        const elsewhere = this.store.all(`SELECT d.qname, df.path, COUNT(*) AS n FROM refs r JOIN symbols d ON d.id = r.dst_id JOIN files df ON df.id = d.file_id
+            JOIN files f ON f.id = r.file_id WHERE r.name = ? AND r.dst_id NOT IN (${ids.map(() => '?').join(',')})${includeTests ? '' : ' AND f.is_test = 0'}
+            GROUP BY r.dst_id ORDER BY n DESC LIMIT 4`, sym.name, ...ids);
         const groups = new Map();
         for (const r of out) (groups.get(r.path) ?? groups.set(r.path, []).get(r.path)).push(r);
-        return { sym, groups, total: out.length, unresolvedSameName: unresolved };
+        return { sym, groups, total: out.length, unresolvedSameName: unresolved, elsewhere };
     }
 
     /** Outgoing references of a symbol (what it calls/uses), including nested closures. */
