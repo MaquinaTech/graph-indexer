@@ -17,6 +17,28 @@ const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|refs|callgr
 const maskGiGrep = (cmd) => cmd.replace(/(^|[\s/])(gi|graph-indexer(?:\.mjs)?)\s+grep\b/g, '$1$2 GI-GREP');
 const isGrep = (cmd) => GREP_CMD.test(maskGiGrep(cmd)) || FIND_NAME.test(cmd);
 
+/**
+ * Does a shell command search the code? A grep that filters another command's output
+ * (`tsc … | grep x`) or reads files outside the repository (saved logs) does not navigate code.
+ * Returns 'search', 'filter' or null.
+ */
+export function grepUse(cmd, repo = null) {
+    // quoted patterns may contain `|` / `;` (`grep -v "a\\|b"`): blank them before splitting
+    const masked = maskGiGrep(cmd).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, 'Q');
+    let use = null;
+    for (const seg of masked.split(/&&|\|\||;|\n/)) {
+        const stages = seg.split('|');
+        stages.forEach((stage, i) => {
+            if (!GREP_CMD.test(stage) && !FIND_NAME.test(stage)) return;
+            if (i > 0 && !/-r|-R|--recursive|\bfind\b/.test(stage)) { use ??= 'filter'; return; }
+            const paths = [...stage.matchAll(/(?:^|\s)(\/[^\s'"|;&]+)/g)].map(m => m[1]);
+            if (repo && paths.length && paths.every(p => !p.startsWith(repo))) { use ??= 'filter'; return; }
+            use = 'search';
+        });
+    }
+    return use;
+}
+
 /** Tool policy of each arm: which tool uses count as violations. */
 export const POLICIES = {
     grep: { forbidTools: [], forbidBash: [GI_CMD], label: 'built-in tools only' },
@@ -25,7 +47,7 @@ export const POLICIES = {
     'grep+gi+': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated' },
 };
 
-export function parseTranscript(file, { arm = null } = {}) {
+export function parseTranscript(file, { arm = null, repo = null } = {}) {
     const text = fs.readFileSync(file, 'utf8');
     const events = [];
     for (const line of text.split('\n')) {
@@ -86,19 +108,26 @@ export function parseTranscript(file, { arm = null } = {}) {
             const cmd = String(t.input.command ?? '');
             bash.push(cmd);
             if (GI_CMD.test(cmd)) giCalls++;
-            if (isGrep(cmd)) grepCalls++;
+            if (isGrep(cmd) && grepUse(cmd, repo) === 'search') grepCalls++; // code searches, not output filters
         }
         if (t.name === 'Grep' || t.name === 'Glob') grepCalls++;
         if (t.name.startsWith('mcp__graph-indexer') || t.name.startsWith('mcp__plugin_graph-indexer')) giCalls++;
         if (t.name === 'Read' && t.input.file_path) reads.add(t.input.file_path);
         if ((t.name === 'Edit' || t.name === 'Write' || t.name === 'MultiEdit' || t.name === 'NotebookEdit') && (t.input.file_path || t.input.notebook_path)) edits.add(t.input.file_path || t.input.notebook_path);
     }
-    const violations = [];
+    const violations = [], benign = [];
     const policy = arm ? POLICIES[arm] : null;
     if (policy) {
         for (const t of tools) {
             if (policy.forbidTools.includes(t.name)) violations.push(`${t.name} tool`);
-            if (t.name === 'Bash') for (const re of policy.forbidBash) if (re.test(String(t.input.command ?? ''))) violations.push(`bash: ${String(t.input.command).slice(0, 120)}`);
+            if (t.name !== 'Bash') continue;
+            const cmd = String(t.input.command ?? '');
+            for (const re of policy.forbidBash) {
+                if (!re.test(cmd)) continue;
+                // for the grep-free arm only code searches count; filtering output is allowed in spirit
+                const use = re.test === isGrep ? grepUse(cmd, repo) : 'search';
+                (use === 'filter' ? benign : violations).push(`bash: ${cmd.slice(0, 120)}`);
+            }
         }
     }
     return {
@@ -116,7 +145,7 @@ export function parseTranscript(file, { arm = null } = {}) {
         filesEdited: [...edits],
         wallMs: result?.duration_ms ?? (first && last ? last - first : null),
         costUsd: result?.total_cost_usd ?? null,
-        violations,
+        violations, benign,
         finalText: finalText.slice(0, 2000),
     };
 }

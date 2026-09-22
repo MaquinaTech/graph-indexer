@@ -235,9 +235,29 @@ const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'sym
 let surface = 'mcp';
 const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
 
+/**
+ * Agents often pass absolute paths (`/work/repo/src`, `./src/`): path arguments are relative to
+ * the repository root everywhere else, so normalise them once here.
+ */
+function relativePaths(intel, args) {
+    const root = String(intel.root ?? '').replace(/\/+$/, '');
+    const rel = (p) => {
+        if (typeof p !== 'string') return p;
+        let r = p.trim();
+        if (root && (r === root || r.startsWith(root + '/'))) r = r.slice(root.length + 1);
+        r = r.replace(/^\.\/+/, '');
+        return r === '.' ? '' : r;
+    };
+    const out = { ...args };
+    if ('path' in out) out.path = rel(out.path);
+    if (Array.isArray(out.files)) out.files = out.files.map(rel);
+    else if (typeof out.files === 'string') out.files = out.files.split(',').map(rel);
+    return out;
+}
+
 export async function callTool(intel, name, args = {}, { cli = false } = {}) {
     surface = cli ? 'cli' : 'mcp';
-    try { return await dispatchTool(intel, name, args); } finally { surface = 'mcp'; }
+    try { return await dispatchTool(intel, name, relativePaths(intel, args ?? {})); } finally { surface = 'mcp'; }
 }
 
 async function dispatchTool(intel, name, args) {

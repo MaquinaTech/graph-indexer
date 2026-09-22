@@ -117,6 +117,7 @@ ${deliver}
 
 # Environment
 - Repository root: \`${checkout}\`. Work only inside it${task.family === 'qa' ? ' (the answer file above is the only file you write)' : ''}; paths you report are relative to it.
+- Your current working directory is NOT the repository: use absolute paths, and always pass the repository root as the path to search tools (tools without a path search an unrelated directory).
 - Nobody is available to answer questions: make reasonable assumptions and finish the task.
 - Be efficient, but the result must be complete and correct.
 - When you are finished, your final reply must be just the word DONE — the ${task.family === 'qa' ? 'answer file' : 'changes in the repository'} are what count.

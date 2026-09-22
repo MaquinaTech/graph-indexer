@@ -117,16 +117,19 @@ export function gradeRun(label, id, transcript = null) {
     const res = task.family === 'qa' ? gradeQa(task, meta) : gradeEdit(task, meta);
     let t = null;
     if (transcript && fs.existsSync(transcript)) {
-        t = parseTranscript(transcript, { arm: meta.arm });
+        t = parseTranscript(transcript, { arm: meta.arm, repo: meta.checkout });
         fs.copyFileSync(transcript, path.join(runDir, 'transcript.jsonl'));
-        // reading benchmark internals would leak answers
-        if (t && fs.readFileSync(transcript, 'utf8').includes('bench/agentic/tasks')) t.violations.push('read benchmark task files');
+        // reading benchmark internals would leak answers: file contents are a violation, a bare
+        // file list (a search tool run from the wrong directory) is recorded
+        const text = fs.readFileSync(transcript, 'utf8');
+        if (text.includes('bench/agentic/tasks') && /\\*"(gold|testPatch|callSites|decoys|statementNotes)\\*"\s*:/.test(text)) t.violations.push('read benchmark task files');
+        else if (text.includes('bench/agentic/tasks')) t.benign.push('listed benchmark task files');
     }
     const record = {
         runId: id, taskId: task.id, family: task.family, kind: task.kind ?? null, repo: task.repo, arm: meta.arm, rep: meta.rep,
         giLabel: label, gradedAt: new Date().toISOString(), ...res,
         agent: t ? { models: t.models, turns: t.turns, usage: t.usage, costUnits: t.costUnits, toolCalls: t.toolCalls, toolCounts: t.toolCounts,
-            giCalls: t.giCalls, grepCalls: t.grepCalls, filesRead: t.filesRead, filesEdited: t.filesEdited.length, wallMs: t.wallMs, violations: t.violations } : null,
+            giCalls: t.giCalls, grepCalls: t.grepCalls, filesRead: t.filesRead, filesEdited: t.filesEdited.length, wallMs: t.wallMs, violations: t.violations, benign: t.benign } : null,
     };
     writeJson(path.join(runDir, 'result.json'), record);
     appendJsonl(path.join(WORK, 'results', `${label}.jsonl`), record);
