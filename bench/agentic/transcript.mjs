@@ -138,12 +138,13 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         else if (t.name === 'Bash' && /(^|[\s;&|(])(curl|wget|git\s+(fetch|clone|pull|ls-remote)|pip3?\s+download|gh\s+(pr|api))\b/.test(t.cmd)) leaks.push(`bash: ${t.cmd.slice(0, 100)}`);
     }
     const violations = [], benign = [];
-    // another run's answer, grading or worktree (its edits) gives the answer away; listing the
-    // parent directories or reading another task's instructions does not
+    // another run's answer, grading or worktree (its edits) gives the answer away, and so do the
+    // source clones the worktrees are made from (they hold the later history, fix included);
+    // listing the parent directories or reading another task's instructions does not
     if (work) {
         // path characters only (shell variables included: `${arm}`), so quotes, escapes and
         // punctuation around a path are not taken for part of it
-        const under = new RegExp(`${work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:runs|wt|results|graded)(?:/[\\w.+@%=\${}/-]*)?`, 'g');
+        const under = new RegExp(`${work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:runs|wt|results|graded|repos)(?:/[\\w.+@%=\${}/-]*)?`, 'g');
         const mine = own.filter(Boolean).map(o => o.replace(/\/+$/, ''));
         for (const t of tools) {
             const text = t.name === 'Bash' ? t.cmd : JSON.stringify(t.input);
@@ -155,7 +156,7 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
                     if (rel.length === 4) benign.push(`read another run's instructions: ${p.slice(0, 100)}`);
                     continue;
                 }
-                if (rel[0] === 'wt' && rel.length <= 1) continue;
+                if ((rel[0] === 'wt' || rel[0] === 'repos') && rel.length <= 1) continue;
                 leaks.push(`other run: ${p.slice(0, 100)}`);
                 break;
             }

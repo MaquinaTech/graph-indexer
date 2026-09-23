@@ -68,6 +68,53 @@ const FILES = {
         `export function includes() {}`,
         ``,
     ].join('\n'),
+    // a builder whose methods return a new builder, without a declared return type
+    'src/builder.ts': [
+        `export class Builder<A = unknown> {`,
+        `  constructor(private readonly options: object, parent?: Builder) {}`,
+        `  setName(key: string) {`,
+        `    const builder = new Builder<A>(this.options, this as any);`,
+        `    return builder;`,
+        `  }`,
+        `  setExtras<E>(extras: E, transform: (d: object, e: E) => object = d => d) {`,
+        `    const builder = new Builder<A>(this.options, this as any);`,
+        `    return builder;`,
+        `  }`,
+        `  build(): { ok: boolean } { return { ok: true }; }`,
+        `}`,
+        `export class PipeBuilder {`,
+        `  build() { return 1; }`,
+        `}`,
+        ``,
+    ].join('\n'),
+    'src/module.ts': [
+        `import { Builder } from './builder';`,
+        `export function suite(describe: (n: string, f: () => void) => void) {`,
+        `  describe('Builder', () => {`,
+        `    describe('build', () => {`,
+        `      type Extra = { isGlobal?: boolean; providers: string[] };`,
+        `      const {`,
+        `        ok,`,
+        `      } = new Builder({`,
+        `        moduleName: 'SomeModuleWithALongName',`,
+        `        alwaysTransient: true,`,
+        `      })`,
+        `        .setName('createOptionsForTheFactory')`,
+        `        .setName('forFeatureWithAnotherLongName')`,
+        `        .setExtras<Extra>(`,
+        `          { isGlobal: false, providers: [] },`,
+        `          (definition, extras) => ({`,
+        `            ...definition,`,
+        `            global: extras.isGlobal,`,
+        `            providers: (definition as any).providers?.concat(extras.providers),`,
+        `          }),`,
+        `        )`,
+        `        .build();`,                                  // 22: a fluent chain over 15 indented lines
+        `    });`,
+        `  });`,
+        `}`,
+        ``,
+    ].join('\n'),
 };
 
 let root, intel;
@@ -94,6 +141,10 @@ test('types elements of awaited collections, loop variables and callback paramet
 
 test('types values of maps and of classes that extend a map', () => {
     assert.deepEqual(lines('Item.total', 'src/registry.ts'), [8, 9, 10]);
+});
+
+test('follows a fluent chain formatted one call per line', () => {
+    assert.deepEqual(lines('Builder.build', 'src/module.ts'), [22]);
 });
 
 test('members of arrays and primitives never bind to same-named repository functions', () => {

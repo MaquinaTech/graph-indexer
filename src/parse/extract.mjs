@@ -101,10 +101,12 @@ const CHAIN_RE = /^[A-Za-z_$@][\w$]*(?:\(\)|\[\])*(?:\.[A-Za-z_$][\w$]*(?:\(\)|\
  * (`?.` `!.` `->` `::` `!!`), string literals neutralised. Null when not a plain access chain.
  */
 function simplifyChain(text) {
-    if (text.length > 400) return null;
+    if (text.length > 4000) return null;
     let s = text.replace(/\bawait\s+/g, '').replace(/^new\s+/, '');
     if (/["'`]/.test(s)) s = s.replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '0');
+    // a fluent chain formatted one call per line is long mostly in whitespace: measure it without
     s = s.replace(/\s+/g, '').replace(/<[^<>()]*>(?=\()/g, '');
+    if (s.length > 600) return null;
     for (let i = 0; i < 12 && /[()[\]]/.test(s); i++) {
         const next = s.replace(/\([^()[\]]*\)/g, '\u0001').replace(/\[[^()[\]]*\]/g, '\u0002');
         if (next === s) return null; // unbalanced
