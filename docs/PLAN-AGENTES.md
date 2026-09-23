@@ -200,7 +200,7 @@ Un mismo ejecutable de hook tiene que detectar qué agente lo llama: Copilot CLI
   - `reglas`: nativas más solo las instrucciones de búsqueda, sin graph-indexer. Es el control que separa el efecto de las instrucciones del de las herramientas;
   - `grep+gi4`: nativas más graph-indexer con la tarjeta nueva (`read`, lotes, tarjeta de definiciones); el agente decide cuándo usarlo, como con MCP sin hooks;
   - `gi4-hooks`: emulación de los hooks. El agente lee y busca con `gi read` y `gi grep`, que devuelven la misma salida que las herramientas nativas más lo que añadirían los hooks. Edita con las herramientas nativas.
-- **Hooks reales.** La medición con hooks reales necesita registrarlos para los subagentes de la sesión, lo que requiere permiso explícito, o el arnés headless en local (`claude -p` con `--mcp-config` y `--settings`; `codex exec`). Queda como paso de validación.
+- **Hooks reales.** Los brazos `mcp` (servidor MCP y el bloque de `init`) y `mcp+hooks` (además, los hooks) se ejecutan con [`run-headless.mjs`](../bench/agentic/run-headless.mjs), que lanza `claude -p` con `--mcp-config` y `--settings` y deja las transcripciones listas para corregir. Necesita un `claude` autenticado en la máquina que lo ejecuta; esta sesión no lo tiene, así que es el paso de validación en local (o con permiso para registrar hooks aquí). Falta la variante para `codex exec`.
 
 ## 8. Fases y puertas
 

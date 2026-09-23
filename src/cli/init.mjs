@@ -23,6 +23,9 @@ The \`graph-indexer\` MCP server keeps a live index of this repository (re-synce
 - Before changing a signature or behaviour other code relies on: \`change_impact\`; after the edit: \`check_changes\`. A fix inside one function needs neither: run the tests that cover it, once.
 ${BLOCK_END}`;
 
+/** The managed instructions block `init` writes to CLAUDE.md / AGENTS.md (markers included). */
+export function managedBlock() { return SNIPPET; }
+
 const AGENTS = {
     claude: { label: 'Claude Code', file: '.mcp.json', key: 'mcpServers', detect: ['.claude', 'CLAUDE.md', '.mcp.json'], instructions: 'CLAUDE.md' },
     cursor: { label: 'Cursor', file: '.cursor/mcp.json', key: 'mcpServers', detect: ['.cursor', '.cursorrules'], instructions: 'AGENTS.md', workspaceVar: '${workspaceFolder}' },

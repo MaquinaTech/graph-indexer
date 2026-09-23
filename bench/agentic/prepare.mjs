@@ -40,7 +40,7 @@ export function snapshot(label = null) {
     return { label, dir: dst };
 }
 
-function giBin(label) {
+export function giBin(label) {
     const bin = path.join(WORK, 'gi', label, 'bin', 'graph-indexer.mjs');
     if (!fs.existsSync(bin)) throw new Error(`graph-indexer snapshot "${label}" not found — run: node bench/agentic/prepare.mjs snapshot --label ${label}`);
     return bin;

@@ -64,6 +64,8 @@ export const POLICIES = {
     gi3: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (third card)' },
     'grep+rules': { forbidTools: [], forbidBash: [], label: 'built-in tools and rules on how to look code up' },
     'grep+gi4': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, fourth card (reads with definitions, same rules)' },
+    mcp: { forbidTools: [], forbidBash: [], label: 'built-in tools and the graph-indexer MCP server with its instructions block' },
+    'mcp+hooks': { forbidTools: [], forbidBash: [], label: 'built-in tools, the graph-indexer MCP server and its Claude Code hooks' },
 };
 
 export function parseTranscript(file, { arm = null, repo = null, own = [], work = null } = {}) {

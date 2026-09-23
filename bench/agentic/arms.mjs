@@ -17,15 +17,23 @@
  *             needed rather than the file, one check at the end) — no graph-indexer
  *   grep+gi4  the same rules with graph-indexer's reads: `gi read` lists where every name the code
  *             uses is defined, so the two arms separate what the rules do from what the index adds
+ *   mcp       graph-indexer as users install it: the MCP server plus the block `init` writes to
+ *             CLAUDE.md/AGENTS.md; needs a harness with MCP (run-headless.mjs)
+ *   mcp+hooks the same plus the Claude Code hooks (edit check, definition rescue, crawl-gated context)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'mcp', 'mcp+hooks'];
+
+/** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */
+export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks']);
 
 /** Arms whose agent gets graph-indexer (an index is built for their checkout). */
 export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules';
+
+import { managedBlock } from '../../src/cli/init.mjs';
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {
@@ -145,11 +153,15 @@ POLICY['grep+gi3'] = POLICY['grep+gi2'];
 POLICY.gi3 = POLICY.gi;
 POLICY['grep+rules'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below.';
 POLICY['grep+gi4'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its rules.';
+POLICY.mcp = 'Use your built-in tools and the graph-indexer MCP tools as you see fit.';
+POLICY['mcp+hooks'] = POLICY.mcp;
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
     if (arm === 'grep+rules') return `# Tools\n${POLICY[arm]}\n\n${rulesCard()}`;
     if (arm === 'grep+gi4') return `# Tools\n${POLICY[arm]}\n\n${giCard4(gi)}`;
+    // what a user's CLAUDE.md / AGENTS.md carries after `graph-indexer init`
+    if (HARNESS_ARMS.has(arm)) return `# Tools\n${POLICY[arm]}\n\n${managedBlock().replace(/<!-- graph-indexer:(start|end) -->\n?/g, '').trim()}`;
     if (arm === 'grep+gi2' || arm === 'gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi2' })}`;
     if (arm === 'grep+gi3' || arm === 'gi3') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi3', v: 3 })}`;
     const grep = arm !== 'gi';

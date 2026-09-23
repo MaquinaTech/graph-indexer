@@ -385,10 +385,11 @@ grep or find despite the policy, most of them to read a configuration file.
   runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
   intervals can show.
 - **The real integration:** the MCP server and hooks inside the agent harness instead of
-  sub-agents following instructions. That needs the hooks registered for the agent under test —
-  in a session that allows it, or in a local headless run (`claude -p` with `--mcp-config` and
-  `--settings`); the transcript parser already reads that format, the script that launches such
-  runs is still to be written.
+  sub-agents following instructions. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
+  launches prepared runs with `claude -p` — the `mcp` arm with the MCP server and the block
+  `init` writes, `mcp+hooks` with the Claude Code hooks as well — and registers the stream-json
+  transcripts for grading; it needs an authenticated `claude` CLI, which the sessions that ran
+  the rounds so far did not have.
 
 ## Reproducing
 

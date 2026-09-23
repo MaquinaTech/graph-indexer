@@ -130,7 +130,8 @@ export function gradeRun(label, id, transcript = null) {
         runId: id, taskId: task.id, family: task.family, kind: task.kind ?? null, repo: task.repo, arm: meta.arm, rep: meta.rep,
         giLabel: label, gradedAt: new Date().toISOString(), ...res,
         agent: t ? { models: t.models, turns: t.turns, usage: t.usage, costUnits: t.costUnits, toolCalls: t.toolCalls, toolCounts: t.toolCounts,
-            giCalls: t.giCalls, grepCalls: t.grepCalls, filesRead: t.filesRead, filesEdited: t.filesEdited.length, wallMs: t.wallMs, violations: t.violations, benign: t.benign, leaks: t.leaks } : null,
+            giCalls: t.giCalls, grepCalls: t.grepCalls, filesRead: t.filesRead, filesEdited: t.filesEdited.length, wallMs: t.wallMs,
+            outputRecorded: t.outputRecorded, firstEditTurn: t.firstEditTurn, modelMs: t.modelMs, toolMs: t.toolMs, violations: t.violations, benign: t.benign, leaks: t.leaks } : null,
     };
     writeJson(path.join(runDir, 'result.json'), record);
     appendJsonl(path.join(WORK, 'results', `${label}.jsonl`), record);
