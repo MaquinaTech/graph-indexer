@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/core/helpers/context-utils.ts",
+    "cls": "ContextUtils",
+    "name": "reflectCallbackParamtypes",
+    "newName": "reflectCallbackParamtypesChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/context/rpc-context-creator.ts",
+      "cls": "RpcContextCreator",
+      "name": "reflectCallbackParamtypes",
+      "params": 2
+    },
+    {
+      "file": "packages/websockets/context/ws-context-creator.ts",
+      "cls": "WsContextCreator",
+      "name": "reflectCallbackParamtypes",
+      "params": 2
+    }
+  ]
+}

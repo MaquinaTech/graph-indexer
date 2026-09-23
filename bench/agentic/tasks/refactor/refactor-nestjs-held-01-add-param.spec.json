@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/core/injector/container.ts",
+    "cls": "NestContainer",
+    "name": "registerRequestProvider",
+    "params": 3,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/core/helpers/external-context-creator.ts",
+      "cls": "ExternalContextCreator",
+      "name": "registerRequestProvider",
+      "params": 2
+    }
+  ]
+}

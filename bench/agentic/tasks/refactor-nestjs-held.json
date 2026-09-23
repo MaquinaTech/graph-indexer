@@ -1,0 +1,362 @@
+[
+  {
+    "id": "refactor-nestjs-held-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `NestContainer.registerRequestProvider` (declared in `packages/core/injector/container.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `registerRequestProvider` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/injector/module-ref.ts:151",
+        "packages/core/helpers/external-context-creator.ts:360",
+        "packages/core/middleware/middleware-module.ts:352",
+        "packages/core/nest-application-context.ts:225",
+        "packages/core/router/router-explorer.ts:424",
+        "packages/microservices/listeners-controller.ts:314"
+      ],
+      "files": [
+        "packages/core/injector/module-ref.ts",
+        "packages/core/helpers/external-context-creator.ts",
+        "packages/core/middleware/middleware-module.ts",
+        "packages/core/nest-application-context.ts",
+        "packages/core/router/router-explorer.ts",
+        "packages/microservices/listeners-controller.ts",
+        "packages/core/injector/container.ts"
+      ]
+    },
+    "meta": {
+      "target": "NestContainer.registerRequestProvider",
+      "path": "packages/core/injector/container.ts",
+      "line": 328,
+      "callSites": 6,
+      "files": 6,
+      "decoys": [
+        "ExternalContextCreator.registerRequestProvider (packages/core/helpers/external-context-creator.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": false,
+      "referenceEdits": 7,
+      "naiveCallEdits": 6,
+      "naiveFailure": []
+    }
+  },
+  {
+    "id": "refactor-nestjs-held-02-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `ContextUtils.reflectCallbackParamtypes` (declared in `packages/core/helpers/context-utils.ts`) to `reflectCallbackParamtypesChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `reflectCallbackParamtypes` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-02-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/helpers/external-context-creator.ts:206",
+        "packages/core/router/router-execution-context.ts:197",
+        "packages/microservices/context/rpc-context-creator.ts:186",
+        "packages/websockets/context/ws-context-creator.ts:181"
+      ],
+      "files": [
+        "packages/core/helpers/external-context-creator.ts",
+        "packages/core/router/router-execution-context.ts",
+        "packages/microservices/context/rpc-context-creator.ts",
+        "packages/websockets/context/ws-context-creator.ts",
+        "packages/core/helpers/context-utils.ts"
+      ]
+    },
+    "meta": {
+      "target": "ContextUtils.reflectCallbackParamtypes",
+      "path": "packages/core/helpers/context-utils.ts",
+      "line": 29,
+      "callSites": 4,
+      "files": 4,
+      "decoys": [
+        "RpcContextCreator.reflectCallbackParamtypes (packages/microservices/context/rpc-context-creator.ts)",
+        "WsContextCreator.reflectCallbackParamtypes (packages/websockets/context/ws-context-creator.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 6,
+      "naiveFailure": [
+        "no new type errors: 8273 diagnostics, 2 new (8983 ms) |   packages/microservices/test/context/rpc-context-creator.spec.ts:142 TS2551 Property 'reflectCallbackParamtypesChecked' does not exist on type 'RpcContextCreator'. Did you mean 'reflectCallbackParamtypes'? |   packages/websockets/test/context/ws-context-creator.spec.ts:137 TS2551 Property 'reflectCallbackParamtypesChecked' does not exist on type 'WsContextCreator'. Did you mean 'reflectCallbackParamtypes'?"
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-held-03-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ExternalExceptionsHandler.invokeCustomFilters` (declared in `packages/core/exceptions/external-exceptions-handler.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `invokeCustomFilters` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-03-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/exceptions/external-exceptions-handler.ts:12",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:47",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:64",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:69",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:73",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:85",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts:89"
+      ],
+      "files": [
+        "packages/core/exceptions/external-exceptions-handler.ts",
+        "packages/core/test/exceptions/external-exceptions-handler.spec.ts",
+        "packages/core/exceptions/external-exceptions-handler.ts"
+      ]
+    },
+    "meta": {
+      "target": "ExternalExceptionsHandler.invokeCustomFilters",
+      "path": "packages/core/exceptions/external-exceptions-handler.ts",
+      "line": 26,
+      "callSites": 7,
+      "files": 2,
+      "decoys": [
+        "ExceptionsHandler.invokeCustomFilters (packages/core/exceptions/exceptions-handler.ts)",
+        "RpcExceptionsHandler.invokeCustomFilters (packages/microservices/exceptions/rpc-exceptions-handler.ts)",
+        "WsExceptionsHandler.invokeCustomFilters (packages/websockets/exceptions/ws-exceptions-handler.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 8,
+      "naiveCallEdits": 28,
+      "naiveFailure": [
+        "no new type errors: 8277 diagnostics, 21 new (6338 ms) |   packages/core/exceptions/exceptions-handler.ts:13 TS2554 Expected 2 arguments, but got 3. |   packages/core/test/exceptions/exceptions-handler.spec.ts:131 TS2554 Expected 2 arguments, but got 3. |   packages/core/test/exceptions/exceptions-handler.spec.ts:147 TS2554 Expected 2 arguments, but got 3."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-held-04-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `GraphInspector.insertOrphanedEnhancer` (declared in `packages/core/inspector/graph-inspector.ts`) to `insertOrphanedEnhancerChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `insertOrphanedEnhancer` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-04-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/nest-application.ts:399",
+        "packages/core/nest-application.ts:410",
+        "packages/core/nest-application.ts:421",
+        "packages/core/nest-application.ts:432",
+        "packages/microservices/nest-microservice.ts:113",
+        "packages/microservices/nest-microservice.ts:124",
+        "packages/microservices/nest-microservice.ts:135",
+        "packages/microservices/nest-microservice.ts:146"
+      ],
+      "files": [
+        "packages/core/nest-application.ts",
+        "packages/microservices/nest-microservice.ts",
+        "packages/core/inspector/graph-inspector.ts"
+      ]
+    },
+    "meta": {
+      "target": "GraphInspector.insertOrphanedEnhancer",
+      "path": "packages/core/inspector/graph-inspector.ts",
+      "line": 86,
+      "callSites": 8,
+      "files": 2,
+      "decoys": [
+        "SerializedGraph.insertOrphanedEnhancer (packages/core/inspector/serialized-graph.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 9,
+      "naiveCallEdits": 9,
+      "naiveFailure": [
+        "no new type errors: 8273 diagnostics, 1 new (6064 ms) |   packages/core/inspector/graph-inspector.ts:87 TS2551 Property 'insertOrphanedEnhancerChecked' does not exist on type 'SerializedGraph'. Did you mean 'insertOrphanedEnhancer'?"
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-held-05-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ClientRedis.createRetryStrategy` (declared in `packages/microservices/client/client-redis.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `createRetryStrategy` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-05-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/client/client-redis.ts:86",
+        "packages/microservices/test/client/client-redis.spec.ts:266",
+        "packages/microservices/test/client/client-redis.spec.ts:275",
+        "packages/microservices/test/client/client-redis.spec.ts:284",
+        "packages/microservices/test/client/client-redis.spec.ts:294"
+      ],
+      "files": [
+        "packages/microservices/client/client-redis.ts",
+        "packages/microservices/test/client/client-redis.spec.ts",
+        "packages/microservices/client/client-redis.ts"
+      ]
+    },
+    "meta": {
+      "target": "ClientRedis.createRetryStrategy",
+      "path": "packages/microservices/client/client-redis.ts",
+      "line": 94,
+      "callSites": 5,
+      "files": 2,
+      "decoys": [
+        "ServerRedis.createRetryStrategy (packages/microservices/server/server-redis.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 10,
+      "naiveFailure": [
+        "no new type errors: 8277 diagnostics, 5 new (5970 ms) |   packages/microservices/server/server-redis.ts:180 TS2554 Expected 1 arguments, but got 2. |   packages/microservices/test/server/server-redis.spec.ts:237 TS2554 Expected 1 arguments, but got 2. |   packages/microservices/test/server/server-redis.spec.ts:246 TS2554 Expected 1 arguments, but got 2."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-held-06-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `ModuleCompiler.compile` (declared in `packages/core/injector/compiler.ts`) to `compileChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `compile` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-held-06-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/core/injector/lazy-module-loader/lazy-module-loader.ts:39",
+        "packages/core/injector/container.ts:87",
+        "packages/core/injector/container.ts:125",
+        "packages/core/injector/container.ts:127",
+        "packages/core/injector/container.ts:222"
+      ],
+      "files": [
+        "packages/core/injector/lazy-module-loader/lazy-module-loader.ts",
+        "packages/core/injector/container.ts",
+        "packages/core/injector/compiler.ts"
+      ]
+    },
+    "meta": {
+      "target": "ModuleCompiler.compile",
+      "path": "packages/core/injector/compiler.ts",
+      "line": 17,
+      "callSites": 5,
+      "files": 2,
+      "decoys": [
+        "TestingModuleBuilder.compile (packages/testing/testing-module.builder.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 224,
+      "naiveFailure": [
+        "no new type errors: 8493 diagnostics, 221 new (5971 ms) |   integration/auto-mock/test/bar.service.spec.ts:19 TS2339 Property 'compileChecked' does not exist on type 'TestingModuleBuilder'. |   integration/auto-mock/test/bar.service.spec.ts:44 TS2339 Property 'compileChecked' does not exist on type 'TestingModuleBuilder'. |   integration/cors/e2e/express.spec.ts:31 TS2339 Property 'compileChecked' does not exist on type 'TestingModuleBuilder'."
+      ]
+    }
+  }
+]

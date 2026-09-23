@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/core/injector/compiler.ts",
+    "cls": "ModuleCompiler",
+    "name": "compile",
+    "newName": "compileChecked",
+    "params": 1
+  },
+  "decoys": [
+    {
+      "file": "packages/testing/testing-module.builder.ts",
+      "cls": "TestingModuleBuilder",
+      "name": "compile",
+      "params": 1
+    }
+  ]
+}

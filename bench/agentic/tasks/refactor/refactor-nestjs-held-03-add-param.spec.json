@@ -1,0 +1,29 @@
+{
+  "target": {
+    "file": "packages/core/exceptions/external-exceptions-handler.ts",
+    "cls": "ExternalExceptionsHandler",
+    "name": "invokeCustomFilters",
+    "params": 3,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/core/exceptions/exceptions-handler.ts",
+      "cls": "ExceptionsHandler",
+      "name": "invokeCustomFilters",
+      "params": 2
+    },
+    {
+      "file": "packages/microservices/exceptions/rpc-exceptions-handler.ts",
+      "cls": "RpcExceptionsHandler",
+      "name": "invokeCustomFilters",
+      "params": 2
+    },
+    {
+      "file": "packages/websockets/exceptions/ws-exceptions-handler.ts",
+      "cls": "WsExceptionsHandler",
+      "name": "invokeCustomFilters",
+      "params": 2
+    }
+  ]
+}

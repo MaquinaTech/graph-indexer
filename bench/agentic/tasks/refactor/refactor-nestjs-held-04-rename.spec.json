@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/core/inspector/graph-inspector.ts",
+    "cls": "GraphInspector",
+    "name": "insertOrphanedEnhancer",
+    "newName": "insertOrphanedEnhancerChecked",
+    "params": 1
+  },
+  "decoys": [
+    {
+      "file": "packages/core/inspector/serialized-graph.ts",
+      "cls": "SerializedGraph",
+      "name": "insertOrphanedEnhancer",
+      "params": 1
+    }
+  ]
+}

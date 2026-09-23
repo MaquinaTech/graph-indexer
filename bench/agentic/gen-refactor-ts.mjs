@@ -11,7 +11,11 @@
  * new "Expected N arguments" / "Property does not exist" error) and a structural check that the
  * target changed while the same-name methods did not.
  *
- *   node bench/agentic/gen-refactor-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ [--seed 5] [--n 6]
+ *   node bench/agentic/gen-refactor-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ [--seed 5] [--n 6] [--set NAME]
+ *
+ * --set NAME writes a separate task set (tasks/refactor-<name>-<set>.json, ids refactor-<name>-<set>-NN-…)
+ * whose targets avoid every method name used by the repository's other refactor sets: a held-out set
+ * for evaluating a version tuned on the first one.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,7 +31,13 @@ const name = opt('--name', path.basename(repo));
 const scope = opt('--scope', 'packages/');
 const seed = Number(opt('--seed', 5));
 const n = Number(opt('--n', 6));
-const out = path.join(HERE, 'tasks', `refactor-${name}.json`);
+const set = opt('--set', null);
+const prefix = set ? `${name}-${set}` : name;
+const out = path.join(HERE, 'tasks', `refactor-${prefix}.json`);
+// method names taken by the repository's other task sets
+const taken = new Set(fs.readdirSync(path.join(HERE, 'tasks'))
+    .filter(f => f.startsWith(`refactor-${name}`) && f.endsWith('.json') && path.join(HERE, 'tasks', f) !== out)
+    .flatMap(f => JSON.parse(fs.readFileSync(path.join(HERE, 'tasks', f), 'utf8')).map(t => t.meta.target.split('.').pop())));
 const specDir = path.join(HERE, 'tasks', 'refactor');
 
 const base = git(repo, 'rev-parse', 'HEAD').trim();
@@ -80,7 +90,7 @@ const tasks = [];
 const used = new Set();
 for (const m of cands) {
     if (tasks.length >= n) break;
-    if (used.has(m.name)) continue;
+    if (used.has(m.name) || taken.has(m.name)) continue;
     const info = declInfo(m.path, m.name_line, m.name_col);
     if (!info || info.hasRest) continue;
     const r = oracle.references(m.path, m.name_line, m.name_col);
@@ -99,7 +109,7 @@ for (const m of cands) {
     // string references (`sinon.stub(obj, 'name')`) are uses the type checker cannot see
     if (kind === 'rename' && stringMentions(m.name, info.cls, files).length) continue;
     used.add(m.name);
-    const id = `refactor-${name}-${String(tasks.length + 1).padStart(2, '0')}-${kind}`;
+    const id = `refactor-${prefix}-${String(tasks.length + 1).padStart(2, '0')}-${kind}`;
     const decoySpec = decoys.map(d => ({ file: d.path, cls: d.info.cls, name: m.name, params: d.info.params.length }));
     let statement, spec;
     if (kind === 'add-param') {

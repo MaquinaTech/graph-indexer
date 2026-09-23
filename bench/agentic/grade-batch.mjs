@@ -6,6 +6,8 @@
  *
  *   node bench/agentic/grade-batch.mjs --gi LABEL --agents id1,id2 [--transcripts DIR] [--min-idle SEC]
  *   node bench/agentic/grade-batch.mjs --gi LABEL --register "agentId runId" ...   append pairs to agents.tsv
+ *   node bench/agentic/grade-batch.mjs --gi LABEL --discard RUN[,RUN] --reason TEXT
+ *       void the gradings made so far (runs/<label>/discarded.tsv; the report ignores them) before a re-run
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,13 +32,22 @@ function finished(transcript, minIdleSec) {
     }
     const content = Array.isArray(last?.message?.content) ? last.message.content : [];
     const idleSec = (Date.now() - Date.parse(last?.timestamp ?? 0)) / 1000;
+    // an agent killed by an API error (rate limit, overload) ends with the error as its last message
+    if (last?.isApiErrorMessage || last?.error) return 'interrupted';
     return last?.type === 'assistant' && !content.some(c => c.type === 'tool_use') && idleSec >= minIdleSec;
 }
 const label = opt('--gi');
 if (!label) throw new Error('--gi LABEL is required');
 const tsv = path.join(WORK, 'runs', label, 'agents.tsv');
 
-if (args.includes('--register')) {
+if (opt('--discard')) {
+    const reason = opt('--reason');
+    if (!reason) throw new Error('--reason is required');
+    const at = new Date().toISOString();
+    for (const run of list('--discard')) fs.appendFileSync(path.join(WORK, 'runs', label, 'discarded.tsv'), `${run}\t${at}\t${reason}\n`);
+    fs.appendFileSync(path.join(WORK, 'runs', label, 'DISCARDED.txt'), `${list('--discard').join(' ')}: ${reason} (${at})\n`);
+    console.log(`discarded ${list('--discard').length} at ${at}`);
+} else if (args.includes('--register')) {
     const pairs = args.slice(args.indexOf('--register') + 1).filter(a => !a.startsWith('--'));
     fs.mkdirSync(path.dirname(tsv), { recursive: true });
     for (const p of pairs) {
@@ -54,7 +65,9 @@ if (args.includes('--register')) {
         const run = map.get(agent);
         if (!run) { console.log(`${agent}: not registered`); continue; }
         const transcript = ['.output', '.jsonl'].map(e => path.join(dir, agent + e)).find(f => fs.existsSync(f));
-        if (transcript && !flag('--force') && !finished(transcript, Number(opt('--min-idle', 180)))) { console.log(`${run}: agent still running (or finished less than --min-idle seconds ago) — not graded`); continue; }
+        const state = transcript && !flag('--force') ? finished(transcript, Number(opt('--min-idle', 180))) : true;
+        if (state === 'interrupted') { console.log(`${run}: agent stopped by an API error — not graded (discard and re-run it)`); continue; }
+        if (!state) { console.log(`${run}: agent still running (or finished less than --min-idle seconds ago) — not graded`); continue; }
         try {
             const r = gradeRun(label, run, transcript);
             const a = r.agent;
