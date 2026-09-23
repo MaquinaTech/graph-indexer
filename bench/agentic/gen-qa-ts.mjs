@@ -77,8 +77,11 @@ function declPos(item) {
     return row ? { line: row.name_line, col: row.name_col } : {};
 }
 
+// accessors are left out: the compiler treats a get/set pair as one symbol, so "the callers of the
+// setter" would include every reader of the getter
 const methods = shuffle(intel.store.all(`SELECT s.name, s.qname, s.kind, s.name_line, s.name_col, s.start_line, s.is_static, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 3 AND s.name <> 'constructor'`).filter(s => inScope(s.path)));
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 3 AND s.name <> 'constructor'
+    AND s.sig NOT LIKE 'get %' AND s.sig NOT LIKE 'set %' AND s.sig NOT LIKE 'static get %' AND s.sig NOT LIKE 'static set %'`).filter(s => inScope(s.path)));
 
 const tasks = [];
 const used = new Set();

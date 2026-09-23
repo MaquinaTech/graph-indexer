@@ -86,97 +86,6 @@
     }
   },
   {
-    "id": "qa-nestjs-r3-callers-01",
-    "family": "qa",
-    "kind": "callers-2",
-    "repo": "nestjs",
-    "base": "416830c3924b37ec354d4e15c14119519e389afc",
-    "statement": "I plan to change the behaviour of the method `InternalProvidersStorage.httpAdapter` (declared in `packages/core/injector/internal-providers-storage.ts`, line 16). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
-    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
-    "gold": {
-      "type": "spans",
-      "items": [
-        {
-          "path": "packages/core/injector/container.ts",
-          "start": 53,
-          "end": 61,
-          "name": "NestContainer.setHttpAdapter",
-          "level": 1
-        },
-        {
-          "path": "packages/core/injector/container.ts",
-          "start": 63,
-          "end": 65,
-          "name": "NestContainer.getHttpAdapterRef",
-          "level": 1
-        },
-        {
-          "path": "packages/core/nest-factory.ts",
-          "start": 191,
-          "end": 235,
-          "name": "NestFactoryStatic.initialize",
-          "level": 2
-        },
-        {
-          "path": "packages/testing/testing-module.ts",
-          "start": 59,
-          "end": 82,
-          "name": "TestingModule.createNestApplication",
-          "level": 2
-        },
-        {
-          "path": "packages/core/middleware/middleware-module.ts",
-          "start": 53,
-          "end": 80,
-          "name": "MiddlewareModule.register",
-          "level": 2
-        },
-        {
-          "path": "packages/core/router/router-explorer.ts",
-          "start": 57,
-          "end": 441,
-          "name": "RouterExplorer",
-          "level": 2
-        },
-        {
-          "path": "packages/core/router/router-explorer.ts",
-          "start": 263,
-          "end": 313,
-          "name": "RouterExplorer.applyHostFilter",
-          "level": 2
-        },
-        {
-          "path": "packages/core/router/routes-resolver.ts",
-          "start": 31,
-          "end": 219,
-          "name": "RoutesResolver",
-          "level": 2
-        },
-        {
-          "path": "packages/core/router/routes-resolver.ts",
-          "start": 142,
-          "end": 156,
-          "name": "RoutesResolver.registerNotFoundHandler",
-          "level": 2
-        },
-        {
-          "path": "packages/core/router/routes-resolver.ts",
-          "start": 158,
-          "end": 179,
-          "name": "RoutesResolver.registerExceptionHandler",
-          "level": 2
-        }
-      ]
-    },
-    "meta": {
-      "target": "InternalProvidersStorage.httpAdapter",
-      "path": "packages/core/injector/internal-providers-storage.ts",
-      "line": 16,
-      "level1": 2,
-      "total": 10
-    }
-  },
-  {
     "id": "qa-nestjs-r3-callers-02",
     "family": "qa",
     "kind": "callers-2",
@@ -461,6 +370,83 @@
       "line": 797,
       "level1": 3,
       "total": 11
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-callers-05",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `InterceptorsContextCreator.create` (declared in `packages/core/interceptors/interceptors-context-creator.ts`, line 21). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/helpers/external-context-creator.ts",
+          "start": 91,
+          "end": 185,
+          "name": "ExternalContextCreator.create",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/router-execution-context.ts",
+          "start": 80,
+          "end": 175,
+          "name": "RouterExecutionContext.create",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/context/rpc-context-creator.ts",
+          "start": 58,
+          "end": 138,
+          "name": "RpcContextCreator.create",
+          "level": 1
+        },
+        {
+          "path": "packages/websockets/context/ws-context-creator.ts",
+          "start": 57,
+          "end": 130,
+          "name": "WsContextCreator.create",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 328,
+          "end": 354,
+          "name": "RouterExplorer.createCallbackProxy",
+          "level": 2
+        },
+        {
+          "path": "packages/microservices/listeners-controller.ts",
+          "start": 67,
+          "end": 155,
+          "name": "ListenersController.registerPatternHandlers",
+          "level": 2
+        },
+        {
+          "path": "packages/microservices/listeners-controller.ts",
+          "start": 234,
+          "end": 294,
+          "name": "requestScopedHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/websockets/web-sockets-controller.ts",
+          "start": 66,
+          "end": 103,
+          "name": "WebSocketsController.subscribeToServerEvents",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "InterceptorsContextCreator.create",
+      "path": "packages/core/interceptors/interceptors-context-creator.ts",
+      "line": 21,
+      "level1": 4,
+      "total": 8
     }
   },
   {
