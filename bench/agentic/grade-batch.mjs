@@ -16,8 +16,8 @@ const { opt, list, args, flag } = argv();
 
 /**
  * Has the agent finished? Its transcript must end with an assistant message that asks for no
- * tool, and must not have changed for a minute. Grading applies the hidden tests to the checkout,
- * so grading a run that is still going would hand the agent the tests.
+ * tool (a running agent's last event is a tool call or a tool result). Grading applies the hidden
+ * tests to the checkout, so grading a run that is still going would hand the agent the tests.
  */
 function finished(transcript) {
     const lines = fs.readFileSync(transcript, 'utf8').trim().split('\n');
@@ -26,8 +26,7 @@ function finished(transcript) {
         try { const e = JSON.parse(lines[i]); if (e.type === 'assistant' || e.type === 'user') last = e; } catch { /* partial line */ }
     }
     const content = Array.isArray(last?.message?.content) ? last.message.content : [];
-    const quiet = Date.now() - fs.statSync(transcript).mtimeMs > 60_000;
-    return last?.type === 'assistant' && !content.some(c => c.type === 'tool_use') && quiet;
+    return last?.type === 'assistant' && !content.some(c => c.type === 'tool_use');
 }
 const label = opt('--gi');
 if (!label) throw new Error('--gi LABEL is required');
@@ -51,7 +50,7 @@ if (args.includes('--register')) {
         const run = map.get(agent);
         if (!run) { console.log(`${agent}: not registered`); continue; }
         const transcript = ['.output', '.jsonl'].map(e => path.join(dir, agent + e)).find(f => fs.existsSync(f));
-        if (transcript && !flag('--force') && !finished(transcript)) { console.log(`${run}: agent still running (or stopped less than a minute ago) — not graded`); continue; }
+        if (transcript && !flag('--force') && !finished(transcript)) { console.log(`${run}: agent still running — not graded`); continue; }
         try {
             const r = gradeRun(label, run, transcript);
             const a = r.agent;
