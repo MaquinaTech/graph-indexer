@@ -59,11 +59,23 @@ function upsertBlock(file, dryRun) {
     return exists ? 'updated' : 'created';
 }
 
-/** The command agents run for graph-indexer (npx, or this installation with --local). */
+/** An installed `graph-indexer` executable on PATH, if any (hooks start in ~0.1 s instead of npx's ~1 s). */
+function installedBin() {
+    for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+        if (!dir) continue;
+        const f = path.join(dir, process.platform === 'win32' ? 'graph-indexer.cmd' : 'graph-indexer');
+        try { if (fs.statSync(f).isFile()) return f; } catch { /* not here */ }
+    }
+    return null;
+}
+
+/** The command agents run for graph-indexer: this installation with --local, an installed binary, or npx. */
 function cliCommand(local) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bin = path.resolve(here, '../../bin/graph-indexer.mjs');
-    return local ? `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)}` : 'npx -y graph-indexer@3';
+    if (local) return `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)}`;
+    const installed = installedBin();
+    return installed ? JSON.stringify(installed) : 'npx -y graph-indexer@3';
 }
 
 /**
@@ -75,9 +87,9 @@ function upsertClaudeHooks(repo, local, dryRun) {
     const file = path.join(repo, '.claude', 'settings.json');
     const cfg = readJson(file) ?? {};
     const cmd = cliCommand(local);
-    const ours = (h) => /graph-indexer(\.mjs"?|@\d+)? hook /.test(h?.command ?? '');
+    const ours = (h) => /graph-indexer(\.mjs|\.cmd)?"?(@\d+)? hook /.test(h?.command ?? '');
     const want = {
-        PostToolUse: { matcher: 'Edit|Write|MultiEdit|Grep|Bash', hooks: [{ type: 'command', command: `${cmd} hook post-tool`, timeout: 10 }] },
+        PostToolUse: { matcher: 'Edit|Write|MultiEdit|Grep|Bash|Read', hooks: [{ type: 'command', command: `${cmd} hook post-tool`, timeout: 10 }] },
         SessionStart: { hooks: [{ type: 'command', command: `${cmd} hook session-start`, timeout: 10 }] },
         SubagentStart: { hooks: [{ type: 'command', command: `${cmd} hook subagent-start`, timeout: 10 }] },
     };

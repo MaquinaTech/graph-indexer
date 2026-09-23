@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { argv, git, sh, readJson, writeJson, loadTasks, runId, WORK, GI_ROOT, HERE } from './lib.mjs';
-import { toolSection, ARM_NAMES } from './arms.mjs';
+import { toolSection, ARM_NAMES, usesIndex } from './arms.mjs';
 import { REPOS } from './repos.mjs';
 
 const { opt, list, args } = argv();
@@ -85,7 +85,7 @@ function buildIndex(label, dir) {
 function checkoutFor(task, arm, id, label) {
     const src = sourceRepo(task.repo);
     excludeIndex(src);
-    const indexed = arm !== 'grep';
+    const indexed = usesIndex(arm);
     let dir;
     if (task.family === 'qa') {
         dir = path.join(WORK, 'checkouts', `${task.repo}@${task.base.slice(0, 10)}`, indexed ? `indexed-${label}` : 'plain');
@@ -159,7 +159,7 @@ export function prepareRun(task, arm, rep, label) {
     fs.mkdirSync(runDir, { recursive: true });
     const { dir: checkout, indexMs } = checkoutFor(task, arm, `${label}__${id}`, label);
     let gi = null, caps = {};
-    if (arm !== 'grep') {
+    if (usesIndex(arm)) {
         gi = path.join(runDir, 'gi');
         fs.writeFileSync(gi, `#!/bin/sh\nexec node ${JSON.stringify(giBin(label))} "$@" --repo ${JSON.stringify(checkout)}\n`, { mode: 0o755 });
         caps = capabilities(label);

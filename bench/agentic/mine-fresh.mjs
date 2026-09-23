@@ -10,9 +10,10 @@
  *   - kept only when FAIL_TO_PASS is non-empty (the real fix passes, the unfixed code fails).
  *
  *   node bench/agentic/mine-fresh.mjs --name sqlglot --runner unittest --src sqlglot/ --tests tests/ \
- *        [--since 2026-06-15] [--max 15] [--skip-subject REGEX]
+ *        [--since 2026-06-15] [--max 15] [--skip-subject REGEX] [--out fresh-sqlglot-r4]
  *
- * Writes bench/agentic/tasks/fresh-<name>.json plus test-id lists under tasks/fresh/. Problem
+ * Writes bench/agentic/tasks/<out>.json (default fresh-<name>.json) plus test-id lists under
+ * tasks/fresh/. Commits already used by another task file are skipped, so a new set is held out. Problem
  * statements start as the commit message and are rewritten separately (statements.mjs).
  */
 import fs from 'node:fs';
@@ -30,7 +31,10 @@ const testRe = new RegExp(opt('--tests-re', REPOS[name]?.testRe ?? '(^|/)tests?/
 const since = opt('--since', '2026-06-15');
 const max = Number(opt('--max', 15));
 const skipSubject = new RegExp(opt('--skip-subject', '^(Merge|Revert|Sync|Update CHANGELOG|Cleanup|chore|docs?|ci|build|style|test|tests|bump|release)\\b'), 'i');
-const out = path.join(HERE, 'tasks', `fresh-${name}.json`);
+const out = path.join(HERE, 'tasks', `${opt('--out', `fresh-${name}`)}.json`);
+// commits that already back a task in another file (earlier rounds) stay out of a new set
+const usedElsewhere = new Set(fs.readdirSync(path.join(HERE, 'tasks')).filter(f => /^fresh-.*\.json$/.test(f) && path.join(HERE, 'tasks', f) !== out)
+    .flatMap(f => readJson(path.join(HERE, 'tasks', f), []).map(t => t.meta?.sha)).filter(Boolean));
 const idsDir = path.join(HERE, 'tasks', 'fresh');
 
 const log = (...a) => console.error(...a);
@@ -84,7 +88,7 @@ const cands = candidates();
 log(`${name}: ${cands.length} candidate commits since ${since}`);
 for (const c of cands) {
     if (tasks.length >= max) break;
-    if (done.has(c.sha)) continue;
+    if (done.has(c.sha) || usedElsewhere.has(c.sha)) continue;
     const t0 = Date.now();
     reset(c.parent);
     const testPatch = git(repo, 'diff', '--no-color', '--binary', c.parent, c.sha, '--', ...c.tests);

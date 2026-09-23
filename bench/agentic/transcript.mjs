@@ -15,7 +15,7 @@ import fs from 'node:fs';
 const RESULT_CHARS_PER_TOKEN = 2.63;
 const GREP_CMD = /(^|[|;&(\s])(grep|egrep|fgrep|rg|ag|ack|git\s+grep)(\s|$)/;
 const FIND_NAME = /(^|[|;&(\s])find\s+\S.*-(i?name|i?path|regex)\b/;
-const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
+const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|read|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
 /** Shell variables that hold graph-indexer's path (`GI=/runs/x/gi; $GI refs Foo`). */
 const GI_VAR = /(?:^|[\s;&|(])([A-Za-z_]\w*)=(["']?)(\S*?(?:\/gi|graph-indexer(?:\.mjs)?))\2(?=[\s;&|)]|$)/g;
 /** Replace `$GI` / `${GI}` by `gi` for every variable known to hold graph-indexer's path. */
@@ -62,6 +62,8 @@ export const POLICIES = {
     gi2: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (adaptive rules)' },
     'grep+gi3': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated (third card)' },
     gi3: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (third card)' },
+    'grep+rules': { forbidTools: [], forbidBash: [], label: 'built-in tools and rules on how to look code up' },
+    'grep+gi4': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, fourth card (reads with definitions, same rules)' },
 };
 
 export function parseTranscript(file, { arm = null, repo = null, own = [], work = null } = {}) {

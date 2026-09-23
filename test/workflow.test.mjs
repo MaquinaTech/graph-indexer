@@ -63,17 +63,37 @@ test('check_changes: broken calls, removed names, new syntax errors and the test
     assert.match(text, /run: npx vitest run src\/cart\.test\.ts/);
 });
 
-test('hook post-tool: an edit gets the checker, a grep for a shared name gets the definitions', () => {
-    const run = (payload) => spawnSync(process.execPath, [BIN, 'hook', 'post-tool'], { input: JSON.stringify({ cwd: root, ...payload }), encoding: 'utf8' });
+test('hook post-tool: edits get the checker; missed definition searches get the location; crawling gets the definitions', () => {
+    const session = `t-${process.pid}-${Date.now()}`;
+    const run = (payload) => spawnSync(process.execPath, [BIN, 'hook', 'post-tool'], { input: JSON.stringify({ cwd: root, session_id: session, ...payload }), encoding: 'utf8' });
+    const ctxOf = (r) => (r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext : null);
     const edit = run({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(root, 'src/cart.ts') } });
     const ctx = JSON.parse(edit.stdout).hookSpecificOutput;
     assert.equal(ctx.hookEventName, 'PostToolUse');
     assert.match(ctx.additionalContext, /Cart\.total now takes 3 argument\(s\) \(was 2\)/);
-    const grep = run({ tool_name: 'Bash', tool_input: { command: `grep -rn "total(" src | head` } });
-    assert.match(JSON.parse(grep.stdout).hookSpecificOutput.additionalContext, /"total" names 2 different definitions/);
-    const quiet = run({ tool_name: 'Read', tool_input: { file_path: path.join(root, 'src/cart.ts') } });
-    assert.equal(quiet.stdout, '');
-    assert.equal(quiet.status, 0);
+    // a search for uses right after an edit: nothing to add yet
+    const first = run({ tool_name: 'Bash', tool_input: { command: `grep -rn "total(" src | head` }, tool_response: { stdout: 'src/checkout.ts:3:  return c.total([1, 2], 0.2);' } });
+    assert.equal(first.stdout, '');
+    // a definition search that missed: where it is, at once
+    const miss = run({ tool_name: 'Bash', tool_input: { command: `grep -n "class Wishlist" src/checkout.ts` }, tool_response: { stdout: '' } });
+    assert.match(ctxOf(miss), /"Wishlist" is defined at:\n {2}Wishlist → src\/cart\.ts:\d+-\d+ {2}class Wishlist/);
+    // third navigation call since the edit: crawling, so reads and greps get context
+    const read = run({ tool_name: 'Read', tool_input: { file_path: path.join(root, 'src/checkout.ts') } });
+    assert.match(ctxOf(read), /Cart\.total → src\/cart\.ts:2/);
+    const grep = run({ tool_name: 'Bash', tool_input: { command: `grep -rn "total(" src | head` }, tool_response: { stdout: 'src/checkout.ts:3:  return c.total([1, 2], 0.2);' } });
+    assert.match(ctxOf(grep), /"total" names 2 different definitions/);
+    // Cursor-style events get Cursor's field
+    const cursor = run({ hook_event_name: 'postToolUse', tool_name: 'Shell', tool_input: { command: 'grep -n "class Wishlist" src/wish.ts' }, tool_response: '' });
+    assert.match(JSON.parse(cursor.stdout).additional_context, /Wishlist → src\/cart\.ts:\d+/);
+    const quietEdit = run({ tool_name: 'Read', tool_input: { file_path: path.join(root, 'config/app.yaml') } });
+    assert.equal(quietEdit.status, 0);
+});
+
+test('hook subagent-start: the index line and the lookup rules', () => {
+    const r = spawnSync(process.execPath, [BIN, 'hook', 'subagent-start'], { input: JSON.stringify({ cwd: root, hook_event_name: 'SubagentStart' }), encoding: 'utf8' });
+    const text = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    assert.match(text, /live index of this repository/);
+    assert.match(text, /several targets/);
 });
 
 test('grep patterns are read from shell commands', () => {

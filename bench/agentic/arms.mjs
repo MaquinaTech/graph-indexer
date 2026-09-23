@@ -13,12 +13,19 @@
  *   gi2       the grep-free arm with the second card (plus `gi files` for file names)
  *   grep+gi3  the second card for graph-indexer with indirect subtypes, `refs --path` and complete-list notes
  *   gi3       its grep-free counterpart
+ *   grep+rules  built-in tools plus rules on how to look code up (several things per call, the lines
+ *             needed rather than the file, one check at the end) — no graph-indexer
+ *   grep+gi4  the same rules with graph-indexer's reads: `gi read` lists where every name the code
+ *             uses is defined, so the two arms separate what the rules do from what the index adds
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4'];
+
+/** Arms whose agent gets graph-indexer (an index is built for their checkout). */
+export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules';
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {
@@ -94,6 +101,38 @@ A live structural index of the repository — definitions, references bound thro
     return [head, '', rules.join('\n'), '', commands.join('\n')].join('\n');
 }
 
+/** How to look code up with the built-in tools only (the control for grep+gi4). */
+function rulesCard() {
+    return `## How to look code up
+- Explore in one pass: when you need several definitions or files, ask for them together — several tool calls in one message, or one search with alternatives — not one search per turn.
+- Read keyholes, not files: the function or the 50–100 lines you need (Read with offset/limit); find the line first (grep -n).
+- To find where a name is defined, search for its definition line (\`def name\`, \`class Name\`) across the package in one search, not directory by directory.
+- Check once: run the tests that cover your change when you are done; do not re-run a check nothing has changed.`;
+}
+
+/** Fourth card: the same rules, with graph-indexer's reads carrying the definitions of the names they use. */
+function giCard4(gi) {
+    return `## graph-indexer (code index for this repository)
+A live structural index of the repository — definitions, references bound through scopes, imports and receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).
+
+How to look code up:
+- Explore in one pass: when you need several definitions, read them in one \`gi read\` call (symbols such as \`Class.method\`, ranges such as \`path:120-180\`), not one search per name.
+- Read keyholes, not files: the function or the 50–100 lines you need. \`gi read <file>\` of a long file returns its outline, with the line range of every definition.
+- Follow names through the index: every \`gi read\` lists where each name the code uses is defined (file:line and signature); read those targets instead of grepping for their definitions.
+- Uses of a function, method or class, especially when other classes share the name → \`gi refs\` (exact call sites) instead of grepping the name.
+- Text that is not a code name (messages, config keys, strings) → grep as usual, or \`gi grep\`, which also says where the definition of a searched name is.
+- Changing a signature, renaming or removing something, or behaviour other code relies on → \`gi impact --symbols X\` first, \`gi check\` after editing. A fix inside one function needs neither: run the tests that cover it, once.
+- Your Edit tool may require its own Read of a file before editing it: read just the lines you change.
+
+Commands:
+- \`gi read <target>… [--full]\` — symbols (Name, Class.method, path:Name), ranges (path:START-END) or files, up to 12 per call: code with line numbers, then where each name it uses is defined.
+- \`gi refs <symbol> [--kind call|type|inherit|new|value] [--path DIR] [--no-tests]\` — every use, grouped by file, with confidence; says when the list is complete.
+- \`gi grep <regex> [--path DIR] [--literal] [-i]\` — text search over all files; code matches show their enclosing definition and, for identifiers, the definition they refer to.
+- \`gi search "<behaviour or identifier>" [--path DIR] [--kind K]\` — ranked symbols for a behaviour described in words.
+- \`gi impact [--symbols A,B] [--files X,Y] [--diff]\` · \`gi check [--files X,Y]\` — call sites to update and tests to run; what an edit broke.
+- \`gi callgraph <symbol> [--direction callers|callees|both]\` · \`gi outline [path]\` — call hierarchy; file skeleton or area map.`;
+}
+
 const POLICY = {
     grep: 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) as you normally would.',
     gi: 'For searching and navigating code use graph-indexer (below) instead of Grep/Glob: do NOT use the Grep or Glob tools, and do NOT run grep, rg, ag, ack, git grep or find in the shell. You may use Read, Edit, Write, and Bash for everything else (running tests or builds, ls, git status/diff).',
@@ -104,9 +143,13 @@ const POLICY = {
 POLICY.gi2 = POLICY.gi;
 POLICY['grep+gi3'] = POLICY['grep+gi2'];
 POLICY.gi3 = POLICY.gi;
+POLICY['grep+rules'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below.';
+POLICY['grep+gi4'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its rules.';
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
+    if (arm === 'grep+rules') return `# Tools\n${POLICY[arm]}\n\n${rulesCard()}`;
+    if (arm === 'grep+gi4') return `# Tools\n${POLICY[arm]}\n\n${giCard4(gi)}`;
     if (arm === 'grep+gi2' || arm === 'gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi2' })}`;
     if (arm === 'grep+gi3' || arm === 'gi3') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi3', v: 3 })}`;
     const grep = arm !== 'gi';
