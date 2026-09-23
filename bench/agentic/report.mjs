@@ -2,7 +2,8 @@
 /**
  * Aggregate graded runs into comparison tables.
  *
- *   node bench/agentic/report.mjs --gi LABEL[,LABEL…] [--baseline grep] [--family qa|edit] [--json out.json] [--md out.md]
+ *   node bench/agentic/report.mjs --gi LABEL[,LABEL…] [--baseline grep] [--integrated grep+gi+] [--nogrep gi]
+ *                                 [--family qa|refactor|fresh] [--tasks ID,ID|file.json] [--json out.json] [--md out.md]
  *
  * Per arm: runs, solve rate (Wilson 95% CI), mean score (F1 for questions, share of checks passed
  * for edits), and median/mean agent cost (input-equivalent tokens), turns, tool calls and wall
@@ -19,6 +20,9 @@ import { compare, wilson, mean, median, holm, bootstrap } from './stats.mjs';
 const { opt, list, flag } = argv();
 const labels = list('--gi');
 const baseline = opt('--baseline', 'grep');
+// the arms the SOTA gates compare with the baseline: graph-indexer integrated with grep, and without grep
+const integrated = opt('--integrated', 'grep+gi+');
+const nogrep = opt('--nogrep', 'gi');
 const family = opt('--family', null);
 
 let rows = labels.flatMap(l => readJsonl(path.join(WORK, 'results', `${l}.jsonl`)));
@@ -31,6 +35,11 @@ rows = rows.filter(r => !(discardedAt.get(`${r.giLabel}|${r.runId}`) >= r.graded
 // keep the latest grading of each run
 rows = [...new Map(rows.map(r => [`${r.giLabel}|${r.runId}`, r])).values()];
 if (family) rows = rows.filter(r => (r.family === 'qa' ? 'qa' : r.kind === 'fresh' ? 'fresh' : 'refactor') === family);
+if (opt('--tasks')) {
+    const spec = opt('--tasks');
+    const ids = new Set(spec.endsWith('.json') ? loadTasks().filter(t => t._file === path.basename(spec)).map(t => t.id) : spec.split(','));
+    rows = rows.filter(r => ids.has(r.taskId));
+}
 // dry runs (rep 0, graded without an agent) are harness checks, not observations
 rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1);
 // runs that looked the answer up outside the repository (web, upstream fetch, task files) are invalid
@@ -140,10 +149,10 @@ if (!family && arms.includes(baseline)) {
     const multi = rows.filter(r => r.group === 'qa' || r.group === 'refactor');
     const simple = rows.filter(r => isSimple(r.taskId));
     const g = {
-        G1: gate('G1 multi-site & impact tasks (B1+B2): grep+gi+ vs grep', multi, baseline, 'grep+gi+'),
-        G2: gate('G2 all tasks: grep+gi+ vs grep', rows, baseline, 'grep+gi+'),
-        G3: gate('G3 all tasks: gi (no grep) vs grep', rows, baseline, 'gi'),
-        G4: gate('G4 simple tasks (one-file fixes): grep+gi+ vs grep', simple, baseline, 'grep+gi+'),
+        G1: gate(`G1 multi-site & impact tasks (B1+B2): ${integrated} vs ${baseline}`, multi, baseline, integrated),
+        G2: gate(`G2 all tasks: ${integrated} vs ${baseline}`, rows, baseline, integrated),
+        G3: gate(`G3 all tasks: ${nogrep} (no grep) vs ${baseline}`, rows, baseline, nogrep),
+        G4: gate(`G4 simple tasks (one-file fixes): ${integrated} vs ${baseline}`, simple, baseline, integrated),
     };
     const pts = (x) => `${fmt(100 * x, 0)}`;
     const verdict = {
@@ -152,7 +161,7 @@ if (!family && arms.includes(baseline)) {
         G3: g.G3.tasks && g.G3.solved.diff.lo * 100 >= -5 && g.G3.cost.ratio.est <= 1.0,
         G4: g.G4.tasks && g.G4.cost.ratio.est <= 1.10,
     };
-    const adoptRuns = multi.filter(r => r.arm === 'grep+gi+');
+    const adoptRuns = multi.filter(r => r.arm === integrated);
     const adoption = adoptRuns.length ? adoptRuns.filter(r => (r.agent?.giCalls ?? 0) > 0).length / adoptRuns.length : NaN;
     out.push(`\n### SOTA gates (docs/PLAN-SOTA.md)\n`);
     out.push('| gate | tasks | Δ solved (95% CI) | cost ratio (95% CI) | cost per solved task (95% CI) | target | met |');
@@ -161,7 +170,7 @@ if (!family && arms.includes(baseline)) {
     for (const [k, v] of Object.entries(g)) {
         out.push(`| ${v.name} | ${v.tasks} | ${pts(v.solved.diff.est)} (${pts(v.solved.diff.lo)}…${pts(v.solved.diff.hi)}) | ${fmt(v.cost.ratio?.est)} (${fmt(v.cost.ratio?.lo)}…${fmt(v.cost.ratio?.hi)}) | ${fmt(v.cps.est)} (${fmt(v.cps.lo)}…${fmt(v.cps.hi)}) | ${target[k]} | ${v.tasks ? (verdict[k] ? 'yes' : 'no') : '–'} |`);
     }
-    out.push(`| G6 adoption: grep+gi+ runs on B1+B2 that used graph-indexer | ${adoptRuns.length} runs | | | | ≥ 80% | ${Number.isFinite(adoption) ? `${pct(adoption)} → ${adoption >= 0.8 ? 'yes' : 'no'}` : '–'} |`);
+    out.push(`| G6 adoption: ${integrated} runs on B1+B2 that used graph-indexer | ${adoptRuns.length} runs | | | | ≥ 80% | ${Number.isFinite(adoption) ? `${pct(adoption)} → ${adoption >= 0.8 ? 'yes' : 'no'}` : '–'} |`);
     out.push('\nG5 (graph accuracy against the TypeScript compiler) is measured by `node bench/eval-graph.mjs`, not by agent runs.');
     json.gates = { ...g, verdict, adoption };
 }
