@@ -2,7 +2,7 @@
 /**
  * Where an agent's tokens and time go, read from the transcripts of graded runs.
  *
- *   node bench/agentic/anatomy.mjs --gi LABEL[,LABEL…] [--transcripts DIR] [--json out.json]
+ *   node bench/agentic/anatomy.mjs --gi LABEL[,LABEL…] [--transcripts DIR] [--tasks ID,ID] [--json out.json]
  *
  * Per suite and arm:
  *   - real cost split: the fixed prefix re-read every call, generating the model's output (thinking, text,
@@ -41,6 +41,8 @@ const discardedAt = new Map(labels.flatMap(l => {
 rows = rows.filter(r => !(discardedAt.get(`${r.giLabel}|${r.runId}`) >= r.gradedAt));
 rows = [...new Map(rows.map(r => [`${r.giLabel}|${r.runId}`, r])).values()];
 rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1 && !r.agent.leaks?.length);
+// --tasks a,b,c: only these tasks (to compare arms on the tasks they all ran)
+if (opt('--tasks')) { const only = new Set(list('--tasks')); rows = rows.filter(r => only.has(r.taskId)); }
 const tasks = new Map(loadTasks().map(t => [t.id, t]));
 const suiteOf = (r) => r.family === 'qa' ? 'B1' : r.kind === 'fresh' ? 'B3' : 'B2';
 
