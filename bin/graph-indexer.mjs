@@ -12,6 +12,7 @@
  *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N]
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
  *   graph-indexer outline  [path]   [--focus TEXT] [--max-tokens N]
+ *   graph-indexer files    <text|glob> [--path P]
  *
  * The query commands print exactly what the MCP tools return, so humans (and agents limited to a
  * shell) get the same answers.
@@ -90,6 +91,7 @@ Usage:
   graph-indexer status [--repo DIR]
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
+  graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
   graph-indexer symbol <name>… [--no-code]         one or several definitions
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
@@ -171,6 +173,10 @@ async function main() {
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');
             return runTool('check_changes', { files, base });
+        }
+        case 'files': {
+            const pathF = opt('--path'); const limit = Number(opt('--limit', 100));
+            return runTool('find_files', { pattern: argv.join(' '), path: pathF, limit });
         }
         case 'outline': {
             const focus = opt('--focus'); const maxTokens = Number(opt('--max-tokens', 1500));

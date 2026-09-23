@@ -41,6 +41,15 @@ test('search_text: grep lines with the definition each identifier match refers t
     assert.match(text, /"total" across all \d+ matches: .*→ Cart\.total.*→ Wishlist\.total.*2 definitions.*1 in non-code files/);
 });
 
+test('find_files (CLI `files`): substring of the path, or a glob on file names or paths', async () => {
+    assert.match(await callTool(intel, 'find_files', { pattern: 'CHECK' }), /^1 file with "CHECK" in the path:\nsrc\/checkout\.ts$/);
+    const tests = await callTool(intel, 'find_files', { pattern: '*.test.ts' });
+    assert.match(tests, /src\/cart\.test\.ts {2}\(test\)/);
+    assert.match(await callTool(intel, 'find_files', { pattern: 'config/*.yaml' }), /config\/app\.yaml/);
+    assert.match(await callTool(intel, 'find_files', { pattern: '**/*.{yaml,json}' }), /^2 files matching/);
+    assert.match(await callTool(intel, 'find_files', { pattern: 'nope' }), /No file path contains "nope"/);
+});
+
 test('check_changes: broken calls, removed names, new syntax errors and the tests to run', async () => {
     writeFile(root, 'src/cart.ts', `export class Cart {\n  total(items: number[], tax: number, currency: string) { return items.length * tax; }\n}\nexport class Wishlist {\n  total() { return 0; }\n}\n`);
     writeFile(root, 'src/wish.ts', `import { Wishlist } from './cart';\nexport function wished(w: Wishlist) {\n  return w.total(1);\n}\nexport function broken( {\n`);

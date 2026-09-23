@@ -31,6 +31,43 @@ function listFiles(root) {
     return out;
 }
 
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+/** Regular expression source for a glob: `*` within a directory, `**` across directories, `?`, `[…]`, `{a,b}`. */
+function globSource(glob) {
+    let re = '';
+    for (let i = 0; i < glob.length; i++) {
+        const c = glob[i];
+        if (c === '*') {
+            if (glob[i + 1] !== '*') { re += '[^/]*'; continue; }
+            i++;
+            if (glob[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*';
+        } else if (c === '?') re += '[^/]';
+        else if (c === '[' && glob.indexOf(']', i + 2) > i) { const j = glob.indexOf(']', i + 2); re += glob.slice(i, j + 1).replace(/^\[!/, '[^'); i = j; }
+        else if (c === '{' && glob.indexOf('}', i) > i) { const j = glob.indexOf('}', i); re += `(?:${glob.slice(i + 1, j).split(',').map(escapeRe).join('|')})`; i = j; }
+        else re += escapeRe(c);
+    }
+    return re;
+}
+
+/**
+ * Files whose path matches a glob (`*.toml`, `tests/test_*.py`, `**` for any depth; without a slash
+ * it is matched against file names) or, without wildcards, contains the text (case-insensitive).
+ */
+export function findFiles(root, pattern, { path: prefix = null } = {}) {
+    const pre = prefix ? String(prefix).replace(/^\.\//, '').replace(/\/+$/, '') : null;
+    let test;
+    if (/[*?[{]/.test(pattern)) {
+        const onName = !pattern.includes('/');
+        const re = new RegExp(onName ? `^${globSource(pattern)}$` : `(^|/)${globSource(pattern.replace(/^\.?\//, ''))}$`);
+        test = (p) => re.test(onName ? p.slice(p.lastIndexOf('/') + 1) : p);
+    } else {
+        const t = pattern.toLowerCase();
+        test = (p) => p.toLowerCase().includes(t);
+    }
+    return listFiles(root).filter(p => (!pre || p === pre || p.startsWith(pre + '/')) && test(p)).sort();
+}
+
 /** The identifier a pattern is about (`\bget\(` → get, `Reflector.get` → get), if any. */
 export function identifierOf(pattern, literal) {
     const src = literal ? pattern : pattern.replace(/\\[bBsSdDwW]/g, ' ').replace(/\\(.)/g, '$1').replace(/[()[\]{}^$*+?|]/g, ' ');

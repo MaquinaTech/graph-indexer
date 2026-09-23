@@ -6,7 +6,7 @@
 import path from 'node:path';
 import { analyzeQuery } from '../search/tokenize.mjs';
 import { loc, clip, codeBlock, symHeader, confWord, matchingLines, plural } from './render.mjs';
-import { textSearch } from '../query/textsearch.mjs';
+import { textSearch, findFiles } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -232,7 +232,7 @@ function refSummary(intel, id) {
  * Hints inside tool output name the next tool to call; through the CLI they must name the
  * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
  */
-const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline' };
+const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
 let surface = 'mcp';
 const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
 
@@ -271,8 +271,24 @@ async function dispatchTool(intel, name, args) {
         case 'change_impact': return toolImpact(intel, args);
         case 'outline': return toolOutline(intel, args);
         case 'check_changes': return toolCheck(intel, args);
+        case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
+}
+
+function toolFiles(intel, { pattern, path: p = null, limit = 100 }) {
+    const pat = String(pattern ?? '').trim();
+    if (!pat) return 'Provide part of a file path or name, or a glob (*.toml, tests/test_*.py, docs/**).';
+    const glob = /[*?[{]/.test(pat);
+    const all = findFiles(intel.root, pat, { path: p });
+    const under = p ? ` under ${p}` : '';
+    if (!all.length) return `No file path ${glob ? 'matches' : 'contains'} "${pat}"${under}. Text without wildcards is matched anywhere in the path, ignoring case; a glob without a slash is matched against file names. To search inside files use ${tn('search_text')}.`;
+    const tests = new Set(intel.store.all('SELECT path FROM files WHERE is_test = 1').map(f => f.path));
+    const n = Math.min(Math.max(1, limit), 1000);
+    const out = [`${plural(all.length, 'file')} ${glob ? `matching "${pat}"` : `with "${pat}" in the path`}${under}:`];
+    for (const f of all.slice(0, n)) out.push(f + (tests.has(f) ? '  (test)' : ''));
+    if (all.length > n) out.push(`… ${all.length - n} more (narrow the pattern, or pass a path or a higher limit)`);
+    return out.join('\n');
 }
 
 async function toolSearch(intel, { query, path: p = null, kind = null, limit = 8 }) {
@@ -624,7 +640,7 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         problems += a.sites.length;
         out.push(a.newCall
             ? `✗ call does not fit ${a.target} (${a.path}; takes ${a.is} argument${a.is === '1' ? '' : 's'}):`
-            : `✗ ${a.sites.length} of ${a.total} call site${a.total === 1 ? '' : 's'} no longer fit ${a.target} (${a.path}; now takes ${a.is}, was ${a.was}):`);
+            : `✗ ${a.sites.length} of ${a.total} call site${a.total === 1 ? '' : 's'} no longer fit${a.sites.length === 1 ? 's' : ''} ${a.target} (${a.path}; now takes ${a.is}, was ${a.was}):`);
         for (const x of a.sites.slice(0, 10)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  passes ${x.argc.n}${x.argc.open ? '+' : ''}  │ ${clip(x.text ?? '', 110)}`);
         if (a.sites.length > 10) out.push(`    … ${a.sites.length - 10} more`);
     }
