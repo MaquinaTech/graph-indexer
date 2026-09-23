@@ -27,6 +27,9 @@ rows = [...new Map(rows.map(r => [`${r.giLabel}|${r.runId}`, r])).values()];
 if (family) rows = rows.filter(r => (r.family === 'qa' ? 'qa' : r.kind === 'fresh' ? 'fresh' : 'refactor') === family);
 // dry runs (rep 0, graded without an agent) are harness checks, not observations
 rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1);
+// runs that looked the answer up outside the repository (web, upstream fetch, task files) are invalid
+const leaked = rows.filter(r => r.agent?.leaks?.length);
+rows = rows.filter(r => !r.agent?.leaks?.length);
 // intention-to-treat: runs that broke their arm's tool policy stay in (dropping them would bias
 // the arm towards the runs that happened to comply); --exclude-violations is the sensitivity check
 const violating = rows.filter(r => r.agent?.violations?.length);
@@ -156,6 +159,7 @@ if (!family && arms.includes(baseline)) {
     out.push('\nG5 (graph accuracy against the TypeScript compiler) is measured by `node bench/eval-graph.mjs`, not by agent runs.');
     json.gates = { ...g, verdict, adoption };
 }
+if (leaked.length) out.push(`\nExcluded — the agent looked the answer up outside the repository (${leaked.length}): ${leaked.map(r => `${r.runId} (${r.agent.leaks.slice(0, 1).map(v => v.slice(0, 80)).join('')})`).join(', ')}`);
 if (violating.length) {
     out.push(`\nRuns that broke their arm's tool policy (${violating.length}, ${flag('--exclude-violations') ? 'excluded' : 'included — intention to treat'}): ${violating.map(r => `${r.runId} (${r.agent.violations.slice(0, 2).map(v => v.slice(0, 90)).join('; ')})`).join(', ')}`);
 }

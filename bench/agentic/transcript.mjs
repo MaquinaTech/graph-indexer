@@ -127,6 +127,12 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
         if (t.name === 'Read' && t.input.file_path) reads.add(t.input.file_path);
         if ((t.name === 'Edit' || t.name === 'Write' || t.name === 'MultiEdit' || t.name === 'NotebookEdit') && (t.input.file_path || t.input.notebook_path)) edits.add(t.input.file_path || t.input.notebook_path);
     }
+    // looking the answer up outside the repository invalidates a run whatever its arm
+    const leaks = [];
+    for (const t of tools) {
+        if (t.name === 'WebSearch' || t.name === 'WebFetch') leaks.push(`${t.name}: ${JSON.stringify(t.input).slice(0, 100)}`);
+        else if (t.name === 'Bash' && /(^|[\s;&|(])(curl|wget|git\s+(fetch|clone|pull|ls-remote)|pip3?\s+download|gh\s+(pr|api))\b/.test(t.cmd)) leaks.push(`bash: ${t.cmd.slice(0, 100)}`);
+    }
     const violations = [], benign = [];
     const policy = arm ? POLICIES[arm] : null;
     if (policy) {
@@ -157,7 +163,7 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
         filesEdited: [...edits],
         wallMs: result?.duration_ms ?? (first && last ? last - first : null),
         costUsd: result?.total_cost_usd ?? null,
-        violations, benign,
+        violations, benign, leaks,
         finalText: finalText.slice(0, 2000),
     };
 }

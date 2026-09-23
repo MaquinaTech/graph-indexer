@@ -93,12 +93,36 @@ function checkoutFor(task, arm, id, label) {
     } else {
         dir = path.join(WORK, 'wt', id);
         if (fs.existsSync(dir)) { tryRemoveWorktree(src, dir); }
-        addWorktree(src, dir, task.base);
+        // mined tasks come from clones that also hold the fix: export the snapshot alone
+        if (task.kind === 'fresh') isolatedCheckout(src, dir, task.base);
+        else addWorktree(src, dir, task.base);
         const setup = REPOS[task.repo].setupWorktree;
         if (setup) { const r = sh(setup, { cwd: dir, timeout: 1_800_000 }); if (r.code !== 0) throw new Error(`setup of ${dir} failed: ${r.stderr.slice(-400)}`); }
     }
     const indexMs = indexed ? buildIndex(label, dir) : null;
     return { dir, indexMs };
+}
+
+/**
+ * A standalone repository holding only the base snapshot: one commit, no remote, none of the
+ * source clone's later history (a worktree shares the clone's objects, so `git log --all` or
+ * `git show <fix>` would reveal the real fix of a mined task).
+ */
+function isolatedCheckout(src, dir, base) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const index = path.join(WORK, `index-${process.pid}-${Date.now()}`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+        let r = sh(`git read-tree ${base}`, { cwd: src, env });
+        if (r.code === 0) r = sh(`git checkout-index -a -f --prefix=${JSON.stringify(dir + '/')}`, { cwd: src, env, timeout: 1_800_000 });
+        if (r.code !== 0) throw new Error(`exporting ${base} from ${src} failed: ${r.stderr.slice(-400)}`);
+    } finally { fs.rmSync(index, { force: true }); }
+    git(dir, 'init', '-q');
+    fs.appendFileSync(path.join(dir, '.git', 'info', 'exclude'), '.graph-indexer/\n');
+    git(dir, 'add', '-A');
+    git(dir, '-c', 'user.name=bench', '-c', 'user.email=bench@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', `base ${base.slice(0, 12)}`);
+    return dir;
 }
 
 function tryRemoveWorktree(src, dir) {
@@ -118,6 +142,7 @@ ${deliver}
 # Environment
 - Repository root: \`${checkout}\`. Work only inside it${task.family === 'qa' ? ' (the answer file above is the only file you write)' : ''}; paths you report are relative to it.
 - Your current working directory is NOT the repository: use absolute paths, and always pass the repository root as the path to search tools (tools without a path search an unrelated directory).
+- Work offline: do not search the web, fetch web pages, or download code or packages (no WebSearch/WebFetch, curl, wget, git fetch/clone, pip install). Solve the task from the repository with the tools described here.
 - Nobody is available to answer questions: make reasonable assumptions and finish the task.
 - Be efficient, but the result must be complete and correct.
 - When you are finished, your final reply must be just the word DONE — the ${task.family === 'qa' ? 'answer file' : 'changes in the repository'} are what count.
