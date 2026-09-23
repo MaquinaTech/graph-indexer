@@ -159,10 +159,12 @@ and real commits, and end to end with coding agents
 - Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
   ranking 0.485 / 0.374; BM25 0.373 / 0.290).
 - Symbol search (377 queries): rank-1 0.700, MRR 0.759 (2.x on the same queries: 0.552 / 0.646).
-- Agents, three rounds (69 tasks, 237 runs; docs/AGENTIC-BENCHMARK.md): on code questions and
-  multi-site refactors graph-indexer next to grep costs 0.73 of grep alone (95% CI 0.58–0.90) in
-  the latest round, 0.76 and 0.81 in the earlier ones; without grep nothing is lost at about the
-  same cost; fixing real issues costs the same either way.
+- Agents, four rounds (88 tasks, 359 runs; docs/AGENTIC-BENCHMARK.md). In the fourth (19 new
+  tasks, 122 runs, all solved), graph-indexer as `init` installs it answers code questions at
+  0.44 of the cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's
+  reasoning; questions and refactors together at 0.48; real issues at 0.85 (0.76–0.96), the same
+  as the lookup rules alone (0.86); one-file fixes at 0.85. On questions and refactors it cost
+  0.73, 0.81 and 0.76 of grep in the earlier rounds.
 
 ---
 

@@ -138,20 +138,24 @@ and every comparison is within a round, against the `grep` arm on the same tasks
 
 ## Results
 
-Three rounds, 69 tasks, 237 graded runs. In short:
+Four rounds, 88 tasks, 359 graded runs. In short:
 
-- **On code questions and multi-site refactors (B1 + B2), graph-indexer next to grep costs less
-  than grep alone in every round:** 0.76 of grep's cost in the development round, 0.81 in the
-  held-out round and 0.73 (0.58–0.90) in the third, where each solved task cost 0.68 of what it
-  cost with grep.
+- **On code questions (B1), graph-indexer next to grep costs less than half of grep alone:** 0.44
+  (0.32–0.67) of grep's cost and 0.37 of its time in the fourth round, with the model writing less
+  than half the reasoning (12k output tokens per question against 30k). On B1 + B2 it was 0.76,
+  0.81 and 0.73 of grep in the first three rounds and 0.48 in the fourth.
+- **Fixing real issues (B3) costs 15% less with graph-indexer installed, and the lookup rules
+  it installs carry that gain:** 0.85 (0.76–0.96) of grep's cost with the sixth card, 0.86
+  (0.76–0.98) with the rules alone; earlier cards cost the same as grep (0.93–1.10). The agent's
+  own reasoning and the prefix it re-reads at every call are most of the cost in every arm (see
+  [where the cost goes](#measurement-correction-and-where-the-cost-goes)).
+- **Reading through graph-indexer gives a cleaner context but not a cheaper run:** with reads by
+  name, 42% of the code lines an agent reads fall in the functions its fix changes (13–16%
+  otherwise) and it makes a third of the lookups before its first edit, at the same cost.
 - **Without grep, nothing is lost and the cost is about the same:** 0.82 (0.59–1.12) on B1 + B2
   in the third round, 1.02 over all tasks in the held-out round.
-- **Fixing real issues (B3) costs the same with or without graph-indexer** (cost ratios between
-  0.96 and 1.10 across arms and rounds): the agent explores by chasing names one search at a
-  time in every arm, and most of the cost is its own reasoning and the prefix it re-reads at every
-  call (see [where the cost goes](#measurement-correction-and-where-the-cost-goes)).
-- **Nearly every run solves its task in every arm**, so the benchmark mostly measures cost; the
-  one failure of the third round was in the `grep` arm.
+- **Nearly every run solves its task in every arm** — all 122 in the fourth round — so the
+  benchmark mostly measures cost; the one failure in four rounds was a run of the `grep` arm.
 
 ### Measurement correction and where the cost goes
 
@@ -191,6 +195,81 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### Fourth round: 19 tasks, 122 runs
+
+**What changed.** The reading layer of [PLAN-AGENTES.md](PLAN-AGENTES.md): a read by name or
+range says where each name the code uses is defined (file:line and signature); a search that
+misses a definition says where it is; a resident process answers the CLI and the hooks without
+reopening the index. The round adds a control arm, `grep+rules`, with the lookup rules the
+graph-indexer cards share and no graph-indexer, to separate what the rules do from what the tools
+do. Snapshot `rc6` ran `grep`, `grep+rules` and `grep+gi4`; `rc7` (`rc6` with a compact
+definitions card and `check` naming the closest test functions) ran `grep+gi5` and `grep+gi6`,
+written after the first repetition showed that the fourth card's reads cost more than they saved
+on issue fixes.
+
+**Tasks.** B1: 7 questions on nestjs (four sets of call sites of methods whose names other
+classes share, two caller chains, one set of implementations), none of whose targets had been
+used. B2: the one method left that met the refactor criteria (add a required parameter). B3: 8
+sqlglot and 3 networkx fixes from June–September 2026; of five networkx candidates, one was
+reachable only through a private helper with synthetic input and one had hidden tests that pin
+partitions only specific random seeds produce, and both were dropped.
+
+Cost ratios paired by task against `grep` (bootstrap 95% CI; two runs per task and arm on B3, one
+on B1 and B2; `grep+gi4` ran once, `grep+gi5` on six sqlglot tasks and one question):
+
+| suite | tasks | `grep` median cost | `grep+rules` | `grep+gi4` | `grep+gi5` | `grep+gi6` |
+|---|---|---|---|---|---|---|
+| B1 code questions | 7 | 276k | 0.72 (0.63–0.87) | 0.46 (0.33–0.66) | 0.46 (1 task) | **0.44** (0.32–0.67) |
+| B2 refactor | 1 | 375k | 0.88 | 0.93 | – | 0.77 |
+| B3 issues | 11 | 645k | 0.86 (0.76–0.98) | 0.93 (0.78–1.13) | 0.83 (0.74–0.95; 6 tasks) | **0.85** (0.76–0.96) |
+| B3, one-file fixes of ≤ 40 lines | 6 | 594k | 0.91 (0.77–1.12) | 1.12 (0.97–1.32) | 0.82 (3 tasks) | 0.85 (0.77–0.99) |
+
+| suite | `grep`: turns / minutes / output tokens | `grep+rules` | `grep+gi4` | `grep+gi6` |
+|---|---|---|---|---|
+| B1 | 19.4 / 3.7 / 29.7k | 12.0 / 3.0 / 24.7k | 12.6 / 1.4 / 11.7k | 11.1 / 1.4 / 12.3k |
+| B3 | 45.4 / 6.2 / 42.5k | 35.5 / 5.6 / 40.5k | 38.7 / 6.4 / 42.8k | 35.7 / 5.5 / 40.6k |
+
+Every run of every arm solved its task (122 of 122).
+
+**Criteria of [PLAN-AGENTES.md](PLAN-AGENTES.md) §3**, graph-indexer as installed (`grep+gi6`,
+the arrangement `init` now writes) against `grep`:
+
+| tasks | cost | time | turns | quality | met |
+|---|---|---|---|---|---|
+| B3 issues | 0.85 (target 0.70) | 0.90 (0.75) | 0.79 (0.70) | 22/22 solved; context precision ×1.06 (×1.5) | no |
+| B1 + B2 | 0.48 (0.60) | 0.42 (0.65); B2 alone 0.97 | 0.59 (0.65) | F1 1.00; the refactor compiles | yes — B2 has one task |
+| B4: one-file fixes | 0.85 (≤ 1.05) | 0.86 (≤ 1.05) | — | 12/12 solved | yes |
+
+**What the round shows.**
+
+- **On code questions the tools carry the gain, and they cut the model's reasoning.** With
+  `refs` and `callgraph` the agent answered in 11 turns instead of 19, and it wrote 12.3k output
+  tokens per question against 29.7k with grep and 24.7k with the rules alone: an answer that is
+  exact and says it is complete leaves little to deliberate. The rules alone reach 0.72.
+- **On issues the rules carry the gain, and the tools add nothing measurable on top.** The rules
+  take the agent from 45 to 35.5 calls per issue (0.86 of the cost); the sixth card, which adds
+  graph-indexer for uses, impact and the final check, lands at the same place (0.85), task by
+  task within noise. The fixed prefix and the model's own output are more than half of the cost
+  in every arm (52–59%), and the number of turns drives both.
+- **Reading through graph-indexer makes the context cleaner, not the run cheaper.** On the six
+  tasks every arm ran, the fifth card's agents — definitions read by name — made 7 lookups before
+  their first edit against 19–22 with the agent's own reads (13.5 with the fourth card), and 42% of the code lines they read fell in
+  the functions the fix changes, against 13–16%. They spent the same (629k against 618k for the
+  sixth card and 570k for the rules alone): tool output was as large, and the work after the
+  first edit did not shrink. The fourth card, whose reads carried every definition, cost more
+  than grep on one-file fixes (1.12). `init`, the session rules and the server instructions
+  therefore follow the sixth card.
+- **Half of an issue's cost comes after the first edit**: tests, a second look at the change,
+  and in several runs a search for the subclasses that inherit the edited method — e.g. the
+  parsers of three dialects built on MySQL's — which `gi check` did not name, so it proposed only
+  the edited class's tests. After the round, `check_changes` and `change_impact` list the
+  subclasses that inherit a changed method (and those that override it) and add their tests;
+  that change is not measured yet.
+- **Measurement.** The log of discarded runs carried agent ids where the discard time belongs,
+  which made the report drop the re-runs of five `grep+gi6` runs cut short by a usage limit and
+  of one control run; the report now rejects such lines. A `grep+rules` run that read another
+  run's graded output, outside its checkout, was discarded and re-run.
 
 ### Third round: 16 tasks, 48 runs
 
@@ -385,11 +464,12 @@ grep or find despite the policy, most of them to read a configuration file.
 
 ## What the rounds leave open
 
-- **Fixing issues.** B3 cost did not move in any round. The prefix and the model's reasoning are
-  about 79% of it and tool output about 21%, so what could change it is fewer calls and less
-  reasoning — reads that already say where each name they use is defined, several lookups per
-  call, and hooks that add this to the agent's own reads and searches — measured on new B3 tasks
-  ([PLAN-AGENTES.md](PLAN-AGENTES.md)).
+- **Fixing issues.** In the fourth round B3 cost fell 15% with graph-indexer installed, and
+  the lookup rules alone gave the same; neither reads that carry definitions nor cleaner context
+  lowered it further. What is left to try is what removes turns after the first edit — a check
+  that names every subclass that runs the changed code and its tests (added after the round), and
+  hooks that bring the next hop to the agent's own reads, searches and edits without a call —
+  measured on new B3 tasks and with real hooks ([PLAN-AGENTES.md](PLAN-AGENTES.md)).
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
@@ -403,7 +483,8 @@ grep or find despite the policy, most of them to read a configuration file.
   launches prepared runs with `claude -p` — the `mcp` arm with the MCP server and the block
   `init` writes, `mcp+hooks` with the Claude Code hooks as well — and registers the stream-json
   transcripts for grading; it needs an authenticated `claude` CLI, which the sessions that ran
-  the rounds so far did not have.
+  the rounds so far did not have (hooks declared by a project sub-agent do not run inside those
+  sessions either, which was checked).
 
 ## Reproducing
 

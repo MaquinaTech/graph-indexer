@@ -171,11 +171,13 @@ strictly at symbol level: rank-1 0.700 and MRR 0.759, against 0.552 and 0.646 fo
 **Agents.** The same model gets the same task with built-in tools only, with graph-indexer added,
 or with graph-indexer instead of grep, and an oracle it never sees grades the result: the
 TypeScript compiler for code questions and multi-site refactors, the hidden tests of the real fix
-for issues reported after the model's training cutoff. Over three rounds (69 tasks, 237 runs),
-graph-indexer next to grep cut the cost of questions and refactors to about three quarters of
-grep alone (0.73, 95% CI 0.58–0.90, in the latest round), and without grep nothing was lost at
-about the same cost. Fixing real issues cost the same either way: reading the code around the
-fault and running tests dominate. Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
+for issues reported after the model's training cutoff. In the latest round (19 new tasks, 122
+runs, all solved), graph-indexer as `init` installs it answered code questions at 0.44 of the
+cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's reasoning, and
+fixed real issues at 0.85 of the cost (0.76–0.96) — a gain the lookup rules it installs give on
+their own (0.86); simple one-file fixes did not cost more (0.85). Over four rounds (88 tasks, 359
+runs), every run with graph-indexer solved its task; the one failure was a run with grep alone.
+Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed
 files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30 ms for search and
