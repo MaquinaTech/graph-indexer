@@ -20,6 +20,8 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `grep+gi+` | built-in tools and graph-indexer | integrated card: decision rules, `grep` with definitions, `check` after editing (first round) |
 | `grep+gi2` | built-in tools and graph-indexer | integrated card, second iteration: verification only for changes that cross a function's boundary |
 | `gi2` | graph-indexer instead of Grep/Glob, as `gi` | the second card plus `files` for file names |
+| `grep+gi3` | built-in tools and graph-indexer | third card: `refs` lists indirect subtypes, filters by path and says when a list of calls is complete |
+| `gi3` | graph-indexer instead of Grep/Glob, as `gi` | the third card |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
 exactly what the MCP tools return. The tool policy of each arm is stated in the instructions and
@@ -30,18 +32,25 @@ outside the repository is filtering, not searching, and is allowed in the grep-f
 
 | suite | what the agent must do | oracle | tasks |
 |---|---|---|---|
-| **B1** code questions (TypeScript, nestjs) | every call site of a method that shares its name with methods of other classes; callers two levels up; classes implementing an interface | the TypeScript language service (`findReferences`, implementations); score = F1 of the `path:LINE` answer | 15 |
-| **B2** multi-site refactors (TypeScript, nestjs) | add a required parameter to a method and pass a value at every call; rename a method whose name other methods share | no type error that the base commit did not have (differential `tsc`), and a structural check that the target changed while the same-name methods did not | 8 + 6 held out |
+| **B1** code questions (TypeScript, nestjs) | every call site of a method that shares its name with methods of other classes; callers two levels up; classes implementing an interface | the TypeScript language service (`findReferences`, implementations); score = F1 of the `path:LINE` answer | 8 + 7 + 10 |
+| **B2** multi-site refactors (TypeScript, nestjs) | add a required parameter to a method and pass a value at every call; rename a method whose name other methods share | no type error that the base commit did not have (differential `tsc`), and a structural check that the target changed while the same-name methods did not | 8 + 6 + 6 |
 | **B3** fresh issues (Python: sqlglot, networkx) | fix a real issue from June–September 2026, after the model's training cutoff, described by its behaviour as a user would report it | the tests of the real fix (FAIL_TO_PASS) and the existing tests of the touched modules (PASS_TO_PASS), applied only when grading | 24 |
+
+The three counts are the three rounds (see [Protocol](#protocol-rounds-and-held-out-tasks)); each
+round's tasks were drawn to avoid every method, interface and call chain used before.
 
 **B1** targets are drawn from the compiler's view of the repository: methods with same-name
 methods elsewhere (so a text search over-matches), and call chains the compiler can resolve.
+A caller chain counts calls only, from callers inside the question's scope (`packages/`, no
+tests); a reference that is not a call is accepted but not required. Getters and setters are
+not used as targets: a question about one of a pair does not say which one it means.
 
 **B2** tasks are generated (`gen-refactor-ts.mjs`) from methods with 4–15 call sites in at least
 two files and same-name methods elsewhere. Each one is validated (`validate-refactor.mjs`) the
 way SWE-bench validates gold patches: the unmodified checkout fails, a reference solution computed
 with the TypeScript language service passes, and a naive textual solution (change every
-`.name(` call) fails — it did on all 8 development tasks and 5 of the 6 held-out ones.
+`.name(` call) fails — it did on all 8 development tasks, 5 of the 6 held-out ones and all 6 of
+the third round.
 
 **B3** tasks are mined (`mine-fresh.mjs`) from commits that fix an issue and add tests. The
 agent gets an issue-style statement, never the commit message or the diff. It works in a
@@ -56,6 +65,14 @@ checkout made of the base snapshot alone — one commit, no remote, none of the 
 - **Looking the answer up voids the run.** Transcripts are scanned for web searches and fetches,
   upstream `git fetch`/`clone`, package downloads and reads of the benchmark's task files; such
   runs are excluded and re-run under the offline rule.
+- **So does reading another run.** The arms of a task run side by side, and in the third round
+  one agent opened the answer another arm had written for the same question. The audit now flags
+  any access to another run's answer, grading or working copy (listing the run directories or
+  reading another task's instructions is recorded but harmless), graded answers are moved out of
+  the run directories, and that run was discarded and re-run.
+- **Ill-posed tasks are withdrawn, not scored.** A question whose answer depends on a reading
+  its statement leaves open (a getter and setter of the same name) was withdrawn before any
+  comparison and replaced by a new one; the change is logged with the discards.
 - **Interrupted runs are re-run.** A run stopped by an infrastructure error (rate limit, lost
   session) is discarded, whatever state its checkout was in.
 - **Policy violations stay in** (intention to treat): dropping them would bias an arm towards
@@ -85,15 +102,21 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
 | G5 | graph accuracy against the TypeScript compiler (`bench/eval-graph.mjs`) | precision ≥ 0.99, recall ≥ 0.93 |
 | G6 | adoption in the integrated arm on B1 + B2 | graph-indexer used in ≥ 80% of the runs, without forcing it |
 
-## Protocol: a development round and a held-out round
+## Protocol: rounds and held-out tasks
 
 1. **Development round** (snapshots `rc2`/`rc3`, arms `grep`, `gi`, `grep+gi`, `grep+gi+`):
    B1 (8 tasks), B2 (8), B3 (14). The transcripts were read to find where the tools cost more
    than they saved, and graph-indexer was changed accordingly (`rc4`).
 2. **Held-out round** (snapshot `rc4`, arms `grep`, `gi2`, `grep+gi2`): tasks that played no
    part in development — B1 (7), a new B2 set (6) generated to avoid every method used before,
-   and B3 (10). The held-out round is the estimate to trust; the development round shows where
-   the changes came from.
+   and B3 (10).
+3. **Third round** (snapshot `rc5`, arms `grep`, `gi3`, `grep+gi3`): the held-out transcripts
+   showed where graph-indexer still cost more than grep (which classes implement an interface),
+   `rc5` changed that, and new B1 (10) and B2 (6) tasks, none of whose targets had been used,
+   measure it. B3 was not repeated.
+
+Each round is held out for the snapshot it tests — its tasks played no part in the changes —
+and every comparison is within a round, against the `grep` arm on the same tasks.
 
 ## Results
 
@@ -179,15 +202,33 @@ by kind of call (the transcripts, `grep` / `grep+gi2` / `gi2`):
   output is larger than grep's for about the same number of calls (20.4k against 12.8k characters on
   B3), and on refactors the agents verified with the compiler more often (4.5 runs per task).
 
+### Development round: 30 tasks, 120 runs
+
+Snapshots `rc2`/`rc3`, one run per task and arm; every run solved its task. Cost ratios against
+`grep`, paired by task (bootstrap 95% CI):
+
+| suite | tasks | `grep` median cost | `grep+gi+` | `grep+gi` | `gi` (no grep) |
+|---|---|---|---|---|---|
+| B1 call sites of a method with same-name methods | 8 | 126k | **0.67** (0.59–0.77) | 0.86 (0.60–1.21) | 0.77 (0.62–1.00) |
+| B2 multi-site refactors | 8 | 304k | **0.80** (0.62–0.99) | 0.91 (0.81–1.01) | 0.84 (0.67–1.04) |
+| B3 fresh issues | 14 | 612k | 0.97 (0.83–1.11) | 0.99 (0.88–1.11) | 1.01 (0.81–1.26) |
+| **all** | **30** | | **0.93** (0.81–1.03) | 0.97 (0.87–1.06) | 0.97 (0.81–1.17) |
+
+Presented only as an MCP server's tool card (`grep+gi`), graph-indexer was used little outside
+the questions (1.2 calls per B3 run) and saved little; the integrated card, with decision rules
+and a check after editing, is what made the difference on B1 and B2. Gates: G1 0.76 (target
+0.75), G2 0.93 (0.85), G3 0.97 (met), G4 1.06 (met), G6 100% (met). Fourteen `gi` runs used
+grep or find despite the policy, most of them to read a configuration file.
+
 ## Reproducing
 
 ```sh
-node bench/agentic/prepare.mjs snapshot --label rc4          # freeze the version under test
-node bench/agentic/prepare.mjs batch --tasks refactor-nestjs-held.json --arms grep,gi2,grep+gi2 --reps 1 --gi rc4
+node bench/agentic/prepare.mjs snapshot --label rc5          # freeze the version under test
+node bench/agentic/prepare.mjs batch --tasks refactor-nestjs-r3.json --arms grep,gi3,grep+gi3 --reps 1 --gi rc5
 # launch one agent per printed prompt (any agent harness), then record which agent ran which run:
-node bench/agentic/grade-batch.mjs --gi rc4 --register "<agent id> <run id>"
-node bench/agentic/grade-batch.mjs --gi rc4 --agents <agent ids>   # only once they have finished
-node bench/agentic/report.mjs --gi rc4 --integrated grep+gi2 --nogrep gi2
+node bench/agentic/grade-batch.mjs --gi rc5 --register "<agent id> <run id>"
+node bench/agentic/grade-batch.mjs --gi rc5 --agents <agent ids>   # only once they have finished
+node bench/agentic/report.mjs --gi rc5 --integrated grep+gi3 --nogrep gi3
 ```
 
 The TypeScript suites need the nestjs fixture (`node bench/fixtures.mjs`); the B3 suites need
@@ -202,4 +243,5 @@ local clones of sqlglot and networkx with their history (`bench/agentic/repos.mj
   tasks absorb part of it, but differences under about 20% in cost are within noise at this size.
 - **Ceiling.** The model solves almost every task in every arm, so the benchmark mostly measures
   cost; a weaker model or harder tasks would test the solve rate.
-- **Coverage.** B1 and B2 are TypeScript on one repository; B3 is Python on two.
+- **Coverage.** B1 and B2 are TypeScript on one repository; B3 is Python on two. The third
+  round did not repeat B3, so for fixing issues the held-out round's estimate (`rc4`) stands.
