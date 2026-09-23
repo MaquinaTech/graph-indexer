@@ -97,7 +97,87 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
 
 ## Results
 
-_Filled in when the held-out round completes._
+### Held-out round: 23 tasks, 69 runs
+
+Snapshot `rc4`, one run per task and arm, every run graded by its oracle. **Every run solved its
+task in every arm** (69/69), so at this difficulty the tools change what a solution costs, not
+whether it is found. Cost ratios are paired by task against `grep` (bootstrap 95% CI).
+
+| suite | tasks | `grep` median cost | `grep+gi2` cost ratio | `gi2` (no grep) cost ratio | turns: `grep` / `grep+gi2` / `gi2` |
+|---|---|---|---|---|---|
+| B1 callers two levels up | 4 | 328k | **0.66** (0.58–0.77) | 0.68 (0.44–1.08) | 31.0 / 21.8 / 23.3 |
+| B1 classes implementing an interface | 3 | 143k | 1.46 (1.25–1.59) | 1.23 (1.07–1.32) | 17.0 / 22.7 / 18.0 |
+| B2 multi-site refactors | 6 | 250k | **0.77** (0.68–0.83) | 1.02 (0.80–1.28) | 29.5 / 22.8 / 31.2 |
+| B3 fresh issues | 10 | 419k | 0.96 (0.77–1.18) | 1.10 (0.98–1.26) | 36.4 / 35.3 / 39.2 |
+| **all** | **23** | | **0.90** (0.77–1.04) | **1.02** (0.89–1.15) | |
+
+Per task (cost in input-equivalent tokens):
+
+| task | `grep` | `grep+gi2` | `gi2` |
+|---|---|---|---|
+| B1 callers-01 | 237k | 162k | 145k |
+| B1 callers-02 | 482k | 280k | 197k |
+| B1 callers-03 | 337k | 195k | 419k |
+| B1 callers-04 | 318k | 266k | 174k |
+| B1 impls-01 | 150k | 187k | 196k |
+| B1 impls-02 | 143k | 223k | 152k |
+| B1 impls-03 | 128k | 204k | 169k |
+| B2 held-01 add-param | 279k | 239k | 318k |
+| B2 held-02 rename | 239k | 190k | 341k |
+| B2 held-03 add-param | 261k | 202k | 244k |
+| B2 held-04 rename | 167k | 98k | 244k |
+| B2 held-05 add-param | 227k | 144k | 130k |
+| B2 held-06 rename | 405k | 341k | 327k |
+| B3 networkx 139259c6 | 243k | 418k | 450k |
+| B3 networkx 2aecdbdd | 1008k | 1262k | 1152k |
+| B3 networkx 6eb2a1db | 113k | 133k | 140k |
+| B3 sqlglot 338bb069 | 526k | 525k | 662k |
+| B3 sqlglot 4b84b4d4 | 312k | 346k | 381k |
+| B3 sqlglot 4eb2c99a | 160k | 127k | 177k |
+| B3 sqlglot 65eb23b5 | 892k | 529k | 807k |
+| B3 sqlglot a069a096 | 533k | 377k | 425k |
+| B3 sqlglot d53cbc98 | 254k | 256k | 286k |
+| B3 sqlglot fa736935 | 585k | 489k | 601k |
+
+**Gates.**
+
+| gate | result | criterion | met |
+|---|---|---|---|
+| G1 B1 + B2, `grep+gi2` | cost 0.81 (0.70–0.96), no task lost | ≤ 0.75 | no |
+| G2 all tasks, `grep+gi2` | cost 0.90 (0.77–1.04), no task lost | ≤ 0.85 | no |
+| G3 all tasks, `gi2` | cost 1.02 (0.89–1.15), no task lost | ≤ 1 | no |
+| G4 one-file fixes (8 tasks), `grep+gi2` | cost 0.98 (0.83–1.20) | ≤ 1.10 | yes |
+| G5 graph accuracy | precision 0.996, recall 0.958 | ≥ 0.99, ≥ 0.93 | yes |
+| G6 adoption on B1 + B2 | 13 of 13 runs | ≥ 80% | yes |
+
+Five `gi2` runs used grep or find once despite the policy (kept in, intention to treat); without
+them G3 is 1.01 (0.83–1.19).
+
+**Where the difference comes from.** Mean characters of tool output an agent took in per run,
+by kind of call (the transcripts, `grep` / `grep+gi2` / `gi2`):
+
+| suite | reading files | text search | graph-indexer | compiler and tests |
+|---|---|---|---|---|
+| B1 callers | 33.8k / 11.8k / 13.5k | 12.3k / 2.8k / 0 | 0 / 26.6k / 29.9k | — |
+| B1 implementations | 13.4k / 12.4k / 11.8k | 10.1k / 7.6k / 0 | 0 / 18.3k / 28.1k | — |
+| B2 refactors | 20.8k / 17.7k / 17.1k | 16.9k / 9.5k / 2.3k | 0 / 8.1k / 15.0k | 6.2 / 1.8 / 4.5 runs |
+| B3 issues | 58.7k / 55.7k / 54.7k | 12.8k / 7.8k / 0.4k | 0 / 5.3k / 20.4k | 6.0 / 5.9 / 5.8 runs |
+
+- **Multi-site work is where the graph pays.** On caller chains the agent reads a third of the
+  source it reads with grep. On refactors the agents checked their edits with `check` and ran the
+  compiler far less (1.8 times per task instead of 6.2), in about a quarter fewer turns. Cost
+  follows turns, because every turn re-reads the conversation.
+- **Fixing a real issue is dominated by reading the code around the fault and running tests** —
+  70–80% of what the agent takes in, in every arm. Finding the place is a small share, so a
+  better locator cannot move the total much, and run-to-run variance is large (one task cost
+  243k with grep and 418k–450k with graph-indexer; another 892k with grep and 529k with
+  `grep+gi2`).
+- **Where one grep is the right tool, the graph answer costs more.** "Which classes implement X"
+  is a single `grep "implements X"`; with graph-indexer the agents confirmed its answer with grep
+  and followed subclasses one class at a time.
+- **Without grep nothing is lost, but nothing is saved outside questions.** Graph-indexer's
+  output is larger than grep's for about the same number of calls (20.4k against 12.8k characters on
+  B3), and on refactors the agents verified with the compiler more often (4.5 runs per task).
 
 ## Reproducing
 
