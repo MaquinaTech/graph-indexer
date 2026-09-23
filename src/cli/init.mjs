@@ -32,6 +32,13 @@ const AGENTS = {
     vscode: { label: 'VS Code (Copilot)', file: '.vscode/mcp.json', key: 'servers', detect: ['.vscode'], instructions: 'AGENTS.md', workspaceVar: '${workspaceFolder}', vscode: true },
     gemini: { label: 'Gemini CLI', file: '.gemini/settings.json', key: 'mcpServers', detect: ['.gemini', 'GEMINI.md'], instructions: 'AGENTS.md' },
     codex: { label: 'Codex CLI', file: null, detect: ['AGENTS.md', '.codex'], instructions: 'AGENTS.md' },
+    // Kilo Code (CLI and VS Code, rebuilt on OpenCode) also reads opencode.json; an existing kilo.json is used instead
+    opencode: { label: 'OpenCode / Kilo Code', file: 'opencode.json', alt: ['kilo.json', '.kilo/kilo.json'], key: 'mcp', detect: ['opencode.json', 'opencode.jsonc', '.opencode', 'kilo.json', 'kilo.jsonc', '.kilo', '.kilocode'], instructions: 'AGENTS.md', opencode: true },
+    junie: { label: 'Junie', file: '.junie/mcp/mcp.json', key: 'mcpServers', detect: ['.junie'], instructions: 'AGENTS.md' },
+    // Zed runs project context servers in the project root; it reads the first of .rules, …, AGENTS.md, CLAUDE.md
+    zed: { label: 'Zed', file: '.zed/settings.json', key: 'context_servers', detect: ['.zed'], instructions: 'AGENTS.md', zed: true },
+    // Devin Desktop (formerly Windsurf) and Devin CLI load the Claude Code hooks in .claude/ by default
+    devin: { label: 'Devin Desktop / Devin CLI', file: null, detect: ['.devin', '.windsurf', '.windsurfrules'], instructions: 'AGENTS.md' },
 };
 
 function readJson(p) {
@@ -45,7 +52,15 @@ function serverEntry(agent, { local }) {
     const base = local
         ? { command: process.execPath, args: [bin, 'serve', ...repoArgs] }
         : { command: 'npx', args: ['-y', 'graph-indexer@3', 'serve', ...repoArgs] };
+    if (agent.opencode) return { type: 'local', command: [base.command, ...base.args], enabled: true };
+    if (agent.zed) return { ...base, env: {} };
     return agent.vscode ? { type: 'stdio', ...base } : base;
+}
+
+/** The config file to edit: the agent's default, or an existing alternative it also reads. */
+function configFile(agent, repo) {
+    for (const f of agent.alt ?? []) if (fs.existsSync(path.join(repo, f))) return f;
+    return agent.file;
 }
 
 function upsertBlock(file, dryRun) {
@@ -130,10 +145,19 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
     for (const key of chosen) {
         const a = AGENTS[key];
         if (a.file) {
-            const file = path.join(repo, a.file);
-            const cfg = readJson(file) ?? {};
-            cfg[a.key] ??= {};
+            const rel = configFile(a, repo);
+            const file = path.join(repo, rel);
+            const raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
             const entry = serverEntry(a, { local });
+            // never rewrite a file whose comments or JSONC syntax a JSON round trip would lose
+            const cfg = raw == null ? {} : readJson(file);
+            if (!cfg || /^\s*\/\/|\/\*/m.test(raw ?? '')) {
+                const already = JSON.stringify(cfg?.[a.key]?.['graph-indexer'] ?? null) === JSON.stringify(entry);
+                report.push(already ? `${a.label}: already configured ${rel}`
+                    : `${a.label}: ${rel} has comments or is not plain JSON, so it was left as is; add under "${a.key}": "graph-indexer": ${JSON.stringify(entry)}`);
+                continue;
+            }
+            cfg[a.key] ??= {};
             const before = JSON.stringify(cfg[a.key]['graph-indexer'] ?? null);
             cfg[a.key]['graph-indexer'] = entry;
             const changed = before !== JSON.stringify(entry);
@@ -141,13 +165,17 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
                 fs.mkdirSync(path.dirname(file), { recursive: true });
                 fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
             }
-            report.push(`${a.label}: ${changed ? (before === 'null' ? 'added' : 'updated') : 'already configured'} ${a.file}`);
+            report.push(`${a.label}: ${changed ? (before === 'null' ? 'added' : 'updated') : 'already configured'} ${rel}`);
         } else if (key === 'codex') {
             const entry = serverEntry(a, { local });
             report.push(`Codex CLI: add to ~/.codex/config.toml →\n  [mcp_servers.graph-indexer]\n  command = "${entry.command}"\n  args = ${JSON.stringify(entry.args)}\n  cwd = "${repo}"`);
+        } else if (key === 'devin') {
+            const entry = serverEntry(a, { local });
+            report.push(`Devin: reads AGENTS.md${hooks ? ' and the Claude Code hooks in .claude/settings.json' : ' (and, with --hooks, the Claude Code hooks)'}; add the MCP server in Devin's MCP settings → command "${entry.command}", args ${JSON.stringify([...entry.args, '--repo', repo])}`);
         }
     }
-    if (hooks && chosen.includes('claude')) report.push(upsertClaudeHooks(repo, local, dryRun));
+    // Devin Desktop/CLI, Copilot CLI and Cursor also run the Claude Code hooks in .claude/settings.json
+    if (hooks && (chosen.includes('claude') || chosen.includes('devin'))) report.push(upsertClaudeHooks(repo, local, dryRun));
     if (!noInstructions) {
         const targets = [...new Set(chosen.map(k => AGENTS[k].instructions))];
         for (const t of targets) report.push(`${t}: ${upsertBlock(path.join(repo, t), dryRun)} graph-indexer instructions block`);
@@ -160,7 +188,7 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
         report.push('.gitignore: added .graph-indexer/');
     }
     process.stdout.write(`graph-indexer init ${dryRun ? '(dry run) ' : ''}in ${repo}\n  ${report.join('\n  ')}\n\n` +
-        `Other agents (Claude Desktop, Windsurf, JetBrains): add an MCP server with command "npx" and args ["-y","graph-indexer@3","serve","--repo","${repo}"].\n` +
+        `Other agents (Claude Desktop, JetBrains AI Assistant, Cline): add an MCP server with command "npx" and args ["-y","graph-indexer@3","serve","--repo","${repo}"].\n` +
         `Build the index now with: npx graph-indexer index   (the server also builds it on first start)\n` +
         (hooks ? '' : `Optional: graph-indexer init --hooks adds Claude Code hooks (edit check after each edit, grep disambiguation).\n`));
 }

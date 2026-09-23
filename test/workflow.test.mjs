@@ -115,3 +115,31 @@ test('init --hooks merges Claude Code hooks idempotently and keeps foreign ones'
         assert.ok(cfg.hooks.SubagentStart[0].hooks[0].command.endsWith('hook subagent-start'));
     } finally { rmrf(dir); }
 });
+
+test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; Devin gets instructions and hooks', () => {
+    const dir = makeRepo({ '.zed/settings.json': '{\n  "tab_size": 2\n}\n', 'kilo.json': '{"model":"x"}\n', '.junie/guidelines.md': 'x\n', '.cursor/mcp.json': '{\n  // mine\n  "mcpServers": {}\n}\n' });
+    try {
+        const r = spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--hooks', '--agents', 'opencode,junie,zed,devin'], { encoding: 'utf8' });
+        assert.equal(r.status, 0, r.stderr);
+        const kilo = JSON.parse(fs.readFileSync(path.join(dir, 'kilo.json'), 'utf8'));
+        assert.equal(kilo.model, 'x', 'keeps the existing Kilo config');
+        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', 'graph-indexer@3', 'serve'], enabled: true });
+        assert.ok(!fs.existsSync(path.join(dir, 'opencode.json')), 'an existing kilo.json is used instead');
+        const junie = JSON.parse(fs.readFileSync(path.join(dir, '.junie/mcp/mcp.json'), 'utf8'));
+        assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', 'graph-indexer@3', 'serve']);
+        const zed = JSON.parse(fs.readFileSync(path.join(dir, '.zed/settings.json'), 'utf8'));
+        assert.equal(zed.tab_size, 2);
+        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', 'graph-indexer@3', 'serve'], env: {} });
+        assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /graph-indexer:start/);
+        assert.ok(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).hooks.PostToolUse, 'Devin runs the Claude Code hooks');
+        assert.match(r.stdout, /Devin: reads AGENTS\.md and the Claude Code hooks/);
+        const cursor = spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--agents', 'cursor'], { encoding: 'utf8' });
+        assert.match(cursor.stdout, /\.cursor\/mcp\.json has comments or is not plain JSON, so it was left as is/);
+        assert.match(fs.readFileSync(path.join(dir, '.cursor/mcp.json'), 'utf8'), /\/\/ mine/, 'a commented config is not rewritten');
+        const fresh = makeRepo({ '.opencode/.keep': '' });
+        try {
+            spawnSync(process.execPath, [BIN, 'init', '--repo', fresh], { encoding: 'utf8' });
+            assert.equal(JSON.parse(fs.readFileSync(path.join(fresh, 'opencode.json'), 'utf8')).mcp['graph-indexer'].type, 'local');
+        } finally { rmrf(fresh); }
+    } finally { rmrf(dir); }
+});

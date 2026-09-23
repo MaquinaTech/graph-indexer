@@ -20,9 +20,9 @@
 Graph Indexer parses your repository with tree-sitter and keeps a structural index of it:
 every definition, every reference bound to the definition it actually points at, the call
 graph, inheritance, imports, and which tests exercise what. Coding agents (Claude Code,
-Cursor, VS Code Copilot, Codex, Gemini CLI, …) query it through six
-[Model Context Protocol](https://modelcontextprotocol.io) tools instead of reading whole files
-and grepping.
+Cursor, VS Code Copilot, Codex, Gemini CLI, OpenCode, Kilo Code, Junie, Zed, Devin, …) query it
+through [Model Context Protocol](https://modelcontextprotocol.io) tools, the CLI and hooks
+instead of reading whole files and grepping.
 
 - **Answers are exact, not guesses.** `find_references` binds each use through scopes,
   imports and inferred receiver types, so it lists the callers of *this* `get` and not of every
@@ -49,11 +49,14 @@ npx graph-indexer index     # optional: build the index now (the server also doe
 ```
 
 `init` writes project-level MCP configuration for the agents it finds (`.mcp.json` for Claude
-Code, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and prints the Codex TOML),
-merges instead of overwriting other servers, adds `.graph-indexer/` to `.gitignore`, and adds
-a five-line block to `CLAUDE.md` / `AGENTS.md` telling the agent when to use which tool. Flags:
-`--agents claude,cursor,vscode,gemini,codex`, `--all`, `--local` (use this checkout instead of
-`npx`), `--dry-run`, `--no-instructions`.
+Code, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `opencode.json` for
+OpenCode and Kilo Code, `.junie/mcp/mcp.json`, `.zed/settings.json`; it prints the Codex TOML
+and Devin's server entry), merges instead of overwriting other servers, adds `.graph-indexer/`
+to `.gitignore`, and adds a short block to `CLAUDE.md` / `AGENTS.md` on how to look code up.
+`--hooks` adds the Claude Code hooks to `.claude/settings.json`, which Devin, Copilot CLI and
+Cursor also run. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
+`--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,
+`--no-instructions`.
 
 <details>
 <summary>Manual configuration</summary>
@@ -211,7 +214,7 @@ Python, Go, Java, C# and Rust.
 The CLI runs the same tools, which is handy for scripts and for checking what an agent sees:
 
 ```text
-graph-indexer init [--repo DIR] [--agents …] [--all] [--local] [--dry-run] [--no-instructions]
+graph-indexer init [--repo DIR] [--agents …] [--all] [--hooks] [--local] [--dry-run] [--no-instructions]
 graph-indexer serve [--repo DIR]            MCP server on stdio
 graph-indexer index [--repo DIR]            build or update the index
 graph-indexer status [--repo DIR]

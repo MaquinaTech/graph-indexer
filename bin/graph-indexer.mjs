@@ -120,7 +120,7 @@ async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
 
 Usage:
-  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex] [--all] [--hooks] [--local] [--dry-run] [--no-instructions]
+  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions]
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]

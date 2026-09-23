@@ -101,7 +101,11 @@ and real commits, and end to end with coding agents
   function's boundary, and only the tests for a fix inside one function. `read_code`,
   `search_text`, `find_references` and `check_changes` are marked always-loaded for clients that
   defer MCP tools.
-- **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI and Codex, and adds a
+- **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI, Codex, OpenCode and
+  Kilo Code (`opencode.json`, or an existing `kilo.json`), Junie (`.junie/mcp/mcp.json`), Zed
+  (`context_servers` in `.zed/settings.json`) and Devin (instructions and the Claude Code hooks it
+  loads), never rewrites a config file whose comments or JSONC syntax a JSON round trip would lose
+  (it prints the entry to add instead), and adds a
   short managed block to `CLAUDE.md`/`AGENTS.md` on how to look code up: several definitions in
   one read, the function or the lines needed rather than the file, the names a read lists instead
   of a grep for their definitions, exact uses through `find_references`, and one check at the end. `init --hooks` adds `graph-indexer hook` to Claude Code (an
