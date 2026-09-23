@@ -136,12 +136,12 @@ own `findReferences` (import lines and declarations excluded):
 
 | | precision | recall | F1 |
 |---|---|---|---|
-| graph-indexer `find_references` | **0.996** | **0.958** | **0.977** |
-| same-name references (no binding) | 0.251 | 0.974 | 0.400 |
+| graph-indexer `find_references` | **0.996** | **0.960** | **0.978** |
+| same-name references (no binding) | 0.252 | 0.974 | 0.400 |
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
 *Dispatch semantics: calls through a base class or interface count, calls to sibling overrides
-do not. Against the compiler's full rename set (sibling overrides included) recall is 0.922. The
+do not. Against the compiler's full rename set (sibling overrides included) recall is 0.924. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.*
 
@@ -159,10 +159,14 @@ rolled back to the parent commit first.
 strictly at symbol level: rank-1 0.700 and MRR 0.759, against 0.552 and 0.646 for graph-indexer
 2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
 
-**Agents.** In a small paired test with the same model, agents with and without graph-indexer
-answered five questions equally well; on the multi-hop impact question the graph-indexer agent
-needed 20 tool calls instead of 44. On single-location questions grep alone was as good and
-slightly cheaper. Details in [docs/BENCHMARKS.md](docs/BENCHMARKS.md#4-agents-with-and-without-graph-indexer).
+**Agents.** The same model gets the same task with built-in tools only, with graph-indexer added,
+or with graph-indexer instead of grep, and an oracle it never sees grades the result: the
+TypeScript compiler for code questions and multi-site refactors, the hidden tests of the real fix
+for issues reported after the model's training cutoff. Over three rounds (69 tasks, 237 runs),
+graph-indexer next to grep cut the cost of questions and refactors to about three quarters of
+grep alone (0.73, 95% CI 0.58–0.90, in the latest round), and without grep nothing was lost at
+about the same cost. Fixing real issues cost the same either way: reading the code around the
+fault and running tests dominate. Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed
 files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30 ms for search and

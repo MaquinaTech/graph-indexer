@@ -63,13 +63,17 @@ checkout made of the base snapshot alone — one commit, no remote, none of the 
   graded only after its agent has finished; a run graded while its agent was still working is
   discarded and re-run from scratch.
 - **Looking the answer up voids the run.** Transcripts are scanned for web searches and fetches,
-  upstream `git fetch`/`clone`, package downloads and reads of the benchmark's task files; such
+  upstream `git fetch`/`clone`, package downloads, reads of the benchmark's task files and of the
+  local clones the worktrees are made from (they hold the later history, the fix included); such
   runs are excluded and re-run under the offline rule.
 - **So does reading another run.** The arms of a task run side by side, and in the third round
   one agent opened the answer another arm had written for the same question. The audit now flags
   any access to another run's answer, grading or working copy (listing the run directories or
   reading another task's instructions is recorded but harmless), graded answers are moved out of
   the run directories, and that run was discarded and re-run.
+- **Scratch files stay private.** Agents write temporary files (compiler output, small scripts)
+  to a directory all runs share; every graded transcript was checked to read there only files
+  its own run had written.
 - **Ill-posed tasks are withdrawn, not scored.** A question whose answer depends on a reading
   its statement leaves open (a getter and setter of the same name) was withdrawn before any
   comparison and replaced by a new one; the change is logged with the discards.
@@ -119,6 +123,111 @@ Each round is held out for the snapshot it tests — its tasks played no part in
 and every comparison is within a round, against the `grep` arm on the same tasks.
 
 ## Results
+
+Three rounds, 69 tasks, 237 graded runs. In short:
+
+- **On code questions and multi-site refactors (B1 + B2), graph-indexer next to grep costs less
+  than grep alone in every round:** 0.76 of grep's cost in the development round, 0.81 in the
+  held-out round and 0.73 (0.58–0.90) in the third, where each solved task cost 0.68 of what it
+  cost with grep.
+- **Without grep, nothing is lost and the cost is about the same:** 0.82 (0.59–1.12) on B1 + B2
+  in the third round, 1.02 over all tasks in the held-out round.
+- **Fixing real issues (B3) costs the same with or without graph-indexer** (cost ratios between
+  0.96 and 1.10 across arms and rounds): reading the code around the fault and running tests are
+  most of the work.
+- **Nearly every run solves its task in every arm**, so the benchmark mostly measures cost; the
+  one failure of the third round was in the `grep` arm.
+
+### Third round: 16 tasks, 48 runs
+
+**What changed in `rc5`.** In the held-out round one kind of question cost more with
+graph-indexer than with grep: which classes implement an interface, directly or through a
+subclass (cost 1.46 with `grep+gi2`). The agents took graph-indexer's list of direct
+implementations, followed each subclass with another call, and confirmed the result with grep.
+In `rc5`, `refs` on a class or interface also lists the types that inherit it indirectly, each
+with the type it goes through; `refs --path DIR` limits any list to a directory and says how many
+references are elsewhere; and a list of calls ends by saying when it is complete — every call
+with that name in the indexed files is bound, here or to the definitions it names — so there is
+nothing left to grep for. The third card mentions the three in one line.
+
+Snapshot `rc5`, one run per task and arm, on new tasks. Every `grep+gi3` and `gi3` run solved its
+task (16/16 each); the `grep` arm solved 15 of 16 — on one caller chain it missed a caller and
+listed a line that is not one (F1 0.88). Cost ratios are paired by task against `grep`
+(bootstrap 95% CI):
+
+| suite | tasks | `grep` median cost | `grep+gi3` cost ratio | `gi3` (no grep) cost ratio | turns: `grep` / `grep+gi3` / `gi3` |
+|---|---|---|---|---|---|
+| B1 call sites of a method with same-name methods | 2 | 168k | **0.52** (0.41–0.90) | **0.48** (0.41–0.72) | 16.0 / 10.0 / 10.0 |
+| B1 callers two levels up | 4 | 323k | 0.65 (0.42–1.25) | 0.65 (0.35–1.43) | 29.3 / 20.0 / 18.8 |
+| B1 classes implementing an interface | 4 | 142k | **0.62** (0.53–0.73) | **0.80** (0.73–0.91) | 16.3 / 10.8 / 12.8 |
+| B2 multi-site refactors | 6 | 281k | 0.88 (0.72–1.01) | 1.03 (0.71–1.45) | 29.0 / 24.3 / 27.5 |
+| **B1 + B2** | **16** | | **0.73** (0.58–0.90) | 0.82 (0.59–1.12) | |
+
+Per task (cost in input-equivalent tokens):
+
+| task | `grep` | `grep+gi3` | `gi3` |
+|---|---|---|---|
+| B1 calls-01 | 75k | 68k | 54k |
+| B1 calls-02 | 262k | 108k | 108k |
+| B1 callers-02 | 171k | 234k | 240k |
+| B1 callers-03 | 202k | 232k | 293k |
+| B1 callers-04 | 531k | 221k | 142k |
+| B1 callers-05 | 444k (F1 0.88) | 187k | 204k |
+| B1 impls-01 | 147k | 83k | 113k |
+| B1 impls-02 | 99k | 77k | 96k |
+| B1 impls-03 | 192k | 98k | 155k |
+| B1 impls-04 | 138k | 96k | 95k |
+| B2 r3-01 add-param | 267k | 266k | 323k |
+| B2 r3-02 rename | 251k | 197k | 176k |
+| B2 r3-03 add-param | 154k | 155k | 100k |
+| B2 r3-04 rename | 296k | 310k | 576k |
+| B2 r3-05 add-param | 315k | 177k | 229k |
+| B2 r3-06 rename | 299k | 287k | 228k |
+
+**Gates.**
+
+| gate | result | criterion | met |
+|---|---|---|---|
+| G1 B1 + B2, `grep+gi3` | cost per solved task 0.68 (0.49–0.90), cost 0.73 (0.58–0.90), one task more solved | ≤ 0.75 | yes, on the point estimate; the interval reaches 0.90 |
+| G2–G4 | need B3, which this round did not repeat | | – |
+| G5 graph accuracy | precision 0.996, recall 0.958 (`rc5`); 0.960 with the fixes below | ≥ 0.99, ≥ 0.93 | yes |
+| G6 adoption on B1 + B2 | 16 of 16 runs | ≥ 80% | yes |
+
+Two `gi3` runs used grep or find once, both on refactors (kept in, intention to treat); without
+them `gi3` costs 0.72 (0.53–0.96) on B1 + B2.
+
+**Where the difference comes from.** Mean characters of tool output per run, by kind of call
+(`grep` / `grep+gi3` / `gi3`):
+
+| suite | reading files | text search | graph-indexer | compiler and tests |
+|---|---|---|---|---|
+| B1 callers | 42.7k / 11.8k / 11.7k | 16.7k / 1.7k / 0 | 0 / 36.9k / 39.1k | — |
+| B1 implementations | 14.3k / 9.7k / 10.2k | 15.3k / 0.8k / 0 | 0 / 7.2k / 16.2k | — |
+| B2 refactors | 22.2k / 23.7k / 46.1k | 14.8k / 8.4k / 0.1k | 0 / 11.8k / 16.2k | 4.5 / 3.7 / 3.2 runs |
+
+- **Implementations now cost less with graph-indexer than with grep** (0.62, from 1.46). One
+  `refs` call lists the direct and the indirect implementations with the class each goes
+  through, and the agents stopped following subclasses one at a time: 3.5 graph-indexer calls
+  and 0.8 greps per task, against 17.3 greps with grep alone.
+- **Caller chains read a quarter of the source**, as in the held-out round (11.8k characters
+  against 42.7k), and every graph-indexer run returned the exact set. The cost ratio, 0.65, has a
+  wide interval: two of the four chains cost more with graph-indexer, the two largest less than
+  half.
+- **Refactors: 0.88 with grep available, 1.03 without.** One grep-free run read 150k characters
+  of compiler output (576k in all); the grep-free arm was cheaper than grep on four of the six
+  tasks. The drop in compiler runs seen in the held-out round (1.8 against 6.2 per task) did not
+  repeat (3.7 against 4.5).
+- **The runs exposed recall gaps, fixed after the round.** A `.build()` at the end of a chain
+  formatted one call per line was too long to follow, and calls on callback parameters typed
+  only by the function they are passed to (`helpers.createServerAndClient((err, server, client)
+  => client.sendMessage(…))`) were unbound. graph-indexer had flagged the first one as a call to
+  check; for the second it only said that some same-name calls were unbound, and the agents
+  found them with a text search. Both are now followed — `TcpSocket.sendMessage` lists all nine
+  calls and says the list is complete — together with chains that start with `(await …)` and
+  parameters of function types, which were taken for local variables; a possibly missed call in
+  a file that uses a subclass inheriting the method is now flagged too. Against the compiler,
+  recall went from 0.958 to 0.960 and exact sets from 0.887 to 0.902, precision unchanged at
+  0.996; localization and search are unchanged.
 
 ### Held-out round: 23 tasks, 69 runs
 
@@ -219,6 +328,24 @@ the questions (1.2 calls per B3 run) and saved little; the integrated card, with
 and a check after editing, is what made the difference on B1 and B2. Gates: G1 0.76 (target
 0.75), G2 0.93 (0.85), G3 0.97 (met), G4 1.06 (met), G6 100% (met). Fourteen `gi` runs used
 grep or find despite the policy, most of them to read a configuration file.
+
+## What the rounds leave open
+
+- **Fixing issues.** B3 cost did not move in any round: the agents spend 70–80% of what they
+  read on the code around the fault and on test output. What could change that is less of both —
+  running only the tests that exercise a change (`check` and `tests` already name them) and
+  showing the relevant part of long outputs — measured on a repeated B3.
+- **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
+  as reaching every override, even when the receiver's static type cannot reach it; recording
+  that type at indexing time would remove these false positives.
+- **Recall gaps that remain** (object literals typed by an interface, destructuring, class
+  expressions; see [BENCHMARKS.md](BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler)).
+- **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
+  runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
+  intervals can show.
+- **The real integration:** the MCP server and hooks inside the agent harness instead of
+  sub-agents following instructions; the headless harness for that runs locally
+  (`bench/agentic/`).
 
 ## Reproducing
 

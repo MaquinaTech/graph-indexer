@@ -44,16 +44,22 @@ and real commits, and end to end with coding agents
   declared and inferred return types (including generic bounds and defaults, and `Self`/`this`),
   value roots (`export const NestFactory = new NestFactoryStatic()`), fields and
   constructor-injected dependencies, collections and their elements (`xs[i]`, loops, array
-  callbacks, `list.get(0)`), optional/nullable and wrapper types, closures and access chains.
-  Members of primitives and collections are never guessed.
+  callbacks, `list.get(0)`), optional/nullable and wrapper types, closures and access chains
+  (also fluent chains formatted one call per line, and chains that start with `(await …)`).
+  Callback parameters without annotations take their types from the signature of the function
+  they are passed to (`helpers.connect((err, socket) => socket.send())`). Members of primitives
+  and collections are never guessed.
 - **Hybrid search** over symbols: exact/qualified name channel, BM25F over name, signature, doc,
   path and body, file-level relevance, a concept thesaurus, interpretable priors and PageRank
   centrality, with per-file diversification.
 - **Maps and dictionaries** in the type model (`Map<K, V>`, `dict[K, V]`, `HashMap<K, V>`, Go
   `map[K]V`, classes that extend them): `m.get(k)`, `m[k]` and `m.values()` reach the value type.
 - `find_references` states where other same-name references resolve, separates plausible unbound
-  call sites from unrelated ones, and lists members named by string (`sinon.stub(obj, 'name')`,
-  `jest.spyOn`, `getattr(o, "name")`, `patch("pkg.C.name")`), which a rename has to update too.
+  call sites (in files that use the type or a subclass inheriting the member) from unrelated
+  ones, says when a list of calls is complete, and lists members named by string
+  (`sinon.stub(obj, 'name')`, `jest.spyOn`, `getattr(o, "name")`, `patch("pkg.C.name")`), which a
+  rename has to update too. For a class or interface it lists every type that inherits it,
+  directly or through a subclass (and through which one); `path` limits any list to a directory.
   Ambiguous names list the alternatives as ready-to-use qualified targets (overloads count as one
   definition).
 - **`search_text`** (`graph-indexer grep`): text search over every file — code, configuration,
@@ -95,13 +101,15 @@ and real commits, and end to end with coding agents
 
 ### Results (see docs/BENCHMARKS.md)
 
-- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.958
-  (grep: 0.128 / 0.993; name-only: 0.251 / 0.974).
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.960
+  (grep: 0.128 / 0.993; name-only: 0.252 / 0.974).
 - Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
   ranking 0.485 / 0.374; BM25 0.373 / 0.290).
 - Symbol search (377 queries): rank-1 0.700, MRR 0.759 (2.x on the same queries: 0.552 / 0.646).
-- Paired agent test (5 tasks): same answers with and without graph-indexer; 20 vs 44 tool calls on
-  a two-level impact question.
+- Agents, three rounds (69 tasks, 237 runs; docs/AGENTIC-BENCHMARK.md): on code questions and
+  multi-site refactors graph-indexer next to grep costs 0.73 of grep alone (95% CI 0.58–0.90) in
+  the latest round, 0.76 and 0.81 in the earlier ones; without grep nothing is lost at about the
+  same cost; fixing real issues costs the same either way.
 
 ---
 

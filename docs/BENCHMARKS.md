@@ -59,11 +59,11 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 
 | oracle | system | micro-P | micro-R | micro-F1 | macro-P | macro-R | exact set |
 |---|---|---|---|---|---|---|---|
-| dispatch | graph-indexer | 0.996 (0.999) | 0.958 (0.886) | 0.977 (0.939) | 0.967 | 0.959 | 0.887 |
-| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.958 (0.886) | 0.977 (0.939) | 0.969 | 0.959 | 0.892 |
-| dispatch | name-only | 0.251 | 0.974 | 0.400 | 0.735 | 0.975 | 0.589 |
+| dispatch | graph-indexer | 0.996 (0.999) | 0.960 (0.886) | 0.978 (0.939) | 0.967 | 0.959 | 0.902 |
+| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.960 (0.886) | 0.978 (0.940) | 0.969 | 0.959 | 0.907 |
+| dispatch | name-only | 0.252 | 0.974 | 0.400 | 0.735 | 0.975 | 0.589 |
 | dispatch | grep | 0.128 | 0.993 | 0.227 | 0.515 | 0.994 | 0.226 |
-| rename | graph-indexer | 0.996 (0.999) | 0.922 (0.766) | 0.958 (0.867) | 0.967 | 0.943 | 0.857 |
+| rename | graph-indexer | 0.996 (0.999) | 0.924 (0.767) | 0.959 (0.868) | 0.967 | 0.943 | 0.872 |
 | rename | name-only | 0.262 | 0.975 | 0.413 | 0.752 | 0.976 | 0.604 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
 
@@ -76,9 +76,13 @@ oracle exactly.
 
 **What is still missed.** Receivers whose type only a type checker knows: object literals
 contextually typed by an interface (`{ useFactory: … }` as a `FactoryProvider`), generic
-instantiation, and `any`-typed values. These show up as lower recall, not as wrong answers, and
-`find_references` reports the number of same-name call sites it could not bind so an agent knows
-when to grep.
+instantiation, destructured property reads, classes declared as expressions, and `any`-typed
+values; type names in JSDoc tags are not references at all. These show up as lower recall, not
+as wrong answers, and `find_references` names the same-name call sites it could not bind, in the
+files that use the type or a subclass of it, so an agent knows what to check. Callback parameters
+typed only by the signature of the function they are passed to
+(`helpers.connect((err, socket) => socket.send(…))`) are followed, as are fluent chains formatted
+one call per line and chains that start with `(await …)`.
 
 **A caveat on the oracle.** The fixture is checked out without `node_modules`, so values that
 flow through third-party libraries (for example `iterate(instances).filter(([_, w]) =>
@@ -178,39 +182,26 @@ queries 0.761 → 0.759); the held-out split did not change.
 
 ## 4. Agents with and without graph-indexer
 
-A small paired evaluation: the same five questions were given to two agents with the same model
-(Claude Sonnet, as a sub-agent), one allowed only grep/glob/read, the other also given the
-graph-indexer CLI (the same six tools as the MCP server). Answers were scored against the
-compiler's `findReferences` or the suites' authored answers, checked by hand where the compiler
-missed library-typed code. Usage is as reported by the agent runtime; every run carries a fixed
-~44k-token overhead (system prompt and tool definitions).
+The end-to-end test is the [agentic benchmark](AGENTIC-BENCHMARK.md): the same model gets the same
+task in the same repository, with built-in tools only (`grep`), with graph-indexer added to them,
+or with graph-indexer instead of grep and glob, and an oracle the agent never sees grades the
+result — the TypeScript compiler for code questions (B1) and multi-site refactors (B2), the tests
+of the real fix for issues reported after the model's training cutoff (B3). Three rounds, each on
+tasks that played no part in the changes it tests; cost is the agent's usage in input-equivalent
+tokens, paired by task (bootstrap 95% CI):
 
-| task | arm | correct | tool calls | tokens | time |
-|---|---|---|---|---|---|
-| T1 callers of `InstanceWrapper.isDependencyTreeStatic`, two levels deep (nestjs, 36 functions) | grep | 36/36 | 44 | 108.4k | 245 s |
-| | graph-indexer | 36/36 | **20** | **88.8k** | **220 s** |
-| T2 call sites of `Module.addProvider`, not the same-named `NestContainer.addProvider` (nestjs) | grep | ✓ | 5 | 50.7k | 25 s |
-| | graph-indexer (before fixes) | ✓ | 9 | 54.4k | 36 s |
-| | graph-indexer (after fixes) | ✓ | 8 | 51.8k | 24 s |
-| T3 function that parses the request body into declared parameters (fastapi) | grep | ✓ | 3 | 45.1k | 8 s |
-| | graph-indexer | ✓ | 4 | 48.3k | 16 s |
-| T4 function that joins URL paths preserving a trailing slash (gin) | grep | ✓ | 3 | 44.6k | 7 s |
-| | graph-indexer | ✓ | 4 | 46.4k | 9 s |
-| T5 method that runs guards and denies on `false` (nestjs) | grep | ✓ | 3 | 45.5k | 8 s |
-| | graph-indexer | ✓ | 3 | 46.7k | 11 s |
+| round | tasks | graph-indexer with grep: cost vs `grep` | graph-indexer without grep | solved |
+|---|---|---|---|---|
+| development (`rc2`/`rc3`) | B1 8, B2 8, B3 14 | 0.93 (0.81–1.03); B1 + B2 0.76 | 0.97 (0.81–1.17) | 120 of 120 |
+| held out (`rc4`) | B1 7, B2 6, B3 10 | 0.90 (0.77–1.04); B1 + B2 0.81 | 1.02 (0.89–1.15) | 69 of 69 |
+| third (`rc5`) | B1 10, B2 6 | 0.73 (0.58–0.90) | 0.82 (0.59–1.12) | 47 of 48 (`grep` 15 of 16) |
 
-What it shows, with one run per cell (indicative, not statistically significant):
-
-- A capable model answers single-location questions with grep just as well and slightly
-  cheaper; the index adds a call it does not need.
-- On the multi-hop impact question the graph-indexer agent needed 55% fewer tool calls and about
-  30% fewer tokens beyond the fixed overhead, for the same complete answer and higher stated
-  confidence.
-- T2 surfaced two real defects, both fixed before the rerun: a call site reached through
-  `class ModulesContainer extends Map<string, Module>` was not bound, and overloads of one method
-  were reported as an ambiguous name. The remaining extra calls were the agent verifying that
-  the other `addProvider` calls belong elsewhere; `find_references` now states where every other
-  same-name reference resolves.
+- On code questions and refactors, graph-indexer next to grep costs about three quarters of
+  grep alone: caller chains are answered after reading a quarter of the source, and on the last
+  round "which classes implement X" costs 0.62 of grep instead of 1.46.
+- Without grep nothing is lost, at about the same cost.
+- Fixing real issues costs the same with or without it (cost ratios between 0.96 and 1.10):
+  reading the code around the fault and running tests are most of the work.
 
 ## Speed and size
 
@@ -232,5 +223,5 @@ at index time). After the first build only changed files are re-parsed.
 
 Warm tool latency on nestjs (median of 5): `get_symbol` 1.2 ms, `find_references` 1.1 ms,
 `call_graph` 1.4 ms, `change_impact` 3.7 ms, `outline` 17.8 ms, `search_code` about 30 ms.
-The six tool definitions cost about 1.8k tokens of context; replies are typically 400–1,500
-tokens.
+The eight tool definitions cost about 2.4k tokens of context and the server instructions about
+500; replies are typically 400–1,500 tokens.
