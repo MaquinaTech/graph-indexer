@@ -48,6 +48,17 @@
         "NatsRecordBuilder.build (packages/microservices/record-builders/nats.record-builder.ts)",
         "RmqRecordBuilder.build (packages/microservices/record-builders/rmq.record-builder.ts)"
       ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 24,
+      "naiveFailure": [
+        "no new type errors: 8290 diagnostics, 18 new (4985 ms) |   integration/microservices/src/mqtt/mqtt.controller.ts:98 TS2554 Expected 0 arguments, but got 1. |   integration/microservices/src/nats/nats.controller.ts:72 TS2554 Expected 0 arguments, but got 1. |   integration/microservices/src/rmq/rmq.controller.ts:89 TS2554 Expected 0 arguments, but got 1."
+      ]
     }
   },
   {
@@ -104,6 +115,17 @@
         "RouterExplorer.getContextId (packages/core/router/router-explorer.ts)",
         "ListenersController.getContextId (packages/microservices/listeners-controller.ts)"
       ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 9,
+      "naiveCallEdits": 23,
+      "naiveFailure": [
+        "no new type errors: 8286 diagnostics, 15 new (5350 ms) |   packages/core/injector/injector.ts:113 TS2339 Property 'getContextIdChecked' does not exist on type 'Injector'. |   packages/core/injector/injector.ts:174 TS2339 Property 'getContextIdChecked' does not exist on type 'Injector'. |   packages/core/injector/injector.ts:313 TS2339 Property 'getContextIdChecked' does not exist on type 'Injector'."
+      ]
     }
   },
   {
@@ -150,6 +172,17 @@
       "files": 2,
       "decoys": [
         "GuardsConsumer.pickResult (packages/core/guards/guards-consumer.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 8,
+      "naiveFailure": [
+        "no new type errors: 8275 diagnostics, 3 new (5612 ms) |   packages/core/guards/guards-consumer.ts:23 TS2554 Expected 1 arguments, but got 2. |   packages/core/test/guards/guards-consumer.spec.ts:52 TS2554 Expected 1 arguments, but got 2. |   packages/core/test/guards/guards-consumer.spec.ts:57 TS2554 Expected 1 arguments, but got 2."
       ]
     }
   },
@@ -204,6 +237,17 @@
         "ServerKafka.sendMessage (packages/microservices/server/server-kafka.ts)",
         "ServerRMQ.sendMessage (packages/microservices/server/server-rmq.ts)"
       ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 10,
+      "naiveCallEdits": 17,
+      "naiveFailure": [
+        "no new type errors: 8279 diagnostics, 8 new (5611 ms) |   packages/microservices/server/server-kafka.ts:152 TS2339 Property 'sendMessageChecked' does not exist on type 'ServerKafka'. |   packages/microservices/server/server-rmq.ts:203 TS2339 Property 'sendMessageChecked' does not exist on type 'ServerRMQ'. |   packages/microservices/server/server-rmq.ts:214 TS2339 Property 'sendMessageChecked' does not exist on type 'ServerRMQ'."
+      ]
     }
   },
   {
@@ -251,6 +295,17 @@
       "files": 2,
       "decoys": [
         "ServerGrpc.createUnaryServiceMethod (packages/microservices/server/server-grpc.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 7,
+      "naiveCallEdits": 10,
+      "naiveFailure": [
+        "no new type errors: 8276 diagnostics, 4 new (5960 ms) |   packages/microservices/server/server-grpc.ts:247 TS2554 Expected 1 arguments, but got 2. |   packages/microservices/test/server/server-grpc.spec.ts:545 TS2554 Expected 1 arguments, but got 2. |   packages/microservices/test/server/server-grpc.spec.ts:554 TS2554 Expected 1 arguments, but got 2."
       ]
     }
   },
@@ -308,6 +363,17 @@
       "files": 5,
       "decoys": [
         "Server.normalizePattern (packages/microservices/server/server.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 13,
+      "naiveCallEdits": 14,
+      "naiveFailure": [
+        "no new type errors: 8274 diagnostics, 2 new (5278 ms) |   packages/microservices/server/server.ts:52 TS2551 Property 'normalizePatternChecked' does not exist on type 'Server'. Did you mean 'normalizePattern'? |   packages/microservices/server/server.ts:215 TS2551 Property 'normalizePatternChecked' does not exist on type 'Server'. Did you mean 'normalizePattern'?"
       ]
     }
   }
