@@ -4,14 +4,15 @@
  * run id, one pair per line, written when the agent is launched) and grades the run with the
  * agent's transcript from the transcripts directory (<dir>/<agent id>.output or .jsonl).
  *
- *   node bench/agentic/grade-batch.mjs --gi LABEL --agents id1,id2 [--transcripts DIR] [--min-idle SEC]
+ *   node bench/agentic/grade-batch.mjs --gi LABEL --agents id1,id2|all [--transcripts DIR] [--min-idle SEC]
+ *       (all: the latest agent of every registered run not graded yet)
  *   node bench/agentic/grade-batch.mjs --gi LABEL --register "agentId runId" ...   append pairs to agents.tsv
  *   node bench/agentic/grade-batch.mjs --gi LABEL --discard RUN[,RUN] --reason TEXT
  *       void the gradings made so far (runs/<label>/discarded.tsv; the report ignores them) before a re-run
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { argv, WORK } from './lib.mjs';
+import { argv, readJsonl, WORK } from './lib.mjs';
 import { gradeRun } from './grade.mjs';
 
 const { opt, list, args, flag } = argv();
@@ -61,7 +62,14 @@ if (opt('--discard')) {
     const dir = opt('--transcripts', process.env.GI_TRANSCRIPTS);
     if (!dir) throw new Error('--transcripts DIR (or GI_TRANSCRIPTS) is required');
     const map = new Map(fs.readFileSync(tsv, 'utf8').split('\n').filter(Boolean).map(l => l.split('\t')));
-    for (const agent of list('--agents')) {
+    let agents = list('--agents');
+    if (agents.length === 1 && agents[0] === 'all') {
+        // the latest agent of every run that has no grading yet (a re-run is graded by its id)
+        const graded = new Set(readJsonl(path.join(WORK, 'results', `${label}.jsonl`)).map(r => r.runId));
+        const latest = new Map([...map].map(([a, r]) => [r, a]));
+        agents = [...latest].filter(([r]) => !graded.has(r)).map(([, a]) => a);
+    }
+    for (const agent of agents) {
         const run = map.get(agent);
         if (!run) { console.log(`${agent}: not registered`); continue; }
         const transcript = ['.output', '.jsonl'].map(e => path.join(dir, agent + e)).find(f => fs.existsSync(f));

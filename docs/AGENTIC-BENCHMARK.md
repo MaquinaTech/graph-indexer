@@ -500,6 +500,29 @@ node bench/agentic/report.mjs --gi rc5 --integrated grep+gi3 --nogrep gi3
 The TypeScript suites need the nestjs fixture (`node bench/fixtures.mjs`); the B3 suites need
 local clones of sqlglot and networkx with their history (`bench/agentic/repos.mjs`).
 
+**With the real MCP server and hooks.** On a machine with an authenticated `claude` CLI,
+[`run-headless.mjs`](../bench/agentic/run-headless.mjs) runs each prepared run with `claude -p`:
+`mcp` gets graph-indexer's MCP server and the block `init` writes, `mcp+hooks` also gets the
+Claude Code hooks, and `grep` / `grep+rules` run with the built-in tools. For the fourth round's
+tasks:
+
+```sh
+node bench/fixtures.mjs                                   # nestjs (B1, B2)
+git clone --filter=blob:none https://github.com/tobymao/sqlglot.git /tmp/gi-agentic/repos/sqlglot
+git clone --filter=blob:none https://github.com/networkx/networkx.git /tmp/gi-agentic/repos/networkx
+node bench/agentic/prepare.mjs snapshot --label local
+for t in qa-nestjs-r4 refactor-nestjs-r4 fresh-sqlglot-r4 fresh-networkx-r4; do
+  node bench/agentic/prepare.mjs batch --tasks $t.json --arms grep,grep+rules,mcp,mcp+hooks --reps 1 --gi local >/dev/null
+done
+node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # add --model M to pin one
+node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts /tmp/gi-agentic/transcripts/local
+node bench/agentic/report.mjs --gi local --integrated mcp+hooks --nogrep grep+rules
+```
+
+`GI_AGENTIC_WORK` moves the work area from `/tmp/gi-agentic`. The 76 runs use the account's
+quota: in the fourth round a run cost between 0.1M and 1.9M input-equivalent tokens, and an
+issue took 1–15 minutes.
+
 ## Limitations
 
 - **One model, sub-agents.** Every run uses the same model as a sub-agent with instructions that
