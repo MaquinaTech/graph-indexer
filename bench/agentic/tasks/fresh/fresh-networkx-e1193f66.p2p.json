@@ -1,0 +1,22 @@
+[
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_configuration",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_davis_southern_women",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_davis_southern_women_detail_3_and_4",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_directed",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_empty_k_components",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_generate_partition_does_not_drop_cutset_nodes",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_generate_partition_keeps_cut_adjacent_low_degree_nodes",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_k_components_alternative_flow_func[boykov_kolmogorov]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_k_components_alternative_flow_func[dinitz]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_k_components_alternative_flow_func[edmonds_karp]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_k_components_alternative_flow_func[preflow_push]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_k_components_alternative_flow_func[shortest_augmenting_path]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_karate",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_karate_component_number",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_random_gnp[10-0.6]",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_reconstruct_k_components_no_nested_output",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_reconstruct_k_components_promotes_spanning_component",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_reconstruction_does_not_replace_component_by_fragments",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_set_consolidation_rosettacode",
+  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_shell[constructor0]"
+]

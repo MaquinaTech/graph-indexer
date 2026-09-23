@@ -1,0 +1,4 @@
+[
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_invalid_n_samples",
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_zero_division_error"
+]

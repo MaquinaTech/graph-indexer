@@ -1,0 +1,468 @@
+[
+  {
+    "id": "qa-nestjs-r4-calls-01",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `ClientRMQ.handleMessage` (declared in `packages/microservices/client/client-rmq.ts`, line 230) is called — including calls in test/spec files. Other methods in the codebase share the name `handleMessage`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/microservices/client/client-rmq.ts",
+          "line": 270
+        },
+        {
+          "path": "packages/microservices/test/client/client-rmq.spec.ts",
+          "line": 313
+        },
+        {
+          "path": "packages/microservices/test/client/client-rmq.spec.ts",
+          "line": 334
+        },
+        {
+          "path": "packages/microservices/test/client/client-rmq.spec.ts",
+          "line": 356
+        }
+      ]
+    },
+    "meta": {
+      "target": "ClientRMQ.handleMessage",
+      "path": "packages/microservices/client/client-rmq.ts",
+      "line": 230,
+      "grepCallLines": 36,
+      "sameNameNoise": 32,
+      "testCalls": 3
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-calls-02",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `NestContainer.addProvider` (declared in `packages/core/injector/container.ts`, line 227) is called — including calls in test/spec files. Other methods in the codebase share the name `addProvider`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/core/scanner.ts",
+          "line": 437
+        },
+        {
+          "path": "packages/core/scanner.ts",
+          "line": 450
+        },
+        {
+          "path": "packages/core/scanner.ts",
+          "line": 486
+        },
+        {
+          "path": "packages/core/test/injector/container.spec.ts",
+          "line": 25
+        },
+        {
+          "path": "packages/core/test/injector/container.spec.ts",
+          "line": 31
+        },
+        {
+          "path": "packages/core/test/nest-application-context.spec.ts",
+          "line": 29
+        },
+        {
+          "path": "packages/core/test/nest-application-context.spec.ts",
+          "line": 39
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 31
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 32
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 33
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 34
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 39
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 40
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/debug-repl-fn.spec.ts",
+          "line": 41
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/methods-repl-fn.spec.ts",
+          "line": 31
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/methods-repl-fn.spec.ts",
+          "line": 32
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/methods-repl-fn.spec.ts",
+          "line": 34
+        },
+        {
+          "path": "packages/core/test/repl/native-functions/methods-repl-fn.spec.ts",
+          "line": 35
+        }
+      ]
+    },
+    "meta": {
+      "target": "NestContainer.addProvider",
+      "path": "packages/core/injector/container.ts",
+      "line": 227,
+      "grepCallLines": 33,
+      "sameNameNoise": 15,
+      "testCalls": 15
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-calls-03",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `ContextCreator.createContext` (declared in `packages/core/helpers/context-creator.ts`, line 16) is called — including calls in test/spec files. Other methods in the codebase share the name `createContext`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/core/exceptions/external-exception-filter-context.ts",
+          "line": 32
+        },
+        {
+          "path": "packages/core/guards/guards-context-creator.ts",
+          "line": 30
+        },
+        {
+          "path": "packages/core/interceptors/interceptors-context-creator.ts",
+          "line": 29
+        },
+        {
+          "path": "packages/core/pipes/pipes-context-creator.ts",
+          "line": 29
+        },
+        {
+          "path": "packages/core/router/router-exception-filters.ts",
+          "line": 33
+        },
+        {
+          "path": "packages/microservices/context/exception-filters-context.ts",
+          "line": 34
+        },
+        {
+          "path": "packages/websockets/context/exception-filters-context.ts",
+          "line": 23
+        }
+      ]
+    },
+    "meta": {
+      "target": "ContextCreator.createContext",
+      "path": "packages/core/helpers/context-creator.ts",
+      "line": 16,
+      "grepCallLines": 9,
+      "sameNameNoise": 3,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-calls-04",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `ExceptionHandler.handle` (declared in `packages/core/errors/exception-handler.ts`, line 7) is called — including calls in test/spec files. Other methods in the codebase share the name `handle`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/core/errors/exceptions-zone.ts",
+          "line": 17
+        },
+        {
+          "path": "packages/core/errors/exceptions-zone.ts",
+          "line": 33
+        },
+        {
+          "path": "packages/core/test/errors/test/exception-handler.spec.ts",
+          "line": 24
+        },
+        {
+          "path": "packages/core/test/errors/test/exception-handler.spec.ts",
+          "line": 30
+        }
+      ]
+    },
+    "meta": {
+      "target": "ExceptionHandler.handle",
+      "path": "packages/core/errors/exception-handler.ts",
+      "line": 7,
+      "grepCallLines": 28,
+      "sameNameNoise": 24,
+      "testCalls": 2
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-callers-01",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `NestContainer.getHttpAdapterRef` (declared in `packages/core/injector/container.ts`, line 63). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/middleware/middleware-module.ts",
+          "start": 53,
+          "end": 80,
+          "name": "MiddlewareModule.register",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 57,
+          "end": 441,
+          "name": "RouterExplorer",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 263,
+          "end": 313,
+          "name": "RouterExplorer.applyHostFilter",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 31,
+          "end": 219,
+          "name": "RoutesResolver",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 142,
+          "end": 156,
+          "name": "RoutesResolver.registerNotFoundHandler",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 158,
+          "end": 179,
+          "name": "RoutesResolver.registerExceptionHandler",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 142,
+          "end": 164,
+          "name": "NestApplication.registerModules",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 155,
+          "end": 261,
+          "name": "RouterExplorer.applyCallbackToRouter",
+          "level": 2
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 55,
+          "end": 476,
+          "name": "NestApplication",
+          "level": 2,
+          "optional": true
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 216,
+          "end": 219,
+          "name": "NestApplication.registerRouterHooks",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 40,
+          "end": 65,
+          "name": "RoutesResolver.constructor",
+          "level": 2,
+          "optional": true
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 77,
+          "end": 96,
+          "name": "NestApplication.constructor",
+          "level": 2,
+          "optional": true
+        }
+      ]
+    },
+    "meta": {
+      "target": "NestContainer.getHttpAdapterRef",
+      "path": "packages/core/injector/container.ts",
+      "line": 63,
+      "level1": 6,
+      "total": 10
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-callers-02",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `NestContainer.registerRequestProvider` (declared in `packages/core/injector/container.ts`, line 328). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/injector/module-ref.ts",
+          "start": 150,
+          "end": 152,
+          "name": "ModuleRef.registerRequestByContextId",
+          "level": 1
+        },
+        {
+          "path": "packages/core/helpers/external-context-creator.ts",
+          "start": 359,
+          "end": 361,
+          "name": "ExternalContextCreator.registerRequestProvider",
+          "level": 1
+        },
+        {
+          "path": "packages/core/middleware/middleware-module.ts",
+          "start": 339,
+          "end": 355,
+          "name": "MiddlewareModule.getContextId",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-application-context.ts",
+          "start": 220,
+          "end": 226,
+          "name": "NestApplicationContext.registerRequestByContextId",
+          "level": 1
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 408,
+          "end": 427,
+          "name": "RouterExplorer.getContextId",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/listeners-controller.ts",
+          "start": 298,
+          "end": 317,
+          "name": "ListenersController.getContextId",
+          "level": 1
+        },
+        {
+          "path": "packages/core/middleware/middleware-module.ts",
+          "start": 235,
+          "end": 290,
+          "name": "MiddlewareModule.bindHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 356,
+          "end": 406,
+          "name": "RouterExplorer.createRequestScopedHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/microservices/listeners-controller.ts",
+          "start": 234,
+          "end": 294,
+          "name": "requestScopedHandler",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "NestContainer.registerRequestProvider",
+      "path": "packages/core/injector/container.ts",
+      "line": 328,
+      "level1": 6,
+      "total": 9
+    }
+  },
+  {
+    "id": "qa-nestjs-r4-impls-01",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "List every class under `packages/` (excluding test/spec files) that implements the interface `Serializer` declared in `packages/microservices/interfaces/serializer.interface.ts`, line 10 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/microservices/serializers/kafka-request.serializer.ts",
+          "start": 19,
+          "end": 54,
+          "name": "KafkaRequestSerializer"
+        },
+        {
+          "path": "packages/microservices/serializers/identity.serializer.ts",
+          "start": 3,
+          "end": 7,
+          "name": "IdentitySerializer"
+        },
+        {
+          "path": "packages/microservices/serializers/mqtt-record.serializer.ts",
+          "start": 5,
+          "end": 23,
+          "name": "MqttRecordSerializer"
+        },
+        {
+          "path": "packages/microservices/serializers/nats-record.serializer.ts",
+          "start": 10,
+          "end": 33,
+          "name": "NatsRecordSerializer"
+        },
+        {
+          "path": "packages/microservices/serializers/rmq-record.serializer.ts",
+          "start": 6,
+          "end": 24,
+          "name": "RmqRecordSerializer"
+        }
+      ]
+    },
+    "meta": {
+      "target": "Serializer",
+      "path": "packages/microservices/interfaces/serializer.interface.ts",
+      "line": 10,
+      "total": 5
+    }
+  }
+]

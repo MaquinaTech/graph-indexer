@@ -1,0 +1,14 @@
+[
+  "networkx/algorithms/community/tests/test_leiden.py::::test_LFR_communities_across_algos",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_barbell_communities_across_algos",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_cpm_node_weights_on_G",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_directed_selfloops",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_directed_weights_matter[modularity]",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_edge_wts",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_expected_stable_across_code_changes_cpm",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_expected_stable_across_code_changes_qmod",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_modularity_selfloops",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_modularity_twom_instead_of_m",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_resolution_kwarg_mod[MultiGraph]",
+  "networkx/algorithms/community/tests/test_leiden.py::::test_weights_matter[modularity]"
+]

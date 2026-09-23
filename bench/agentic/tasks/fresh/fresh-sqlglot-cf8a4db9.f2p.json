@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_snowflake.py::TestSnowflake::test_rollback_as_identifier"
+]

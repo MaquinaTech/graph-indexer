@@ -1,0 +1,4 @@
+[
+  "networkx/classes/tests/test_function.py::::test_remove_attributes_clears_cache[remove_edge_attributes]",
+  "networkx/classes/tests/test_function.py::::test_remove_attributes_clears_cache[remove_node_attributes]"
+]

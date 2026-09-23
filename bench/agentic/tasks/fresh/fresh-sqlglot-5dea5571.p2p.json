@@ -1,0 +1,13 @@
+[
+  "tests/dialects/test_doris.py::TestDoris::test_analyze",
+  "tests/dialects/test_doris.py::TestDoris::test_date_add_sub",
+  "tests/dialects/test_doris.py::TestDoris::test_distributed",
+  "tests/dialects/test_doris.py::TestDoris::test_doris",
+  "tests/dialects/test_doris.py::TestDoris::test_key",
+  "tests/dialects/test_doris.py::TestDoris::test_materialized_view_properties",
+  "tests/dialects/test_doris.py::TestDoris::test_partition",
+  "tests/dialects/test_doris.py::TestDoris::test_regex",
+  "tests/dialects/test_doris.py::TestDoris::test_rename_table",
+  "tests/dialects/test_doris.py::TestDoris::test_table_alias_conversion",
+  "tests/dialects/test_doris.py::TestDoris::test_time"
+]

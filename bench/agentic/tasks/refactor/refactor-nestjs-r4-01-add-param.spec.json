@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/microservices/server/server-grpc.ts",
+    "cls": "ServerGrpc",
+    "name": "createStreamServiceMethod",
+    "params": 2,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/client/client-grpc.ts",
+      "cls": "ClientGrpcProxy",
+      "name": "createStreamServiceMethod",
+      "params": 2
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+[
+  "tests/test_expressions.py::TestExprs::test_is_star"
+]

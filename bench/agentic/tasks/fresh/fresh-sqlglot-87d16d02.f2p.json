@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_singlestore.py::TestSingleStore::test_percentile_null_ordering"
+]

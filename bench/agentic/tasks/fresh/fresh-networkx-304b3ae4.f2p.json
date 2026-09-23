@@ -1,0 +1,3 @@
+[
+  "networkx/readwrite/tests/test_gml.py::TestGraph::test_tuple_label_quote_escape"
+]

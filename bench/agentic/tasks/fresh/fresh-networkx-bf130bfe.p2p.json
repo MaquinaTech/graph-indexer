@@ -1,0 +1,13 @@
+[
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_exception2",
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_leq_3_nodes_normalized",
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_leq_3_nodes_unnormalized",
+  "networkx/algorithms/tests/test_richclub.py::::test_rich_club_selfloop",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub2",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub3",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub4",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub_exception",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub_normalized",
+  "networkx/algorithms/tests/test_richclub.py::::test_richclub_seed"
+]

@@ -1,0 +1,60 @@
+[
+  {
+    "id": "refactor-nestjs-r4-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ServerGrpc.createStreamServiceMethod` (declared in `packages/microservices/server/server-grpc.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `createStreamServiceMethod` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-r4-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/server/server-grpc.ts:246",
+        "packages/microservices/test/server/server-grpc.spec.ts:453",
+        "packages/microservices/test/server/server-grpc.spec.ts:468",
+        "packages/microservices/test/server/server-grpc.spec.ts:488",
+        "packages/microservices/test/server/server-grpc.spec.ts:518"
+      ],
+      "files": [
+        "packages/microservices/server/server-grpc.ts",
+        "packages/microservices/test/server/server-grpc.spec.ts",
+        "packages/microservices/server/server-grpc.ts"
+      ]
+    },
+    "meta": {
+      "target": "ServerGrpc.createStreamServiceMethod",
+      "path": "packages/microservices/server/server-grpc.ts",
+      "line": 260,
+      "callSites": 5,
+      "files": 2,
+      "decoys": [
+        "ClientGrpcProxy.createStreamServiceMethod (packages/microservices/client/client-grpc.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 6,
+      "naiveCallEdits": 10,
+      "naiveFailure": [
+        "no new type errors: 8277 diagnostics, 5 new (7468 ms) |   packages/microservices/client/client-grpc.ts:141 TS2554 Expected 2 arguments, but got 3. |   packages/microservices/test/client/client-grpc.spec.ts:117 TS2554 Expected 2 arguments, but got 3. |   packages/microservices/test/client/client-grpc.spec.ts:128 TS2554 Expected 2 arguments, but got 3."
+      ]
+    }
+  }
+]
