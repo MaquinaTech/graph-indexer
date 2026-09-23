@@ -31,6 +31,16 @@ function paramsNodeOf(def) {
 }
 
 /**
+ * Python decorators that turn a def into something other than a plain function: properties, and
+ * classes (CapWords by convention, e.g. a caching descriptor). How the result is called is up to
+ * that object, so the def's parameters say nothing about its call sites.
+ */
+function isDescriptorDecorator(d) {
+    const last = d.split('.').pop();
+    return /(property|setter|getter|deleter)$/i.test(last) || /^_*[A-Z]/.test(last);
+}
+
+/**
  * Accepted argument count of a function/method definition node.
  * @param {object} def tree-sitter node of the definition
  * @param {{ method?: boolean, lang?: string, isStatic?: boolean, decorators?: string[] }} ctx
@@ -42,7 +52,7 @@ export function paramArity(def, { method = false, lang = '', isStatic = false, d
     if (params.type === 'identifier') return { min: 1, max: 1 }; // `x => …`
     let min = 0, max = 0, first = true, keywordOnly = false;
     const py = lang === 'python';
-    if (py && decorators.some(d => /property|setter|getter|cached_property/.test(d))) return null;
+    if (py && decorators.some(isDescriptorDecorator)) return null;
     for (const p of params.namedChildren) {
         const t = p.type;
         if (t === 'keyword_separator') { keywordOnly = true; continue; }
