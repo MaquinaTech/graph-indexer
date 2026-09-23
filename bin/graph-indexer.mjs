@@ -7,7 +7,7 @@
  *   graph-indexer init    [--repo DIR] [--agents …]   wire the MCP server into your coding agents
  *   graph-indexer status  [--repo DIR]
  *   graph-indexer search   <query>  [--path P] [--kind K] [--limit N]
- *   graph-indexer symbol   <name>   [--no-code]
+ *   graph-indexer symbol   <name>…  [--no-code]
  *   graph-indexer refs     <name>   [--kind K] [--no-tests] [--limit N]
  *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N]
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
@@ -66,11 +66,19 @@ function rejectUnknownOptions() {
 }
 
 async function runTool(name, args) {
+    return runTools([[name, args]]);
+}
+
+/** Several tool calls against one open index (e.g. `symbol A B C`), outputs separated by a blank line. */
+async function runTools(calls) {
     if (rejectUnknownOptions()) return;
     const intel = await openIntel({ quiet: true });
     const { callTool } = await import('../src/mcp/tools.mjs');
-    try { process.stdout.write((await callTool(intel, name, args, { cli: true })) + '\n'); }
-    finally { intel.close(); }
+    try {
+        const outs = [];
+        for (const [name, args] of calls) outs.push(await callTool(intel, name, args, { cli: true }));
+        process.stdout.write(outs.join('\n\n') + '\n');
+    } finally { intel.close(); }
 }
 
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
@@ -82,7 +90,7 @@ Usage:
   graph-indexer status [--repo DIR]
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
-  graph-indexer symbol <name> [--no-code]
+  graph-indexer symbol <name>… [--no-code]         one or several definitions
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
@@ -138,7 +146,9 @@ async function main() {
         }
         case 'symbol': {
             const noCode = flag('--no-code'); const maxLines = Number(opt('--max-lines', 200));
-            return runTool('get_symbol', { symbol: argv.join(' '), include_code: !noCode, max_lines: maxLines });
+            // `symbol A B C` reads several definitions in one call
+            const targets = argv.filter(a => !a.startsWith('--'));
+            return runTools((targets.length ? targets : ['']).map(t => ['get_symbol', { symbol: t, include_code: !noCode, max_lines: maxLines }]));
         }
         case 'refs': {
             const kind = opt('--kind', 'all'); const noTests = flag('--no-tests'); const limit = Number(opt('--limit', 80));
