@@ -433,6 +433,27 @@ export class Resolver {
         return null;
     }
 
+    /**
+     * The module file an imported Python name stands for, when that name is a module: `import a.b as x`,
+     * `from pkg import sub` (a submodule), or a name the imported module itself imports as a module —
+     * `from sqlglot import exp`, where sqlglot/__init__.py does `from sqlglot import expressions as exp`.
+     */
+    #moduleFileOf(fileId, local, depth = 0) {
+        if (depth > 4 || local == null) return null;
+        const imp = this.#importFor(fileId, local);
+        if (!imp) return null;
+        if (imp.imported === '*' && !imp.wildcard) return imp.targetFileId ?? null;
+        const n = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : null;
+        if (!n) return null;
+        if (imp.targetDir) {
+            const sub = `${imp.targetDir}/${n.replace(/\./g, '/')}`;
+            const f = this.t.fileByPath.get(sub + '.py') ?? this.t.fileByPath.get(sub + '/__init__.py');
+            if (f) return f.id;
+        }
+        if (imp.targetFileId != null && imp.targetFileId !== fileId) return this.#moduleFileOf(imp.targetFileId, n, depth + 1);
+        return null;
+    }
+
     /** Top-level symbols named `name` exported by a module file, following re-exports. */
     exportedFrom(targetFileId, name, depth = 0, seen = new Set()) {
         if (targetFileId == null || depth > 6 || seen.has(targetFileId)) return [];
@@ -443,7 +464,9 @@ export class Resolver {
             if (s.name === name && s.parentId == null) out.push(id);
         }
         if (out.length) return out;
-        for (const imp of this.t.imports.get(targetFileId) ?? []) {
+        // in Python a later import rebinds the name (`from a import *` then `from b import *`)
+        const imports = this.t.imports.get(targetFileId) ?? [];
+        for (const imp of this.t.file(targetFileId)?.lang === 'python' ? [...imports].reverse() : imports) {
             // `export { X } from './x'`, `export * from './x'`, Python `from .x import X` in __init__
             const passes = imp.reexport === name || imp.reexport === '*' || imp.local === name || (imp.wildcard && imp.imported === '*');
             if (!passes || imp.targetFileId == null) continue;
@@ -699,6 +722,12 @@ export class Resolver {
                 // ns.Class.method / pkg.sub.fn / pkg.DefaultClient.Do
                 let owners = imp.targetFileId != null ? this.exportedFrom(imp.targetFileId, rest[0]) : this.#symbolsInDir(imp.targetDir, rest[0], fileId);
                 if (rest.length === 1) for (const oid of owners) ids.push(...this.#membersVia(this.t.sym(oid), name));
+            }
+            if (!ids.length && file.lang === 'python') {
+                // the receiver is a module reached through a package (`exp.Column`, `exp.Literal.string`)
+                const mod = this.#moduleFileOf(fileId, imp.local);
+                if (mod != null && rest.length === 0) ids = this.exportedFrom(mod, name);
+                else if (mod != null && rest.length === 1) for (const oid of this.exportedFrom(mod, rest[0])) ids.push(...this.#membersVia(this.t.sym(oid), name));
             }
             if (ids.length) {
                 const r = this.#pick(ids, kind, 0.95, fileId);

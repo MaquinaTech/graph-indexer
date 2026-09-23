@@ -1,13 +1,16 @@
 /**
  * The MCP tool surface: eight read-only tools, each answering one kind of question an agent has
- * while changing code. Descriptions say when to use the tool (and when grep/read is better);
+ * while changing code (`get_symbol`, which `read_code` replaced, stays callable for older clients).
+ * Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
  */
 import path from 'node:path';
 import { analyzeQuery } from '../search/tokenize.mjs';
 import { loc, clip, codeBlock, symHeader, confWord, matchingLines, plural } from './render.mjs';
-import { textSearch, findFiles } from '../query/textsearch.mjs';
+import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
+import { definitionsUsed, testsUsing } from '../query/read.mjs';
+import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_KINDS = new Set(['field', 'property', 'variable', 'constant']);
@@ -30,7 +33,6 @@ export const TOOLS = [
                 limit: { type: 'integer', minimum: 1, maximum: 30, default: 8, description: 'Max results (default 8).' },
             },
             required: ['query'],
-            additionalProperties: false,
         },
     },
     {
@@ -47,22 +49,20 @@ export const TOOLS = [
                 limit: { type: 'integer', minimum: 1, maximum: 300, default: 60, description: 'Max matching lines shown (totals are always complete).' },
             },
             required: ['pattern'],
-            additionalProperties: false,
         },
     },
     {
-        name: 'get_symbol',
-        title: 'Get symbol',
-        description: 'Read one definition instead of a whole file: source code with line numbers, signature, doc comment, members (for classes/structs/interfaces) and a summary of what it calls and who calls it. Accepts a name ("handleRequest"), qualified name ("Router.handle"), "path/file.ts:Name" or "path/file.ts:42" (the symbol enclosing that line). When a name is ambiguous, shows the most central definition and lists the others. Use it after search_code, or directly when you know the name. Set include_code=false to get only the signature and relationships.',
+        name: 'read_code',
+        title: 'Read code',
+        description: 'Read code without searching for what it uses: a function, class or method by name ("Parser.parse_interval", "handleRequest"), a line range ("src/app.py:120-180") or a file — several targets per call. Returns the code with line numbers and, below it, where each name the code uses is defined (file:line and signature), so following a call or a type means reading the listed targets instead of grepping for them. For a symbol it also shows what it overrides, who uses it and which tests exercise it. A file over 300 lines comes back as its outline (definitions with line ranges); read the parts you need, or pass full: true. Your editor may still ask you to open the lines you change with its own read tool.',
         inputSchema: {
             type: 'object',
             properties: {
-                symbol: { type: 'string', description: 'Name, Class.member, path:Name or path:line.' },
-                include_code: { type: 'boolean', default: true, description: 'Include the source (default true).' },
-                max_lines: { type: 'integer', minimum: 5, maximum: 1000, default: 200, description: 'Truncate long bodies after this many lines (default 200).' },
+                targets: { type: 'array', items: { type: 'string' }, description: 'Symbols (name, Class.method, path:Name), ranges (path:START-END) or files; up to 12.' },
+                full: { type: 'boolean', default: false, description: 'Whole files even when long (up to 2000 lines).' },
+                max_lines: { type: 'integer', minimum: 5, maximum: 1000, default: 200, description: 'Truncate a long definition after this many lines (default 200).' },
             },
-            required: ['symbol'],
-            additionalProperties: false,
+            required: ['targets'],
         },
     },
     {
@@ -79,7 +79,6 @@ export const TOOLS = [
                 limit: { type: 'integer', minimum: 1, maximum: 500, default: 80 },
             },
             required: ['symbol'],
-            additionalProperties: false,
         },
     },
     {
@@ -95,7 +94,6 @@ export const TOOLS = [
                 limit: { type: 'integer', minimum: 5, maximum: 200, default: 40, description: 'Max nodes per direction.' },
             },
             required: ['symbol'],
-            additionalProperties: false,
         },
     },
     {
@@ -110,7 +108,6 @@ export const TOOLS = [
                 diff: { type: 'boolean', default: false, description: 'Use the uncommitted git diff as the change set.' },
                 depth: { type: 'integer', minimum: 1, maximum: 5, default: 3 },
             },
-            additionalProperties: false,
         },
     },
     {
@@ -123,7 +120,6 @@ export const TOOLS = [
                 files: { type: 'array', items: { type: 'string' }, description: 'Only check these changed files/directories (default: all changes).' },
                 base: { type: 'string', default: 'HEAD', description: 'Git revision to compare with.' },
             },
-            additionalProperties: false,
         },
     },
     {
@@ -137,31 +133,50 @@ export const TOOLS = [
                 focus: { type: 'string', description: 'Optional task/query to center the repository map on.' },
                 max_tokens: { type: 'integer', minimum: 200, maximum: 8000, default: 1500 },
             },
-            additionalProperties: false,
+        },
+    },
+];
+
+// `get_symbol` predates read_code: still callable by clients configured for it, no longer listed
+export const LEGACY_TOOLS = [
+    {
+        name: 'get_symbol',
+        title: 'Get symbol',
+        description: 'Read one definition instead of a whole file: source code with line numbers, signature, doc comment, members (for classes/structs/interfaces) and a summary of what it calls and who calls it. Accepts a name ("handleRequest"), qualified name ("Router.handle"), "path/file.ts:Name" or "path/file.ts:42" (the symbol enclosing that line). When a name is ambiguous, shows the most central definition and lists the others. Use it after search_code, or directly when you know the name. Set include_code=false to get only the signature and relationships.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                symbol: { type: 'string', description: 'Name, Class.member, path:Name or path:line.' },
+                include_code: { type: 'boolean', default: true, description: 'Include the source (default true).' },
+                max_lines: { type: 'integer', minimum: 5, maximum: 1000, default: 200, description: 'Truncate long bodies after this many lines (default 200).' },
+            },
+            required: ['symbol'],
         },
     },
 ];
 
 // loaded up front even when the client defers MCP tools behind a tool search: the three tools an
 // agent needs at the moments it would otherwise guess (which uses? what text? what did I break?)
-const ALWAYS_LOAD = new Set(['search_text', 'find_references', 'check_changes']);
-for (const t of TOOLS) {
+const ALWAYS_LOAD = new Set(['read_code', 'search_text', 'find_references', 'check_changes']);
+for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
 export const SERVER_INSTRUCTIONS = `graph-indexer keeps a live structural index of this repository: definitions, references bound through scopes, imports and receiver types, the call graph, and the tests that exercise each function. It re-syncs with the files before every answer, so results include edits made seconds ago.
 
-Where it saves work compared with grep and reading whole files:
-- Uses of a known symbol, even when other classes have methods with the same name: find_references gives the exact call sites and says which other same-name calls could not be bound and whether they are plausible. For a class or interface it lists every type that inherits it, directly or through a subclass.
-- Anything grep would find (identifiers, strings, config keys, any file): search_text returns grep-style lines plus, for each code match, its enclosing function and the definition an identifier refers to.
-- Code for a behaviour described in words: search_code, then get_symbol to read only that definition, with line numbers.
-- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact lists the call sites to update, overrides and implementations, transitive dependents and the tests to run.
-- After such an edit: check_changes reports syntax errors introduced, calls that no longer fit a changed signature, removed or renamed names still in use, and the command that runs the affected tests.
+Reading and following code:
+- read_code reads symbols (Class.method), line ranges (file:120-180) or files, several per call, and lists where each name the code uses is defined, with its signature. To follow a call or a type, read the listed targets (several at once) instead of searching for their definitions.
+- search_text: anything grep would find (identifiers, strings, config keys, any file), plus for each code match its enclosing function and the definition an identifier refers to; when the definition of the name is elsewhere it says where.
+- search_code: code for a behaviour described in words.
+
+Changing code:
+- Uses of a known symbol, even when other classes have same-name methods: find_references gives the exact call sites and says which same-name calls could not be bound and whether they are plausible; for a class or interface, every type that inherits it.
+- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact (call sites to update, overrides, dependents, tests to run). After such an edit: check_changes (syntax errors, calls that no longer fit, removed names still in use, the test command).
 - A fix inside one function that keeps its signature needs neither: run the tests that cover it.
 - Callers of callers and request flows: call_graph. A map of an unfamiliar area: outline.
 
-Every answer carries a confidence (exact, high, likely) and states what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why. Reading a file directly remains the right step once the location is known.`;
+Every answer states its confidence and what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 
@@ -234,7 +249,7 @@ function refSummary(intel, id) {
  * Hints inside tool output name the next tool to call; through the CLI they must name the
  * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
  */
-const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
+const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
 let surface = 'mcp';
 const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
 
@@ -267,7 +282,8 @@ async function dispatchTool(intel, name, args) {
     switch (name) {
         case 'search_code': return toolSearch(intel, args);
         case 'search_text': return toolText(intel, args);
-        case 'get_symbol': return toolSymbol(intel, args);
+        case 'read_code': return toolRead(intel, args);
+        case 'get_symbol': return toolSymbol(intel, args); // predates read_code; no longer listed
         case 'find_references': return toolReferences(intel, args);
         case 'call_graph': return toolCallGraph(intel, args);
         case 'change_impact': return toolImpact(intel, args);
@@ -311,7 +327,7 @@ async function toolSearch(intel, { query, path: p = null, kind = null, limit = 8
             for (const ln of matchingLines(lines, s, terms, 2)) out.push(`   ${ln}: ${clip(lines[ln - 1].trim(), 150)}`);
         }
     });
-    out.push(surface === 'cli' ? 'Next: `symbol <name | path:line>` to read one; `refs` / `callgraph` for usages.' : 'Next: get_symbol(<name or path:line>) to read one; find_references / call_graph for usages.');
+    out.push(surface === 'cli' ? 'Next: `read <name | path:START-END>…` to read them (several at once); `refs` / `callgraph` for usages.' : 'Next: read_code with the names you want (several at once); find_references / call_graph for usages.');
     return out.join('\n');
 }
 
@@ -320,7 +336,7 @@ async function toolText(intel, { pattern, path: p = null, literal = false, ignor
     const r = await textSearch(intel, { pattern: String(pattern), path: p, literal, ignoreCase: ignore_case, limit: Math.min(Math.max(1, limit), 300) });
     if (r.error) return r.error;
     const shownPat = literal ? `"${clip(pattern, 60)}"` : `/${clip(pattern, 60)}/${ignore_case ? 'i' : ''}`;
-    if (!r.total) return `No matches for ${shownPat}${p ? ` under ${p}` : ''}.`;
+    if (!r.total) return [`No matches for ${shownPat}${p ? ` under ${p}` : ''}.`, ...definitionRescue(intel, pattern, literal, r)].join('\n');
     const out = [`${plural(r.total, 'match', 'matches')} in ${plural(r.files, 'file')} for ${shownPat}${p ? ` under ${p}` : ''}${r.truncated ? ` (showing ${r.shown.length}; code first, then tests, examples and other files)` : ''}:`];
     let cur = null;
     for (const m of r.shown) {
@@ -342,10 +358,113 @@ async function toolText(intel, { pattern, path: p = null, literal = false, ignor
         if (sm.nonCode) parts.push(`${sm.nonCode} in non-code files`);
         out.push(`"${sm.ident}" across all ${r.total} matches: ${parts.join(', ')}.`);
     }
+    out.push(...definitionRescue(intel, pattern, literal, r));
     return out.join('\n');
 }
 
-async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 }) {
+/**
+ * A search for a name whose definition it did not match — wrong file or directory, a pattern that
+ * misses the definition line, a name defined in another module — says where the definition is,
+ * so the next call is a read instead of another search.
+ */
+function definitionRescue(intel, pattern, literal, r) {
+    if (r.summary?.defs) return [];
+    const ident = identifierOf(String(pattern), literal);
+    if (!ident || ident.length < 3) return [];
+    const defs = intel.store.all(`SELECT s.id, s.qname, s.kind, s.start_line, s.sig, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+        WHERE s.name = ? AND s.kind NOT IN ('variable', 'parameter') ORDER BY f.is_test, (SELECT COUNT(*) FROM refs x WHERE x.dst_id = s.id) DESC LIMIT 4`, ident);
+    if (!defs.length) return [];
+    const shown = defs.slice(0, 3).map(d => `${d.qname}  ${d.path}:${d.start_line}  ${clip(String(d.sig || d.kind).replace(/\s+/g, ' '), 100)}`);
+    return [`${r.total ? 'None of these matches is where' : 'Not found here, but'} "${ident}" is defined${defs.length > 3 ? ' (first 3 of several)' : ''}:`, ...shown.map(x => `  ${x}`)];
+}
+
+/**
+ * "Defined elsewhere" card for lines [from, to] of a file: one line per definition the code uses that
+ * lives outside those lines — qualified name, location, signature (and the first doc line for the top
+ * few) — so a read also answers where the names it contains are defined. Definitions already listed
+ * in this answer (`seen`) are not repeated.
+ */
+function definitionsCard(intel, file, from, to, { seen = new Set(), skipAncestorsOf = null, max = 10, docs = 3 } = {}) {
+    const { rows, more } = definitionsUsed(intel, file, from, to, { max, skipIds: seen, skipAncestorsOf });
+    if (!rows.length) return [];
+    const out = ['Defined elsewhere (used above):'];
+    rows.forEach((s, i) => {
+        seen.add(s.id);
+        const sig = clip(String(s.sig || `${s.kind} ${s.name}${s.type ? `: ${s.type}` : ''}`).replace(/\s+/g, ' ').replace(/([([{])\s+/g, '$1').replace(/,?\s+([)\]}])/g, '$1').replace(/:\s+#.*$/, ':').replace(/\s+#.*$/, ''), 110);
+        const doc = i < docs && s.doc ? ` — ${clip(s.doc.split('\n').map(l => l.trim()).find(Boolean) ?? '', 80)}` : '';
+        out.push(`  ${s.qname}  ${s.path}:${s.start_line}${s.byName ? ' (by name)' : ''}  ${sig}${doc}`);
+    });
+    // the rest in one line, still with where each one is
+    if (more.length) out.push(`  … ${more.length} more: ${more.slice(0, 12).map(s => `${s.qname} ${s.path}:${s.start_line}`).join(', ')}${more.length > 12 ? ', …' : ''}`);
+    return out;
+}
+
+/** Card rows for a read of n lines: about one per dozen lines read, between 8 and 25. */
+const cardRows = (n) => Math.min(25, Math.max(8, Math.round(n / 12)));
+
+// whole-file reads return files up to this many lines; longer ones come back as their outline
+const READ_WHOLE_MAX = 300;
+
+async function toolRead(intel, { targets = [], target = null, full = false, max_lines = 200 }) {
+    let list = Array.isArray(targets) ? [...targets] : typeof targets === 'string' ? targets.split(/[\s,]+/) : [];
+    if (target) list.unshift(target);
+    list = list.map(t => String(t).trim()).filter(Boolean);
+    if (!list.length) return 'Provide one or more targets: a symbol (Class.method), a file, or file:START-END.';
+    const seen = new Set();
+    const sections = [];
+    for (const t of list.slice(0, 12)) sections.push(await readOne(intel, t, { full, maxLines: max_lines, seen }));
+    if (list.length > 12) sections.push(`(${list.length - 12} more targets not read: at most 12 per call)`);
+    return sections.join('\n\n');
+}
+
+function isFile(intel, rel) {
+    try { return fs.statSync(path.join(intel.root, rel)).isFile(); } catch { return false; }
+}
+
+async function readOne(intel, raw, { full, maxLines, seen }) {
+    const root = String(intel.root ?? '').replace(/\/+$/, '');
+    const t = raw.startsWith(root + '/') ? raw.slice(root.length + 1) : raw.replace(/^\.\/+/, '');
+    const m = /^(.+?):(\d+)-(\d+)$/.exec(t);
+    if (m && isFile(intel, m[1])) return readRange(intel, m[1], Number(m[2]), Number(m[3]), { maxLines, seen });
+    if (isFile(intel, t)) return readFile(intel, t, { full, seen });
+    // anything else names a definition: name, Class.member, path:Name, path:LINE
+    return toolSymbol(intel, { symbol: t, include_code: true, max_lines: maxLines, seen });
+}
+
+async function readFile(intel, rel, { full, seen }) {
+    const indexed = intel.store.get('SELECT id FROM files WHERE path = ?', rel);
+    if (indexed) await intel.revalidate([rel]);
+    const lines = intel.fileLines(rel);
+    if (!lines) return `Cannot read ${rel}.`;
+    const n = lines.length && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+    if (!full && indexed && n > READ_WHOLE_MAX) {
+        return fileOutline(intel, rel, 1500) + `\n(${n} lines, so this is the outline. Read the parts you need by range or name — ${surface === 'cli' ? `\`read ${rel}:START-END Name …\`` : 'read_code with several targets'} — or the whole file with ${surface === 'cli' ? '`--full`' : 'full: true'}.)`;
+    }
+    const cap = full ? 2000 : READ_WHOLE_MAX;
+    const out = [`${rel} — ${plural(n, 'line')}`, codeBlock(lines, 1, n, { maxLines: cap })];
+    if (n > cap) out.push(`(${n - cap} more lines: read ${rel}:${cap + 1}-${n})`);
+    if (indexed) out.push(...definitionsCard(intel, rel, 1, Math.min(n, cap), { seen, max: cardRows(Math.min(n, cap)) }));
+    return out.join('\n');
+}
+
+async function readRange(intel, rel, a, b, { maxLines, seen }) {
+    const indexed = intel.store.get('SELECT id FROM files WHERE path = ?', rel);
+    if (indexed) await intel.revalidate([rel]);
+    const lines = intel.fileLines(rel);
+    if (!lines) return `Cannot read ${rel}.`;
+    if (a > b) [a, b] = [b, a];
+    a = Math.max(1, a); b = Math.min(b, lines.length);
+    if (a > b) return `${rel} has ${plural(lines.length, 'line')}; nothing at ${a}-${b}.`;
+    const encl = intel.store.get(`SELECT s.qname, s.kind, s.start_line, s.end_line FROM symbols s JOIN files f ON f.id = s.file_id
+        WHERE f.path = ? AND s.start_line <= ? AND s.end_line >= ? ORDER BY (s.end_line - s.start_line) ASC LIMIT 1`, rel, a, b);
+    const cap = Math.max(maxLines, 400);
+    const out = [`${rel}:${a}-${b}${encl ? ` — in ${encl.qname} (${encl.kind}, ${encl.start_line}-${encl.end_line})` : ''}`, codeBlock(lines, a, b, { maxLines: cap })];
+    if (b - a + 1 > cap) out.push(`(${b - a + 1 - cap} more lines: read ${rel}:${a + cap}-${b})`);
+    if (indexed) out.push(...definitionsCard(intel, rel, a, Math.min(b, a + cap - 1), { seen, max: cardRows(Math.min(b - a + 1, cap)) }));
+    return out.join('\n');
+}
+
+async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200, seen = new Set() }) {
     const matches = pickSymbol(intel, symbol);
     if (!matches.length) return notFound(intel, symbol);
     const s = matches[0];
@@ -375,7 +494,11 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
         if (fam.up.length) out.push(`overrides/implements: ${fam.up.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
         if (fam.down.length) out.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 12).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 12 ? ', …' : ''}`);
     }
-    const callees = intel.callees(fresh.id).filter(c => c.dst_id != null);
+    // what the body uses that is defined elsewhere, with signatures (read the listed targets rather
+    // than searching for them); the bare callee list only when there is no card to show
+    seen.add(fresh.id);
+    const card = definitionsCard(intel, fresh.path, fresh.start_line, fresh.end_line, { seen, skipAncestorsOf: fresh.id, max: cardRows(Math.min(fresh.end_line - fresh.start_line + 1, max_lines)) });
+    const callees = card.length ? [] : intel.callees(fresh.id).filter(c => c.dst_id != null);
     if (callees.length && !TYPE_KINDS.has(fresh.kind)) {
         const uniq = new Map();
         for (const c of callees) if (!uniq.has(c.dst_id)) uniq.set(c.dst_id, c);
@@ -388,14 +511,17 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
         out.push(`used by: ${plural(refs.total, 'reference')} in ${plural(refs.groups.size, 'file')} — e.g. ${top.map(t => `${t.src_qname ?? '(module)'} ${t.path}:${t.line}`).join(', ')}${refs.total > 8 ? ` … (${tn('find_references')} for all)` : ''}`);
     } else out.push(`used by: no bound references${VALUE_KINDS.has(fresh.kind) ? ' (field/attribute uses through untyped receivers are not all indexed — grep the name before concluding it is unused)' : ' (may be an entry point, framework-invoked, or called dynamically)'}.`);
     if (refs.unbound?.plausible.length) out.push(`also possibly used at: ${refs.unbound.plausible.slice(0, 5).map(r => `${r.path}:${r.line}`).join(', ')}${refs.unbound.plausible.length > 5 ? ', …' : ''} (unknown receiver type, file mentions ${typeList(refs.unbound.typeNames) || 'it'})`);
+    const tests = fresh.is_test ? [] : testsUsing(intel, fresh.id);
+    if (tests.length) out.push(`tested in: ${tests.slice(0, 3).map(t => `${t.qname} (${t.path}:${t.line})`).join(', ')}${tests.length > 3 ? ', …' : ''}`);
     if (include_code) {
         const lines = intel.fileLines(fresh.path);
         const span = fresh.end_line - fresh.start_line + 1;
         const cap = TYPE_KINDS.has(fresh.kind) && span > max_lines ? Math.min(max_lines, 40) : max_lines;
         out.push('');
         out.push(codeBlock(lines, fresh.start_line, fresh.end_line, { maxLines: cap }));
-        if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or ${tn('get_symbol')} on a member)`);
+        if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or ${tn('read_code')} on a member)`);
     }
+    if (card.length) out.push(...card);
     if (matches.length > 1) {
         out.push('');
         out.push(`${matches.length - 1} other definition${matches.length > 2 ? 's' : ''} named "${symbol}":`);
@@ -724,28 +850,33 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
     return out.join('\n');
 }
 
+/** Every definition of an indexed file with its signature and line range, within a token budget. */
+function fileOutline(intel, rel, maxTokens = 1500) {
+    const rows = intel.store.all(`SELECT s.id, s.qname, s.name, s.kind, s.parent_id, s.start_line, s.end_line, s.sig, s.doc FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? ORDER BY s.start_line`, rel);
+    const f = intel.store.get('SELECT lines, lang, is_test FROM files WHERE path = ?', rel);
+    const depthOf = new Map();
+    const out = [`${rel} — ${f.lang}, ${f.lines} lines, ${plural(rows.length, 'symbol')}${f.is_test ? ', test file' : ''}`];
+    const imports = intel.store.all('SELECT DISTINCT source FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ? LIMIT 30', rel).map(r => r.source);
+    if (imports.length) out.push(`imports: ${imports.join(', ')}`);
+    let budget = maxTokens * 4;
+    for (const r of rows) {
+        const d = r.parent_id != null ? (depthOf.get(r.parent_id) ?? 0) + 1 : 0;
+        depthOf.set(r.id, d);
+        if (r.kind === 'field' && d > 1) continue;
+        const line = `${String(r.start_line).padStart(5)}-${String(r.end_line).padEnd(5)} ${'  '.repeat(d)}${describe(r)}`;
+        budget -= line.length;
+        if (budget < 0) { out.push(`… truncated (${rows.length} symbols); raise max_tokens`); break; }
+        out.push(line);
+    }
+    return out.join('\n');
+}
+
 async function toolOutline(intel, { path: p = '', focus = null, max_tokens = 1500 }) {
     const rel = String(p || '').replace(/^\.\//, '').replace(/\/$/, '');
     const isFile = rel && intel.store.get('SELECT id FROM files WHERE path = ?', rel);
     if (isFile) {
         await intel.revalidate([rel]);
-        const rows = intel.store.all(`SELECT s.id, s.qname, s.name, s.kind, s.parent_id, s.start_line, s.end_line, s.sig, s.doc FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? ORDER BY s.start_line`, rel);
-        const f = intel.store.get('SELECT lines, lang, is_test FROM files WHERE path = ?', rel);
-        const depthOf = new Map();
-        const out = [`${rel} — ${f.lang}, ${f.lines} lines, ${plural(rows.length, 'symbol')}${f.is_test ? ', test file' : ''}`];
-        const imports = intel.store.all('SELECT DISTINCT source FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ? LIMIT 30', rel).map(r => r.source);
-        if (imports.length) out.push(`imports: ${imports.join(', ')}`);
-        let budget = max_tokens * 4;
-        for (const r of rows) {
-            const d = r.parent_id != null ? (depthOf.get(r.parent_id) ?? 0) + 1 : 0;
-            depthOf.set(r.id, d);
-            if (r.kind === 'field' && d > 1) continue;
-            const line = `${String(r.start_line).padStart(5)}-${String(r.end_line).padEnd(5)} ${'  '.repeat(d)}${describe(r)}`;
-            budget -= line.length;
-            if (budget < 0) { out.push(`… truncated (${rows.length} symbols); raise max_tokens`); break; }
-            out.push(line);
-        }
-        return out.join('\n');
+        return fileOutline(intel, rel, max_tokens);
     }
     // directory / repository map
     let focusIds = null;

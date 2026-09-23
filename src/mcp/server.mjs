@@ -8,7 +8,7 @@
  * Only tools are exposed (all read-only). stdout carries protocol messages exclusively; logs go to stderr.
  */
 import readline from 'node:readline';
-import { TOOLS, SERVER_INSTRUCTIONS, callTool } from './tools.mjs';
+import { TOOLS, LEGACY_TOOLS, SERVER_INSTRUCTIONS, callTool } from './tools.mjs';
 
 export const SUPPORTED_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const LATEST_HANDSHAKE = '2025-11-25';
@@ -99,7 +99,7 @@ export class McpServer {
                 }
                 case 'tools/call': {
                     const name = params?.name;
-                    const tool = TOOLS.find(t => t.name === name);
+                    const tool = TOOLS.find(t => t.name === name) ?? LEGACY_TOOLS.find(t => t.name === name);
                     if (!tool) { this.#error(id, -32602, `Unknown tool: ${name}`); return; }
                     const args = params?.arguments ?? {};
                     const missing = (tool.inputSchema.required ?? []).filter(k => args[k] === undefined || args[k] === null || args[k] === '');

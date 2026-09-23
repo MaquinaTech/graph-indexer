@@ -61,7 +61,7 @@ Coste en tokens equivalentes de entrada: entrada ×1, escritura de caché ×1,25
    - el prefijo se relee entero en cada turno;
    - el razonamiento se genera a precio de salida y se relee en cada turno posterior.
 
-   Lo que devuelven las herramientas es el 11–21 %. Un turno evitado en un issue ahorra en torno a 15k tokens equivalentes; acortar una salida en 1k tokens ahorra unos 4k.
+   Lo que devuelven las herramientas es el 11–21 %. Un turno evitado en un issue ahorra en torno a 15k tokens equivalentes; acortar una salida en 1k tokens ahorra unos 3,5k.
 2. **Explorar es perseguir nombres de uno en uno.** En los issues el agente llega al fichero relevante hacia el turno 4, pero no edita hasta el 15–19.
    - Antes de editar hace 21 llamadas; 17,7 de ellas son búsquedas y lecturas encadenadas.
    - El **71 %** de sus búsquedas busca un nombre que acababa de ver en código leído.
@@ -74,7 +74,18 @@ Coste en tokens equivalentes de entrada: entrada ×1, escritura de caché ×1,25
 5. **graph-indexer hoy contesta una pregunta por llamada, como grep.**
    - Con grep disponible, en issues se usa poco: 0,6 `symbol` y 1,0 `grep` por ejecución.
    - Sin grep, el agente hace las mismas 23 llamadas con otra herramienta.
-   - Cada llamada por CLI tarda 1–2,5 s solo en arrancar.
+   - Cada llamada por CLI tarda de media unos 2 s, sobre todo en arrancar el proceso y comprobar el índice.
+
+6. **La evidencia externa dice lo mismo** ([notas](research/notes/output_rewriting_and_read_hooks.md)).
+   - Comprimir las salidas de las herramientas (el enfoque de RTK) no bajó el coste en ningún estudio independiente:
+     - JetBrains: +7,6 %;
+     - Quesma: +1 % y +17 %;
+     - PointFive: −2,9 %, no significativo, en 2.908 ejecuciones;
+     - en ese estudio, la lectura de caché era el 87 % del coste.
+   - Sustituir una lectura por un esqueleto de firmas perdió el 65 % de las líneas que el agente usaba después.
+   - Lo que sí ahorró fue cambiar cómo busca el agente:
+     - un bloque de 745 tokens inyectado al empezar ("reconocimiento en una pasada", "leer 50 líneas, no el fichero") bajó el coste un 17,9 % y los turnos un 20 %, con la misma calidad; como skill que el agente tenía que descubrir no ahorró nada;
+     - herramientas de grafo que solo intervienen cuando el agente está rastreando costaron 0,88 veces lo de grep; interviniendo en cada búsqueda, 1,44–1,72 veces.
 
 **Conclusión.** Para bajar mucho tokens y tiempo hay que quitar turnos y razonamiento, no solo bytes. Eso exige dos cosas:
 - responder de una vez lo que el agente va a preguntar a continuación: dónde está definido cada nombre del código que lee, quién lo usa y qué tests lo cubren;
@@ -116,7 +127,11 @@ Métricas nuevas en el informe:
    Donde hay hooks, sin turnos extra; donde no, por MCP y CLI con unas pocas líneas de instrucciones.
 5. **Rápido.** Menos de 100 ms por respuesta con un proceso residente, para que los hooks no añadan tiempo.
 6. **Exacto y honesto**, como en la 3.0: sin ceros falsos, truncado explícito, confianza declarada y silencio cuando no hay nada útil que decir.
-7. **Medir de extremo a extremo** con la métrica corregida antes de declarar una mejora.
+7. **Añadir, no sustituir.**
+   - No se comprimen ni se pliegan las lecturas que el agente pidió: los números de línea tienen que seguir sirviendo para editar.
+   - El esquema de un fichero es un mapa antes de leer, no un sustituto de la lectura.
+   - Los hooks solo intervienen cuando el agente está rastreando o una búsqueda falló, nunca en cada llamada.
+8. **Medir de extremo a extremo** con la métrica corregida antes de declarar una mejora.
 
 ## 5. Arquitectura objetivo
 
@@ -147,7 +162,8 @@ Métricas nuevas en el informe:
   - tras buscar, la definición de lo buscado y el rescate de búsquedas fallidas;
   - tras editar, `check`;
   - al empezar, una línea de estado.
-- **Instrucciones** (`AGENTS.md`, `CLAUDE.md`, reglas) y una skill: pocas líneas, redactadas como hechos.
+- **Instrucciones de búsqueda** (`AGENTS.md`, `CLAUDE.md`, reglas, y el hook de inicio donde exista): explorar en una pasada, leer por trozos, seguir los nombres por la tarjeta, usos exactos con `find_references`, comprobar una vez. Unas 8 líneas redactadas como hechos, inyectadas al empezar; una skill que el agente tiene que descubrir no sirve para esto.
+- **Hooks con detector de rastreo**: la tarjeta tras leer solo cuando el agente encadena búsquedas y lecturas sin editar; el rescate tras una búsqueda de una definición que falló, siempre.
 
 ### 5.3 Proceso residente
 
@@ -159,13 +175,18 @@ Lo que cada agente permite en septiembre de 2026 decide cuánto se puede hacer d
 
 | Agente | MCP | Instrucciones | Hooks útiles |
 |---|---|---|---|
-| Claude Code | sí; herramientas diferidas, instrucciones visibles | `CLAUDE.md` | PreToolUse (`updatedInput`), PostToolUse (`additionalContext`, `updatedToolOutput` en todas las herramientas); dentro de subagentes también |
-| Codex CLI | sí; diferidas, búsqueda BM25 | `AGENTS.md` | contrato de Claude: PreToolUse (`updatedInput`, `additionalContext`), PostToolUse (`additionalContext`); todo pasa por la shell |
-| VS Code / Copilot | sí (máximo 128 herramientas) | `AGENTS.md`, `.github/…` | PreToolUse y PostToolUse con `additionalContext` |
-| Gemini CLI | sí; instrucciones en el system prompt | `GEMINI.md`, `AGENTS.md` | BeforeTool / AfterTool (`additionalContext`, `tailToolCallRequest`, que sustituye el resultado) |
-| Cursor | sí | reglas, `AGENTS.md` | `postToolUse` con `additional_context`, con fallos de inyección reportados |
-| Windsurf | sí (máximo 100 herramientas) | reglas, `AGENTS.md` | hooks previos que pueden bloquear; los posteriores son solo informativos |
-| Junie, Kilo Code, Zed, Cline, OpenCode | sí | `AGENTS.md` o reglas propias | sin hooks útiles o no verificados: MCP e instrucciones |
+| Claude Code | sí; herramientas diferidas, instrucciones visibles | `CLAUDE.md` | PreToolUse (`updatedInput`, `additionalContext`), PostToolUse (`additionalContext`; `updatedToolOutput` con el formato exacto de cada herramienta, que hay que comprobar en la versión instalada); también dentro de subagentes |
+| Codex CLI | sí; diferidas, búsqueda BM25 | `AGENTS.md` | contrato de Claude: PreToolUse (`updatedInput` solo con `allow`, `additionalContext`), PostToolUse (`additionalContext`); todo pasa por la shell |
+| VS Code / Copilot (IDE y CLI) | sí (máximo 128 herramientas) | `AGENTS.md`, `.github/…` | PreToolUse y PostToolUse con `additionalContext`; Copilot CLI también reescribe resultados y ejecuta los hooks de `.claude/settings.json` |
+| Cursor | sí | reglas, `AGENTS.md` | `preToolUse` (reescribe comandos); el contexto tras una herramienta no llega al modelo desde marzo de 2026; ejecuta hooks de Claude importados |
+| Devin Desktop (antes Windsurf, Cascade retirado el 2026-09-08) | sí | `AGENTS.md` | hooks con el contrato de Claude; carga los de `.claude` por defecto |
+| Kilo Code (reconstruido sobre OpenCode) y OpenCode | sí | `AGENTS.md` | plugins `tool.execute.before/after`: reescriben entradas y salidas |
+| Gemini CLI | sí; instrucciones en el system prompt | `GEMINI.md`, `AGENTS.md` | BeforeTool / AfterTool (`additionalContext`, `tailToolCallRequest`) |
+| Antigravity CLI (sucesor para usuarios de Gemini) | sí, pero descarta herramientas cuyo esquema usa `const` o `additionalProperties` | `AGENTS.md` | por verificar |
+| Junie | sí | `AGENTS.md` | solo en su CLI (acceso anticipado, sin PostToolUse); en el IDE, ninguno |
+| Zed, Cline (extensión) | sí | `AGENTS.md` o reglas | sin hooks útiles: MCP e instrucciones |
+
+Un mismo ejecutable de hook tiene que detectar qué agente lo llama: Copilot CLI, Cursor y Devin ejecutan también los hooks escritos para Claude Code.
 
 ## 7. Benchmarks
 
@@ -176,6 +197,7 @@ Lo que cada agente permite en septiembre de 2026 decide cuánto se puede hacer d
   - B4: tareas sencillas, el subconjunto de B3 de un solo fichero.
 - **Brazos:**
   - `grep`: herramientas nativas;
+  - `reglas`: nativas más solo las instrucciones de búsqueda, sin graph-indexer. Es el control que separa el efecto de las instrucciones del de las herramientas;
   - `grep+gi4`: nativas más graph-indexer con la tarjeta nueva (`read`, lotes, tarjeta de definiciones); el agente decide cuándo usarlo, como con MCP sin hooks;
   - `gi4-hooks`: emulación de los hooks. El agente lee y busca con `gi read` y `gi grep`, que devuelven la misma salida que las herramientas nativas más lo que añadirían los hooks. Edita con las herramientas nativas.
 - **Hooks reales.** La medición con hooks reales necesita registrarlos para los subagentes de la sesión, lo que requiere permiso explícito, o el arnés headless en local (`claude -p` con `--mcp-config` y `--settings`; `codex exec`). Queda como paso de validación.
@@ -185,7 +207,7 @@ Lo que cada agente permite en septiembre de 2026 decide cuánto se puede hacer d
 | Fase | Contenido | Puerta |
 |---|---|---|
 | F0 ✅ | Diagnóstico (§2) y métrica corregida | — |
-| F1 | `read` con tarjeta de definiciones, lotes y esquema plegado; `grep` con rescate de definiciones; `symbol` con tarjeta; tarjeta de instrucciones nueva | en las trayectorias B3, la tarjeta habría respondido ≥ 60 % de las búsquedas que persiguen un nombre ya visto; tarjeta media ≤ 400 tokens |
+| F1 ✅ | `read_code` con tarjeta de definiciones, lotes y esquema para ficheros largos; rescate de definiciones en `search_text`; `symbol` con tarjeta; instrucciones de búsqueda; resolución de nombres a través de paquetes que reexportan en Python | en las trayectorias B3, la tarjeta habría respondido ≥ 60 % de las búsquedas que persiguen un nombre ya visto; tarjeta media ≤ 400 tokens. Resultado: **48 %** con ubicación y 11 % solo nombrados; 339 tokens de media. De las búsquedas de una definición que fallaron, el rescate sitúa 16 de 27. Lo que falta viene del enunciado, de salidas de Python, de tablas de registro y de métodos llamados por convención de nombre |
 | F2 | Proceso residente; hooks de lectura, búsqueda y edición para Claude Code, Codex, VS Code/Copilot, Gemini CLI y Cursor; `init` para Windsurf, Junie, Kilo Code, Zed y OpenCode | p95 del hook < 150 ms con el proceso residente; silencio cuando no aporta |
 | F3 | `context` evaluado sin agente sobre B3 | Acc@5 de función ≥ 0,6 antes de exponerlo |
 | F4 | Ronda 4 sobre tareas reservadas | criterios del §3 |
@@ -194,6 +216,7 @@ Lo que cada agente permite en septiembre de 2026 decide cuánto se puede hacer d
 ## 9. Riesgos
 
 - **Contexto añadido que no evita turnos.** La tarjeta cuesta tokens en cada lectura; si no ahorra búsquedas, resta. Se mide su tamaño y cuántas búsquedas evita, y se calla cuando no hay nombres externos relevantes.
+- **Intervenir de más.** Contexto añadido en cada búsqueda encareció 1,44–1,72 veces las preguntas de tipo "dónde está X" en otro proyecto. Por eso el detector de rastreo y la tarjeta proporcional a lo leído.
 - **Emulación frente a hooks reales.** La emulación mide el efecto del contenido, no el de la adopción automática. La validación con hooks reales queda pendiente de permiso o del arnés local.
 - **Sobreajuste.** Las decisiones se toman con las tareas de desarrollo y se juzgan con tareas reservadas.
 - **Potencia estadística.** Con 12–20 tareas por suite solo son detectables efectos de 20–30 % en coste. Los resultados se dan con su IC.

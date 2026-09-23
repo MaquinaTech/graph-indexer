@@ -7,6 +7,8 @@
  *   graph-indexer init    [--repo DIR] [--agents …]   wire the MCP server into your coding agents
  *   graph-indexer status  [--repo DIR]
  *   graph-indexer search   <query>  [--path P] [--kind K] [--limit N]
+ *   graph-indexer read     <target>… [--full]           symbols, file:START-END ranges or files, with the
+ *                                                        definitions each one uses
  *   graph-indexer symbol   <name>…  [--no-code]
  *   graph-indexer refs     <name>   [--kind K] [--path P] [--no-tests] [--limit N]
  *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N]
@@ -92,6 +94,8 @@ Usage:
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
+  graph-indexer read <target>… [--full] [--max-lines N]   symbols (Class.method), ranges (file:10-80) or files,
+                                                   with where each name they use is defined
   graph-indexer symbol <name>… [--no-code]         one or several definitions
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--path P] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
@@ -145,6 +149,12 @@ async function main() {
             const pathF = opt('--path'); const literal = flag('--literal') || flag('-F'); const ic = flag('-i') || flag('--ignore-case'); const limit = Number(opt('--limit', 60));
             const pattern = argv.shift();
             return runTool('search_text', { pattern, path: pathF, literal, ignore_case: ic, limit });
+        }
+        case 'read': {
+            const full = flag('--full'); const maxLines = Number(opt('--max-lines', 200));
+            const targets = argv.filter(a => !a.startsWith('--'));
+            argv.length = 0;
+            return runTool('read_code', { targets, full, max_lines: maxLines });
         }
         case 'symbol': {
             const noCode = flag('--no-code'); const maxLines = Number(opt('--max-lines', 200));

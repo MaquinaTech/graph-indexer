@@ -38,7 +38,7 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
 - **Stays inside the repository.** Only files listed by git (or found by a `.gitignore`-aware
   walk) under the repository root are indexed. Symlinks are followed only when their target
   resolves inside the repository, so a link to a file elsewhere on the machine is never read,
-  indexed or served. Paths given to the tools (`get_symbol "file.ts:42"`, `outline`,
+  indexed or served. Paths given to the tools (`read_code "file.ts:42"`, `outline`,
   `change_impact`) are looked up in the index, never opened directly from disk.
 - **Read-only tools.** All six MCP tools are read-only (`readOnlyHint: true`) and never modify
   the repository.

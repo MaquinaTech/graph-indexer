@@ -15,14 +15,15 @@ and real commits, and end to end with coding agents
 ### Breaking
 
 - **Node.js 22.5+** is required (the index uses the built-in `node:sqlite`).
-- **New tool surface** (eight read-only MCP tools): `search_code`, `search_text`, `get_symbol`,
-  `find_references`, `call_graph`, `change_impact`, `check_changes`, `outline`. The 2.x tools and
-  their option set are gone.
+- **New tool surface** (eight read-only MCP tools): `search_code`, `search_text`, `read_code`,
+  `find_references`, `call_graph`, `change_impact`, `check_changes`, `outline`. `get_symbol`
+  (one definition by name, which `read_code` replaced) stays callable for clients configured for
+  it. The 2.x tools and their option set are gone.
 - **Removed:** dense embeddings, Ollama/MLX/in-process embedders, LLM enrichment and reranking,
   the watch daemon, sealed mode and its attestation, taint tools, and the grammar auto-installer.
   Search is lexical + structural and needs no model.
-- **CLI:** `graph-indexer init | serve | index | status | search | grep | files | symbol | refs |
-  callgraph | impact | check | outline | hook`. `idx-mcp` and `idx-index` remain as aliases of
+- **CLI:** `graph-indexer init | serve | index | status | search | grep | files | read | symbol |
+  refs | callgraph | impact | check | outline | hook`. `idx-mcp` and `idx-index` remain as aliases of
   `serve` and `index`.
 - The index lives in `.graph-indexer/index.db` (SQLite); 2.x index files are ignored.
 
@@ -33,8 +34,10 @@ and real commits, and end to end with coding agents
   WebAssembly with pinned versions and checksums; nothing is downloaded or compiled.
 - **Reference graph.** Every call, instantiation, type use, inheritance, decorator, value and
   member-read reference is bound to its definition through lexical scopes, the enclosing type and
-  its bases, imports (barrels, tsconfig paths, workspaces, Go modules, Python packages, Rust
-  crates, C includes), packages and globals, with a confidence label. `find_references` includes
+  its bases, imports (barrels, tsconfig paths, workspaces, Go modules, Python packages — including
+  a module reached as an attribute of a package alias, `exp.Column` through `from pkg import exp`
+  and star re-exports, where a later import rebinds the name — Rust crates, C includes), packages
+  and globals, with a confidence label. `find_references` includes
   overload sets and calls through base types, labelled. Ambiguous and standard-library method
   names (`get`, `set`, `apply`…) stay unbound instead of being guessed; `super()` calls reach the
   parent's method only. Go implicit interface satisfaction, field reads and struct literal keys;
@@ -62,9 +65,18 @@ and real commits, and end to end with coding agents
   directly or through a subclass (and through which one); `path` limits any list to a directory.
   Ambiguous names list the alternatives as ready-to-use qualified targets (overloads count as one
   definition).
+- **`read_code`** (`graph-indexer read`): reads symbols (`Class.method`), line ranges
+  (`path:120-180`) or files, up to 12 per call, with line numbers — and under each one, where
+  every name the code uses is defined (file:line, signature, first doc line), about one line per
+  dozen lines read, so following a call or a type is a read of the listed targets rather than a
+  search. A symbol also shows what it overrides, who uses it and the tests that reference it; a
+  file over 300 lines comes back as its outline unless `full` is set; a definition already shown
+  in the same answer is not listed again.
 - **`search_text`** (`graph-indexer grep`): text search over every file — code, configuration,
   docs. Each code match carries its enclosing definition and, for identifiers, the symbol it
-  refers to, one compact line per match. `graph-indexer files` finds files by path or glob.
+  refers to, one compact line per match; when the search did not match the definition of the
+  name it looked for (wrong file, a pattern that misses the definition line), it says where the
+  definition is. `graph-indexer files` finds files by path or glob.
 - **Change impact:** call sites to update, overrides and implementations, transitive dependents
   by distance, tests that exercise them (including describe blocks), public surface, git
   co-change history, blind spots, and `diff: true` for the uncommitted working tree; "risk:
@@ -81,13 +93,18 @@ and real commits, and end to end with coding agents
   symlinks that point outside the repository. Path arguments accept absolute and `./` paths.
 - **MCP** implemented without an SDK: stdio JSON-RPC, protocol versions 2024-11-05 to
   2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), read-only tool
-  annotations, plain-text replies with token caps. Server instructions are short decision rules:
-  text search through `search_text`, `find_references` before changing a signature or renaming,
-  `change_impact`/`check_changes` for edits that cross a function's boundary, and only the tests
-  for a fix inside one function. `search_text`, `find_references` and `check_changes` are marked
-  always-loaded for clients that defer MCP tools.
+  annotations, plain-text replies with token caps, and input schemas without `const` or
+  `additionalProperties` (some Gemini-family hosts drop tools whose schemas use them). Server
+  instructions are short decision rules: read code and follow the names it uses with
+  `read_code`, several targets at once; text search through `search_text`; `find_references`
+  before changing a signature or renaming; `change_impact`/`check_changes` for edits that cross a
+  function's boundary, and only the tests for a fix inside one function. `read_code`,
+  `search_text`, `find_references` and `check_changes` are marked always-loaded for clients that
+  defer MCP tools.
 - **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI and Codex, and adds a
-  short managed block to `CLAUDE.md`/`AGENTS.md`. `init --hooks` adds `graph-indexer hook` to
+  short managed block to `CLAUDE.md`/`AGENTS.md` on how to look code up: several definitions in
+  one read, the function or the lines needed rather than the file, the names a read lists instead
+  of a grep for their definitions, exact uses through `find_references`, and one check at the end. `init --hooks` adds `graph-indexer hook` to
   Claude Code: after an edit it runs the edit check on that file, after a grep for an identifier
   several definitions share it says which definition is which, and otherwise stays silent (it
   fails open under a deadline). A Claude Code plugin (`integrations/claude-code`) bundles the
@@ -97,7 +114,10 @@ and real commits, and end to end with coding agents
   pinned fixtures (`bench/fixtures.mjs`). An agentic benchmark (`bench/agentic/`): code questions
   graded by the TypeScript compiler, multi-site refactors graded by differential `tsc`, and real
   issues from after the model's training cutoff graded by the hidden tests of their fix, with and
-  without grep, paired statistics and acceptance gates.
+  without grep, paired statistics and acceptance gates. The model's output is recovered from the
+  growth of the context between calls (transcripts keep only the first streamed usage and redact
+  reasoning), and `anatomy.mjs` reports where cost and time go, the calls before the first edit
+  and the share of code read that the fix changes.
 
 ### Results (see docs/BENCHMARKS.md)
 

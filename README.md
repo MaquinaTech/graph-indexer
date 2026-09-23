@@ -82,11 +82,13 @@ Without `--repo` the server indexes the git repository containing its working di
 
 | Tool | Use it to | Typical reply |
 |---|---|---|
+| `read_code` | read symbols, line ranges or files — several per call — without searching for what they use | code with line numbers, then where each name it uses is defined (file:line and signature); who uses a symbol and which tests reference it; a long file's outline |
+| `search_text` | grep any text across the repository (code, config, docs) | grep lines with the enclosing definition and, for identifiers, the definition each match refers to; where the definition is when the search missed it |
 | `search_code` | find where a behaviour or identifier lives (natural language or names) | ranked symbols with location, signature, doc line and matching lines |
-| `get_symbol` | read one definition instead of a whole file | code with line numbers, members, what it calls, who uses it |
 | `find_references` | see every use before renaming or changing a signature | uses grouped by file, enclosing function, confidence, calls through base types marked |
 | `call_graph` | trace callers and callees across files | a tree with locations and confidence |
 | `change_impact` | get the blast radius of a change, or of your uncommitted diff | transitive dependents by distance, tests to run, co-changed files, risk |
+| `check_changes` | verify uncommitted edits without building | syntax errors introduced, calls that no longer fit, removed names still in use, the tests to run |
 | `outline` | see a file's structure, or a ranked map of a directory or the repo | signatures and line ranges within a token budget |
 
 All tools are read-only. Replies are plain text, capped, best result first, and end with a hint
@@ -233,7 +235,8 @@ through the index, and symlinks pointing outside the repository are ignored. See
 ## Upgrading from 2.x
 
 Version 3 is a rewrite; see the [changelog](CHANGELOG.md). In short: the tools changed
-(`search_code`, `get_symbol`, `find_references`, `call_graph`, `change_impact`, `outline`), the
+(`read_code`, `search_text`, `search_code`, `find_references`, `call_graph`, `change_impact`,
+`check_changes`, `outline`), the
 embedding, Ollama, reranker and daemon options are gone (search is lexical plus graph and needs
 no model), grammars are bundled instead of installed on first use, and Node.js 22.5+ is required.
 Re-run `npx graph-indexer init` to update agent configuration; old `.graph-indexer/` contents are

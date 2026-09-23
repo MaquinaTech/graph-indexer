@@ -53,7 +53,7 @@ test('handshake negotiates a supported version and carries instructions', async 
 test('tools/list exposes the read-only tools with short descriptions', async () => {
     const r = await srv.request('tools/list', {});
     const names = r.result.tools.map(t => t.name);
-    assert.deepEqual(names, ['search_code', 'search_text', 'get_symbol', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
+    assert.deepEqual(names, ['search_code', 'search_text', 'read_code', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
     for (const t of r.result.tools) {
         assert.equal(t.annotations.readOnlyHint, true);
         assert.ok(t.description.length <= 2048, t.name);
@@ -87,6 +87,15 @@ test('tools/call returns text results and reports errors in-band', async () => {
     assert.equal(unknown.error.code, -32602);
     const nf = await srv.request('tools/call', { name: 'get_symbol', arguments: { symbol: 'doesNotExist' } });
     assert.match(nf.result.content[0].text, /No symbol named "doesNotExist"/);
+    // read_code: a definition and a range in one call, each with where the names it uses are defined
+    const rd = await srv.request('tools/call', { name: 'read_code', arguments: { targets: ['twice', 'lib/app.js:2-2'] } });
+    const rt = rd.result.content[0].text;
+    assert.match(rt, /twice — function/);
+    assert.match(rt, /Defined elsewhere \(used above\):\n {2}add {2}lib\/math\.js:2 {2}function add\(a, b\) — Adds two numbers\./);
+    assert.match(rt, /lib\/app\.js:2-2 — in main/);
+    assert.doesNotMatch(rt.slice(rt.indexOf('lib/app.js:2-2')), /Defined elsewhere/, 'twice was read above in the same answer');
+    const range = await srv.request('tools/call', { name: 'read_code', arguments: { targets: ['lib/app.js:2-2'] } });
+    assert.match(range.result.content[0].text, /twice {2}lib\/math\.js:3 {2}function twice\(x\)/);
 });
 
 test('unknown methods yield JSON-RPC errors and nothing else is written to stdout', async () => {

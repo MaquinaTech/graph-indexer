@@ -150,7 +150,7 @@ async function sessionLine(root) {
     if (!intel) return null;
     try {
         const st = intel.stats();
-        return `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: search_text (grep that also says which definition each match refers to), find_references, call_graph, change_impact (what a change affects and which tests to run), check_changes (what an edit broke) and search_code / get_symbol / outline.`;
+        return `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: read_code (symbols, ranges or files, several per call, with where each name they use is defined), search_text (grep that also says which definition each match refers to), find_references, change_impact (what a change affects and which tests to run), check_changes (what an edit broke), call_graph, search_code and outline.`;
     } finally { intel.close(); }
 }
 
