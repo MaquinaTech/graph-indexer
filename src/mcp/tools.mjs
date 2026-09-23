@@ -100,7 +100,7 @@ export const TOOLS = [
     {
         name: 'change_impact',
         title: 'Change impact',
-        description: 'What a change to some symbols or files affects: the call sites to update (file:line), overrides and implementations that must stay in line, callers of callers, the tests that exercise the code, the public surface, files that historically change together (git), and what the index cannot see. Pass `symbols` and/or `files`, or `diff: true` for your uncommitted changes. Use it before changing a widely used function or a signature; after editing, check_changes verifies what you actually changed.',
+        description: 'What a change to some symbols or files affects: the call sites to update (file:line), overrides and implementations that must stay in line, subclasses that inherit a changed method, callers of callers, the tests that exercise the code, the public surface, files that historically change together (git), and what the index cannot see. Pass `symbols` and/or `files`, or `diff: true` for your uncommitted changes. Use it before changing a widely used function or a signature; after editing, check_changes verifies what you actually changed.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -114,7 +114,7 @@ export const TOOLS = [
     {
         name: 'check_changes',
         title: 'Check changes',
-        description: 'Verify your uncommitted edits before you finish, without building: compares every changed file with the last commit and reports syntax errors you introduced, calls whose argument count no longer fits a changed definition (call sites across the repository and calls you wrote), definitions you removed or renamed that are still used or imported, callers of a changed signature in files you did not touch, and the tests that exercise the changed code — the closest test functions first — with the commands to run them. Use it after editing and before declaring a task done; it complements, not replaces, running the tests and the type checker.',
+        description: 'Verify your uncommitted edits before you finish, without building: compares every changed file with the last commit and reports syntax errors you introduced, calls whose argument count no longer fits a changed definition (call sites across the repository and calls you wrote), definitions you removed or renamed that are still used or imported, callers of a changed signature in files you did not touch, the subclasses that inherit a method you changed (they run the new code too), and the tests that exercise the changed code — the closest test functions first, and the tests of those subclasses — with the commands to run them. Use it after editing and before declaring a task done; it complements, not replaces, running the tests and the type checker.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -771,7 +771,12 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     }
     moduleUses.sort((a, b) => pathRank(a[0]) - pathRank(b[0]) || a[0].localeCompare(b[0]));
     overrides.sort((a, b) => pathRank(a.s.path) - pathRank(b.s.path) || a.s.path.localeCompare(b.s.path));
+    // subclasses that inherit a changed member without redeclaring it run the changed code too
+    const inheritors = new Map();
+    for (const id of seeds) for (const x of intel.inheritance(id).inherit) inheritors.set(x.id, x);
     for (const t of intel.conventionTests([...seedFiles])) if (!tests.has(t)) tests.set(t, ['(by naming convention)']);
+    for (const t of intel.conventionTests([...new Set([...inheritors.values()].map(x => x.path))])) if (!tests.has(t)) tests.set(t, ['(tests a subclass that inherits it)']);
+    for (const x of inheritors.values()) if (x.is_test) { addTest(x.path, x.name); inheritors.delete(x.id); }
 
     const out = [`Impact of changing ${labels.join(', ')}`];
     const seedSyms = [...seeds].map(id => intel.sym(id)).filter(Boolean);
@@ -800,6 +805,11 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
         out.push(`overrides / implementations (keep them in line with the change): ${overrides.length}`);
         for (const { s } of overrides.slice(0, 15)) out.push(`    ${s.qname}  ${loc(s)}`);
         if (overrides.length > 15) out.push(`    … ${overrides.length - 15} more`);
+    }
+    if (inheritors.size) {
+        out.push(`inherited by (these subclasses run the changed code too): ${inheritors.size}`);
+        for (const x of [...inheritors.values()].slice(0, 15)) out.push(`    ${x.qname}  ${loc(x)}`);
+        if (inheritors.size > 15) out.push(`    … ${inheritors.size - 15} more`);
     }
     // 2. what is affected further away
     const transTotal = [...transitive.values()].reduce((n, a) => n + a.length, 0);
@@ -834,10 +844,10 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     if (blind.length) { out.push('not visible to the index (check by hand):'); for (const b of blind) out.push(`    ${b}`); }
     const co = intel.coChange([...seedFiles]);
     if (co.length) out.push(`often changed together (git): ${co.map(c => `${c.file} (${c.together}/${c.of})`).join(', ')}`);
-    const total = direct.length + overrides.length + transTotal + moduleUses.length;
+    const total = direct.length + overrides.length + inheritors.size + transTotal + moduleUses.length;
     let risk = total > 40 || affectedFiles.size > 15 ? 'high' : total > 8 ? 'medium' : 'low';
     if (!total && (blind.length || exported.length)) risk = `unknown (no bound dependents, but ${blind.length ? 'the index has blind spots listed above' : 'the code is exported and may be used by callers outside this repository or by a framework'})`;
-    out.push(`risk: ${risk} (${direct.length} direct, ${overrides.length} overrides, ${transTotal} transitive, ${tests.size} test files)`);
+    out.push(`risk: ${risk} (${direct.length} direct, ${overrides.length} overrides, ${inheritors.size ? `${inheritors.size} inheriting subclasses, ` : ""}${transTotal} transitive, ${tests.size} test files)`);
     return out.join('\n');
 }
 
@@ -871,6 +881,11 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         out.push(`• ${u.target} changed signature (${u.was} → ${u.is} arguments); ${plural(u.sites.length, 'call site')} in files you did not modify still fit — review them if the meaning changed:`);
         for (const x of u.sites.slice(0, 8)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  │ ${clip(x.text ?? '', 110)}`);
         if (u.sites.length > 8) out.push(`    … ${u.sites.length - 8} more`);
+    }
+    for (const h of r.inherited ?? []) {
+        const members = h.members.join(', ');
+        if (h.inherit.length) out.push(`• subclasses of ${h.type} that inherit ${members} run the changed code too (${h.inherit.length}): ${h.inherit.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.inherit.length > 8 ? `, … ${h.inherit.length - 8} more` : ''}`);
+        if (h.override.length) out.push(`• overridden, so not reached by the change: ${h.override.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.override.length > 8 ? `, … ${h.override.length - 8} more` : ''}`);
     }
     if (r.cases.length) {
         const name = (c) => `${c.path}::${c.cls ? `${c.cls}::` : ''}${c.name}`;

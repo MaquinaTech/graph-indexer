@@ -8,6 +8,7 @@
  *                 of changed signatures anywhere, and calls written in the changed lines
  *   removed       definitions that were deleted or renamed but are still used or imported
  *   untouched     callers of a changed signature in files the change did not touch (to review)
+ *   inherited     subclasses that inherit a changed member (they run the new code) or override it
  *   tests         the test files that exercise the changed code, and the command to run them
  */
 import fs from 'node:fs';
@@ -114,6 +115,21 @@ function errorTexts(tree, lines) {
     return out;
 }
 
+const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'trait', 'enum', 'object', 'impl', 'type']);
+/** The member (method, field, …) a changed symbol belongs to: itself, or the member around a local. */
+function memberOf(intel, id) {
+    let s = intel.sym(id);
+    for (let guard = 0; s && guard < 16; guard++) {
+        if (TYPE_KINDS.has(s.kind)) return null;
+        if (s.parent_id == null) return s.kind === 'method' ? s : null; // Go/Rust: declared outside its type
+        const p = intel.sym(s.parent_id);
+        if (!p) return null;
+        if (TYPE_KINDS.has(p.kind)) return s;
+        s = p;
+    }
+    return null;
+}
+
 const keyOf = (s) => `${s.qname}|${s.kind}`;
 /** "2", "1–2", or "1 | 2" for overload sets (definitions without a countable parameter list are skipped). */
 const arityText = (defs) => [...new Set(defs.filter(d => d.arity).map(d => describeArity(d.arity)))].sort().join(' | ') || '?';
@@ -134,7 +150,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
     await intel.ensureFresh();
     await intel.ix.syncPaths([...changed.keys()]);
     const targets = [...changed.keys()].filter(f => specForPath(f) && (!files || files.some(x => f === x || f.startsWith(x.replace(/\/?$/, '/')))));
-    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], tests: [], commands: [], cases: [], casesTotal: 0, caseCommands: [], notes: [] };
+    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], inherited: [], tests: [], commands: [], cases: [], casesTotal: 0, caseCommands: [], notes: [] };
     if (!targets.length) return report;
     // callers only need a syntax tree; definitions (changed files, callees) also need symbols + arities
     const treeCache = new Map(), symCache = new Map();
@@ -272,14 +288,36 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         if (rows.length || imports.length) report.removed.push({ qname: s.qname, kind: s.kind, path: s.path, uses: rows.slice(0, 12), total: rows.length, imports });
     }
 
-    // ── tests to run ─────────────────────────────────────────────────────────────
+    // ── subclasses that inherit a changed member run the new code too ───────────
+    // (with tests: false — the edit hook — only problems are reported, so the diff is not mapped to symbols)
     const seeds = tests ? intel.diffSeeds(base).seeds ?? [] : [];
+    const inheritorFiles = new Set();
+    const byType = new Map();
+    const members = new Map();
+    for (const id of seeds) { const m = memberOf(intel, id); if (m && !m.is_test) members.set(m.id, m); }
+    for (const m of members.values()) {
+        const { inherit, override } = intel.inheritance(m.id);
+        if (!inherit.length && !override.length) continue;
+        const owner = m.parent_id != null ? intel.sym(m.parent_id) : null;
+        const type = owner?.qname ?? m.qname.split('.').slice(0, -1).join('.');
+        const e = byType.get(type) ?? byType.set(type, { type, path: m.path, members: [], inherit: new Map(), override: [] }).get(type);
+        e.members.push(m.name);
+        for (const s of inherit) {
+            inheritorFiles.add(s.path); // a test subclass is not listed, but its file is a test to run
+            if (!s.is_test) e.inherit.set(s.id, { qname: s.qname, path: s.path });
+        }
+        for (const s of override) if (!s.is_test) e.override.push({ qname: `${s.qname}.${m.name}`, path: s.path });
+    }
+    report.inherited = [...byType.values()].map(e => ({ ...e, inherit: [...e.inherit.values()] })).filter(e => e.inherit.length || e.override.length);
+
+    // ── tests to run ─────────────────────────────────────────────────────────────
     if (seeds.length) {
         const { nodes, fileLevel } = intel.dependents(seeds, { depth: 3, maxNodes: 300 });
         const tests = new Set();
         for (const [id] of nodes) { const x = intel.sym(id); if (x?.is_test) tests.add(x.path); }
         for (const [p] of fileLevel) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', p)?.is_test) tests.add(p);
-        for (const t of intel.conventionTests(targets)) tests.add(t);
+        for (const t of intel.conventionTests([...targets, ...inheritorFiles])) tests.add(t);
+        for (const f of inheritorFiles) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', f)?.is_test) tests.add(f);
         for (const rel of targets) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', rel)?.is_test) tests.add(rel);
         report.tests = [...tests].sort();
         report.commands = testCommands(root, report.tests.slice(0, 40));

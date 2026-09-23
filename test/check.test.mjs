@@ -78,3 +78,32 @@ test('check_changes names the test functions closest to the change and how to ru
         } finally { intel.close(); rmrf(root); }
     }
 });
+
+test('check_changes and change_impact name the subclasses that inherit a changed method, and their tests', async () => {
+    const root = makeRepo({
+        'dialects/__init__.py': '',
+        'dialects/base.py': 'class Parser:\n    def parse_unique(self, tokens):\n        return list(tokens)\n\n    def parse_key(self, tokens):\n        return self.parse_unique(tokens)\n',
+        'dialects/mysql.py': 'from dialects.base import Parser\n\n\nclass MySQLParser(Parser):\n    def parse_unique(self, tokens):\n        return sorted(tokens)\n',
+        'dialects/doris.py': 'from dialects.mysql import MySQLParser\n\n\nclass DorisParser(MySQLParser):\n    pass\n',
+        'dialects/starrocks.py': 'from dialects.doris import DorisParser\n\n\nclass StarRocksParser(DorisParser):\n    LIMIT = 3\n',
+        'dialects/tsql.py': 'from dialects.mysql import MySQLParser\n\n\nclass TSQLParser(MySQLParser):\n    def parse_unique(self, tokens):\n        return tokens[:1]\n',
+        'tests/__init__.py': '',
+        'tests/test_mysql.py': 'import unittest\n\n\nclass TestMySQL(unittest.TestCase):\n    def test_ddl(self):\n        self.assertTrue(True)\n',
+        'tests/test_doris.py': 'import unittest\n\n\nclass TestDoris(unittest.TestCase):\n    def test_ddl(self):\n        self.assertTrue(True)\n',
+        'tests/test_starrocks.py': 'import unittest\n\n\nclass TestStarRocks(unittest.TestCase):\n    def test_ddl(self):\n        self.assertTrue(True)\n',
+        'tests/test_tsql.py': 'import unittest\n\n\nclass TestTSQL(unittest.TestCase):\n    def test_ddl(self):\n        self.assertTrue(True)\n',
+    });
+    const intel = new CodeIntel({ root });
+    try {
+        await intel.open();
+        writeFile(root, 'dialects/mysql.py', 'from dialects.base import Parser\n\n\nclass MySQLParser(Parser):\n    def parse_unique(self, tokens):\n        return sorted(set(tokens))\n');
+        const text = await callTool(intel, 'check_changes', {});
+        assert.match(text, /subclasses of MySQLParser that inherit parse_unique run the changed code too \(2\): DorisParser \(dialects\/doris\.py\), StarRocksParser \(dialects\/starrocks\.py\)/, text);
+        assert.match(text, /overridden, so not reached by the change: TSQLParser\.parse_unique \(dialects\/tsql\.py\)/, text);
+        assert.match(text, /test files that exercise the change \(3\): tests\/test_doris\.py, tests\/test_mysql\.py, tests\/test_starrocks\.py/, text);
+        const impact = await callTool(intel, 'change_impact', { symbols: ['MySQLParser.parse_unique'] });
+        assert.match(impact, /inherited by \(these subclasses run the changed code too\): 2\n\s+DorisParser\s+dialects\/doris\.py:4-5\n\s+StarRocksParser\s+dialects\/starrocks\.py:4-5/, impact);
+        assert.match(impact, /tests\/test_doris\.py: \(tests a subclass that inherits it\)/, impact);
+        assert.doesNotMatch(impact, /inherited by[\s\S]*TSQLParser  /, impact);
+    } finally { intel.close(); rmrf(root); }
+});

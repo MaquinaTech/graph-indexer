@@ -129,6 +129,11 @@ and real commits, and end to end with coding agents
   that reach the changed code through calls the index sees (directly or through one helper), with
   a command that runs only them (pytest, unittest, Django, `go test -run`, Maven, Gradle), before
   the test files that exercise the change.
+- **Subclasses that inherit a changed method**: `check_changes` and `change_impact` list the
+  subclasses (transitively) that inherit a changed method without redeclaring it — they run the
+  new code too — and those that override it, and add the inheriting subclasses' test files to the
+  tests to run. In the fourth round's issue fixes, agents searched for these subclasses by hand
+  after editing, and the check named only the edited class's tests.
 - **OpenCode and Kilo Code plugin** (`integrations/opencode/graph-indexer.js`, written by
   `init --hooks` to `.opencode/plugins/` or `.kilo/plugin/`): after a read, a search or an edit it
   appends to the tool's output what the Claude Code hooks add as context, answered by the resident

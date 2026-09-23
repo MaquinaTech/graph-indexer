@@ -230,6 +230,38 @@ export class CodeIntel {
         return out;
     }
 
+    /**
+     * The subtypes of a member's type, transitively, split into those that inherit the member — they
+     * run it as their own, so a change to it reaches them — and those that redeclare it (their own
+     * version runs; their subtypes are not followed).
+     * @returns {{ inherit: object[], override: object[] }} index rows of the subtypes
+     */
+    inheritance(id, { max = 30 } = {}) {
+        const out = { inherit: [], override: [] };
+        const sym = this.sym(id);
+        if (!sym) return out;
+        const type = this.ix.resolver.enclosingType(sym.id);
+        if (!type || type.id == null || type.id === sym.id) return out;
+        const seen = new Set([type.id]);
+        let frontier = [type.id];
+        for (let depth = 0; depth < 4 && frontier.length; depth++) {
+            const next = [];
+            for (const tid of frontier) {
+                for (const { src_id } of this.store.all("SELECT DISTINCT src_id FROM refs WHERE dst_id = ? AND kind = 'inherit' AND src_id IS NOT NULL", tid)) {
+                    if (seen.has(src_id)) continue;
+                    seen.add(src_id);
+                    const st = this.sym(src_id);
+                    if (!st) continue;
+                    if (this.#membersNamed(src_id, sym.name).length) out.override.push(st);
+                    else { out.inherit.push(st); next.push(src_id); }
+                    if (out.inherit.length + out.override.length >= max) return out;
+                }
+            }
+            frontier = next;
+        }
+        return out;
+    }
+
     /** Members of a type with a name: declared in its body, or outside it with the type as owner (Go, Rust, C++). */
     #membersNamed(typeId, name) {
         const t = this.ix.table;
