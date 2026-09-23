@@ -385,23 +385,23 @@ function definitionRescue(intel, pattern, literal, r) {
  * few) — so a read also answers where the names it contains are defined. Definitions already listed
  * in this answer (`seen`) are not repeated.
  */
-function definitionsCard(intel, file, from, to, { seen = new Set(), skipAncestorsOf = null, max = 10, docs = 3 } = {}) {
+function definitionsCard(intel, file, from, to, { seen = new Set(), skipAncestorsOf = null, max = 10, docs = 1 } = {}) {
     const { rows, more } = definitionsUsed(intel, file, from, to, { max, skipIds: seen, skipAncestorsOf });
     if (!rows.length) return [];
     const out = ['Defined elsewhere (used above):'];
     rows.forEach((s, i) => {
         seen.add(s.id);
-        const sig = clip(String(s.sig || `${s.kind} ${s.name}${s.type ? `: ${s.type}` : ''}`).replace(/\s+/g, ' ').replace(/([([{])\s+/g, '$1').replace(/,?\s+([)\]}])/g, '$1').replace(/:\s+#.*$/, ':').replace(/\s+#.*$/, ''), 110);
+        const sig = clip(String(s.sig || `${s.kind} ${s.name}${s.type ? `: ${s.type}` : ''}`).replace(/\s+/g, ' ').replace(/([([{])\s+/g, '$1').replace(/,?\s+([)\]}])/g, '$1').replace(/:\s+#.*$/, ':').replace(/\s+#.*$/, ''), 90);
         const doc = i < docs && s.doc ? ` — ${clip(s.doc.split('\n').map(l => l.trim()).find(Boolean) ?? '', 80)}` : '';
         out.push(`  ${s.qname}  ${s.path}:${s.start_line}${s.byName ? ' (by name)' : ''}  ${sig}${doc}`);
     });
-    // the rest in one line, still with where each one is
-    if (more.length) out.push(`  … ${more.length} more: ${more.slice(0, 12).map(s => `${s.qname} ${s.path}:${s.start_line}`).join(', ')}${more.length > 12 ? ', …' : ''}`);
+    // the rest in one line, by name: reading any of them by name finds it
+    if (more.length) out.push(`  … ${more.length} more: ${more.slice(0, 10).map(s => s.qname).join(', ')}${more.length > 10 ? ', …' : ''}`);
     return out;
 }
 
-/** Card rows for a read of n lines: about one per dozen lines read, between 8 and 25. */
-const cardRows = (n) => Math.min(25, Math.max(8, Math.round(n / 12)));
+/** Card rows for a read of n lines: about one per 20 lines read, between 5 and 12. */
+const cardRows = (n) => Math.min(12, Math.max(5, Math.round(n / 20)));
 
 // whole-file reads return files up to this many lines; longer ones come back as their outline
 const READ_WHOLE_MAX = 300;
@@ -472,13 +472,19 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
     await intel.revalidate([s.path]);
     const fresh = intel.sym(s.id) ?? s;
     const out = [`${fresh.qname} — ${fresh.kind}${fresh.exported ? ', exported' : ''}${fresh.is_test ? ', test' : ''} · ${loc(fresh)}`];
-    if (fresh.sig) out.push(`signature: ${clip(fresh.sig, 300)}`);
-    if (fresh.doc) out.push(`doc: ${clip(fresh.doc, 400)}`);
+    // with the code shown, its signature and docstring are in it
+    const span = fresh.end_line - fresh.start_line + 1;
+    const codeCap = TYPE_KINDS.has(fresh.kind) && span > max_lines ? Math.min(max_lines, 40) : max_lines;
+    if (fresh.sig && !include_code) out.push(`signature: ${clip(fresh.sig, 300)}`);
+    if (fresh.doc && !include_code) out.push(`doc: ${clip(fresh.doc, 400)}`);
     if (fresh.parent_id) { const p = intel.sym(fresh.parent_id); if (p) out.push(`member of: ${p.qname} (${p.kind}) ${loc(p)}`); }
     const bases = fresh.bases ? JSON.parse(fresh.bases) : [];
     if (bases.length) out.push(`extends/implements: ${bases.join(', ')}`);
     if (TYPE_KINDS.has(fresh.kind)) {
         const mem = [...intel.members(fresh.id), ...intel.ownedMembers(fresh)];
+        // listed when the class body is not shown whole (members defined elsewhere always)
+        const shownWhole = include_code && span <= codeCap;
+        if (shownWhole) mem.splice(0, mem.length, ...mem.filter(m => m.path && m.path !== fresh.path));
         if (mem.length) {
             out.push(`members (${mem.length}):`);
             for (const m of mem.slice(0, 60)) out.push(`  ${String(m.start_line).padStart(5)}  ${m.kind.padEnd(9)} ${clip(m.sig || m.name, 150)}${m.path && m.path !== fresh.path ? `  (${m.path})` : ''}`);
@@ -508,16 +514,15 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
     // same counting as find_references (overloads and the method family included)
     const refs = intel.references(fresh.id, { minConf: 0.4 });
     if (refs.total) {
-        const top = [...refs.groups.values()].flat().slice(0, 8);
-        out.push(`used by: ${plural(refs.total, 'reference')} in ${plural(refs.groups.size, 'file')} — e.g. ${top.map(t => `${t.src_qname ?? '(module)'} ${t.path}:${t.line}`).join(', ')}${refs.total > 8 ? ` … (${tn('find_references')} for all)` : ''}`);
+        const top = [...refs.groups.values()].flat().slice(0, 4);
+        out.push(`used by: ${plural(refs.total, 'reference')} in ${plural(refs.groups.size, 'file')} — e.g. ${top.map(t => `${t.src_qname ?? '(module)'} ${t.path}:${t.line}`).join(', ')}${refs.total > 4 ? ` … (${tn('find_references')} for all)` : ''}`);
     } else out.push(`used by: no bound references${VALUE_KINDS.has(fresh.kind) ? ' (field/attribute uses through untyped receivers are not all indexed — grep the name before concluding it is unused)' : ' (may be an entry point, framework-invoked, or called dynamically)'}.`);
-    if (refs.unbound?.plausible.length) out.push(`also possibly used at: ${refs.unbound.plausible.slice(0, 5).map(r => `${r.path}:${r.line}`).join(', ')}${refs.unbound.plausible.length > 5 ? ', …' : ''} (unknown receiver type, file mentions ${typeList(refs.unbound.typeNames) || 'it'})`);
+    if (refs.unbound?.plausible.length) out.push(`also possibly used at: ${refs.unbound.plausible.slice(0, 3).map(r => `${r.path}:${r.line}`).join(', ')}${refs.unbound.plausible.length > 3 ? ', …' : ''} (unknown receiver type, file mentions ${typeList(refs.unbound.typeNames) || 'it'})`);
     const tests = fresh.is_test ? [] : testsUsing(intel, fresh.id);
     if (tests.length) out.push(`tested in: ${tests.slice(0, 3).map(t => `${t.qname} (${t.path}:${t.line})`).join(', ')}${tests.length > 3 ? ', …' : ''}`);
     if (include_code) {
         const lines = intel.fileLines(fresh.path);
-        const span = fresh.end_line - fresh.start_line + 1;
-        const cap = TYPE_KINDS.has(fresh.kind) && span > max_lines ? Math.min(max_lines, 40) : max_lines;
+        const cap = codeCap;
         out.push('');
         out.push(codeBlock(lines, fresh.start_line, fresh.end_line, { maxLines: cap }));
         if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or ${tn('read_code')} on a member)`);
