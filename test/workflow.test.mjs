@@ -34,9 +34,9 @@ test.after(() => { intel?.close(); rmrf(root); });
 
 test('search_text: grep lines with the definition each identifier match refers to', async () => {
     const text = await callTool(intel, 'search_text', { pattern: '\\btotal\\b' });
-    assert.match(text, /src\/checkout\.ts[\s\S]*3 {2}→ Cart\.total {2}in checkout/);
+    assert.match(text, /src\/checkout\.ts[\s\S]*3 → Cart\.total \(checkout\) │ return c\.total/);
     assert.match(text, /src\/wish\.ts[\s\S]*→ Wishlist\.total/);
-    assert.match(text, /5 {2}comment/);
+    assert.match(text, /5 comment │/);
     assert.match(text, /config\/app\.yaml/);
     assert.match(text, /"total" across all \d+ matches: .*→ Cart\.total.*→ Wishlist\.total.*2 definitions.*1 in non-code files/);
 });

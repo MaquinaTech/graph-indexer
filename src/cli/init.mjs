@@ -17,7 +17,7 @@ const SNIPPET = `${BLOCK_START}
 The \`graph-indexer\` MCP server keeps a live index of this repository (re-synced before every answer).
 - Uses of a function, method or class, even when other code shares the name: \`find_references\` (exact call sites) rather than grepping the name.
 - Identifiers, strings or config across all files: \`search_text\` — grep output plus the definition each code match refers to.
-- Before changing a signature or behaviour: \`change_impact\`; after editing: \`check_changes\` (calls that no longer fit, removed names still in use, tests to run).
+- Before changing a signature, renaming, removing, or changing behaviour others rely on: \`change_impact\`; after such an edit: \`check_changes\` (calls that no longer fit, removed names still in use, tests to run). A fix inside one function needs neither: run its tests.
 - Code for a behaviour described in words: \`search_code\`, then \`get_symbol\` to read one definition.
 ${BLOCK_END}`;
 

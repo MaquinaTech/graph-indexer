@@ -154,8 +154,9 @@ Where it saves work compared with grep and reading whole files:
 - Uses of a known symbol, even when other classes have methods with the same name: find_references gives the exact call sites and says which other same-name calls could not be bound and whether they are plausible.
 - Anything grep would find (identifiers, strings, config keys, any file): search_text returns grep-style lines plus, for each code match, its enclosing function and the definition an identifier refers to.
 - Code for a behaviour described in words: search_code, then get_symbol to read only that definition, with line numbers.
-- Before changing a signature or behaviour: change_impact lists the call sites to update, overrides and implementations, transitive dependents and the tests to run.
-- After editing: check_changes reports syntax errors introduced, calls that no longer fit a changed signature, removed or renamed names still in use, and the command that runs the affected tests.
+- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact lists the call sites to update, overrides and implementations, transitive dependents and the tests to run.
+- After such an edit: check_changes reports syntax errors introduced, calls that no longer fit a changed signature, removed or renamed names still in use, and the command that runs the affected tests.
+- A fix inside one function that keeps its signature needs neither: run the tests that cover it.
 - Callers of callers and request flows: call_graph. A map of an unfamiliar area: outline.
 
 Every answer carries a confidence (exact, high, likely) and states what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why. Reading a file directly remains the right step once the location is known.`;
@@ -306,10 +307,11 @@ async function toolText(intel, { pattern, path: p = null, literal = false, ignor
     let cur = null;
     for (const m of r.shown) {
         if (m.path !== cur) { cur = m.path; out.push(m.path + (m.isTest ? '  (test)' : '')); }
-        const tag = m.what === 'def' ? `def ${m.target}` : m.what === 'ref' ? `→ ${m.target}` : m.what === 'unbound' ? 'unbound ref' : m.what === 'comment' ? 'comment' : m.what === 'text' ? 'text' : '';
-        const where = m.encl && m.what !== 'def' ? `in ${m.encl}` : '';
-        const label = [tag, where].filter(Boolean).join('  ');
-        out.push(`  ${String(m.line).padStart(5)}  ${label ? label + '  ' : ''}│ ${clip(m.text.trim(), 140)}`);
+        // compact: the enclosing definition is the context; tags only where they add something
+        const tag = m.what === 'def' ? 'def' : m.what === 'ref' ? `→ ${m.target}` : m.what === 'unbound' ? 'unbound' : m.what === 'comment' ? 'comment' : '';
+        const where = m.encl && m.what !== 'def' ? `(${m.encl})` : '';
+        const label = [tag, where].filter(Boolean).join(' ');
+        out.push(`${String(m.line).padStart(6)} ${label ? label + ' ' : ''}│ ${clip(m.text.trim(), 120)}`);
     }
     if (r.truncated) out.push(`… ${r.total - r.shown.length} more matching lines (narrow with path, or raise limit)`);
     const sm = r.summary;
