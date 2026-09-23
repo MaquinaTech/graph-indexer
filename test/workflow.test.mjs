@@ -133,6 +133,10 @@ test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; De
         assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /graph-indexer:start/);
         assert.ok(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).hooks.PostToolUse, 'Devin runs the Claude Code hooks');
         assert.match(r.stdout, /Devin: reads AGENTS\.md and the Claude Code hooks/);
+        const plugin = fs.readFileSync(path.join(dir, '.kilo/plugin/graph-indexer.js'), 'utf8');
+        assert.match(plugin, /export const GraphIndexer = async/);
+        assert.match(plugin, /^const DAEMON = \[.*"daemon"\];$/m);
+        assert.ok(!fs.existsSync(path.join(dir, '.opencode/plugins/graph-indexer.js')), 'Kilo Code only: its own plugin directory');
         const cursor = spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--agents', 'cursor'], { encoding: 'utf8' });
         assert.match(cursor.stdout, /\.cursor\/mcp\.json has comments or is not plain JSON, so it was left as is/);
         assert.match(fs.readFileSync(path.join(dir, '.cursor/mcp.json'), 'utf8'), /\/\/ mine/, 'a commented config is not rewritten');

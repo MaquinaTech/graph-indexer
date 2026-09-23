@@ -96,6 +96,39 @@ function cliCommand(local) {
     return installed ? JSON.stringify(installed) : 'npx -y graph-indexer@3';
 }
 
+/** The command that starts graph-indexer, as an argv array (for the OpenCode/Kilo Code plugin). */
+function cliArgv(local) {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    if (local) return [process.execPath, path.resolve(here, '../../bin/graph-indexer.mjs')];
+    const installed = installedBin();
+    return installed ? [installed] : ['npx', '-y', 'graph-indexer@3'];
+}
+
+/**
+ * The OpenCode / Kilo Code plugin (integrations/opencode/graph-indexer.js): after reads, searches
+ * and edits it appends what the Claude Code hooks add as context. Kilo Code loads project plugins
+ * from .kilo/plugin/, OpenCode from .opencode/plugins/.
+ */
+function writeOpenCodePlugin(repo, local, dryRun) {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.resolve(here, '../../integrations/opencode/graph-indexer.js'), 'utf8')
+        .replace(/^const DAEMON = .*$/m, `const DAEMON = ${JSON.stringify([...cliArgv(local), 'daemon'])};`);
+    const kilo = ['kilo.json', 'kilo.jsonc', '.kilo', '.kilocode'].some(f => fs.existsSync(path.join(repo, f)));
+    const open = ['opencode.json', 'opencode.jsonc', '.opencode'].some(f => fs.existsSync(path.join(repo, f)));
+    const targets = [...(kilo ? ['.kilo/plugin/graph-indexer.js'] : []), ...(open || !kilo ? ['.opencode/plugins/graph-indexer.js'] : [])];
+    const out = [];
+    for (const rel of targets) {
+        const file = path.join(repo, rel);
+        const same = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === src;
+        if (!same && !dryRun) {
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, src);
+        }
+        out.push(`${same ? 'already in' : 'written to'} ${rel}`);
+    }
+    return `OpenCode / Kilo Code plugin (definitions after reads, missed definitions, edit check): ${out.join(', ')}`;
+}
+
 /**
  * Claude Code hooks (project .claude/settings.json), merged with existing ones: after edits the
  * edit checker runs on the edited file, after a grep for a shared identifier the definitions are
@@ -176,6 +209,7 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
     }
     // Devin Desktop/CLI, Copilot CLI and Cursor also run the Claude Code hooks in .claude/settings.json
     if (hooks && (chosen.includes('claude') || chosen.includes('devin'))) report.push(upsertClaudeHooks(repo, local, dryRun));
+    if (hooks && chosen.includes('opencode')) report.push(writeOpenCodePlugin(repo, local, dryRun));
     if (!noInstructions) {
         const targets = [...new Set(chosen.map(k => AGENTS[k].instructions))];
         for (const t of targets) report.push(`${t}: ${upsertBlock(path.join(repo, t), dryRun)} graph-indexer instructions block`);

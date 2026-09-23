@@ -54,7 +54,8 @@ OpenCode and Kilo Code, `.junie/mcp/mcp.json`, `.zed/settings.json`; it prints t
 and Devin's server entry), merges instead of overwriting other servers, adds `.graph-indexer/`
 to `.gitignore`, and adds a short block to `CLAUDE.md` / `AGENTS.md` on how to look code up.
 `--hooks` adds the Claude Code hooks to `.claude/settings.json`, which Devin, Copilot CLI and
-Cursor also run. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
+Cursor also run, and the OpenCode / Kilo Code plugin that appends the same context to their tool
+output. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
 `--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,
 `--no-instructions`.
 

@@ -16,6 +16,7 @@
     "files": [
         "bin/",
         "src/",
+        "integrations/",
         "vendor/",
         "README.md",
         "CHANGELOG.md",

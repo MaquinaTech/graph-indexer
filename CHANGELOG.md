@@ -125,6 +125,10 @@ and real commits, and end to end with coding agents
   before. The plugin's hook command is a small client that talks to that socket instead of
   starting graph-indexer through npx (about a second per call). `GRAPH_INDEXER_RESIDENT=0`
   turns it off.
+- **OpenCode and Kilo Code plugin** (`integrations/opencode/graph-indexer.js`, written by
+  `init --hooks` to `.opencode/plugins/` or `.kilo/plugin/`): after a read, a search or an edit it
+  appends to the tool's output what the Claude Code hooks add as context, answered by the resident
+  process; with none running it adds nothing and starts one.
 - **Benchmarks** (`bench/`): symbol-search suites (377 queries, 9 repositories), reference
   accuracy against the TypeScript compiler, and localization replayed from real commits, with
   pinned fixtures (`bench/fixtures.mjs`). An agentic benchmark (`bench/agentic/`): code questions

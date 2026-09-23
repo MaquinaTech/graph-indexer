@@ -94,3 +94,28 @@ test("the Claude Code plugin's hook client finds the same socket and relays thro
         assert.equal(JSON.parse(out).hookSpecificOutput.additionalContext, 'seen post-tool Read');
     } finally { rmrf(root); }
 });
+
+test('OpenCode/Kilo Code plugin: maps tool calls to the hook and appends the resident answer to the output', async () => {
+    const root = makeRepo({ 'a.ts': 'export const a = 1;\n' });
+    try {
+        const { GraphIndexer } = await import('../integrations/opencode/graph-indexer.js');
+        const { hookPayload } = GraphIndexer;
+        assert.deepEqual(hookPayload({ tool: 'read', sessionID: 's1', args: { filePath: '/x/a.ts', offset: 10, limit: 20 } }, { output: 'code' }, root).tool_input, { file_path: '/x/a.ts', offset: 10, limit: 20 });
+        assert.equal(hookPayload({ tool: 'grep', args: { pattern: 'class Foo' } }, { output: 'No files found' }, root).tool_response, '', 'an empty search');
+        assert.equal(hookPayload({ tool: 'bash', args: { command: 'grep -rn "def x" .' } }, { output: '' }, root).tool_name, 'Bash');
+        assert.equal(hookPayload({ tool: 'glob', args: {} }, { output: '' }, root), null);
+        const seen = [];
+        const context = 'graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n  A → a.ts:1';
+        const handle = async (req) => { seen.push(req); return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: context } }); };
+        const res = await startResident({ root, version: 'resident-version', handle });
+        delete globalThis.__graphIndexerPlugin;
+        const hooks = await GraphIndexer({ directory: root, worktree: root });
+        const output = { title: 'a.ts', output: '1: export const a = 1;', metadata: {} };
+        await hooks['tool.execute.after']({ tool: 'read', sessionID: 's1', callID: 'c1', args: { filePath: path.join(root, 'a.ts') } }, output);
+        res.close();
+        assert.equal(output.output, `1: export const a = 1;\n\n${context}`);
+        assert.equal(seen[0].input.tool_name, 'Read');
+        assert.equal(seen[0].input.session_id, 'opencode-s1');
+        assert.deepEqual(await GraphIndexer({ directory: root }), {}, 'registers once when loaded from two directories');
+    } finally { delete globalThis.__graphIndexerPlugin; rmrf(root); }
+});
