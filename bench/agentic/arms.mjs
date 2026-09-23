@@ -124,10 +124,10 @@ function giCard4(gi) {
 A live structural index of the repository — definitions, references bound through scopes, imports and receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).
 
 How to look code up:
-- Explore in one pass: when you need several definitions, read them in one \`gi read\` call (symbols such as \`Class.method\`, ranges such as \`path:120-180\`), not one search per name.
+- Explore in one pass: when you need several definitions or files, ask for them together — several tool calls in one message, or one \`gi read\` with several targets (symbols such as \`Class.method\`, ranges such as \`path:120-180\`) — not one search per turn.
 - Read keyholes, not files: the function or the 50–100 lines you need. \`gi read <file>\` of a long file returns its outline, with the line range of every definition.
 - Follow names through the index: every \`gi read\` lists where each name the code uses is defined (file:line and signature); read those targets instead of grepping for their definitions.
-- Uses of a function, method or class, especially when other classes share the name → \`gi refs\` (exact call sites) instead of grepping the name.
+- Uses of a function, method or class, especially when other classes share the name → \`gi refs\` (exact call sites) instead of grepping the name; when it reports the list as complete, a grep only repeats it. Callers of callers → one \`gi callgraph X --direction callers --depth 2\`.
 - Text that is not a code name (messages, config keys, strings) → grep as usual, or \`gi grep\`, which also says where the definition of a searched name is.
 - Changing a signature, renaming or removing something, or behaviour other code relies on → \`gi impact --symbols X\` first, \`gi check\` after editing. A fix inside one function needs neither: run the tests that cover it, once.
 - Your Edit tool may require its own Read of a file before editing it: read just the lines you change.

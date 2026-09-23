@@ -238,7 +238,7 @@ async function afterRead(root, input, state) {
 
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
 const RULES = `How to look code up in this repository (graph-indexer):
-- Several definitions at once: one read_code call with several targets (Class.method, path:120-180) — or \`npx graph-indexer read A B\` in a shell — not one search per name.
+- Several things at once: several tool calls in one message, or one read_code call with several targets (Class.method, path:120-180) — \`npx graph-indexer read A B\` in a shell — not one search per turn.
 - The function or the 50–100 lines you need, not whole files; a long file's outline gives every definition's line range.
 - Every read lists where each name the code uses is defined; read those targets instead of grepping for their definitions.
 - Exact uses of a function or class: find_references. Text that is not a code name: grep as usual.`;

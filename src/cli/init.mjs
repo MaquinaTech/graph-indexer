@@ -15,10 +15,10 @@ const BLOCK_END = '<!-- graph-indexer:end -->';
 const SNIPPET = `${BLOCK_START}
 ## Reading and searching code (graph-indexer)
 The \`graph-indexer\` MCP server keeps a live index of this repository (re-synced before every answer).
-- Explore in one pass: when you need several definitions, read them in one \`read_code\` call (symbols such as \`Class.method\`, ranges such as \`path:120-180\`), not one search per name.
+- Explore in one pass: when you need several definitions or files, ask for them together — several tool calls in one message, or one \`read_code\` call with several targets (symbols such as \`Class.method\`, ranges such as \`path:120-180\`) — not one search per turn.
 - Read keyholes, not files: the function or the 50–100 lines you need. A long file comes back as its outline, with the line range of every definition.
 - Follow names through the index: every read lists where each name the code uses is defined (file:line and signature); read those targets instead of grepping for their definitions.
-- Uses of a function, method or class, even when other code shares the name: \`find_references\` (exact call sites; for an interface or class, every type that implements or extends it) rather than grepping the name.
+- Uses of a function, method or class, even when other code shares the name: \`find_references\` (exact call sites; for an interface or class, every type that implements or extends it) rather than grepping the name; callers of callers: \`call_graph\`.
 - Text that is not a code name (messages, config keys, strings): grep as usual; \`search_text\` also says which definition each code match refers to.
 - Before changing a signature or behaviour other code relies on: \`change_impact\`; after the edit: \`check_changes\`. A fix inside one function needs neither: run the tests that cover it, once.
 ${BLOCK_END}`;
