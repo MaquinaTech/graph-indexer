@@ -13,7 +13,7 @@
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2'];
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {
@@ -54,15 +54,43 @@ Commands:
     return lines.join('\n');
 }
 
+/**
+ * Integrated card, second iteration (after the first benchmark round): the verification steps
+ * are for changes that cross a function's boundary; a local fix is checked by its tests. On the
+ * fresh bug-fix tasks the first card's unconditional "check / impact before finishing" added turns
+ * without adding solved tasks.
+ */
+function integratedCard2(gi) {
+    return `## graph-indexer (code index for this repository)
+A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).
+
+When it saves work (otherwise use your usual tools):
+- Uses of a known function/method/class, especially when other classes share the name → \`gi refs\` (exact call sites; same-name methods told apart) instead of grepping the name.
+- Where a behaviour described in words lives → \`gi search\`, then \`gi symbol\` on the hit (several targets at once: \`gi symbol A B C\`).
+- Changing a signature, renaming or removing something, or changing behaviour other code relies on → \`gi impact --symbols X\` first (all call sites and tests), \`gi check\` after editing.
+- A fix inside one function that keeps its signature needs neither impact nor check: run the tests that cover it and finish.
+
+Commands:
+- \`gi refs <symbol> [--kind call|type|inherit|new|value] [--no-tests]\` — every use, grouped by file, with confidence; lists same-name calls it could not bind and names used as strings (stubs, getattr).
+- \`gi symbol <Name | Class.member | path:Name | path:LINE>… [--no-code]\` — definitions with line numbers, members, callers/callees summary.
+- \`gi search "<behaviour or identifier>" [--path DIR] [--kind K] [--limit N]\` — ranked symbols with location and matching lines.
+- \`gi grep <regex> [--path DIR] [--literal] [-i]\` — text search over all files; each code match shows its enclosing definition and, for identifiers, the definition it refers to.
+- \`gi impact [--symbols A,B] [--files X,Y] [--diff]\` — call sites to update, overrides, dependents, tests to run.
+- \`gi check [--files X,Y]\` — after a cross-function change: broken call sites, references to removed names, tests to run.
+- \`gi callgraph <symbol> [--direction callers|callees|both] [--depth N]\` · \`gi outline [path]\` — call hierarchy; file skeleton or area map.`;
+}
+
 const POLICY = {
     grep: 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) as you normally would.',
     gi: 'For searching and navigating code use graph-indexer (below) instead of Grep/Glob: do NOT use the Grep or Glob tools, and do NOT run grep, rg, ag, ack, git grep or find in the shell. You may use Read, Edit, Write, and Bash for everything else (running tests or builds, ls, git status/diff).',
     'grep+gi': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) and, where it helps, graph-indexer (below).',
     'grep+gi+': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its "when to use what" rules.',
+    'grep+gi2': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below) where it saves work.',
 };
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
+    if (arm === 'grep+gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi)}`;
     const grep = arm !== 'gi';
     const card = arm === 'grep+gi+' || (arm === 'gi' && (caps.grep || caps.check)) ? integratedCard(gi, caps, { grep }) : basicCard(gi, { grep });
     return `# Tools\n${POLICY[arm]}\n\n${card}`;
