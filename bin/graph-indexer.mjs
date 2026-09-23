@@ -8,7 +8,7 @@
  *   graph-indexer status  [--repo DIR]
  *   graph-indexer search   <query>  [--path P] [--kind K] [--limit N]
  *   graph-indexer symbol   <name>…  [--no-code]
- *   graph-indexer refs     <name>   [--kind K] [--no-tests] [--limit N]
+ *   graph-indexer refs     <name>   [--kind K] [--path P] [--no-tests] [--limit N]
  *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N]
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
  *   graph-indexer outline  [path]   [--focus TEXT] [--max-tokens N]
@@ -93,7 +93,7 @@ Usage:
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
   graph-indexer symbol <name>… [--no-code]         one or several definitions
-  graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--no-tests]
+  graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--path P] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
@@ -153,8 +153,8 @@ async function main() {
             return runTools((targets.length ? targets : ['']).map(t => ['get_symbol', { symbol: t, include_code: !noCode, max_lines: maxLines }]));
         }
         case 'refs': {
-            const kind = opt('--kind', 'all'); const noTests = flag('--no-tests'); const limit = Number(opt('--limit', 80));
-            return runTool('find_references', { symbol: argv.join(' '), kind, include_tests: !noTests, limit });
+            const kind = opt('--kind', 'all'); const noTests = flag('--no-tests'); const limit = Number(opt('--limit', 80)); const pathF = opt('--path');
+            return runTool('find_references', { symbol: argv.join(' '), kind, include_tests: !noTests, limit, ...(pathF ? { path: pathF } : {}) });
         }
         case 'callgraph': {
             const direction = opt('--direction', 'both'); const depth = Number(opt('--depth', 2)); const limit = Number(opt('--limit', 40));

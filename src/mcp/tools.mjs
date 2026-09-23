@@ -1,5 +1,5 @@
 /**
- * The MCP tool surface: six read-only tools, each answering one kind of question an agent has
+ * The MCP tool surface: eight read-only tools, each answering one kind of question an agent has
  * while changing code. Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
  */
@@ -11,6 +11,7 @@ import { checkChanges } from '../query/check.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_KINDS = new Set(['field', 'property', 'variable', 'constant']);
+const CALLABLE_KINDS = new Set(['function', 'method']);
 // examples, docs snippets and sample apps come after the library code they exercise
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|fixtures?|playground)\//i;
 const pathRank = (p) => (EXAMPLE_PATH.test(p) ? 1 : 0);
@@ -67,12 +68,13 @@ export const TOOLS = [
     {
         name: 'find_references',
         title: 'Find references',
-        description: 'Every place that uses a symbol — calls, instantiations, type annotations, inheritance, decorators, field reads and function references passed as values — grouped by file with the enclosing function and the source line. Methods that merely share the name (other classes, standard-library `get`/`set`…) are kept apart. Use it before renaming or changing a signature, or to learn how something is used. References are bound through scopes, imports and inferred receiver types (including injected fields); calls through a parent class or interface are included and marked. The footer lists same-name calls whose receiver type is unknown and says whether any of them is plausible (its file mentions the type), so a grep cross-check is only needed when it says so.',
+        description: 'Every place that uses a symbol — calls, instantiations, type annotations, inheritance, decorators, field reads and function references passed as values — grouped by file with the enclosing function and the source line. Methods that merely share the name (other classes, standard-library `get`/`set`…) are kept apart. Use it before renaming or changing a signature, or to learn how something is used. References are bound through scopes, imports and inferred receiver types (including injected fields); calls through a parent class or interface are included and marked. For a class or interface it also lists the types that inherit it indirectly, through a subclass or sub-interface. The footer lists same-name calls whose receiver type is unknown and says whether any of them is plausible (its file mentions the type), so a grep cross-check is only needed when it says so.',
         inputSchema: {
             type: 'object',
             properties: {
                 symbol: { type: 'string', description: 'Name, Class.member, path:Name or path:line.' },
                 kind: { type: 'string', enum: ['all', 'call', 'type', 'inherit', 'new', 'value', 'decorator'], default: 'all', description: 'Only this reference kind.' },
+                path: { type: 'string', description: 'Only references in files under this path, e.g. "packages/".' },
                 include_tests: { type: 'boolean', default: true },
                 limit: { type: 'integer', minimum: 1, maximum: 500, default: 80 },
             },
@@ -151,7 +153,7 @@ for (const t of TOOLS) {
 export const SERVER_INSTRUCTIONS = `graph-indexer keeps a live structural index of this repository: definitions, references bound through scopes, imports and receiver types, the call graph, and the tests that exercise each function. It re-syncs with the files before every answer, so results include edits made seconds ago.
 
 Where it saves work compared with grep and reading whole files:
-- Uses of a known symbol, even when other classes have methods with the same name: find_references gives the exact call sites and says which other same-name calls could not be bound and whether they are plausible.
+- Uses of a known symbol, even when other classes have methods with the same name: find_references gives the exact call sites and says which other same-name calls could not be bound and whether they are plausible. For a class or interface it lists every type that inherits it, directly or through a subclass.
 - Anything grep would find (identifiers, strings, config keys, any file): search_text returns grep-style lines plus, for each code match, its enclosing function and the definition an identifier refers to.
 - Code for a behaviour described in words: search_code, then get_symbol to read only that definition, with line numbers.
 - Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact lists the call sites to update, overrides and implementations, transitive dependents and the tests to run.
@@ -362,8 +364,9 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
             for (const m of mem.slice(0, 60)) out.push(`  ${String(m.start_line).padStart(5)}  ${m.kind.padEnd(9)} ${clip(m.sig || m.name, 150)}${m.path && m.path !== fresh.path ? `  (${m.path})` : ''}`);
             if (mem.length > 60) out.push(`  … ${mem.length - 60} more`);
         }
-        const subs = intel.store.all(`SELECT DISTINCT src.qname, f.path, src.start_line FROM refs r JOIN symbols src ON src.id = r.src_id JOIN files f ON f.id = src.file_id WHERE r.dst_id = ? AND r.kind = 'inherit' ORDER BY f.is_test, f.path`, fresh.id);
-        if (subs.length) out.push(`subtypes/implementations (${subs.length}${subs.length > 20 ? ', showing 20' : ''}): ${subs.slice(0, 20).map(x => `${x.qname} (${x.path}:${x.start_line})`).join(', ')}`);
+        const { direct, indirect } = subtypeTree(intel, fresh.id);
+        if (direct.length) out.push(`subtypes/implementations (${direct.length}${direct.length > 20 ? ', showing 20' : ''}): ${direct.slice(0, 20).map(x => `${x.qname} (${x.path}:${x.start_line})`).join(', ')}`);
+        if (indirect.length) out.push(`indirect, through one of those (${indirect.length}${indirect.length > 20 ? ', showing 20' : ''}): ${indirect.slice(0, 20).map(x => `${x.qname} via ${x.via} (${x.path}:${x.start_line})`).join(', ')}`);
     }
     if (fresh.kind === 'method' && !fresh.is_static) {
         const fam = intel.methodFamily(fresh);
@@ -401,17 +404,21 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200 
     return out.join('\n');
 }
 
-async function toolReferences(intel, { symbol, kind = 'all', include_tests = true, limit = 80 }) {
+async function toolReferences(intel, { symbol, kind = 'all', include_tests = true, limit = 80, path: p = null }) {
     const matches = pickSymbol(intel, symbol);
     if (!matches.length) return notFound(intel, symbol);
     const s = matches[0];
-    const res = intel.references(s.id, { kinds: kind && kind !== 'all' ? [kind] : null, includeTests: include_tests });
+    const all = intel.references(s.id, { kinds: kind && kind !== 'all' ? [kind] : null, includeTests: include_tests });
+    const inPath = pathFilter(p);
+    const groups = p ? new Map([...all.groups].filter(([f]) => inPath(f))) : all.groups;
+    const res = { ...all, groups, total: p ? [...groups.values()].reduce((n, rows) => n + rows.length, 0) : all.total };
     const files = [...res.groups.keys()];
     await intel.revalidate(files);
     const counts = {};
     for (const rows of res.groups.values()) for (const r of rows) counts[r.confidence] = (counts[r.confidence] ?? 0) + 1;
     const cstr = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
-    const out = [`References to ${s.qname} (${s.kind}) ${loc(s)} — ${res.total} in ${plural(files.length, 'file')}${cstr ? ` (${cstr})` : ''}`];
+    const scope = p ? ` under ${p}${all.total !== res.total ? ` (of ${all.total})` : ''}` : '';
+    const out = [`References to ${s.qname} (${s.kind}) ${loc(s)} — ${res.total} in ${plural(files.length, 'file')}${scope}${cstr ? ` (${cstr})` : ''}`];
     if (matches.length > 1) out.push(`note: "${symbol}" matches ${matches.length} definitions; showing ${shownAs(s, matches)}. Others (pass one as symbol): ${otherDefinitions(intel, matches)}.`);
     let shown = 0;
     for (const [file, rows] of res.groups) {
@@ -420,14 +427,17 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         out.push(file + (rows[0].is_test ? '  (test)' : ''));
         for (const r of rows) {
             if (shown >= limit) break;
-            const src = r.src_qname ? `in ${r.src_qname}` : 'module level';
+            // an `implements`/`extends` clause may sit lines below the declaration it belongs to
+            const decl = r.kind === 'inherit' && r.src_line && r.src_line !== r.line ? ` (${r.src_kind} at line ${r.src_line})` : '';
+            const src = r.src_qname ? `in ${r.src_qname}${decl}` : 'module level';
             const via = r.via ? ` via ${r.via}` : '';
             const conf = r.confidence === 'exact' ? '' : ` [${r.confidence}${r.ncand > 1 ? `, ${r.ncand} candidates` : ''}]`;
             out.push(`  ${String(r.line).padStart(5)}  ${r.kind.padEnd(9)} ${src}${via}${conf}  │ ${clip((lines?.[r.line - 1] ?? '').trim(), 120)}`);
             shown++;
         }
     }
-    if (res.total > shown) out.push(`… ${res.total - shown} more (raise limit, or filter with kind / include_tests=false)`);
+    if (res.total > shown) out.push(`… ${res.total - shown} more (raise limit, or filter with kind / path / include_tests=false)`);
+    if (TYPE_KINDS.has(s.kind) && (!kind || kind === 'all' || kind === 'inherit')) out.push(...indirectNote(intel, s, { includeTests: include_tests, inPath, p }));
     const allKinds = !res.total && kind && kind !== 'all' ? intel.references(s.id, { includeTests: include_tests }).total : 0;
     if (allKinds) out.push(`No references of kind "${kind}"; ${plural(allKinds, 'reference')} of other kinds exist (use kind: "all").`);
     else if (!res.total) out.push(VALUE_KINDS.has(s.kind)
@@ -435,15 +445,65 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         : 'No bound references. It may be unused, an entry point, invoked by a framework/reflection, or only called through dynamic receivers.');
     if (res.elsewhere?.length) out.push(`Other references named "${s.name}" resolve elsewhere: ${res.elsewhere.map(e => `${e.n} → ${e.qname} (${e.path})`).join(', ')}.`);
     out.push(...unboundNote(res.unbound, s));
+    if (CALLABLE_KINDS.has(s.kind) && (!kind || kind === 'all' || kind === 'call') && all.total && !res.unbound?.total) {
+        out.push(`Complete: every "${s.name}(…)" call in the indexed files is bound${res.elsewhere?.length ? ', here or to the definitions named above' : ' to this definition'}; none is left unresolved.`);
+    }
     out.push(...stringMentionNote(intel, s));
     return out.join('\n');
+}
+
+/** `path` argument → predicate on repository-relative paths (a directory prefix or one file). */
+function pathFilter(p) {
+    if (!p) return () => true;
+    const dir = p.replace(/\/+$/, '') + '/';
+    return (f) => f === p || f.startsWith(dir);
+}
+
+/** Types that extend or implement a type: direct, and indirect through one of those (named in `via`). */
+function subtypeTree(intel, id, maxDepth = 8) {
+    const q = `SELECT DISTINCT src.id, src.qname, src.kind, src.start_line, f.path, f.is_test FROM refs r JOIN symbols src ON src.id = r.src_id JOIN files f ON f.id = src.file_id WHERE r.dst_id = ? AND r.kind = 'inherit' ORDER BY f.is_test, f.path, src.start_line`;
+    const direct = intel.store.all(q, id);
+    const seen = new Set([id, ...direct.map(x => x.id)]);
+    const indirect = [];
+    let frontier = direct;
+    for (let depth = 2; depth <= maxDepth && frontier.length; depth++) {
+        const next = [];
+        for (const parent of frontier) {
+            for (const x of intel.store.all(q, parent.id)) {
+                if (seen.has(x.id)) continue;
+                seen.add(x.id);
+                next.push(x);
+                indirect.push({ ...x, via: parent.qname });
+            }
+        }
+        frontier = next;
+    }
+    indirect.sort((a, b) => (a.is_test - b.is_test) || a.path.localeCompare(b.path) || a.start_line - b.start_line);
+    return { direct, indirect };
+}
+
+/** For a type: what inherits it through its direct subtypes, so "every implementation" is one answer. */
+function indirectNote(intel, s, { includeTests, inPath, p, max = 30 }) {
+    const { direct, indirect } = subtypeTree(intel, s.id);
+    if (!direct.length) return [];
+    const shown = indirect.filter(x => (includeTests || !x.is_test) && inPath(x.path));
+    if (!shown.length) {
+        const where = [p && `under ${p}`, !includeTests && 'outside tests'].filter(Boolean).join(' ');
+        return [indirect.length
+            ? `No indirect subtypes ${where} (${indirect.length} elsewhere).`
+            : `No indirect subtypes: nothing extends or implements the types that inherit ${s.name} directly.`];
+    }
+    return [`Indirect subtypes (${shown.length}) — inherit ${s.name} through the type after "via":`,
+        ...shown.slice(0, max).map(x => `  ${x.path}:${x.start_line}  ${x.kind} ${x.qname}  via ${x.via}${x.is_test ? '  (test)' : ''}`),
+        ...(shown.length > max ? [`  … ${shown.length - max} more`] : [])];
 }
 
 /** Stubs/spies/getattr naming a member by string: a rename must update them, the index cannot bind them. */
 function stringMentionNote(intel, s, max = 8) {
     const sm = intel.stringMentions(s.id);
     if (!sm.length) return [];
-    return [`Also named as a string in ${plural(new Set(sm.map(m => m.path)).size, 'file')} that use${sm.length === 1 ? 's' : ''} this class (stubs, spies, getattr — not bound by the index; a rename must update them):`,
+    const nf = new Set(sm.map(m => m.path)).size;
+    return [`Also named as a string in ${plural(nf, 'file')} that use${nf === 1 ? 's' : ''} this class (stubs, spies, getattr — not bound by the index; a rename must update them):`,
         ...sm.slice(0, max).map(m => `  ${m.path}:${m.line}  │ ${clip(m.text, 110)}`),
         ...(sm.length > max ? [`  … ${sm.length - max} more`] : [])];
 }

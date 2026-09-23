@@ -336,7 +336,7 @@ export class CodeIntel {
             for (const s of this.#supertypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
             for (const s of this.#subtypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }
         }
-        const rows = this.store.all(`SELECT r.id, r.kind, r.line, r.col, r.conf, r.ncand, r.recv, r.dst_id, f.path, f.is_test, src.qname AS src_qname, src.kind AS src_kind
+        const rows = this.store.all(`SELECT r.id, r.kind, r.line, r.col, r.conf, r.ncand, r.recv, r.dst_id, f.path, f.is_test, src.qname AS src_qname, src.kind AS src_kind, src.start_line AS src_line
             FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols src ON src.id = r.src_id
             WHERE r.dst_id IN (${ids.map(() => '?').join(',')}) ORDER BY f.is_test, f.path, r.line`, ...ids); // production code before tests
         const out = [];

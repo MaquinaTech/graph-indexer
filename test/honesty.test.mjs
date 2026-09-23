@@ -20,6 +20,8 @@ const FILES = {
     // an interface with implementations, one of them in a sample app
     'src/pipe.ts': `export interface PipeTransform {\n  transform(value: string): string;\n}\nexport class TrimPipe implements PipeTransform {\n  transform(value: string) { return value.trim(); }\n}\n`,
     'sample/app/pipe.ts': `import { PipeTransform } from '../../src/pipe';\nexport class TrimPipe implements PipeTransform {\n  transform(value: string) { return value; }\n}\n`,
+    // an implementation reached through a base class, declared over two lines
+    'src/shapes.ts': `export interface Shape {\n  area(): number;\n}\nexport class Polygon implements Shape {\n  area() { return 0; }\n}\nexport class Square\n  extends Polygon {\n  area() { return 1; }\n}\n`,
     // Python: super(), string annotations, class calls reach __init__, package re-exports
     'aaa_docs/example.py': `from lib import Depends\n\n\ndef handler(dep=Depends()):\n    return dep\n`,
     'lib/__init__.py': `from .functions import Depends as Depends\n`,
@@ -117,4 +119,30 @@ test('members named by string in stubs are reported for renames', async () => {
     assert.match(out, /named as a string/);
     assert.match(out, /test\/filters\.spec\.ts:4 .*sinon\.stub\(f, 'createContext'\)/);
     assert.doesNotMatch(out, /filters\.spec\.ts:2 /); // a describe() title is not a use
+});
+
+test('a type lists what inherits it indirectly, and through which type', async () => {
+    const out = await callTool(intel, 'find_references', { symbol: 'Shape', kind: 'inherit' });
+    assert.match(out, /in Polygon/);
+    assert.match(out, /Indirect subtypes \(1\)[\s\S]*src\/shapes\.ts:7 +class Square +via Polygon/);
+    const poly = await callTool(intel, 'find_references', { symbol: 'Polygon', kind: 'inherit' });
+    assert.match(poly, /in Square \(class at line 7\)/);
+    assert.match(poly, /No indirect subtypes: nothing extends or implements/);
+    const sym = await callTool(intel, 'get_symbol', { symbol: 'Shape', include_code: false });
+    assert.match(sym, /indirect, through one of those \(1\): Square via Polygon/);
+});
+
+test('find_references keeps to a path', async () => {
+    const all = await callTool(intel, 'find_references', { symbol: 'PipeTransform', kind: 'inherit' });
+    assert.match(all, /sample\/app\/pipe\.ts/);
+    const src = await callTool(intel, 'find_references', { symbol: 'PipeTransform', kind: 'inherit', path: 'src/' });
+    assert.doesNotMatch(src, /sample\/app\/pipe\.ts/);
+    assert.match(src, /1 in 1 file under src\/ \(of 2\)/);
+});
+
+test('a call list with nothing left unbound says it is complete', async () => {
+    const out = await callTool(intel, 'find_references', { symbol: 'Injector.loadInstance' });
+    assert.match(out, /Complete: every "loadInstance\(…\)" call in the indexed files is bound to this definition/);
+    const set = await callTool(intel, 'find_references', { symbol: 'HandlerStorage.set' });
+    assert.doesNotMatch(set, /Complete:/);
 });
