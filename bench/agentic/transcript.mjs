@@ -61,7 +61,7 @@ export const POLICIES = {
     gi3: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (third card)' },
 };
 
-export function parseTranscript(file, { arm = null, repo = null } = {}) {
+export function parseTranscript(file, { arm = null, repo = null, own = [], work = null } = {}) {
     const text = fs.readFileSync(file, 'utf8');
     const events = [];
     for (const line of text.split('\n')) {
@@ -138,6 +138,29 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
         else if (t.name === 'Bash' && /(^|[\s;&|(])(curl|wget|git\s+(fetch|clone|pull|ls-remote)|pip3?\s+download|gh\s+(pr|api))\b/.test(t.cmd)) leaks.push(`bash: ${t.cmd.slice(0, 100)}`);
     }
     const violations = [], benign = [];
+    // another run's answer, grading or worktree (its edits) gives the answer away; listing the
+    // parent directories or reading another task's instructions does not
+    if (work) {
+        // path characters only (shell variables included: `${arm}`), so quotes, escapes and
+        // punctuation around a path are not taken for part of it
+        const under = new RegExp(`${work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:runs|wt|results|graded)(?:/[\\w.+@%=\${}/-]*)?`, 'g');
+        const mine = own.filter(Boolean).map(o => o.replace(/\/+$/, ''));
+        for (const t of tools) {
+            const text = t.name === 'Bash' ? t.cmd : JSON.stringify(t.input);
+            for (const m of text.matchAll(under)) {
+                const p = m[0].replace(/[./]+$/, '');
+                if (mine.some(o => p === o || p.startsWith(o + '/'))) continue;
+                const rel = p.slice(work.length).split('/').filter(Boolean);
+                if (rel[0] === 'runs' && (rel.length <= 3 || (rel.length === 4 && rel[3] === 'INSTRUCTIONS.md'))) {
+                    if (rel.length === 4) benign.push(`read another run's instructions: ${p.slice(0, 100)}`);
+                    continue;
+                }
+                if (rel[0] === 'wt' && rel.length <= 1) continue;
+                leaks.push(`other run: ${p.slice(0, 100)}`);
+                break;
+            }
+        }
+    }
     const policy = arm ? POLICIES[arm] : null;
     if (policy) {
         for (const t of tools) {

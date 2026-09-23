@@ -64,7 +64,8 @@ export function scoreSets(answer, gold) {
 }
 
 function gradeQa(task, meta) {
-    const file = path.join(meta.runDir, 'answer.txt');
+    // answers of graded runs are kept under WORK/graded (see gradeRun)
+    const file = [path.join(meta.runDir, 'answer.txt'), path.join(WORK, 'graded', meta.giLabel, meta.runId, 'answer.txt')].find(f => fs.existsSync(f)) ?? path.join(meta.runDir, 'answer.txt');
     if (!fs.existsSync(file)) return { solved: false, score: 0, error: 'no answer file' };
     const { items, bad } = parseAnswer(fs.readFileSync(file, 'utf8'), meta.checkout + '/');
     const s = scoreSets(items, task.gold);
@@ -117,7 +118,7 @@ export function gradeRun(label, id, transcript = null) {
     const res = task.family === 'qa' ? gradeQa(task, meta) : gradeEdit(task, meta);
     let t = null;
     if (transcript && fs.existsSync(transcript)) {
-        t = parseTranscript(transcript, { arm: meta.arm, repo: meta.checkout });
+        t = parseTranscript(transcript, { arm: meta.arm, repo: meta.checkout, own: [meta.runDir, meta.checkout], work: WORK });
         fs.copyFileSync(transcript, path.join(runDir, 'transcript.jsonl'));
         // reading benchmark internals would leak answers: file contents are a violation, a bare
         // file list (a search tool run from the wrong directory) is recorded
@@ -133,6 +134,12 @@ export function gradeRun(label, id, transcript = null) {
     };
     writeJson(path.join(runDir, 'result.json'), record);
     appendJsonl(path.join(WORK, 'results', `${label}.jsonl`), record);
+    // graded artifacts leave the runs tree, where agents working on the same task could find them
+    const kept = path.join(WORK, 'graded', label, id);
+    fs.mkdirSync(kept, { recursive: true });
+    for (const f of ['answer.txt', 'result.json', 'transcript.jsonl']) {
+        if (fs.existsSync(path.join(runDir, f))) fs.renameSync(path.join(runDir, f), path.join(kept, f));
+    }
     return record;
 }
 

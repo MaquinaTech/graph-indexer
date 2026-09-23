@@ -118,7 +118,8 @@ for (const m of methods) {
     if (used.has(m.name) || taken.has(m.name)) continue;
     const r = oracle.references(m.path, m.name_line, m.name_col);
     if (!r || r.groups !== 1) continue;
-    const items = oracle.incomingCalls(m.path, m.name_line, m.name_col, 2).filter(c => inScope(c.path) && !isTest(c.path) && c.kind !== 'script' && c.kind !== 'module');
+    // the second level is the callers of the direct callers in scope, as the statement says
+    const items = oracle.incomingCalls(m.path, m.name_line, m.name_col, 2, c => inScope(c.path) && !isTest(c.path) && c.kind !== 'script' && c.kind !== 'module');
     const l1 = items.filter(c => c.level === 1).length;
     if (l1 < 2 || l1 > 8 || items.length < 8 || items.length > 40) continue;
     // functions that pass a caller along as a value (`xs.map(loadOne)`) instead of calling it are a
@@ -143,7 +144,8 @@ for (const m of methods) {
         family: 'qa', kind: 'callers-2', repo: name, base,
         statement: `I plan to change the behaviour of the ${m.is_static ? 'static ' : ''}method \`${m.qname}\` (declared in \`${m.path}\`, line ${m.start_line}). List every function or method under \`${scope}\` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.`,
         answerFormat: 'One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.',
-        gold: { type: 'spans', items: [...items.map(c => ({ path: c.path, start: c.start, end: c.end, name: c.name, level: c.level })), ...optional] },
+        // a function that only mentions a caller without calling it is a judgement call too
+        gold: { type: 'spans', items: [...items.map(c => ({ path: c.path, start: c.start, end: c.end, name: c.name, level: c.level, ...(c.call ? {} : { optional: true }) })), ...optional] },
         meta: { target: m.qname, path: m.path, line: m.start_line, level1: l1, total: items.length },
     });
     console.error(`callers-2: ${m.qname} level1=${l1} total=${items.length}`);

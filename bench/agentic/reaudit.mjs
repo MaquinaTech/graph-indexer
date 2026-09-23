@@ -36,7 +36,7 @@ for (const label of list('--gi')) {
             .filter(Boolean).filter(f => (lastEventAt(f) ?? '') <= row.gradedAt).at(-1);
         if (!transcript) continue;
         const meta = JSON.parse(fs.readFileSync(path.join(WORK, 'runs', label, run, 'meta.json'), 'utf8'));
-        const a = parseTranscript(transcript, { arm: row.arm, repo: meta.checkout });
+        const a = parseTranscript(transcript, { arm: row.arm, repo: meta.checkout, own: [meta.runDir, meta.checkout], work: WORK });
         const keys = ['violations', 'benign', 'leaks', 'giCalls', 'grepCalls'];
         // rows graded before a field existed lack it: that alone is not a change
         if (keys.every(k => JSON.stringify(a[k]) === JSON.stringify(row.agent[k] ?? (Array.isArray(a[k]) ? [] : a[k])))) continue;

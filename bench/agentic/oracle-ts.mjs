@@ -93,8 +93,11 @@ export function createTsOracle(root, relFiles, tsPath = process.env.TYPESCRIPT_P
         return { groups: groups.length, refs };
     }
 
-    /** Direct and transitive callers up to `depth` levels: [{path, name, start, end, level}]. */
-    function incomingCalls(relPath, line, col, depth = 2) {
+    /**
+     * Direct and transitive callers up to `depth` levels: [{path, name, start, end, level}].
+     * `keep(item)` limits the walk: only kept callers are listed and followed further up.
+     */
+    function incomingCalls(relPath, line, col, depth = 2, keep = () => true) {
         const at = posOf(relPath, line, col);
         if (!at) return [];
         const out = new Map();
@@ -112,8 +115,12 @@ export function createTsOracle(root, relFiles, tsPath = process.env.TYPESCRIPT_P
                     const key = `${rel(it.file)}:${it.selectionSpan.start}`;
                     if (out.has(key)) continue;
                     const start = lineOf(sf, it.span.start), end = lineOf(sf, it.span.start + it.span.length);
-                    out.set(key, { path: rel(it.file), name: (it.containerName ? it.containerName + '.' : '') + it.name, kind: it.kind, start, end, level });
-                    if (it.kind !== 'script' && it.kind !== 'module') next.push({ file: it.file, pos: it.selectionSpan.start });
+                    // a reference that is not in call position (`isFunction(x.m)`) makes no call
+                    const call = (c.fromSpans ?? []).some(sp => isCallee(sf, sp.start));
+                    const item = { path: rel(it.file), name: (it.containerName ? it.containerName + '.' : '') + it.name, kind: it.kind, start, end, level, call };
+                    if (!keep(item)) continue;
+                    out.set(key, item);
+                    if (call && it.kind !== 'script' && it.kind !== 'module') next.push({ file: it.file, pos: it.selectionSpan.start });
                 }
             }
             frontier = next;
