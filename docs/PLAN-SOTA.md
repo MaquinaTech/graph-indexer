@@ -87,9 +87,11 @@ Arnés en [`bench/agentic/`](../bench/agentic/). Las configuraciones (brazos) co
 | `grep` | Read, Grep, Glob, Bash, Edit, Write |
 | `gi` | graph-indexer en lugar de grep/glob (sin grep, rg ni find en la shell) |
 | `grep+gi` | ambos, presentado como un servidor MCP |
-| `grep+gi+` | ambos, con reglas de decisión y los comandos de verificación de la integración |
+| `grep+gi+` | ambos, con reglas de decisión y los comandos de verificación de la integración (ronda 1) |
+| `grep+gi2` | ambos, con la segunda versión de las reglas: verificar solo los cambios que cruzan el límite de una función (ronda 2) |
+| `gi2` | graph-indexer en lugar de grep/glob, con las reglas de `grep+gi2` y `files` para buscar ficheros (ronda 2) |
 
-La política de herramientas se audita en cada trayectoria y las violaciones se excluyen. Métricas por ejecución:
+La política de herramientas se audita en cada trayectoria. Las violaciones se mantienen en el análisis (intención de tratar) y `--exclude-violations` sirve de análisis de sensibilidad. Las ejecuciones que consultan la solución (web, repositorio remoto, ficheros de la tarea), las corregidas mientras el agente seguía trabajando y las cortadas por errores de la API se descartan y se repiten; cada descarte queda registrado con su motivo. Métricas por ejecución:
 - tareas resueltas y puntuación;
 - tokens (entrada sin caché, escritura y lectura de caché, salida) y un coste equivalente;
 - turnos, llamadas a herramientas y tiempo.
@@ -98,10 +100,10 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 
 | Suite | Qué mide | Cómo se corrige | Estado |
 |---|---|---|---|
-| B1 Preguntas con oráculo (TypeScript, nestjs) | encontrar llamadas de un método con homónimos, llamadores a dos niveles, implementaciones | conjunto verificado por el compilador de TypeScript; P/R/F1 | 15 tareas generadas, pilotaje hecho |
-| B2 Cambios multi-sitio | añadir un parámetro obligatorio y actualizar todos los llamadores, renombrar un método con homónimos, eliminar una API y migrar sus usos | TypeScript: `tsc` diferencial + comprobación estructural (señuelos intactos); Python: tests del proyecto + `pyright` diferencial | por generar |
-| B3 Cambios reales posteriores al corte (Python) | issues reales de sqlglot y networkx con commits de junio–septiembre de 2026 | tests del commit (FAIL_TO_PASS) y existentes (PASS_TO_PASS), aplicados solo al corregir | repositorios validados sin red |
-| B4 Tareas sencillas | localizar una función descrita en palabras | respuesta verificada; coste | por crear |
+| B1 Preguntas con oráculo (TypeScript, nestjs) | encontrar llamadas de un método con homónimos, llamadores a dos niveles, implementaciones | conjunto verificado por el compilador de TypeScript; P/R/F1 | 15 tareas: 8 de desarrollo y 7 reservadas |
+| B2 Cambios multi-sitio | añadir un parámetro obligatorio y actualizar todos los llamadores, renombrar un método con homónimos | `tsc` diferencial + comprobación estructural (señuelos intactos) | 14 tareas validadas (la solución de referencia pasa, el checkout sin tocar y la solución textual fallan): 8 de desarrollo y 6 reservadas, generadas sin repetir ningún método |
+| B3 Cambios reales posteriores al corte (Python) | issues reales de sqlglot y networkx con commits de junio–septiembre de 2026 | tests del commit (FAIL_TO_PASS) y existentes (PASS_TO_PASS), aplicados solo al corregir | 24 tareas validadas: 14 de desarrollo y 10 reservadas; checkout de un solo commit y trabajo sin red |
+| B4 Tareas sencillas | arreglos de un solo fichero y ≤ 40 líneas | el subconjunto de B3 que cumple esa condición (G4) | sin suite propia |
 | B5 Regresión (existentes) | precisión del grafo, búsqueda, localización en commits | oráculo del compilador, consultas escritas, commits reales | en uso |
 
 **Limitaciones del entorno actual:**
@@ -117,7 +119,7 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 | W2 | grep estructural | `search_text` / `graph-indexer grep`: todo el repositorio, cada coincidencia con su definición contenedora y, para identificadores, a qué símbolo apunta | P0 | hecho |
 | W3 | Verificación tras editar | `check_changes` / `graph-indexer check`: sintaxis nueva, llamadas que ya no encajan con una firma cambiada, definiciones eliminadas o renombradas aún en uso, llamadores sin tocar, tests y comando | P0 | hecho (≈1 s en nestjs) |
 | W4 | Selección de tests | tests que ejercitan el cambio, por grafo y convenciones de nombre, con el comando por ecosistema (jest, vitest, mocha, pytest, unittest, Django, go test, cargo, Maven/Gradle…) | P0 | hecho (mejora continua) |
-| W5 | Integración en agentes | ver detalle debajo | P0 | en curso |
+| W5 | Integración en agentes | ver detalle debajo | P0 | hecho: instrucciones con reglas adaptativas, herramientas siempre visibles, bloque de `CLAUDE.md`/`AGENTS.md`, `hook`, `init --hooks` y plugin de Claude Code; para Cursor, VS Code, Gemini CLI y Codex, configuración MCP e instrucciones |
 | W6 | Canal semántico opcional | potion-code-16M-v2 (MIT, 32 MB, JS puro; 3.790 fragmentos/s) con fusión ponderada y peso bajo en consultas de identificador; solo se activa si mejora B3/B4 y la suite semántica | P2 | experimento |
 | W7 | Marcos y lenguajes | rutas HTTP → handlers, inyección de dependencias, eventos; alternativas `if PYDANTIC_V2` y ficheros con build tags de Go; recall de lecturas de campos sin tipo | P1 | pendiente |
 | W8 | Escala | prefiltro de trigramas (FTS5) para grep en monorepos; comprobación incremental rápida para hooks (< 300 ms) | P1 | pendiente |
@@ -138,13 +140,12 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 
 1. ✅ Revisión, investigación, pilotaje del arnés y B1.
 2. ✅ W1–W4, con tests de regresión (`test/honesty.test.mjs`) y benchmarks B5 sin regresiones.
-3. ⏳ W5: instrucciones, descripciones, `init`, `graph-indexer hook` y plugin.
-4. ⏳ B2 y B3: generación, validación de cada tarea (el parche real pasa y el vacío falla) y pilotaje.
-5. ⏳ Medición principal:
-   - brazos `grep`, `gi`, `grep+gi` (v3.0 como línea base) y `grep+gi+` (versión actual);
-   - k = 2–3 ejecuciones por tarea, orden aleatorio y el mismo modelo;
-   - informe con los criterios del §1.
-6. Iterar sobre los fallos observados en las trayectorias y volver a medir. W6–W8 según lo que muestren los datos.
+3. ✅ W5: instrucciones, descripciones, `init`, `graph-indexer hook` y plugin.
+4. ✅ B2 y B3: generación, validación de cada tarea (la solución de referencia pasa, el checkout sin tocar falla) y pilotaje.
+5. ✅ Ronda de desarrollo (v3.1-rc2/rc3): brazos `grep`, `gi`, `grep+gi` y `grep+gi+` sobre B1 (8), B2 (8) y B3 (14), una ejecución por tarea y brazo con el mismo modelo.
+6. ✅ Iteración sobre las trayectorias (v3.1-rc4): reglas adaptativas (verificar solo lo que cruza el límite de una función), líneas de `search_text` compactas, `symbol` con varios objetivos, `files`, miembros nombrados por cadena, `super()` sin despacho a hermanos y sin falsos positivos de `check` con decoradores.
+7. ⏳ Ronda reservada (v3.1-rc4): brazos `grep`, `gi2` y `grep+gi2` sobre tareas que no se usaron en el desarrollo: B1 (7), B2 (6) y B3 (10).
+8. W6–W8 según lo que muestren los datos.
 
 ## 8. Riesgos
 

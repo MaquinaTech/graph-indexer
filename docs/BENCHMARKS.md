@@ -9,7 +9,7 @@ Three benchmarks, each answering a question an agent actually depends on:
    queries, compared with graph-indexer 2.x.
 
 Everything runs offline on public repositories pinned to exact commits (`bench/fixtures.mjs`).
-Numbers below were produced with graph-indexer 3.0.0 on Node.js 22.
+Numbers below were produced with graph-indexer 3.1.0 on Node.js 22.
 
 ## Setup
 
@@ -59,13 +59,16 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 
 | oracle | system | micro-P | micro-R | micro-F1 | macro-P | macro-R | exact set |
 |---|---|---|---|---|---|---|---|
-| dispatch | graph-indexer | 0.979 (0.995) | 0.895 (0.885) | 0.935 (0.937) | 0.949 | 0.948 | 0.835 |
-| dispatch | graph-indexer, confidence ≥ likely | 0.992 (1.000) | 0.877 (0.883) | 0.931 (0.938) | 0.967 | 0.935 | 0.847 |
-| dispatch | name-only | 0.246 | 0.921 | 0.389 | 0.752 | 0.961 | 0.599 |
+| dispatch | graph-indexer | 0.996 (0.999) | 0.958 (0.886) | 0.977 (0.939) | 0.967 | 0.959 | 0.887 |
+| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.958 (0.886) | 0.977 (0.939) | 0.969 | 0.959 | 0.892 |
+| dispatch | name-only | 0.251 | 0.974 | 0.400 | 0.735 | 0.975 | 0.589 |
 | dispatch | grep | 0.128 | 0.993 | 0.227 | 0.515 | 0.994 | 0.226 |
-| rename | graph-indexer | 0.979 (0.995) | 0.861 (0.766) | 0.916 (0.866) | 0.949 | 0.932 | 0.807 |
-| rename | name-only | 0.257 | 0.924 | 0.402 | 0.769 | 0.962 | 0.614 |
+| rename | graph-indexer | 0.996 (0.999) | 0.922 (0.766) | 0.958 (0.867) | 0.967 | 0.943 | 0.857 |
+| rename | name-only | 0.262 | 0.975 | 0.413 | 0.752 | 0.976 | 0.604 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
+
+graph-indexer 3.0.0 with the same seed: dispatch precision 0.979, recall 0.895, exact sets
+0.835; the [changelog](../CHANGELOG.md) lists the changes in between.
 
 Micro averages pool all reference lines (dominated by heavily used symbols); macro averages
 weigh each symbol equally; "exact set" is the share of symbols whose reference set matches the
@@ -116,22 +119,22 @@ fastapi only; nestjs and axios are held out):
 |---|---|---|---|---|---|---|---|
 | express-js | 36 | graph-indexer | 0.722 | 0.917 | 0.893 | 0.929 | 0.810 |
 | | | grep | 0.778 | 0.889 | 0.857 | 0.929 | 0.633 |
-| | | BM25 | 0.472 | 0.861 | 0.821 | 0.893 | 0.596 |
+| | | BM25 | 0.472 | 0.861 | 0.821 | 0.893 | 0.598 |
 | gin | 40 | graph-indexer | 0.625 | 0.925 | 0.500 | 0.528 | 0.396 |
 | | | grep | 0.600 | 0.875 | 0.583 | 0.639 | 0.461 |
 | | | BM25 | 0.450 | 0.850 | 0.417 | 0.528 | 0.309 |
 | fastapi | 13 | graph-indexer | 0.692 | 0.923 | 0.667 | 0.778 | 0.405 |
 | | | grep | 0.308 | 0.846 | 0.556 | 0.667 | 0.295 |
-| | | BM25 | 0.462 | 0.846 | 0.556 | 0.556 | 0.278 |
+| | | BM25 | 0.462 | 0.846 | 0.556 | 0.556 | 0.254 |
 | nestjs *(held out)* | 40 | graph-indexer | 0.450 | 0.675 | 0.324 | 0.432 | 0.271 |
 | | | grep | 0.325 | 0.625 | 0.162 | 0.297 | 0.103 |
-| | | BM25 | 0.300 | 0.575 | 0.270 | 0.324 | 0.171 |
-| axios *(held out)* | 40 | graph-indexer | 0.350 | 0.675 | 0.438 | 0.688 | 0.336 |
+| | | BM25 | 0.300 | 0.575 | 0.243 | 0.324 | 0.164 |
+| axios *(held out)* | 40 | graph-indexer | 0.350 | 0.675 | 0.438 | 0.688 | 0.335 |
 | | | grep | 0.325 | 0.675 | 0.531 | 0.719 | 0.386 |
 | | | BM25 | 0.250 | 0.575 | 0.156 | 0.313 | 0.154 |
 | **all** | **169** | **graph-indexer** | **0.544** | **0.805** | **0.528** | **0.634** | **0.432** |
 | | | grep | 0.485 | 0.769 | 0.514 | 0.627 | 0.374 |
-| | | BM25 | 0.373 | 0.722 | 0.408 | 0.500 | 0.293 |
+| | | BM25 | 0.373 | 0.722 | 0.401 | 0.500 | 0.290 |
 
 **Reading it honestly.** On commit subjects, a well-ranked grep is a strong baseline: it wins on
 gin and axios at function level. graph-indexer is ahead overall on every metric and clearly on the
@@ -158,19 +161,20 @@ configuration.
 
 | queries | n | v3 rank-1 | v3 success@5 | v3 MRR@10 | v2 rank-1 | v2 success@5 | v2 MRR@10 |
 |---|---|---|---|---|---|---|---|
-| all | 377 | **0.706** | **0.841** | **0.761** | 0.552 | 0.780 | 0.646 |
+| all | 377 | **0.700** | **0.841** | **0.759** | 0.552 | 0.780 | 0.646 |
 | held-out | 169 | **0.728** | **0.846** | **0.773** | 0.544 | 0.757 | 0.632 |
-| tuning | 208 | 0.688 | 0.837 | 0.752 | 0.558 | 0.798 | 0.658 |
-| symbol-oriented (easy/medium/hard) | 285 | 0.779 | 0.895 | 0.826 | 0.639 | 0.842 | 0.727 |
+| tuning | 208 | 0.678 | 0.837 | 0.747 | 0.558 | 0.798 | 0.658 |
+| symbol-oriented (easy/medium/hard) | 285 | 0.772 | 0.895 | 0.822 | 0.639 | 0.842 | 0.727 |
 | semantic (behaviour descriptions) | 92 | 0.478 | 0.674 | 0.563 | 0.283 | 0.587 | 0.396 |
 
-Per fixture (MRR@10, v3 vs v2): axios 0.76 / 0.80, express 0.83 / 0.70, gin 0.89 / 0.79,
+Per fixture (MRR@10, v3 vs v2): axios 0.76 / 0.80, express 0.83 / 0.70, gin 0.88 / 0.79,
 spring 0.86 / 0.71, serde-json 0.66 / 0.37, cJSON 0.69 / 0.56, nvm 0.85 / 0.64,
-fastapi 0.65 / 0.64, nestjs 0.68 / 0.59. axios is the one fixture where 2.x ranks better.
+fastapi 0.63 / 0.64, nestjs 0.68 / 0.59. 2.x ranks better on axios, and on fastapi by 0.01.
 
 The file-level channel added last trades some top-5 recall on the semantic queries of the tuning
 split (0.706 → 0.608) for better rank-1 and better localization; overall MRR rose from 0.755 to
-0.761.
+0.761. Since 3.0.0 a few tuning-split queries moved down (MRR 0.752 → 0.747, all
+queries 0.761 → 0.759); the held-out split did not change.
 
 ## 4. Agents with and without graph-indexer
 

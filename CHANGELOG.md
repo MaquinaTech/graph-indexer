@@ -4,6 +4,75 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [3.1.0] — 2026-09-23
+
+Built and measured against one question: does an agent with graph-indexer finish more coding
+tasks, or the same tasks for less? A new end-to-end benchmark answers it
+([docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md)), and most changes below come from reading
+its transcripts.
+
+### Added
+
+- **`search_text`** (`graph-indexer grep`): text search over every file in the repository —
+  code, configuration, docs. Each code match carries its enclosing definition and, for
+  identifiers, the symbol the match refers to, one compact line per match.
+- **`check_changes`** (`graph-indexer check`): verifies uncommitted edits without building —
+  syntax errors introduced, calls that no longer fit a changed signature, removed or renamed
+  definitions still in use, callers the edit did not touch — and names the tests to run with the
+  command for the project's runner (jest, vitest, mocha, pytest, unittest, Django, go test,
+  cargo, Maven/Gradle). About 1 s on nestjs.
+- **Agent hooks:** `graph-indexer hook post-tool|session-start|subagent-start` adds context only
+  when it helps: after an edit, the edit check of that file; after a grep for an identifier that
+  several definitions share, which definition is which. It fails open under a deadline and says
+  nothing otherwise. `graph-indexer init --hooks` merges the hooks into `.claude/settings.json`;
+  a Claude Code plugin (`integrations/claude-code`) bundles the MCP server and the hooks.
+- **Members named by string:** `find_references` and `change_impact` list
+  `sinon.stub(obj, 'name')`, `jest.spyOn`, `getattr(o, "name")` and `patch("pkg.C.name")` in
+  files that use the class, since a rename has to update them too.
+- CLI: `graph-indexer files <text|glob>` finds files by path, for agents without `find` or Glob;
+  `symbol A B C` reads several definitions in one call.
+- **Agentic benchmark** (`bench/agentic/`): code questions graded by the TypeScript compiler,
+  multi-site refactors graded by differential `tsc`, and real issues from after the model's
+  training cutoff graded by the hidden tests of their fix; arms with and without grep, paired
+  statistics and acceptance gates.
+
+### Changed
+
+- Server instructions and the `CLAUDE.md`/`AGENTS.md` block are short decision rules: text
+  search through `search_text`, `find_references` before changing a signature or renaming,
+  `change_impact`/`check_changes` for edits that cross a function's boundary, and only the
+  tests for a fix inside one function. `search_text`, `find_references` and `check_changes` are
+  marked always-loaded for clients that defer MCP tools.
+- `change_impact` lists the call sites to update, overrides and implementations, constructor
+  calls, tests inside describe blocks and blind spots, and says "risk: unknown" instead of a
+  false "low".
+- `find_references`, `call_graph` and `get_symbol` separate plausible unbound call sites from
+  unrelated same-name ones, count what they truncate and list method families.
+- Graph: results typed through generic defaults and bounds (`create<T = INestApplication>()`)
+  and through value roots (`export const NestFactory = new NestFactoryStatic()`); Go implicit
+  interface satisfaction, field reads and struct literal keys; Python `super()`, string
+  annotations, `self` attributes as fields, package re-exports in any indexing order; TypeScript
+  computed keys and `typeof`. Ambiguous and standard-library method names (`get`, `set`,
+  `apply`…) stay unbound instead of being guessed.
+
+### Fixed
+
+- A `super()` call no longer counts as a call of a sibling class's override.
+- `check_changes` no longer reports arity findings for Python definitions wrapped in
+  property-like or class decorators.
+- Path arguments accept absolute and `./` paths in every tool; hints in CLI output name CLI
+  commands rather than MCP tools.
+- TypeScript calls with type arguments under `await` are calls; locals named like globals
+  (`module`, `process`) keep their calls.
+
+### Results (see docs/BENCHMARKS.md)
+
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.958,
+  exact reference sets 0.887 (3.0.0: 0.979 / 0.895 / 0.835).
+- Localization over 169 real commits and symbol search over 377 queries: unchanged within 0.01.
+
+---
+
 ## [3.0.0] — 2026-09-22
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.

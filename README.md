@@ -136,12 +136,12 @@ own `findReferences` (import lines and declarations excluded):
 
 | | precision | recall | F1 |
 |---|---|---|---|
-| graph-indexer `find_references` | **0.979** | **0.895** | **0.935** |
-| same-name references (no binding) | 0.246 | 0.921 | 0.389 |
+| graph-indexer `find_references` | **0.996** | **0.958** | **0.977** |
+| same-name references (no binding) | 0.251 | 0.974 | 0.400 |
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
 *Dispatch semantics: calls through a base class or interface count, calls to sibling overrides
-do not. Against the compiler's full rename set (sibling overrides included) recall is 0.861. The
+do not. Against the compiler's full rename set (sibling overrides included) recall is 0.922. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.*
 
@@ -153,10 +153,10 @@ rolled back to the parent commit first.
 |---|---|---|---|---|
 | graph-indexer `search_code` | **0.544** | **0.805** | **0.528** | **0.432** |
 | grep, files ranked by idf-weighted hits | 0.485 | 0.769 | 0.514 | 0.374 |
-| BM25 over the same index | 0.373 | 0.722 | 0.408 | 0.293 |
+| BM25 over the same index | 0.373 | 0.722 | 0.401 | 0.290 |
 
 **Symbol search.** 377 hand-written queries over nine repositories in eight languages, scored
-strictly at symbol level: rank-1 0.706 and MRR 0.761, against 0.552 and 0.646 for graph-indexer
+strictly at symbol level: rank-1 0.700 and MRR 0.759, against 0.552 and 0.646 for graph-indexer
 2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
 
 **Agents.** In a small paired test with the same model, agents with and without graph-indexer
