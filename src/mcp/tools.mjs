@@ -156,9 +156,10 @@ export const LEGACY_TOOLS = [
     },
 ];
 
-// loaded up front even when the client defers MCP tools behind a tool search: the three tools an
-// agent needs at the moments it would otherwise guess (which uses? what text? what did I break?)
-const ALWAYS_LOAD = new Set(['read_code', 'search_text', 'find_references', 'check_changes']);
+// loaded up front even when the client defers MCP tools behind a tool search: the tools an agent
+// needs at the moments it would otherwise guess (which uses? what does this change reach? what did
+// I break? where is the definition my search missed?). Text search stays with the agent's own grep.
+const ALWAYS_LOAD = new Set(['find_references', 'change_impact', 'check_changes', 'read_code']);
 for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
@@ -166,16 +167,12 @@ for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
 
 export const SERVER_INSTRUCTIONS = `graph-indexer keeps a live structural index of this repository: definitions, references bound through scopes, imports and receiver types, the call graph, and the tests that exercise each function. It re-syncs with the files before every answer, so results include edits made seconds ago.
 
-Reading and following code:
-- read_code reads symbols (Class.method), line ranges (file:120-180) or files, several per call, and lists where each name the code uses is defined, with its signature. To follow a call or a type, read the listed targets (several at once) instead of searching for their definitions.
-- search_text: anything grep would find (identifiers, strings, config keys, any file), plus for each code match its enclosing function and the definition an identifier refers to; when the definition of the name is elsewhere it says where.
-- search_code: code for a behaviour described in words.
-
-Changing code:
-- Uses of a known symbol, even when other classes have same-name methods: find_references gives the exact call sites and says which same-name calls could not be bound and whether they are plausible; for a class or interface, every type that inherits it.
-- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact (call sites to update, overrides, dependents, tests to run). After such an edit: check_changes (syntax errors, calls that no longer fit, removed names still in use, the test command).
-- A fix inside one function that keeps its signature needs neither: run the tests that cover it.
-- Callers of callers and request flows: call_graph. A map of an unfamiliar area: outline.
+Use it for what a text search cannot answer exactly, and keep reading and searching text with your own tools — the function or lines you need, several lookups per message:
+- Uses of a known symbol, even when other classes have same-name methods: find_references gives the exact call sites and says when the list is complete, or which same-name calls could not be bound and whether they are plausible; for a class or interface, every type that inherits it.
+- Callers of callers and request flows: call_graph.
+- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact (call sites to update, overrides, subclasses that inherit it, dependents, tests to run). When you are done: check_changes (syntax errors, calls that no longer fit, removed names still in use, subclasses that inherit the changed code, the closest tests and the command to run them). A fix inside one function that keeps its signature needs no change_impact: run the tests that cover it, once.
+- A definition your search did not find, or several at once: read_code with names (Class.method) or ranges (file:120-180); it also lists where each name the code uses is defined.
+- search_text: grep that also gives each code match's enclosing function and the definition an identifier refers to. search_code: code for a behaviour described in words. outline: a map of an unfamiliar area.
 
 Every answer states its confidence and what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why.`;
 

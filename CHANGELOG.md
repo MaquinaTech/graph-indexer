@@ -95,20 +95,24 @@ and real commits, and end to end with coding agents
   2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), read-only tool
   annotations, plain-text replies with token caps, and input schemas without `const` or
   `additionalProperties` (some Gemini-family hosts drop tools whose schemas use them). Server
-  instructions are short decision rules: read code and follow the names it uses with
-  `read_code`, several targets at once; text search through `search_text`; `find_references`
-  before changing a signature or renaming; `change_impact`/`check_changes` for edits that cross a
-  function's boundary, and only the tests for a fix inside one function. `read_code`,
-  `search_text`, `find_references` and `check_changes` are marked always-loaded for clients that
-  defer MCP tools.
+  instructions are short decision rules: keep reading and searching text with the agent's own
+  tools, several lookups per message; `find_references` for exact uses, `call_graph` for callers of
+  callers, `change_impact` before changing what other code relies on, `check_changes` when done,
+  and `read_code` for a definition a search did not find. `find_references`, `change_impact`,
+  `check_changes` and `read_code` are marked always-loaded for clients that defer MCP tools.
 - **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI, Codex, OpenCode and
   Kilo Code (`opencode.json`, or an existing `kilo.json`), Junie (`.junie/mcp/mcp.json`), Zed
   (`context_servers` in `.zed/settings.json`) and Devin (instructions and the Claude Code hooks it
   loads), never rewrites a config file whose comments or JSONC syntax a JSON round trip would lose
   (it prints the entry to add instead), and adds a
-  short managed block to `CLAUDE.md`/`AGENTS.md` on how to look code up: several definitions in
-  one read, the function or the lines needed rather than the file, the names a read lists instead
-  of a grep for their definitions, exact uses through `find_references`, and one check at the end. `init --hooks` adds `graph-indexer hook` to Claude Code (an
+  short managed block to `CLAUDE.md`/`AGENTS.md` on how to look code up: several lookups per
+  message, the function or the lines needed rather than the file, one search for a definition
+  line across the package, and one check at the end; then graph-indexer for what a text search
+  cannot answer exactly — exact uses (`find_references`), callers of callers, what a change
+  reaches (`change_impact`), what an edit broke and the closest tests (`check_changes`), a
+  definition a search missed (`read_code`). The fourth benchmark round chose this arrangement:
+  sending every read and search through graph-indexer cost more on issue fixes than the rules
+  alone. `init --hooks` adds `graph-indexer hook` to Claude Code (an
   installed `graph-indexer` binary when there is one, npx otherwise). After an edit it runs the
   edit check on that file; after a search for a definition that did not find it, it says where
   the definition is; once the agent is crawling — three searches or reads since its last edit —

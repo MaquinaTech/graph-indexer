@@ -251,10 +251,9 @@ async function afterRead(root, input, state, acquire) {
 
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
 const RULES = `How to look code up in this repository (graph-indexer):
-- Several things at once: several tool calls in one message, or one read_code call with several targets (Class.method, path:120-180) — \`npx graph-indexer read A B\` in a shell — not one search per turn.
-- The function or the 50–100 lines you need, not whole files; a long file's outline gives every definition's line range.
-- Every read lists where each name the code uses is defined; read those targets instead of grepping for their definitions.
-- Exact uses of a function or class: find_references. Text that is not a code name: grep as usual.`;
+- Several things at once: several tool calls in one message, or one search with alternatives — not one search per turn.
+- The function or the 50–100 lines you need, not whole files; to find a definition, search for its definition line (\`def name\`, \`class Name\`) across the package in one search.
+- Exact uses of a function or class, even when other code shares its name: find_references (\`npx graph-indexer refs NAME\` in a shell). Before changing what other code relies on: change_impact; when you are done: check_changes, then run the tests it names, once.`;
 
 async function sessionLine(root, { rules = false, acquire }) {
     if (!hasIndex(root)) return null; // being built in the background (spawnResident); say nothing yet
@@ -263,7 +262,7 @@ async function sessionLine(root, { rules = false, acquire }) {
     const { intel } = ix;
     try {
         const st = intel.stats();
-        const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: read_code (symbols, ranges or files, several per call, with where each name they use is defined), search_text (grep that also says which definition each match refers to), find_references, change_impact (what a change affects and which tests to run), check_changes (what an edit broke), call_graph, search_code and outline.`;
+        const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: find_references (exact uses, even when other code shares the name), change_impact (what a change affects and which tests to run), check_changes (what an edit broke, and the closest tests), call_graph, read_code (symbols or ranges by name, with where each name they use is defined), search_text, search_code and outline.`;
         // the managed block of `init` already carries the rules; otherwise add them
         const carried = ['CLAUDE.md', 'AGENTS.md'].some(f => { try { return fs.readFileSync(path.join(root, f), 'utf8').includes('<!-- graph-indexer:start -->'); } catch { return false; } });
         return rules || !carried ? `${line}\n${RULES}` : line;

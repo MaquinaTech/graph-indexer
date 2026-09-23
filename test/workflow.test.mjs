@@ -95,7 +95,8 @@ test('hook subagent-start: the index line and the lookup rules', () => {
     const r = spawnSync(process.execPath, [BIN, 'hook', 'subagent-start'], { input: JSON.stringify({ cwd: root, hook_event_name: 'SubagentStart' }), encoding: 'utf8', env: LOCAL });
     const text = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     assert.match(text, /live index of this repository/);
-    assert.match(text, /several targets/);
+    assert.match(text, /several tool calls in one message/);
+    assert.match(text, /find_references/);
 });
 
 test('grep patterns are read from shell commands', () => {

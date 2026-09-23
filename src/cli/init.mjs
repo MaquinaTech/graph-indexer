@@ -12,15 +12,20 @@ import { findRepoRoot } from '../util/paths.mjs';
 
 const BLOCK_START = '<!-- graph-indexer:start -->';
 const BLOCK_END = '<!-- graph-indexer:end -->';
+// The lookup rules first, then graph-indexer for what a text search cannot answer exactly: the
+// arrangement that cost least in the fourth benchmark round (docs/AGENTIC-BENCHMARK.md). Sending
+// every read and search through graph-indexer cost more on issue fixes than the rules alone.
 const SNIPPET = `${BLOCK_START}
-## Reading and searching code (graph-indexer)
-The \`graph-indexer\` MCP server keeps a live index of this repository (re-synced before every answer).
-- Explore in one pass: when you need several definitions or files, ask for them together — several tool calls in one message, or one \`read_code\` call with several targets (symbols such as \`Class.method\`, ranges such as \`path:120-180\`) — not one search per turn.
-- Read keyholes, not files: the function or the 50–100 lines you need. A long file comes back as its outline, with the line range of every definition.
-- Follow names through the index: every read lists where each name the code uses is defined (file:line and signature); read those targets instead of grepping for their definitions.
-- Uses of a function, method or class, even when other code shares the name: \`find_references\` (exact call sites; for an interface or class, every type that implements or extends it) rather than grepping the name; callers of callers: \`call_graph\`.
-- Text that is not a code name (messages, config keys, strings): grep as usual; \`search_text\` also says which definition each code match refers to.
-- Before changing a signature or behaviour other code relies on: \`change_impact\`; after the edit: \`check_changes\`. A fix inside one function needs neither: run the tests that cover it, once.
+## Looking code up (graph-indexer)
+- Explore in one pass: when you need several definitions or files, ask for them together — several tool calls in one message, or one search with alternatives — not one search per turn.
+- Read keyholes, not files: the function or the 50–100 lines you need (find the line first, then read that range).
+- To find where a name is defined, search for its definition line (\`def name\`, \`class Name\`, \`function name\`) across the package in one search, not directory by directory.
+- Check once: run the tests that cover your change when you are done; do not re-run a check nothing has changed.
+
+The \`graph-indexer\` MCP server keeps a live index of this repository — definitions, references, call graph, tests — re-synced before every answer. Use it for what a text search cannot answer exactly:
+- Uses of a function, method or class, even when other code shares its name: \`find_references\` (exact call sites; it says when the list is complete). Callers of callers: \`call_graph\`. Classes that implement or extend a type: \`find_references\` with kind \`inherit\`.
+- Before changing a signature or behaviour other code relies on: \`change_impact\`. When you are done: \`check_changes\` says what your edit broke, which subclasses inherit the changed code and which tests are closest to it — run those.
+- A definition your search did not find: \`read_code\` with its name.
 ${BLOCK_END}`;
 
 /** The managed instructions block `init` writes to CLAUDE.md / AGENTS.md (markers included). */
