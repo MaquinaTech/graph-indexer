@@ -104,10 +104,14 @@ and real commits, and end to end with coding agents
 - **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI and Codex, and adds a
   short managed block to `CLAUDE.md`/`AGENTS.md` on how to look code up: several definitions in
   one read, the function or the lines needed rather than the file, the names a read lists instead
-  of a grep for their definitions, exact uses through `find_references`, and one check at the end. `init --hooks` adds `graph-indexer hook` to
-  Claude Code: after an edit it runs the edit check on that file, after a grep for an identifier
-  several definitions share it says which definition is which, and otherwise stays silent (it
-  fails open under a deadline). A Claude Code plugin (`integrations/claude-code`) bundles the
+  of a grep for their definitions, exact uses through `find_references`, and one check at the end. `init --hooks` adds `graph-indexer hook` to Claude Code (an
+  installed `graph-indexer` binary when there is one, npx otherwise). After an edit it runs the
+  edit check on that file; after a search for a definition that did not find it, it says where
+  the definition is; once the agent is crawling — three searches or reads since its last edit —
+  a read gets where the names in the lines read are defined and a grep for a name several
+  definitions share says which is which; a subagent starts with the lookup rules. Otherwise it
+  stays silent, and it fails open under a deadline. The same hook reads Codex, Copilot CLI,
+  Devin and Gemini CLI payloads, and answers Cursor's events with Cursor's field. A Claude Code plugin (`integrations/claude-code`) bundles the
   server and the hooks.
 - **Benchmarks** (`bench/`): symbol-search suites (377 queries, 9 repositories), reference
   accuracy against the TypeScript compiler, and localization replayed from real commits, with
