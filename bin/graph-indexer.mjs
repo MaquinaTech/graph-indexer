@@ -75,6 +75,13 @@ async function runTool(name, args) {
 /** Several tool calls against one open index (e.g. `symbol A B C`), outputs separated by a blank line. */
 async function runTools(calls) {
     if (rejectUnknownOptions()) return;
+    // a resident process (MCP server or daemon) answers without opening and syncing the index again
+    const { findRepoRoot } = await import('../src/util/paths.mjs');
+    const { askResident, residentRequired } = await import('../src/cli/resident.mjs');
+    const root = repoArg ? path.resolve(repoArg) : findRepoRoot(process.cwd());
+    const reply = await askResident(root, { op: 'tool', calls }, { version: pkg.version, totalMs: 60_000 });
+    if (reply && typeof reply.out === 'string') { process.stdout.write(reply.out + '\n'); return; }
+    if (residentRequired()) { process.stderr.write('graph-indexer: no resident process answers for this repository\n'); process.exitCode = 3; return; }
     const intel = await openIntel({ quiet: true });
     const { callTool } = await import('../src/mcp/tools.mjs');
     try {
@@ -82,6 +89,32 @@ async function runTools(calls) {
         for (const [name, args] of calls) outs.push(await callTool(intel, name, args, { cli: true }));
         process.stdout.write(outs.join('\n\n') + '\n');
     } finally { intel.close(); }
+}
+
+/**
+ * Answer hooks and CLI queries for this index over the repository's local socket (see
+ * src/cli/resident.mjs). Resolves to null when another process already does.
+ */
+async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
+    const { startResident } = await import('../src/cli/resident.mjs');
+    const hold = async () => ({ intel, release() {} });
+    return startResident({
+        root: intel.root, version: pkg.version, log, idleMs, onIdle,
+        wanted: () => fs.existsSync(intel.dbPath),
+        handle: async (req) => {
+            if (req.op === 'hook') {
+                const { handleHook } = await import('../src/cli/hook.mjs');
+                return handleHook(String(req.event ?? ''), req.input ?? {}, { root: intel.root, acquire: hold });
+            }
+            if (req.op === 'tool' && Array.isArray(req.calls)) {
+                const { callTool } = await import('../src/mcp/tools.mjs');
+                const outs = [];
+                for (const [name, args] of req.calls) outs.push(await callTool(intel, name, args ?? {}, { cli: true }));
+                return outs.join('\n\n');
+            }
+            return null;
+        },
+    });
 }
 
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
@@ -103,6 +136,8 @@ Usage:
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
   graph-indexer hook post-tool|session-start|subagent-start   agent hook (JSON on stdin)
+  graph-indexer daemon [--idle-minutes N]           keep the index open for hooks and CLI queries
+                                                   (the hooks start it; the MCP server does the same)
 
 The index lives in <repo>/.graph-indexer/ and is kept in sync automatically.`;
 
@@ -118,6 +153,21 @@ async function main() {
             server.onClose = () => { intel.close(); process.exit(0); };
             server.listen();
             for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { intel.close(); process.exit(0); });
+            serveResident(intel).catch((e) => log(`resident: ${e.message}`));
+            return;
+        }
+        case 'daemon': {
+            // the resident for hooks and CLI queries when no MCP server runs; the hooks start it
+            const idle = Math.max(1, Number(opt('--idle-minutes', 30)));
+            const { findRepoRoot } = await import('../src/util/paths.mjs');
+            const { askResident } = await import('../src/cli/resident.mjs');
+            const root = repoArg ? path.resolve(repoArg) : findRepoRoot(process.cwd());
+            if (await askResident(root, { op: 'ping' }, { version: pkg.version })) return; // already served
+            const intel = await openIntel({ watch: true, quiet: true });
+            const stop = () => { intel.close(); process.exit(0); };
+            const res = await serveResident(intel, { idleMs: idle * 60_000, onIdle: stop });
+            if (!res) { intel.close(); return; }
+            for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, stop);
             return;
         }
         case 'index': {
@@ -178,7 +228,7 @@ async function main() {
         }
         case 'hook': {
             const { runHook } = await import('../src/cli/hook.mjs');
-            return runHook(argv.shift() ?? '', { repo: repoArg });
+            return runHook(argv.shift() ?? '', { repo: repoArg, version: pkg.version });
         }
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');

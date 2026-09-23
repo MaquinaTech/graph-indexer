@@ -14,6 +14,8 @@ import { grepPattern } from '../src/cli/hook.mjs';
 import { makeRepo, writeFile, rmrf } from './helpers.mjs';
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'graph-indexer.mjs');
+// hooks answered in-process, without starting a resident process (test/resident.test.mjs covers that)
+const LOCAL = { ...process.env, GRAPH_INDEXER_RESIDENT: '0' };
 
 const FILES = {
     'package.json': '{"name":"shop","devDependencies":{"vitest":"1.0.0"}}\n',
@@ -65,7 +67,7 @@ test('check_changes: broken calls, removed names, new syntax errors and the test
 
 test('hook post-tool: edits get the checker; missed definition searches get the location; crawling gets the definitions', () => {
     const session = `t-${process.pid}-${Date.now()}`;
-    const run = (payload) => spawnSync(process.execPath, [BIN, 'hook', 'post-tool'], { input: JSON.stringify({ cwd: root, session_id: session, ...payload }), encoding: 'utf8' });
+    const run = (payload) => spawnSync(process.execPath, [BIN, 'hook', 'post-tool'], { input: JSON.stringify({ cwd: root, session_id: session, ...payload }), encoding: 'utf8', env: LOCAL });
     const ctxOf = (r) => (r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext : null);
     const edit = run({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(root, 'src/cart.ts') } });
     const ctx = JSON.parse(edit.stdout).hookSpecificOutput;
@@ -90,7 +92,7 @@ test('hook post-tool: edits get the checker; missed definition searches get the 
 });
 
 test('hook subagent-start: the index line and the lookup rules', () => {
-    const r = spawnSync(process.execPath, [BIN, 'hook', 'subagent-start'], { input: JSON.stringify({ cwd: root, hook_event_name: 'SubagentStart' }), encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [BIN, 'hook', 'subagent-start'], { input: JSON.stringify({ cwd: root, hook_event_name: 'SubagentStart' }), encoding: 'utf8', env: LOCAL });
     const text = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     assert.match(text, /live index of this repository/);
     assert.match(text, /several targets/);

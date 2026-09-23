@@ -33,7 +33,10 @@ and grepping.
 - **Answers are small.** A tool reply is typically 400–1,500 tokens: the right function with
   line numbers, not a 2,000-line file.
 - **Nothing to set up.** Zero dependencies, no native builds, no model downloads, no network,
-  no daemon. The tree-sitter runtime and 16 grammars ship as WebAssembly inside the package.
+  no service to install. The tree-sitter runtime and 16 grammars ship as WebAssembly inside the
+  package. The MCP server keeps the index open while the agent runs; with hooks and no server, a
+  resident process started on demand does the same so hooks and CLI queries answer in about
+  0.1 s, and exits after 30 idle minutes (`GRAPH_INDEXER_RESIDENT=0` turns it off).
 
 ## Quick start
 

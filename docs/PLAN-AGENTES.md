@@ -167,7 +167,7 @@ Métricas nuevas en el informe:
 
 ### 5.3 Proceso residente
 
-El servidor MCP escucha también en un socket local del repositorio. La CLI y los hooks lo usan si está vivo, en menos de 100 ms; si no, abren el índice ellos mismos, como hoy.
+El servidor MCP escucha también en un socket local del repositorio (`src/cli/resident.mjs`); sin servidor, los hooks arrancan `graph-indexer daemon`, que hace lo mismo y se cierra tras 30 minutos sin peticiones. La CLI y los hooks lo usan si está vivo; si no, abren el índice ellos mismos, como antes. El socket está en `.graph-indexer/` con permisos 0600 (o en un directorio 0700 del usuario si la ruta es demasiado larga) y solo acepta peticiones de la misma versión, salvo el cliente del plugin, que no tiene lógica propia.
 
 ## 6. Integración por agente
 
@@ -208,7 +208,7 @@ Un mismo ejecutable de hook tiene que detectar qué agente lo llama: Copilot CLI
 |---|---|---|
 | F0 ✅ | Diagnóstico (§2) y métrica corregida | — |
 | F1 ✅ | `read_code` con tarjeta de definiciones, lotes y esquema para ficheros largos; rescate de definiciones en `search_text`; `symbol` con tarjeta; instrucciones de búsqueda; resolución de nombres a través de paquetes que reexportan en Python | en las trayectorias B3, la tarjeta habría respondido ≥ 60 % de las búsquedas que persiguen un nombre ya visto; tarjeta media ≤ 400 tokens. Resultado: **48 %** con ubicación y 11 % solo nombrados; 339 tokens de media. De las búsquedas de una definición que fallaron, el rescate sitúa 16 de 27. Lo que falta viene del enunciado, de salidas de Python, de tablas de registro y de métodos llamados por convención de nombre |
-| F2 (en curso) | Hooks de lectura, búsqueda y edición con detector de rastreo, rescate de definiciones, reglas al arrancar un subagente y salida según el agente (hecho); proceso residente; `init` para Devin, Kilo Code/OpenCode, Junie y Zed | p95 del hook < 150 ms con el proceso residente; silencio cuando no aporta. Pendiente: el plugin de Claude Code arranca el hook con `npx` (≈1 s por llamada); `init --hooks` ya usa el ejecutable instalado si lo hay |
+| F2 (en curso) | Hecho: hooks de lectura, búsqueda y edición con detector de rastreo, rescate de definiciones, reglas al arrancar un subagente y salida según el agente; proceso residente (el servidor MCP, o `graph-indexer daemon`, que arrancan los hooks y se cierra tras 30 min sin peticiones) que responde a hooks y CLI por un socket local; el hook del plugin de Claude Code es un cliente mínimo de ese socket, sin `npx`. Pendiente: `init` para Devin, Kilo Code/OpenCode, Junie y Zed | p95 del hook < 150 ms con el proceso residente; silencio cuando no aporta. Resultado en nestjs (1.641 ficheros): un hook pasa de 280–570 ms a 70–120 ms (lectura con tarjeta, rescate, `check` tras editar, inicio de sesión), y una consulta de la CLI de ~370 ms a 110–210 ms, con la misma salida |
 | F3 | `context` evaluado sin agente sobre B3 | Acc@5 de función ≥ 0,6 antes de exponerlo |
 | F4 | Ronda 4 sobre tareas reservadas | criterios del §3 |
 | F5 | Iterar sobre las trayectorias; hooks reales; más repositorios y lenguajes | criterios del §3 con hooks reales |

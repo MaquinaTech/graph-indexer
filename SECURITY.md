@@ -40,10 +40,16 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
   resolves inside the repository, so a link to a file elsewhere on the machine is never read,
   indexed or served. Paths given to the tools (`read_code "file.ts:42"`, `outline`,
   `change_impact`) are looked up in the index, never opened directly from disk.
-- **Read-only tools.** All six MCP tools are read-only (`readOnlyHint: true`) and never modify
+- **Read-only tools.** All MCP tools are read-only (`readOnlyHint: true`) and never modify
   the repository.
 - **stdio transport.** The MCP server talks to the local client over stdin/stdout. It does not
   open a network socket.
+- **Local socket for hooks and the CLI.** The MCP server, or `graph-indexer daemon` started by the
+  hooks, also answers hook and CLI queries over a Unix domain socket (a named pipe on Windows),
+  never TCP. The socket lives in `<repo>/.graph-indexer/` with mode 0600; when that path is too
+  long for a socket, in a per-user directory in the temp dir with mode 0700 whose owner and mode
+  both sides check before using it. It answers the same read-only queries as the CLI.
+  `GRAPH_INDEXER_RESIDENT=0` disables it.
 - **Local artifacts.** The index is a SQLite database in `<repo>/.graph-indexer/` (git-ignored by
   `init`). It contains excerpts of your source code — treat it with the same sensitivity as the
   repository itself and do not commit or share it. Deleting the directory is always safe; it is

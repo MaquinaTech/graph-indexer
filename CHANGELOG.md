@@ -113,6 +113,14 @@ and real commits, and end to end with coding agents
   stays silent, and it fails open under a deadline. The same hook reads Codex, Copilot CLI,
   Devin and Gemini CLI payloads, and answers Cursor's events with Cursor's field. A Claude Code plugin (`integrations/claude-code`) bundles the
   server and the hooks.
+- **Resident process.** The MCP server, or `graph-indexer daemon` when no server runs (the hooks
+  start it and it exits after 30 idle minutes), keeps the index open and in sync and answers hooks
+  and CLI queries over a socket only its owner can reach, inside `.graph-indexer/` (a named pipe
+  on Windows). On a 1,600-file repository a hook drops from 280–570 ms to 70–120 ms and a CLI
+  query from ~370 ms to 110–210 ms, with the same output; without a resident everything works as
+  before. The plugin's hook command is a small client that talks to that socket instead of
+  starting graph-indexer through npx (about a second per call). `GRAPH_INDEXER_RESIDENT=0`
+  turns it off.
 - **Benchmarks** (`bench/`): symbol-search suites (377 queries, 9 repositories), reference
   accuracy against the TypeScript compiler, and localization replayed from real commits, with
   pinned fixtures (`bench/fixtures.mjs`). An agentic benchmark (`bench/agentic/`): code questions

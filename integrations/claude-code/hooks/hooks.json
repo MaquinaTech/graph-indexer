@@ -3,14 +3,14 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|Grep|Bash|Read",
-        "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook post-tool", "timeout": 10 }]
+        "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gi-hook.mjs\" post-tool", "timeout": 10 }]
       }
     ],
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook session-start", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gi-hook.mjs\" session-start", "timeout": 10 }] }
     ],
     "SubagentStart": [
-      { "hooks": [{ "type": "command", "command": "npx -y graph-indexer@3 hook subagent-start", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gi-hook.mjs\" subagent-start", "timeout": 10 }] }
     ]
   }
 }

@@ -18,13 +18,17 @@
  * Staying quiet until the agent is crawling matters: context added to every search made "where is
  * X" questions dearer in other projects' measurements. Fail-open by design: any error, timeout or
  * irrelevant input prints nothing and exits 0. Context is phrased as facts.
+ *
+ * A resident process (the MCP server, or `graph-indexer daemon`) answers when one runs for the
+ * repository, with the index already open (src/cli/resident.mjs); otherwise the hook opens the
+ * index itself and starts a daemon for the next calls.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findRepoRoot, DATA_DIR_NAME } from '../util/paths.mjs';
+import { findRepoRoot, dataDir, DATA_DIR_NAME } from '../util/paths.mjs';
 import { specForPath } from '../parse/languages.mjs';
 
 const MAX_CONTEXT = 1500;
@@ -48,11 +52,12 @@ async function readStdin() {
 /** Cursor's own hook events are camelCase (`postToolUse`) and take `additional_context`. */
 const isCursor = (input) => /^[a-z]/.test(input.hook_event_name ?? '') || input.cursor_version != null;
 
-function emit(event, context, input = {}, max = MAX_CONTEXT) {
-    if (!context) return;
+/** What the hook prints for `context` in the calling host's format, or null for nothing. */
+function format(event, context, input = {}, max = MAX_CONTEXT) {
+    if (!context) return null;
     const text = context.length > max ? context.slice(0, max - 1) + '…' : context;
     const out = isCursor(input) ? { additional_context: text } : { hookSpecificOutput: { hookEventName: event, additionalContext: text } };
-    process.stdout.write(JSON.stringify(out) + '\n');
+    return JSON.stringify(out);
 }
 
 /** The text a tool returned, whatever the host's shape (string, Bash {stdout}, Grep {content}). */
@@ -127,22 +132,27 @@ export function grepPattern(command) {
     return null;
 }
 
-async function openIntel(root) {
-    const db = path.join(root, DATA_DIR_NAME, 'index.db');
-    if (!fs.existsSync(db)) return null; // never build a whole index inside a tool hook
-    const { CodeIntel } = await import('../query/intel.mjs');
-    const intel = new CodeIntel({ root });
-    await intel.open();
-    return intel;
+const hasIndex = (root) => fs.existsSync(path.join(root, DATA_DIR_NAME, 'index.db'));
+
+/** The index for one hook call when no resident process answers: opened, synced, closed after. */
+function localIndex(root) {
+    return async () => {
+        if (!hasIndex(root)) return null; // never build a whole index inside a tool hook
+        const { CodeIntel } = await import('../query/intel.mjs');
+        const intel = new CodeIntel({ root });
+        await intel.open();
+        return { intel, release: () => intel.close() };
+    };
 }
 
-async function afterEdit(root, input) {
+async function afterEdit(root, input, acquire) {
     const file = input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? input.tool_input?.path ?? null;
     if (!file) return null;
     const rel = path.isAbsolute(file) ? path.relative(root, file).split(path.sep).join('/') : file;
     if (rel.startsWith('..') || !specForPath(rel)) return null;
-    const intel = await openIntel(root);
-    if (!intel) return null;
+    const ix = await acquire();
+    if (!ix) return null;
+    const { intel } = ix;
     try {
         const { checkChanges } = await import('../query/check.mjs');
         const r = await checkChanges(intel, { files: [rel], tests: false });
@@ -160,10 +170,10 @@ async function afterEdit(root, input) {
         }
         if (!lines.length) return null;
         return `graph-indexer check after this edit:\n- ${lines.join('\n- ')}\n(check_changes lists everything, including the tests to run.)`;
-    } finally { intel.close(); }
+    } finally { ix.release(); }
 }
 
-async function afterGrep(root, input, crawling) {
+async function afterGrep(root, input, crawling, acquire) {
     const shell = !GREP_TOOLS.has(input.tool_name);
     const pattern = shell ? grepPattern(input.tool_input?.command) : input.tool_input?.pattern;
     if (!pattern || pattern.length > 200) return null;
@@ -177,8 +187,9 @@ async function afterGrep(root, input, crawling) {
     const defSearch = DEF_SEARCH.test(pattern) || (out != null && out.trim() === '');
     const foundDef = out != null && new RegExp(`\\b(def|class|function|func|fn|interface|struct|trait|enum|type)\\s+${ident}\\b`).test(out);
     if (!(defSearch && !foundDef) && !crawling) return null;
-    const intel = await openIntel(root);
-    if (!intel) return null;
+    const ix = await acquire();
+    if (!ix) return null;
+    const { intel } = ix;
     try {
         const defs = intel.store.all(`SELECT s.id, s.qname, s.kind, s.start_line, s.end_line, s.sig, f.path, f.is_test,
                 (SELECT COUNT(*) FROM refs r WHERE r.dst_id = s.id) AS uses
@@ -202,11 +213,11 @@ async function afterGrep(root, input, crawling) {
             ? `graph-indexer: "${ident}" is ${shown[0]}`
             : `graph-indexer: "${ident}" names ${list.length} different definitions — ${shown.join('; ')}${list.length > 5 ? `; ${list.length - 5} more` : ''}`;
         return `${head}.${unbound ? ` ${unbound} same-name call${unbound === 1 ? ' has' : 's have'} a receiver of unknown type.` : ''} find_references on one qualified name lists only its uses, with the enclosing function of each.`;
-    } finally { intel.close(); }
+    } finally { ix.release(); }
 }
 
 /** After a read while the agent is crawling: where the names used in the lines it read are defined. */
-async function afterRead(root, input, state) {
+async function afterRead(root, input, state, acquire) {
     let file = null, from = 1, to = 2000;
     if (READ_TOOLS.has(input.tool_name)) {
         file = input.tool_input?.file_path ?? input.tool_input?.path ?? input.tool_input?.absolute_path ?? null;
@@ -223,9 +234,11 @@ async function afterRead(root, input, state) {
     const abs = path.isAbsolute(file) ? file : path.join(cwd, file);
     const rel = path.relative(root, abs).split(path.sep).join('/');
     if (rel.startsWith('..') || !specForPath(rel)) return null;
-    const intel = await openIntel(root);
-    if (!intel) return null;
+    const ix = await acquire();
+    if (!ix) return null;
+    const { intel } = ix;
     try {
+        await intel.revalidate([rel]); // a long-lived index may not have seen the file change yet
         const { definitionsUsed } = await import('../query/read.mjs');
         const n = Math.max(1, to - from + 1);
         const { rows } = definitionsUsed(intel, rel, from, to, { max: Math.min(12, Math.max(4, Math.round(n / 15))), skipIds: new Set(state.st.shown) });
@@ -233,7 +246,7 @@ async function afterRead(root, input, state) {
         for (const r of rows) state.st.shown.push(r.id);
         const lines = rows.map(r => `  ${r.qname} → ${r.path}:${r.start_line}  ${String(r.sig || r.kind).replace(/\s+/g, ' ').replace(/\s+#.*$/, '').slice(0, 100)}`);
         return `graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n${lines.join('\n')}`;
-    } finally { intel.close(); }
+    } finally { ix.release(); }
 }
 
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
@@ -243,55 +256,86 @@ const RULES = `How to look code up in this repository (graph-indexer):
 - Every read lists where each name the code uses is defined; read those targets instead of grepping for their definitions.
 - Exact uses of a function or class: find_references. Text that is not a code name: grep as usual.`;
 
-async function sessionLine(root, { rules = false } = {}) {
-    const db = path.join(root, DATA_DIR_NAME, 'index.db');
-    if (!fs.existsSync(db)) {
-        // build it in the background so the first query is fast; say nothing yet
-        const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/graph-indexer.mjs');
-        try { spawn(process.execPath, [bin, 'index', '--repo', root], { detached: true, stdio: 'ignore' }).unref(); } catch { /* optional */ }
-        return null;
-    }
-    const intel = await openIntel(root);
-    if (!intel) return null;
+async function sessionLine(root, { rules = false, acquire }) {
+    if (!hasIndex(root)) return null; // being built in the background (spawnResident); say nothing yet
+    const ix = await acquire();
+    if (!ix) return null;
+    const { intel } = ix;
     try {
         const st = intel.stats();
         const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: read_code (symbols, ranges or files, several per call, with where each name they use is defined), search_text (grep that also says which definition each match refers to), find_references, change_impact (what a change affects and which tests to run), check_changes (what an edit broke), call_graph, search_code and outline.`;
         // the managed block of `init` already carries the rules; otherwise add them
         const carried = ['CLAUDE.md', 'AGENTS.md'].some(f => { try { return fs.readFileSync(path.join(root, f), 'utf8').includes('<!-- graph-indexer:start -->'); } catch { return false; } });
         return rules || !carried ? `${line}\n${RULES}` : line;
-    } finally { intel.close(); }
+    } finally { ix.release(); }
 }
 
-export async function runHook(event, { repo = null } = {}) {
+/**
+ * One hook call: what the hook prints (in the calling host's format), or null. `acquire()` gives
+ * the index: opened for this call, or the resident process's own.
+ */
+export async function handleHook(event, input, { root, acquire }) {
+    let text = null, name = input.hook_event_name ?? null;
+    if (event === 'post-tool') {
+        name ??= 'PostToolUse';
+        const tool = input.tool_name ?? input.toolName ?? '';
+        const command = input.tool_input?.command;
+        const state = sessionState(input);
+        if (EDIT_TOOLS.has(tool)) {
+            state.st.nav = 0;
+            state.save();
+            text = await afterEdit(root, input, acquire);
+        } else if (GREP_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && grepPattern(command))) {
+            state.st.nav++;
+            state.save();
+            text = await afterGrep(root, input, state.st.nav >= CRAWL, acquire);
+        } else if (READ_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && shellRead(command))) {
+            state.st.nav++;
+            if (state.st.nav >= CRAWL) text = await afterRead(root, input, state, acquire);
+            state.save();
+        }
+    } else if (event === 'session-start' || event === 'subagent-start') {
+        name ??= event === 'session-start' ? 'SessionStart' : 'SubagentStart';
+        text = await sessionLine(root, { rules: event === 'subagent-start', acquire });
+    }
+    return format(name, text, input, event === 'post-tool' ? MAX_CONTEXT : 2500);
+}
+
+/**
+ * Start a resident process (`graph-indexer daemon`) so later hook calls skip opening the index; at
+ * session start it also builds a missing index. At most once a minute per repository, and never
+ * from a tool hook in a repository without an index.
+ */
+function spawnResident(root, event) {
+    const starting = event === 'session-start' || event === 'subagent-start';
+    if (!starting && !hasIndex(root)) return;
+    const bin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/graph-indexer.mjs');
+    const off = process.env.GRAPH_INDEXER_RESIDENT === '0';
+    if (off && (!starting || hasIndex(root))) return;
+    try {
+        const mark = path.join(dataDir(root), 'resident.started');
+        try { if (Date.now() - fs.statSync(mark).mtimeMs < 60_000) return; } catch { /* first time */ }
+        fs.writeFileSync(mark, String(Date.now()));
+        // without a resident, still build a missing index in the background so the first query is fast
+        spawn(process.execPath, [bin, off ? 'index' : 'daemon', '--repo', root], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    } catch { /* optional */ }
+}
+
+export async function runHook(event, { repo = null, version = null } = {}) {
     const deadlineMs = event === 'post-tool' ? 4000 : 3000;
     const timer = setTimeout(() => process.exit(0), deadlineMs); // fail open: never hold the agent up
     try {
         const input = await readStdin();
         const root = findRepoRoot(input.cwd || repo || process.cwd());
-        let text = null, name = input.hook_event_name ?? null;
-        if (event === 'post-tool') {
-            name ??= 'PostToolUse';
-            const tool = input.tool_name ?? input.toolName ?? '';
-            const command = input.tool_input?.command;
-            const state = sessionState(input);
-            if (EDIT_TOOLS.has(tool)) {
-                state.st.nav = 0;
-                state.save();
-                text = await afterEdit(root, input);
-            } else if (GREP_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && grepPattern(command))) {
-                state.st.nav++;
-                state.save();
-                text = await afterGrep(root, input, state.st.nav >= CRAWL);
-            } else if (READ_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && shellRead(command))) {
-                state.st.nav++;
-                if (state.st.nav >= CRAWL) text = await afterRead(root, input, state);
-                state.save();
-            }
-        } else if (event === 'session-start' || event === 'subagent-start') {
-            name ??= event === 'session-start' ? 'SessionStart' : 'SubagentStart';
-            text = await sessionLine(root, { rules: event === 'subagent-start' });
+        const { askResident, residentRequired } = await import('./resident.mjs');
+        const reply = await askResident(root, { op: 'hook', event, input }, { version, totalMs: 2000 });
+        let out = null;
+        if (reply) out = reply.out;
+        else if (!residentRequired()) {
+            out = await handleHook(event, input, { root, acquire: localIndex(root) });
+            spawnResident(root, event);
         }
-        emit(name, text, input, event === 'post-tool' ? MAX_CONTEXT : 2500);
+        if (out) process.stdout.write(out + '\n');
     } catch { /* fail open */ }
     clearTimeout(timer);
 }
