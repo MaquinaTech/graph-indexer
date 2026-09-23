@@ -371,7 +371,12 @@ export class CodeIntel {
         if (!rows.length) return { total: 0, plausible: [], typeNames: [] };
         const typeNames = new Set();
         const owner = sym.parent_id != null ? this.sym(sym.parent_id) : null;
-        if (owner && TYPE_KINDS.has(owner.kind)) typeNames.add(owner.name);
+        if (owner && TYPE_KINDS.has(owner.kind)) {
+            typeNames.add(owner.name);
+            // subclasses that inherit the member without redeclaring it: `jsonSocket.send()` on a
+            // JsonSocket extends TcpSocket runs TcpSocket.send
+            if (!sym.is_static) for (const name of this.#inheritingSubtypes(owner.id, sym.name)) typeNames.add(name);
+        }
         for (const id of ids) {
             const s = id === sym.id ? null : this.sym(id);
             const o = s?.parent_id != null ? this.sym(s.parent_id) : null;
@@ -398,6 +403,27 @@ export class CodeIntel {
             return mentions.get(r.path);
         });
         return { total: rows.length, plausible, typeNames: names };
+    }
+
+    /** Names of the subtypes of a type (transitively) that inherit its member `name` without redeclaring it. */
+    #inheritingSubtypes(typeId, name, max = 20) {
+        const t = this.ix.table;
+        const out = [], seen = new Set([typeId]);
+        let frontier = [typeId];
+        for (let depth = 0; depth < 4 && frontier.length && out.length < max; depth++) {
+            const next = [];
+            for (const tid of frontier) {
+                for (const { src_id } of this.store.all("SELECT DISTINCT src_id FROM refs WHERE dst_id = ? AND kind = 'inherit' AND src_id IS NOT NULL", tid)) {
+                    if (seen.has(src_id)) continue;
+                    seen.add(src_id);
+                    if (this.#membersNamed(src_id, name).length) continue; // overrides it: its calls bind to its own member
+                    const st = t.sym(src_id);
+                    if (st && out.length < max) { out.push(st.name); next.push(src_id); }
+                }
+            }
+            frontier = next;
+        }
+        return out;
     }
 
     /** Outgoing references of a symbol (what it calls/uses), including nested closures. */

@@ -34,6 +34,9 @@ const FILES = {
     'src/errors.ts': `export class WsError {\n  getError() { return 1; }\n}\nexport class RpcError {\n  getError() { return 2; }\n}\nexport function handle(e: unknown) {\n  if (!(e instanceof WsError)) {\n    return 0;\n  }\n  return e.getError();\n}\n`,
     'src/creator.ts': `export class ContextCreator {\n  createContext() { return []; }\n}\nexport class FiltersContext extends ContextCreator {\n  create() { return this.createContext(); }\n}\n`,
     'test/filters.spec.ts': `import { FiltersContext } from '../src/creator';\ndescribe('createContext', () => {\n  const f = new FiltersContext();\n  sinon.stub(f, 'createContext').returns([]);\n});\n`,
+    // a method inherited by a subclass, called on a callback parameter of unknown type
+    'src/sockets.ts': `export class TcpSocket {\n  sendMessage(m: object) { return m; }\n}\nexport class JsonSocket extends TcpSocket {}\nexport class KafkaServer {\n  sendMessage(m: object) { return m; }\n}\n`,
+    'test/connection.spec.ts': `import { JsonSocket } from '../src/sockets';\nexport function withSocket(cb: (s: JsonSocket) => void) { cb(new JsonSocket()); }\nwithSocket(socket => {\n  socket.sendMessage({ type: 'ping' });\n});\n`,
     'binding/binding.go': `package binding\n\ntype Binding interface {\n\tName() string\n\tBind(v any) error\n}\n\ntype jsonBinding struct{}\n\nfunc (jsonBinding) Name() string { return "json" }\n\nfunc (jsonBinding) Bind(v any) error { return nil }\n\ntype half struct{}\n\nfunc (half) Name() string { return "half" }\n`,
 };
 
@@ -106,6 +109,13 @@ test('Go: a type implements an interface when its method set covers it', () => {
 test('the unbound footer says why unrelated same-name calls can be ignored', async () => {
     const text = await callTool(intel, 'find_references', { symbol: 'HandlerStorage.set' });
     assert.match(text, /none is in a file that mentions `HandlerStorage`/);
+});
+
+test('unknown receivers in files that use a subclass inheriting the member are worth checking', async () => {
+    const out = await callTool(intel, 'find_references', { symbol: 'TcpSocket.sendMessage' });
+    assert.match(out, /Possibly missed[\s\S]*test\/connection\.spec\.ts:4/);
+    const other = await callTool(intel, 'find_references', { symbol: 'KafkaServer.sendMessage' });
+    assert.doesNotMatch(other, /connection\.spec\.ts:4/);
 });
 
 test('instanceof narrows the receiver, also after an early return', async () => {
