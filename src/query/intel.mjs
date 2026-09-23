@@ -251,6 +251,11 @@ export class CodeIntel {
             sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id, sym.is_static ? 1 : 0).map(r => r.id);
     }
 
+    /** Is `memberId` one of the members `sym` overrides (declared in a supertype)? */
+    #isSupertypeMemberOf(memberId, sym) {
+        return this.#supertypeMembers(sym).some(s => s.id === memberId);
+    }
+
     /** Members with the same name in subtypes (overrides/implementations), transitively. */
     #subtypeMembers(sym) {
         const t = this.ix.table, r = this.ix.resolver;
@@ -339,6 +344,8 @@ export class CodeIntel {
             if (kinds && !kinds.includes(r.kind)) continue;
             if (!includeTests && r.is_test) continue;
             if (r.conf < minConf) continue;
+            // `super().m()` binds statically to the parent's m: it cannot reach an override elsewhere
+            if (r.recv === 'super' && via.has(r.dst_id) && this.#isSupertypeMemberOf(r.dst_id, sym)) continue;
             out.push({ ...r, via: via.get(r.dst_id) ?? null, confidence: confidenceLabel(via.has(r.dst_id) ? r.conf * 0.8 : r.conf) });
         }
         const unbound = this.#unboundSameName(sym, ids, { includeTests });
@@ -432,13 +439,15 @@ export class CodeIntel {
                 if (sym && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property')) for (const s of this.#supertypeMembers(sym)) targets.push(s.id);
                 // a constructor is invoked through its class: `new Foo()` / `Foo()` (Python)
                 if (sym && CONSTRUCTORS.has(sym.name) && sym.parent_id != null) targets.push(sym.parent_id);
-                const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, r.line, r.dst_id, f.path, f.is_test FROM refs r JOIN files f ON f.id = r.file_id
+                const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, r.line, r.dst_id, r.recv, f.path, f.is_test FROM refs r JOIN files f ON f.id = r.file_id
                     WHERE r.dst_id IN (${targets.map(() => '?').join(',')}) AND r.kind IN (${kinds.map(() => '?').join(',')})`, ...targets, ...kinds);
                 const rank = (r) => (EXAMPLE_PATH.test(r.path) ? 2 : r.is_test ? 1 : 0);
                 rows.sort((a, b) => rank(a) - rank(b));
                 for (const r of rows) {
                     // through the class only its instantiations reach the constructor
                     if (r.dst_id !== id && sym && CONSTRUCTORS.has(sym.name) && r.dst_id === sym.parent_id && r.kind !== 'call' && r.kind !== 'new') continue;
+                    // `super().m()` runs exactly the parent's m, never this override (it is static dispatch)
+                    if (r.dst_id !== id && r.recv === 'super') continue;
                     const c = conf * r.conf;
                     if (c < minConf) continue;
                     if (r.src_id == null) {
