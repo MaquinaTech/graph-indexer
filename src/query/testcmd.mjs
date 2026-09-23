@@ -81,3 +81,39 @@ export function testCommands(root, files) {
     }
     return out;
 }
+
+/**
+ * Commands that run only the given test functions: [{ path, name, cls }] (cls: the enclosing test
+ * class, if any). pytest, unittest and Django (Python), `go test -run`, Maven and Gradle; other
+ * ecosystems name tests by strings the index does not see, so they get no command here.
+ * @returns {string[]} shell commands
+ */
+export function testCaseCommands(root, cases) {
+    const out = [];
+    const py = cases.filter(c => c.path.endsWith('.py'));
+    if (py.length) {
+        const r = pyRunner(root);
+        const mod = (p) => p.replace(/\.py$/, '').replace(/\//g, '.');
+        if (r.kind === 'pytest') out.push(`python -m pytest -q ${py.map(c => `${c.path}::${c.cls ? `${c.cls}::` : ''}${c.name}`).join(' ')}`);
+        else if (r.kind === 'django') {
+            const withCls = py.filter(c => c.cls);
+            if (withCls.length) out.push(`python tests/runtests.py ${withCls.map(c => `${mod(c.path.replace(/^tests\//, ''))}.${c.cls}.${c.name}`).join(' ')}`);
+        } else {
+            const withCls = py.filter(c => c.cls);
+            if (withCls.length) out.push(`python -m unittest ${withCls.map(c => `${mod(c.path)}.${c.cls}.${c.name}`).join(' ')}`);
+        }
+    }
+    const byDir = new Map();
+    for (const c of cases.filter(c => c.path.endsWith('.go'))) (byDir.get(path.posix.dirname(c.path)) ?? byDir.set(path.posix.dirname(c.path), []).get(path.posix.dirname(c.path))).push(c.name);
+    for (const [dir, names] of byDir) out.push(`go test ./${dir} -run '^(${[...new Set(names)].join('|')})$'`);
+    const jvm = cases.filter(c => /\.(java|kt|scala)$/.test(c.path));
+    if (jvm.length) {
+        const cls = (c) => c.cls ?? path.posix.basename(c.path).replace(/\.\w+$/, '');
+        if (exists(root, 'pom.xml')) {
+            const by = new Map();
+            for (const c of jvm) (by.get(cls(c)) ?? by.set(cls(c), []).get(cls(c))).push(c.name);
+            out.push(`mvn -q test -Dtest=${[...by].map(([k, v]) => `${k}#${[...new Set(v)].join('+')}`).join(',')}`);
+        } else out.push(`./gradlew test ${jvm.map(c => `--tests '*${cls(c)}.${c.name}'`).join(' ')}`);
+    }
+    return out;
+}

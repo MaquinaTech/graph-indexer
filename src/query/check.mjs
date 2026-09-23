@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { specForPath } from '../parse/languages.mjs';
 import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
-import { testCommands } from './testcmd.mjs';
+import { testCommands, testCaseCommands } from './testcmd.mjs';
 
 const CALLABLE = new Set(['function', 'method', 'constructor']);
 const CONSTRUCTORS = new Set(['constructor', '__init__', 'initialize', '__construct']);
@@ -134,7 +134,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
     await intel.ensureFresh();
     await intel.ix.syncPaths([...changed.keys()]);
     const targets = [...changed.keys()].filter(f => specForPath(f) && (!files || files.some(x => f === x || f.startsWith(x.replace(/\/?$/, '/')))));
-    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], tests: [], commands: [], notes: [] };
+    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], tests: [], commands: [], cases: [], casesTotal: 0, caseCommands: [], notes: [] };
     if (!targets.length) return report;
     // callers only need a syntax tree; definitions (changed files, callees) also need symbols + arities
     const treeCache = new Map(), symCache = new Map();
@@ -283,6 +283,21 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         for (const rel of targets) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', rel)?.is_test) tests.add(rel);
         report.tests = [...tests].sort();
         report.commands = testCommands(root, report.tests.slice(0, 40));
+        // the test functions closest to the change: changed themselves, calling it, or calling a
+        // function that calls it — running these first verifies a fix in seconds
+        const near = new Map(seeds.map(id => [id, 0]));
+        for (const [id, info] of nodes) if (info.depth <= 2 && !near.has(id)) near.set(id, info.depth);
+        const cases = [];
+        for (const [id, depth] of near) {
+            const x = intel.sym(id);
+            if (!x?.is_test || (x.kind !== 'function' && x.kind !== 'method') || !/^test/i.test(x.name)) continue;
+            const parent = x.parent_id != null ? intel.sym(x.parent_id) : null;
+            cases.push({ path: x.path, name: x.name, cls: parent?.kind === 'class' ? parent.name : null, depth });
+        }
+        cases.sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path) || a.name.localeCompare(b.name));
+        report.casesTotal = cases.length;
+        report.cases = cases.slice(0, 15);
+        if (cases.length <= 15) report.caseCommands = testCaseCommands(root, cases);
     }
     for (const v of treeCache.values()) v?.tree?.delete(); // WASM memory
     return report;

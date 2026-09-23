@@ -53,3 +53,28 @@ test('Python: a def wrapped in a class-based descriptor is not checked against i
     assert.doesNotMatch(text, /Graph\.edges/, text);
     assert.match(text, /degree_of[\s\S]*algo\.py:6/, text);
 });
+
+test('check_changes names the test functions closest to the change and how to run just those', async () => {
+    const files = {
+        'pkg/__init__.py': '',
+        'pkg/money.py': 'def to_cents(x):\n    return int(x * 100)\n\n\ndef fmt(x):\n    return str(to_cents(x))\n',
+        'pkg/other.py': 'def unrelated():\n    return 1\n',
+        'tests/__init__.py': '',
+        'tests/test_money.py': 'import unittest\nfrom pkg.money import to_cents, fmt\n\n\nclass TestMoney(unittest.TestCase):\n    def test_cents(self):\n        self.assertEqual(to_cents(1), 100)\n\n    def test_fmt(self):\n        self.assertEqual(fmt(1), "100")\n',
+        'tests/test_other.py': 'import unittest\nfrom pkg.other import unrelated\n\n\nclass TestOther(unittest.TestCase):\n    def test_unrelated(self):\n        self.assertEqual(unrelated(), 1)\n',
+    };
+    for (const [runner, extra] of [['unittest', {}], ['pytest', { 'pytest.ini': '[pytest]\n' }]]) {
+        const root = makeRepo({ ...files, ...extra });
+        const intel = new CodeIntel({ root });
+        try {
+            await intel.open();
+            writeFile(root, 'pkg/money.py', 'def to_cents(x):\n    return round(x * 100)\n\n\ndef fmt(x):\n    return str(to_cents(x))\n');
+            const text = await callTool(intel, 'check_changes', {});
+            assert.match(text, /test functions that reach the changed code[^\n]*\(2\): tests\/test_money\.py::TestMoney::test_cents, tests\/test_money\.py::TestMoney::test_fmt/, runner);
+            assert.match(text, runner === 'pytest'
+                ? /run these first: python -m pytest -q tests\/test_money\.py::TestMoney::test_cents tests\/test_money\.py::TestMoney::test_fmt/
+                : /run these first: python -m unittest tests\.test_money\.TestMoney\.test_cents tests\.test_money\.TestMoney\.test_fmt/, runner);
+            assert.doesNotMatch(text, /test_unrelated/);
+        } finally { intel.close(); rmrf(root); }
+    }
+});

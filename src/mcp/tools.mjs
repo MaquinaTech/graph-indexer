@@ -114,7 +114,7 @@ export const TOOLS = [
     {
         name: 'check_changes',
         title: 'Check changes',
-        description: 'Verify your uncommitted edits before you finish, without building: compares every changed file with the last commit and reports syntax errors you introduced, calls whose argument count no longer fits a changed definition (call sites across the repository and calls you wrote), definitions you removed or renamed that are still used or imported, callers of a changed signature in files you did not touch, and the tests that exercise the changed code with the command to run them. Use it after editing and before declaring a task done; it complements, not replaces, running the tests and the type checker.',
+        description: 'Verify your uncommitted edits before you finish, without building: compares every changed file with the last commit and reports syntax errors you introduced, calls whose argument count no longer fits a changed definition (call sites across the repository and calls you wrote), definitions you removed or renamed that are still used or imported, callers of a changed signature in files you did not touch, and the tests that exercise the changed code — the closest test functions first — with the commands to run them. Use it after editing and before declaring a task done; it complements, not replaces, running the tests and the type checker.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -867,8 +867,13 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         for (const x of u.sites.slice(0, 8)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  │ ${clip(x.text ?? '', 110)}`);
         if (u.sites.length > 8) out.push(`    … ${u.sites.length - 8} more`);
     }
+    if (r.cases.length) {
+        const name = (c) => `${c.path}::${c.cls ? `${c.cls}::` : ''}${c.name}`;
+        out.push(`test functions that reach the changed code through calls the index sees, or that you changed (${r.casesTotal}${r.casesTotal > r.cases.length ? `, first ${r.cases.length}` : ''}): ${r.cases.map(name).join(', ')}`);
+        for (const c of r.caseCommands) out.push(`    run these first: ${clip(c, 600)}`);
+    }
     if (r.tests.length) {
-        out.push(`tests that exercise the change (${r.tests.length}): ${r.tests.slice(0, 12).join(', ')}${r.tests.length > 12 ? ', …' : ''}`);
+        out.push(`test files that exercise the change (${r.tests.length}): ${r.tests.slice(0, 12).join(', ')}${r.tests.length > 12 ? ', …' : ''}`);
         for (const c of r.commands) out.push(`    run: ${clip(c, 400)}`);
     } else out.push('tests: none found that exercise the changed code.');
     out.push(problems ? `${plural(problems, 'problem')} found.` : 'No problems found in the changed code (this check does not replace running the tests).');

@@ -125,6 +125,10 @@ and real commits, and end to end with coding agents
   before. The plugin's hook command is a small client that talks to that socket instead of
   starting graph-indexer through npx (about a second per call). `GRAPH_INDEXER_RESIDENT=0`
   turns it off.
+- **`check_changes` names the closest test functions**: the test functions you changed and those
+  that reach the changed code through calls the index sees (directly or through one helper), with
+  a command that runs only them (pytest, unittest, Django, `go test -run`, Maven, Gradle), before
+  the test files that exercise the change.
 - **OpenCode and Kilo Code plugin** (`integrations/opencode/graph-indexer.js`, written by
   `init --hooks` to `.opencode/plugins/` or `.kilo/plugin/`): after a read, a search or an edit it
   appends to the tool's output what the Claude Code hooks add as context, answered by the resident
