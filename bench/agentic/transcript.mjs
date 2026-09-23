@@ -146,6 +146,7 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
                 if (!re.test(cmd)) continue;
                 // for the grep-free arm only code searches count; filtering output is allowed in spirit
                 const use = re.test === isGrep ? grepUse(cmd, repo) : 'search';
+                if (!use) continue; // the word only appears in quoted text (`echo "== grep x =="`)
                 (use === 'filter' ? benign : violations).push(`bash: ${cmd.slice(0, 120)}`);
             }
         }
