@@ -8,7 +8,7 @@
  *   node bench/agentic/prepare.mjs run --task ID --arm ARM [--rep N] --gi LABEL
  *       create the run directory (instructions, graph-indexer wrapper) and the checkout it works
  *       in; prints {runId, runDir, checkout, prompt} as JSON
- *   node bench/agentic/prepare.mjs batch --tasks ID,ID|all|<file.json> --arms A,B --reps N --gi LABEL
+ *   node bench/agentic/prepare.mjs batch --tasks ID,ID|all|<file.json> --arms A,B --reps N [--first-rep K] --gi LABEL
  *       the same for many runs, one JSON object per line
  *
  * Read-only tasks (family "qa") share one checkout per repository/commit and variant ("plain" for
@@ -190,7 +190,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         const tasks = selectTasks(cmd === 'run' ? opt('--task') : opt('--tasks', 'all'));
         if (!tasks.length) throw new Error('no matching tasks');
         const arms = cmd === 'run' ? [opt('--arm')] : list('--arms', ARM_NAMES);
-        const reps = cmd === 'run' ? [Number(opt('--rep', 1))] : Array.from({ length: Number(opt('--reps', 1)) }, (_, i) => i + 1);
+        // --first-rep N adds repetitions after graded ones (preparing a run wipes its directory)
+        const first = Number(opt('--first-rep', 1));
+        const reps = cmd === 'run' ? [Number(opt('--rep', 1))] : Array.from({ length: Number(opt('--reps', 1)) }, (_, i) => first + i);
         for (const t of tasks) for (const a of arms) for (const r of reps) console.log(JSON.stringify(prepareRun(t, a, r, label)));
     } else {
         console.error('usage: prepare.mjs snapshot [--label L] | run --task ID --arm A [--rep N] --gi L | batch --tasks … --arms … --reps N --gi L');
