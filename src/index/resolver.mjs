@@ -14,6 +14,7 @@
  * candidate count, so tools can say "3 possible targets" instead of guessing silently.
  */
 import path from 'node:path';
+import { normalizeType } from '../parse/extract.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
@@ -49,6 +50,71 @@ function push(map, key, val) {
 
 /** Receiver type whose members never live in the repository (primitives, builtins, collections). */
 export const EXTERNAL = Object.freeze({ external: true });
+
+/** Split a list at top-level commas (brackets, generics and nested function types kept whole). */
+function splitTopLevel(text, sep = ',') {
+    const out = [];
+    let depth = 0, cur = '';
+    for (let k = 0; k < text.length; k++) {
+        const ch = text[k];
+        if ('([{<'.includes(ch)) depth++;
+        else if (')]}'.includes(ch) || (ch === '>' && text[k - 1] !== '=')) depth--;
+        if (ch === sep && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+}
+
+/** The text between the bracket at `open` and its match, or null when it is not closed. */
+function bracketed(text, open) {
+    let depth = 0;
+    for (let k = open; k < text.length; k++) {
+        if (text[k] === '(') depth++;
+        else if (text[k] === ')' && --depth === 0) return { inner: text.slice(open + 1, k), end: k };
+    }
+    return null;
+}
+
+/** Declared type of a parameter (`name?: T = x` → `T`), or null when it has none. */
+function paramType(param) {
+    if (/^\.\.\./.test(param)) return null; // rest parameter
+    const colon = splitTopLevel(param, ':');
+    if (colon.length < 2) return null;
+    const type = colon.slice(1).join(':');
+    // a default value starts at a top-level `=` that is not part of `=>`, `==`, `<=`, `>=`, `!=`
+    let depth = 0;
+    for (let k = 0; k < type.length; k++) {
+        const ch = type[k];
+        if ('([{<'.includes(ch)) depth++;
+        else if (')]}'.includes(ch) || (ch === '>' && type[k - 1] !== '=')) depth--;
+        else if (ch === '=' && depth === 0 && !'=>'.includes(type[k + 1] ?? '') && !'=!<>'.includes(type[k - 1] ?? '')) return type.slice(0, k).trim() || null;
+    }
+    return type.trim() || null;
+}
+
+/**
+ * `cb` in `on(event: string, cb: (socket: JsonSocket, n: number) => void)`: the declared type of
+ * parameter `j` of the function type that parameter `i` of `name` declares, from its signature.
+ */
+export function callbackParamTypeText(sig, name, i, j) {
+    if (!sig) return null;
+    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const list = m ? bracketed(sig, m.index + m[0].length - 1) : null;
+    let type = list ? paramType(splitTopLevel(list.inner)[i] ?? '') : null;
+    if (!type) return null;
+    // `cb?: ((s: T) => void) | undefined`: drop null/undefined, unwrap parentheses
+    const alts = splitTopLevel(type, '|').filter(t => t !== 'undefined' && t !== 'null');
+    if (alts.length !== 1) return null;
+    type = alts[0];
+    for (let g = 0; g < 3 && type.startsWith('('); g++) {
+        const b = bracketed(type, 0);
+        if (!b || b.end !== type.length - 1) break;
+        type = b.inner.trim();
+    }
+    const fn = type.startsWith('(') ? bracketed(type, 0) : null;
+    if (!fn || !/^\s*=>/.test(type.slice(fn.end + 1))) return null;
+    return paramType(splitTopLevel(fn.inner)[j] ?? '');
+}
 
 /** `name[][]` → { name, elem: 2 } (element access applied to a descriptor part). */
 function splitElem(part) {
@@ -149,9 +215,10 @@ export class SymbolTable {
 }
 
 export class Resolver {
-    constructor(table, specsById) {
+    constructor(table, specsById, { sigOf = null } = {}) {
         this.t = table;
         this.specs = specsById; // lang id -> spec (implicitThis etc.)
+        this.sigOf = sigOf;     // symbol id -> signature text (read on demand: callback parameter types)
         this.memo = new Map();
     }
 
@@ -238,7 +305,7 @@ export class Resolver {
      */
     typeFromString(str, fileId, elem = 0) {
         if (!str) return null;
-        if (str.startsWith('call:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
+        if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
         let s = str;
         for (let i = 0; i < elem; i++) { if (!s.endsWith('[]') && !s.endsWith('{}')) return null; s = s.slice(0, -2); }
         if (s === '!') return EXTERNAL;
@@ -272,6 +339,8 @@ export class Resolver {
                 else if (s.type) cur = this.typeFromString(s.type, s.fileId, head.elem);
             }
             if ((cur?.arrayOf != null || cur?.mapOf != null) && parts.length === 1) cur = EXTERNAL;
+        } else if (head.name.startsWith('cb:')) {
+            cur = this.#callbackParam(head.name, fileId, srcId, head.elem);
         } else if (!head.elem) {
             // same-file qualified name first (this.x → Class#x uses the class qname)
             const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
@@ -330,6 +399,31 @@ export class Resolver {
         const res = cur === EXTERNAL || cur?.arrayOf != null || cur?.mapOf != null ? EXTERNAL : cur ? { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null } : null;
         this.memo.set(k, res);
         return res;
+    }
+
+    /** Type of a callback parameter (`cb:i:j:callee`, see extract.mjs) from the callee's signature. */
+    #callbackParam(desc, fileId, srcId, elem) {
+        const m = /^cb:(\d+):(\d+):(.+)$/.exec(desc);
+        if (!m || !this.sigOf) return null;
+        const target = m[3];
+        let callee = null;
+        const sep = target.lastIndexOf('::');
+        if (sep > 0) {
+            // a method of a typed receiver (`this`, a field, a local)
+            const type = this.resolveRecvType(target.slice(0, sep).replace(/~/g, '#'), fileId, srcId);
+            if (type && type !== EXTERNAL) callee = this.membersOf(type, target.slice(sep + 2)).map(id => this.t.sym(id)).find(s => s && CALLABLE_KINDS.has(s.kind)) ?? null;
+        } else {
+            // `@helpers.create`: a function reached through a module, namespace or class; else a name in scope
+            const dot = target.lastIndexOf('.');
+            const r = target.startsWith('@') && dot > 0 ? this.#resolveMember(target.slice(dot + 1), 'call', target.slice(1, dot), null, fileId, srcId)
+                : this.#resolveName(target, 'call', fileId, srcId);
+            callee = r?.id != null ? this.t.sym(r.id) : null;
+        }
+        if (!callee || !CALLABLE_KINDS.has(callee.kind)) return null;
+        const text = callbackParamTypeText(this.sigOf(callee.id), callee.name, Number(m[1]), Number(m[2]));
+        const spec = this.specs[this.t.file(callee.fileId)?.lang];
+        const t = text && spec ? normalizeType(text, spec) : null;
+        return t ? this.typeFromString(t, callee.fileId, elem) : null;
     }
 
     // ── import helpers ───────────────────────────────────────────────────────────

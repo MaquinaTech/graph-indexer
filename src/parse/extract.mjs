@@ -94,6 +94,8 @@ const LITERAL_NODES = new Set(['string', 'template_string', 'number', 'true', 'f
     'decimal_integer_literal', 'decimal_floating_point_literal', 'interpreted_string_literal', 'raw_string_literal', 'int_literal', 'float_literal',
     'boolean', 'boolean_literal', 'char_literal', 'character_literal', 'real_literal', 'concatenated_string', 'rune_literal', 'regex']);
 const NULL_NODES = new Set(['null', 'undefined', 'none', 'nil', 'null_literal']);
+// Collection methods whose callback's first parameter is an element (typed by the collection).
+const ELEMENT_WISE = new Set(['forEach', 'map', 'filter', 'find', 'findLast', 'findIndex', 'findLastIndex', 'some', 'every', 'flatMap']);
 // Parameters declared inside a type — `cb: (app: App) => void`, interface method signatures —
 // name no variable in any scope; binding them would shadow or contradict real locals.
 const TYPE_CONTEXTS = new Set(['function_type', 'constructor_type', 'method_signature', 'abstract_method_signature', 'call_signature', 'construct_signature', 'function_signature', 'index_signature', 'type_annotation']);
@@ -290,10 +292,12 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const bindSites = new Map();
     const scopeNodes = [];    // anonymous functions / lambdas / comprehensions: lexical scopes
     const retNodes = [];      // returned expressions (return-type inference)
+    const cbSites = [];       // functions passed as call arguments (callback parameter types)
 
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
         let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, srcNode = null;
+        let cbFn = null, cbArg = null;
         for (const c of m.captures) {
             const n = c.name;
             if (n === 'name') nameNode = c.node;
@@ -316,7 +320,11 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
             else if (n === 'ret') { role = 'ret'; main = c.node; }
+            else if (n === 'cb') { role = 'cb'; main = c.node; }
+            else if (n === 'cb.fn') cbFn = c.node;
+            else if (n === 'cb.arg') cbArg = c.node;
         }
+        if (role === 'cb') { if (cbFn && cbArg) cbSites.push({ call: main, fn: cbFn, arg: cbArg }); continue; }
         if (role === 'scope') { scopeNodes.push(main); continue; }
         if (role === 'ret') { retNodes.push(main); continue; }
         if (role === 'def' && nameNode) {
@@ -492,7 +500,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
     //   '…#a#b'       member a, then member b, of the preceding type (crosses files)
     //   '[]' after a call/member part: the element type of that part
     //   '!'           a value whose members never live in the repository (primitives, arrays)
-    const deferred = (t) => t.startsWith('call:') || t.includes('#');
+    //   'cb:i:j:f'    parameter j of the function passed as argument i to callable f, typed by
+    //                 f's signature (f: `name`, `@module.name`, or `<type>::name` with # as ~)
+    const deferred = (t) => t.startsWith('call:') || t.startsWith('cb:') || t.includes('#');
     const typeText = (t) => {
         const n = normalizeType(t, spec);
         if (!n) return null;
@@ -513,7 +523,23 @@ function extractFromTree(spec, query, tree, source, relPath) {
         return best?.type ?? null;
     };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
-    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem;
+    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.cb === b.cb;
+    // `helper((err, socket) => socket.send())`: an untyped parameter of a function passed to a call
+    // takes its type from the callee's signature, resolved across files (the `cb:` types above)
+    for (const { call, fn, arg } of cbSites) {
+        const args = call.childForFieldName('arguments')?.namedChildren.filter(n => n.type !== 'comment') ?? [];
+        const i = args.findIndex(n => n.id === arg.id);
+        const callee = fn.text.replace(/\s+/g, '').replace(/\?\./g, '.');
+        if (i < 0 || !/^(?:this\.)?[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){0,2}$/.test(callee)) continue;
+        const dot = callee.lastIndexOf('.');
+        const recv = dot > 0 ? callee.slice(0, dot) : '', method = callee.slice(dot + 1);
+        if (recv && ELEMENT_WISE.has(method)) continue; // `xs.forEach(x => …)`: typed by the collection
+        const params = arg.childForFieldName('parameters')?.namedChildren ?? [arg.childForFieldName('parameter')].filter(Boolean);
+        params.filter(p => p.type !== 'comment').forEach((p, j) => {
+            const pat = (p.type === 'required_parameter' || p.type === 'optional_parameter') && !p.childForFieldName('type') ? p.childForFieldName('pattern') : p;
+            if (pat?.type === 'identifier') binds.push({ node: arg, name: pat.text, cb: { recv, method, i, j } });
+        });
+    }
     const setLocal = (scope, name, val) => {
         const k = scope + ':' + name;
         const prev = localTypes.get(k);
@@ -526,6 +552,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
         if (type) setLocal(ctx.scope, b.name, { type, ctx });
         else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx });
+        else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx });
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx });
         else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx });
         else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx }); // shadows outer bindings
@@ -552,7 +579,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const applyOps = (t, ops) => {
         for (const op of ops) {
             if (!t) return null;
-            if (op === '()') { if (!deferred(t)) return null; continue; } // a method's type is its return type
+            if (op === '()') { if (!deferred(t) || (t.startsWith('cb:') && !t.includes('#'))) return null; continue; } // a method's type is its return type
             if (deferred(t)) t += '[]';
             else if (t.endsWith('[]') || t.endsWith('{}')) t = t.slice(0, -2); // element / map value
             else return null; // indexing a string or an untyped object
@@ -561,9 +588,25 @@ function extractFromTree(spec, query, tree, source, relPath) {
     };
     // iterating a map yields keys or entries except where the language hands out values (Go's `range`)
     const elemOf = (t) => (!t ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2) : t.endsWith('{}') && spec.mapIterValues ? t.slice(0, -2) : null);
+    /** The `cb:` type of a callback parameter, or null when the callee cannot be named. */
+    const callbackType = ({ recv, method, i, j }, ctx, depth) => {
+        let target = method; // a function in scope or imported
+        if (recv === 'this') {
+            const st = selfType(ctx.sym);
+            if (!st) return null;
+            target = st.name + '::' + method;
+        } else if (recv) {
+            const rt = inferType(recv, ctx, depth + 1);
+            if (rt && rt !== '!' && !/(\[\]|\{\})$/.test(rt)) target = rt.replace(/#/g, '~') + '::' + method;
+            else if (!rt && !isDeclared(ctx, recv.split('.')[0])) target = '@' + recv + '.' + method; // module, namespace or class
+            else return null;
+        }
+        return `cb:${i}:${j}:${target}`;
+    };
     const bindingType = (v, depth) => {
         if (v.type) return v.type;
         if (v.call) return 'call:' + v.call;
+        if (v.cb) return depth > 5 ? null : callbackType(v.cb, v.ctx, depth);
         if (v.expr) return inferType(v.expr, v.ctx, depth + 1);
         if (v.elem) return elemOf(inferType(v.elem, v.ctx, depth + 1));
         return null;

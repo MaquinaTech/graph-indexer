@@ -103,6 +103,41 @@ const FILES = {
         `}`,
         ``,
     ].join('\n'),
+    // callbacks whose parameters are typed only by the callee's signature
+    'src/sockets.ts': [
+        `export class TcpSocket { sendMessage(m: object) { return m; } }`,
+        `export class JsonSocket extends TcpSocket {}`,
+        `export class KafkaServer { sendMessage(m: object) { return m; } }`,
+        ``,
+    ].join('\n'),
+    'src/socket-helpers.ts': [
+        `import { JsonSocket } from './sockets';`,
+        `export function createServerAndClient(`,
+        `  callback: (`,
+        `    err?: any,`,
+        `    server?: object,`,
+        `    clientSocket?: JsonSocket,`,
+        `  ) => void,`,
+        `) {}`,
+        `export class Emitter {`,
+        `  on(event: string, cb: (s: JsonSocket) => void) {}`,
+        `  listen() { this.on('x', s => s.sendMessage({})); }`, // 11: callee on \`this\`
+        `}`,
+        ``,
+    ].join('\n'),
+    'src/connection.ts': [
+        `import * as helpers from './socket-helpers';`,
+        `import { createServerAndClient, Emitter } from './socket-helpers';`,
+        `helpers.createServerAndClient((err, server, client) => {`,
+        `  client.sendMessage({ type: 'ping' });`,                          // 4: through a namespace
+        `});`,
+        `createServerAndClient((err, server, client) => client.sendMessage({}));`, // 6: imported function
+        `const em = new Emitter();`,
+        `em.on('x', s => s.sendMessage({}));`,                              // 8: typed receiver
+        `em.on('y', function (s) { s.sendMessage({}); });`,                  // 9: function expression
+        `[1, 2].forEach(n => n.toFixed());`,                                // element-wise: typed by the array
+        ``,
+    ].join('\n'),
     'src/module.ts': [
         `import { Builder } from './builder';`,
         `export function suite(describe: (n: string, f: () => void) => void) {`,
@@ -157,6 +192,12 @@ test('types elements of awaited collections, loop variables and callback paramet
 
 test('types values of maps and of classes that extend a map', () => {
     assert.deepEqual(lines('Item.total', 'src/registry.ts'), [8, 9, 10]);
+});
+
+test('types callback parameters by the signature of the function they are passed to', () => {
+    assert.deepEqual(lines('TcpSocket.sendMessage', 'src/connection.ts'), [4, 6, 8, 9]);
+    assert.deepEqual(lines('TcpSocket.sendMessage', 'src/socket-helpers.ts'), [11]);
+    assert.deepEqual(lines('KafkaServer.sendMessage', 'src/connection.ts'), []);
 });
 
 test('follows a chain that starts with a parenthesised await', () => {

@@ -149,6 +149,7 @@ ${callbackParam('parameter: (identifier) @bind.name')}
 
 const BINDINGS_TS = `
 ${callbackParam('parameters: (formal_parameters . (required_parameter pattern: (identifier) @bind.name))')}
+(call_expression function: [(identifier) (member_expression)] @cb.fn arguments: (arguments [(arrow_function) (function_expression)] @cb.arg)) @cb
 (variable_declarator name: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
 (required_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
 (optional_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind

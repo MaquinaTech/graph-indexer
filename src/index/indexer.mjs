@@ -40,7 +40,7 @@ export class Indexer {
         this.log = log;
         this.include = include;
         this.table = new SymbolTable();
-        this.resolver = new Resolver(this.table, SPECS);
+        this.resolver = new Resolver(this.table, SPECS, { sigOf: (id) => this.store.get('SELECT sig FROM symbols WHERE id = ?', id)?.sig ?? null });
         this.modules = null;
         this.loaded = false;
         this.resolveAll = false;

@@ -36,7 +36,7 @@ const FILES = {
     'test/filters.spec.ts': `import { FiltersContext } from '../src/creator';\ndescribe('createContext', () => {\n  const f = new FiltersContext();\n  sinon.stub(f, 'createContext').returns([]);\n});\n`,
     // a method inherited by a subclass, called on a callback parameter of unknown type
     'src/sockets.ts': `export class TcpSocket {\n  sendMessage(m: object) { return m; }\n}\nexport class JsonSocket extends TcpSocket {}\nexport class KafkaServer {\n  sendMessage(m: object) { return m; }\n}\n`,
-    'test/connection.spec.ts': `import { JsonSocket } from '../src/sockets';\nexport function withSocket(cb: (s: JsonSocket) => void) { cb(new JsonSocket()); }\nwithSocket(socket => {\n  socket.sendMessage({ type: 'ping' });\n});\n`,
+    'test/connection.spec.ts': `import { JsonSocket } from '../src/sockets';\nexport function withSocket(cb: any) { cb(new JsonSocket()); }\nwithSocket(socket => {\n  socket.sendMessage({ type: 'ping' });\n});\n`,
     'binding/binding.go': `package binding\n\ntype Binding interface {\n\tName() string\n\tBind(v any) error\n}\n\ntype jsonBinding struct{}\n\nfunc (jsonBinding) Name() string { return "json" }\n\nfunc (jsonBinding) Bind(v any) error { return nil }\n\ntype half struct{}\n\nfunc (half) Name() string { return "half" }\n`,
 };
 
