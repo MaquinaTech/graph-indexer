@@ -87,6 +87,22 @@ const FILES = {
         `}`,
         ``,
     ].join('\n'),
+    // `(await x.compile()).createApp()`: a parenthesised await at the head of a chain
+    'src/testing.ts': [
+        `export class App { init() {} }`,
+        `export class TestModule { createApp(): App { return new App(); } }`,
+        `export class ModuleBuilder { async compile(): Promise<TestModule> { return new TestModule(); } }`,
+        `export class Test { static create(meta: object): ModuleBuilder { return new ModuleBuilder(); } }`,
+        `export class Other { init() {} createApp() {} }`,
+        `export async function boot(before?: (app: App) => void) {`,
+        `  const app = (`,
+        `    await Test.create({ imports: [] }).compile()`,
+        `  ).createApp();`,
+        `  app.init();`,                                           // 10: \`app\` of the type's parameter is no local
+        `  (await Test.create({}).compile()).createApp().init();`, // 11
+        `}`,
+        ``,
+    ].join('\n'),
     'src/module.ts': [
         `import { Builder } from './builder';`,
         `export function suite(describe: (n: string, f: () => void) => void) {`,
@@ -141,6 +157,10 @@ test('types elements of awaited collections, loop variables and callback paramet
 
 test('types values of maps and of classes that extend a map', () => {
     assert.deepEqual(lines('Item.total', 'src/registry.ts'), [8, 9, 10]);
+});
+
+test('follows a chain that starts with a parenthesised await', () => {
+    assert.deepEqual(lines('App.init', 'src/testing.ts'), [10, 11]);
 });
 
 test('follows a fluent chain formatted one call per line', () => {

@@ -94,6 +94,17 @@ const LITERAL_NODES = new Set(['string', 'template_string', 'number', 'true', 'f
     'decimal_integer_literal', 'decimal_floating_point_literal', 'interpreted_string_literal', 'raw_string_literal', 'int_literal', 'float_literal',
     'boolean', 'boolean_literal', 'char_literal', 'character_literal', 'real_literal', 'concatenated_string', 'rune_literal', 'regex']);
 const NULL_NODES = new Set(['null', 'undefined', 'none', 'nil', 'null_literal']);
+// Parameters declared inside a type — `cb: (app: App) => void`, interface method signatures —
+// name no variable in any scope; binding them would shadow or contradict real locals.
+const TYPE_CONTEXTS = new Set(['function_type', 'constructor_type', 'method_signature', 'abstract_method_signature', 'call_signature', 'construct_signature', 'function_signature', 'index_signature', 'type_annotation']);
+const FUNCTION_NODES = new Set(['function_declaration', 'function_expression', 'arrow_function', 'method_definition', 'generator_function', 'generator_function_declaration']);
+function inTypeContext(node) {
+    for (let p = node.parent, g = 0; p && g < 12; p = p.parent, g++) {
+        if (TYPE_CONTEXTS.has(p.type)) return true;
+        if (FUNCTION_NODES.has(p.type)) return false;
+    }
+    return false;
+}
 const CHAIN_RE = /^[A-Za-z_$@][\w$]*(?:\(\)|\[\])*(?:\.[A-Za-z_$][\w$]*(?:\(\)|\[\])*){0,7}$/;
 
 /**
@@ -104,6 +115,18 @@ function simplifyChain(text) {
     if (text.length > 4000) return null;
     let s = text.replace(/\bawait\s+/g, '').replace(/^new\s+/, '');
     if (/["'`]/.test(s)) s = s.replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '0');
+    // `(await a.b()).c()`: a leading parenthesised group followed by a member access is its chain
+    for (let g = 0; g < 3 && s.startsWith('('); g++) {
+        let depth = 0, k = -1;
+        for (let i = 0; i < s.length && k < 0; i++) {
+            if (s[i] === '(') depth++;
+            else if (s[i] === ')' && --depth === 0) k = i;
+        }
+        if (k < 0 || !/^\s*[?!]*\s*\./.test(s.slice(k + 1))) break;
+        const inner = s.slice(1, k).trim();
+        if (/\s(as|satisfies)\s/.test(inner)) return null; // a cast names a type, not a chain
+        s = inner.replace(/^new\s+/, '') + s.slice(k + 1);
+    }
     // a fluent chain formatted one call per line is long mostly in whitespace: measure it without
     s = s.replace(/\s+/g, '').replace(/<[^<>()]*>(?=\()/g, '');
     if (s.length > 600) return null;
@@ -320,6 +343,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         } else if (role === 'import') importNodes.push(main);
         else if (role === 'require' && srcNode) requireCalls.push({ node: main, srcNode });
         else if ((role === 'bind' || role === 'field') && bindName) {
+            if ((main.type === 'required_parameter' || main.type === 'optional_parameter') && inTypeContext(main)) continue;
             // one record per binding site; an explicit type annotation beats an initialiser
             const list = role === 'bind' ? binds : fields;
             const key = role + ':' + main.id + ':' + bindName;
