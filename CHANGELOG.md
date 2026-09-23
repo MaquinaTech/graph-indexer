@@ -164,7 +164,7 @@ and real commits, and end to end with coding agents
   0.44 of the cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's
   reasoning; questions and refactors together at 0.48; real issues at 0.85 (0.76–0.96), the same
   as the lookup rules alone (0.86); one-file fixes at 0.85. On questions and refactors it cost
-  0.73, 0.81 and 0.76 of grep in the earlier rounds.
+  0.76, 0.81 and 0.73 of grep in the first three rounds.
 
 ---
 
