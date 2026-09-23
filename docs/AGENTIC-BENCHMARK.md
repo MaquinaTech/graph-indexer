@@ -22,6 +22,10 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `gi2` | graph-indexer instead of Grep/Glob, as `gi` | the second card plus `files` for file names |
 | `grep+gi3` | built-in tools and graph-indexer | third card: `refs` lists indirect subtypes, filters by path and says when a list of calls is complete |
 | `gi3` | graph-indexer instead of Grep/Glob, as `gi` | the third card |
+| `grep+rules` | Read, Grep, Glob, Bash, Edit, Write | no graph-indexer: only the lookup rules the other fourth-round cards share (several lookups per message, a function or 50–100 lines rather than the file, one search for a definition line, one check at the end) — the control that separates the effect of the rules from that of the tools |
+| `grep+gi4` | built-in tools and graph-indexer | fourth card: the same rules, with reads and searches through `gi read` (code plus where each name it uses is defined) and `gi grep` |
+| `grep+gi5` | built-in tools and graph-indexer | fifth card: the rules, with definitions read by name through `gi read` and its card trimmed to the rows that matter |
+| `grep+gi6` | built-in tools and graph-indexer | sixth card: the control's rules word for word for reading and searching; graph-indexer only for exact uses, callers, impact, the final check and a definition a search missed |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
 exactly what the MCP tools return. The tool policy of each arm is stated in the instructions and
@@ -32,12 +36,13 @@ outside the repository is filtering, not searching, and is allowed in the grep-f
 
 | suite | what the agent must do | oracle | tasks |
 |---|---|---|---|
-| **B1** code questions (TypeScript, nestjs) | every call site of a method that shares its name with methods of other classes; callers two levels up; classes implementing an interface | the TypeScript language service (`findReferences`, implementations); score = F1 of the `path:LINE` answer | 8 + 7 + 10 |
-| **B2** multi-site refactors (TypeScript, nestjs) | add a required parameter to a method and pass a value at every call; rename a method whose name other methods share | no type error that the base commit did not have (differential `tsc`), and a structural check that the target changed while the same-name methods did not | 8 + 6 + 6 |
-| **B3** fresh issues (Python: sqlglot, networkx) | fix a real issue from June–September 2026, after the model's training cutoff, described by its behaviour as a user would report it | the tests of the real fix (FAIL_TO_PASS) and the existing tests of the touched modules (PASS_TO_PASS), applied only when grading | 24 |
+| **B1** code questions (TypeScript, nestjs) | every call site of a method that shares its name with methods of other classes; callers two levels up; classes implementing an interface | the TypeScript language service (`findReferences`, implementations); score = F1 of the `path:LINE` answer | 8 + 7 + 10 + 7 |
+| **B2** multi-site refactors (TypeScript, nestjs) | add a required parameter to a method and pass a value at every call; rename a method whose name other methods share | no type error that the base commit did not have (differential `tsc`), and a structural check that the target changed while the same-name methods did not | 8 + 6 + 6 + 1 |
+| **B3** fresh issues (Python: sqlglot, networkx) | fix a real issue from June–September 2026, after the model's training cutoff, described by its behaviour as a user would report it | the tests of the real fix (FAIL_TO_PASS) and the existing tests of the touched modules (PASS_TO_PASS), applied only when grading | 24 + 11 |
 
-The three counts are the three rounds (see [Protocol](#protocol-rounds-and-held-out-tasks)); each
-round's tasks were drawn to avoid every method, interface and call chain used before.
+The counts are the rounds (see [Protocol](#protocol-rounds-and-held-out-tasks)); each round's
+tasks were drawn to avoid every method, interface, call chain and fix used before. B2 has a
+single task in the fourth round: it was the only method left that met the criteria.
 
 **B1** targets are drawn from the compiler's view of the repository: methods with same-name
 methods elsewhere (so a text search over-matches), and call chains the compiler can resolve.
@@ -118,6 +123,15 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    showed where graph-indexer still cost more than grep (which classes implement an interface),
    `rc5` changed that, and new B1 (10) and B2 (6) tasks, none of whose targets had been used,
    measure it. B3 was not repeated.
+
+4. **Fourth round** (snapshots `rc6`/`rc7`, arms `grep`, `grep+rules`, `grep+gi4`, then
+   `grep+gi5` and `grep+gi6`): new tasks for all three suites after the reading layer of
+   [PLAN-AGENTES.md](PLAN-AGENTES.md) — reads that say where each name they use is defined, and
+   the resident process — and a control arm with the lookup rules alone. Two runs per task and
+   arm on B3, one on B1 and B2. The fifth and sixth cards were written after the first
+   repetition had shown where the fourth cost more (the fourth ran once), and ran on the same
+   tasks: they compare arrangements on tasks that played no part in building graph-indexer, but
+   they are not a second held-out test.
 
 Each round is held out for the snapshot it tests — its tasks played no part in the changes —
 and every comparison is within a round, against the `grep` arm on the same tasks.
