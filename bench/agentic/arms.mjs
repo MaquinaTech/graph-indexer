@@ -19,6 +19,8 @@
  *             uses is defined, so the two arms separate what the rules do from what the index adds
  *   grep+gi5  the control's rules word for word, pointed at graph-indexer where it replaces a search
  *             (a definition by name, uses, the tests closest to an edit), with compact reads
+ *   grep+gi6  the control's rules for reading and searching, and graph-indexer only for exact uses,
+ *             callers, impact and the edit check
  *   mcp       graph-indexer as users install it: the MCP server plus the block `init` writes to
  *             CLAUDE.md/AGENTS.md; needs a harness with MCP (run-headless.mjs)
  *   mcp+hooks the same plus the Claude Code hooks (edit check, definition rescue, crawl-gated context)
@@ -27,7 +29,7 @@
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'mcp', 'mcp+hooks'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'mcp', 'mcp+hooks'];
 
 /** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */
 export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks']);
@@ -163,6 +165,22 @@ A live index of this repository's definitions, references, call graph and tests,
 Commands: \`gi read <target>…\` (symbols, path:START-END ranges or files — a long file gives its outline — up to 12 per call) · \`gi refs <name> [--kind call|type|inherit] [--no-tests]\` · \`gi callgraph <name> [--direction callers|callees] [--depth N]\` · \`gi grep <regex>\` · \`gi search "<behaviour in words>"\` · \`gi impact --symbols A,B\` · \`gi check\``;
 }
 
+/**
+ * Sixth card: the control's rules word for word for reading and searching, and graph-indexer only
+ * for what text search cannot answer exactly. In rounds 4a/4b the gains on questions came from
+ * `gi refs`, while on real issues agents used `gi read`/`gi grep` in place of their own reads and
+ * searches, which returned more text than they saved.
+ */
+function giCard6(gi) {
+    return `${rulesCard()}
+
+## graph-indexer (code index for this repository)
+A live index of this repository's definitions, references, call graph and tests, re-synced on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path). Use it for what a text search cannot answer exactly:
+- Uses of a function, method or class, even when other code shares its name: \`gi refs <name>\` (exact call sites; it says when the list is complete). Callers of callers: \`gi callgraph <name> --direction callers --depth 2\`. Classes that implement or extend a type: \`gi refs <name> --kind inherit\`.
+- Before changing a signature or behaviour other code relies on: \`gi impact --symbols <name>\`. When you are done: \`gi check\` says what your edit broke and which test functions are closest to it — run those.
+- A definition a search did not find: \`gi read <name>\`.`;
+}
+
 const POLICY = {
     grep: 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) as you normally would.',
     gi: 'For searching and navigating code use graph-indexer (below) instead of Grep/Glob: do NOT use the Grep or Glob tools, and do NOT run grep, rg, ag, ack, git grep or find in the shell. You may use Read, Edit, Write, and Bash for everything else (running tests or builds, ls, git status/diff).',
@@ -176,6 +194,7 @@ POLICY.gi3 = POLICY.gi;
 POLICY['grep+rules'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below.';
 POLICY['grep+gi4'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its rules.';
 POLICY['grep+gi5'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following the rules below.';
+POLICY['grep+gi6'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below, and graph-indexer where it says.';
 POLICY.mcp = 'Use your built-in tools and the graph-indexer MCP tools as you see fit.';
 POLICY['mcp+hooks'] = POLICY.mcp;
 
@@ -184,6 +203,7 @@ export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep+rules') return `# Tools\n${POLICY[arm]}\n\n${rulesCard()}`;
     if (arm === 'grep+gi4') return `# Tools\n${POLICY[arm]}\n\n${giCard4(gi)}`;
     if (arm === 'grep+gi5') return `# Tools\n${POLICY[arm]}\n\n${giCard5(gi)}`;
+    if (arm === 'grep+gi6') return `# Tools\n${POLICY[arm]}\n\n${giCard6(gi)}`;
     // what a user's CLAUDE.md / AGENTS.md carries after `graph-indexer init`
     if (HARNESS_ARMS.has(arm)) return `# Tools\n${POLICY[arm]}\n\n${managedBlock().replace(/<!-- graph-indexer:(start|end) -->\n?/g, '').trim()}`;
     if (arm === 'grep+gi2' || arm === 'gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi2' })}`;
