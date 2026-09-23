@@ -12,7 +12,23 @@ import path from 'node:path';
 import { argv, WORK } from './lib.mjs';
 import { gradeRun } from './grade.mjs';
 
-const { opt, list, args } = argv();
+const { opt, list, args, flag } = argv();
+
+/**
+ * Has the agent finished? Its transcript must end with an assistant message that asks for no
+ * tool, and must not have changed for a minute. Grading applies the hidden tests to the checkout,
+ * so grading a run that is still going would hand the agent the tests.
+ */
+function finished(transcript) {
+    const lines = fs.readFileSync(transcript, 'utf8').trim().split('\n');
+    let last = null;
+    for (let i = lines.length - 1; i >= 0 && !last; i--) {
+        try { const e = JSON.parse(lines[i]); if (e.type === 'assistant' || e.type === 'user') last = e; } catch { /* partial line */ }
+    }
+    const content = Array.isArray(last?.message?.content) ? last.message.content : [];
+    const quiet = Date.now() - fs.statSync(transcript).mtimeMs > 60_000;
+    return last?.type === 'assistant' && !content.some(c => c.type === 'tool_use') && quiet;
+}
 const label = opt('--gi');
 if (!label) throw new Error('--gi LABEL is required');
 const tsv = path.join(WORK, 'runs', label, 'agents.tsv');
@@ -35,6 +51,7 @@ if (args.includes('--register')) {
         const run = map.get(agent);
         if (!run) { console.log(`${agent}: not registered`); continue; }
         const transcript = ['.output', '.jsonl'].map(e => path.join(dir, agent + e)).find(f => fs.existsSync(f));
+        if (transcript && !flag('--force') && !finished(transcript)) { console.log(`${run}: agent still running (or stopped less than a minute ago) — not graded`); continue; }
         try {
             const r = gradeRun(label, run, transcript);
             const a = r.agent;

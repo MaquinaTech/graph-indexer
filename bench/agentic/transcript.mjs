@@ -13,6 +13,16 @@ import fs from 'node:fs';
 const GREP_CMD = /(^|[|;&(\s])(grep|egrep|fgrep|rg|ag|ack|git\s+grep)(\s|$)/;
 const FIND_NAME = /(^|[|;&(\s])find\s+\S.*-(i?name|i?path|regex)\b/;
 const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
+/** Shell variables that hold graph-indexer's path (`GI=/runs/x/gi; $GI refs Foo`). */
+const GI_VAR = /(?:^|[\s;&|(])([A-Za-z_]\w*)=(["']?)(\S*?(?:\/gi|graph-indexer(?:\.mjs)?))\2(?=[\s;&|)]|$)/g;
+/** Replace `$GI` / `${GI}` by `gi` for every variable known to hold graph-indexer's path. */
+function expandGiVars(cmd, vars) {
+    for (const m of cmd.matchAll(GI_VAR)) vars.add(m[1]);
+    let out = cmd;
+    for (const v of vars) out = out.replace(new RegExp(`\\$\\{?${v}\\}?(?=[\\s;&|)]|$)`, 'g'), 'gi');
+    return out;
+}
+
 /** `gi grep …` is graph-indexer's own text search, not a shell grep. */
 const maskGiGrep = (cmd) => cmd.replace(/(^|[\s/])(gi|graph-indexer(?:\.mjs)?)\s+grep\b/g, '$1$2 GI-GREP');
 const isGrep = (cmd) => GREP_CMD.test(maskGiGrep(cmd)) || FIND_NAME.test(cmd);
@@ -102,10 +112,12 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
     const bash = [];
     const reads = new Set(), edits = new Set();
     let giCalls = 0, grepCalls = 0;
+    const giVars = new Set();
+    for (const t of tools) if (t.name === 'Bash') t.cmd = expandGiVars(String(t.input.command ?? ''), giVars);
     for (const t of tools) {
         counts[t.name] = (counts[t.name] ?? 0) + 1;
         if (t.name === 'Bash') {
-            const cmd = String(t.input.command ?? '');
+            const cmd = t.cmd;
             bash.push(cmd);
             if (GI_CMD.test(cmd)) giCalls++;
             if (isGrep(cmd) && grepUse(cmd, repo) === 'search') grepCalls++; // code searches, not output filters
@@ -121,7 +133,7 @@ export function parseTranscript(file, { arm = null, repo = null } = {}) {
         for (const t of tools) {
             if (policy.forbidTools.includes(t.name)) violations.push(`${t.name} tool`);
             if (t.name !== 'Bash') continue;
-            const cmd = String(t.input.command ?? '');
+            const cmd = t.cmd;
             for (const re of policy.forbidBash) {
                 if (!re.test(cmd)) continue;
                 // for the grep-free arm only code searches count; filtering output is allowed in spirit
