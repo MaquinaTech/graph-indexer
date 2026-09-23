@@ -277,6 +277,46 @@ export class CodeIntel {
     }
 
     /**
+     * String literals naming a member in code that works with its class or a subclass —
+     * `sinon.stub(obj, 'name')`, `jest.spyOn(x, 'name')`, `getattr(o, "name")`,
+     * `patch.object(C, "name")`, `patch("pkg.mod.C.name")`: uses no type checker sees, which a
+     * rename has to update too. Test titles (`describe('name', …)`) are left out.
+     * @returns {{ path: string, line: number, text: string }[]}
+     */
+    stringMentions(id, { max = 20 } = {}) {
+        const sym = this.sym(id);
+        if (!sym || !['method', 'property', 'field', 'function'].includes(sym.kind) || sym.name.length < 3) return [];
+        const files = new Set(this.references(id, { family: true })?.groups.keys() ?? []);
+        const type = this.ix.resolver.enclosingType(sym.id);
+        if (type?.id != null) {
+            const family = new Set([type.id]);
+            let frontier = [type.id];
+            for (let depth = 0; depth < 4 && frontier.length; depth++) {
+                const next = [];
+                for (const tid of frontier) {
+                    for (const { src_id } of this.store.all("SELECT DISTINCT src_id FROM refs WHERE dst_id = ? AND kind = 'inherit' AND src_id IS NOT NULL", tid)) {
+                        if (!family.has(src_id)) { family.add(src_id); next.push(src_id); }
+                    }
+                }
+                frontier = next;
+            }
+            const ids = [...family];
+            for (const { path: p } of this.store.all(`SELECT DISTINCT f.path FROM refs r JOIN files f ON f.id = r.file_id WHERE r.dst_id IN (${ids.map(() => '?').join(',')})`, ...ids)) files.add(p);
+        } else files.add(sym.path);
+        const name = sym.name.replace(/[$]/g, '\\$');
+        const lit = new RegExp(`(['"\`])(?:[\\w.]*\\.)?${name}\\1`);
+        const title = /^\s*(?:describe|it|test|context|suite)(?:\.\w+)?\s*\(/;
+        const out = [];
+        for (const f of [...files].sort()) {
+            const lines = this.fileLines(f) ?? [];
+            for (let i = 0; i < lines.length && out.length < max; i++) {
+                if (lit.test(lines[i]) && !title.test(lines[i])) out.push({ path: f, line: i + 1, text: lines[i].trim() });
+            }
+        }
+        return out;
+    }
+
+    /**
      * All references to a symbol, grouped by file. Includes its overload set and, for members,
      * the method family: calls through a supertype (may dispatch here) and calls to overrides in
      * subtypes — each labelled so the agent can tell direct uses from dispatch-related ones.

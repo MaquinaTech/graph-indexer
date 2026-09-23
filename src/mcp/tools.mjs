@@ -417,7 +417,17 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         : 'No bound references. It may be unused, an entry point, invoked by a framework/reflection, or only called through dynamic receivers.');
     if (res.elsewhere?.length) out.push(`Other references named "${s.name}" resolve elsewhere: ${res.elsewhere.map(e => `${e.n} → ${e.qname} (${e.path})`).join(', ')}.`);
     out.push(...unboundNote(res.unbound, s));
+    out.push(...stringMentionNote(intel, s));
     return out.join('\n');
+}
+
+/** Stubs/spies/getattr naming a member by string: a rename must update them, the index cannot bind them. */
+function stringMentionNote(intel, s, max = 8) {
+    const sm = intel.stringMentions(s.id);
+    if (!sm.length) return [];
+    return [`Also named as a string in ${plural(new Set(sm.map(m => m.path)).size, 'file')} that use${sm.length === 1 ? 's' : ''} this class (stubs, spies, getattr — not bound by the index; a rename must update them):`,
+        ...sm.slice(0, max).map(m => `  ${m.path}:${m.line}  │ ${clip(m.text, 110)}`),
+        ...(sm.length > max ? [`  … ${sm.length - max} more`] : [])];
 }
 
 async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, limit = 40 }) {
@@ -584,6 +594,8 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
         if (s.kind === 'field' || s.kind === 'property') blind.push(`${s.qname}: field/attribute uses are only partly indexed (untyped receivers) — grep "${s.name}"`);
         const u = intel.unboundFor(s.id);
         if (u.plausible.length) blind.push(`${s.qname}: ${u.plausible.length} same-name call site${u.plausible.length === 1 ? '' : 's'} with unknown receiver type in files that mention ${u.typeNames.length ? u.typeNames.join('/') : 'it'} — ${u.plausible.slice(0, 4).map(r => `${r.path}:${r.line}`).join(', ')}${u.plausible.length > 4 ? ', …' : ''}`);
+        const sm = intel.stringMentions(s.id);
+        if (sm.length) blind.push(`${s.qname}: named as a string (stub/spy/getattr) at ${sm.slice(0, 4).map(m => `${m.path}:${m.line}`).join(', ')}${sm.length > 4 ? `, … ${sm.length - 4} more` : ''}`);
     }
     if (blind.length) { out.push('not visible to the index (check by hand):'); for (const b of blind) out.push(`    ${b}`); }
     const co = intel.coChange([...seedFiles]);

@@ -28,6 +28,10 @@ const FILES = {
     'lib/base.py': `class Base:\n    def run(self):\n        return 1\n\n\nclass Child(Base):\n    def __init__(self, n):\n        self.n = n\n\n    def run(self):\n        return super().run()\n\n\ndef build() -> "Child":\n    return Child(1)\n`,
     // Go: implicit interface satisfaction, factories through a package
     'go.mod': 'module example.com/app\n\ngo 1.21\n',
+    // narrowing by type tests, and members named by string in stubs
+    'src/errors.ts': `export class WsError {\n  getError() { return 1; }\n}\nexport class RpcError {\n  getError() { return 2; }\n}\nexport function handle(e: unknown) {\n  if (!(e instanceof WsError)) {\n    return 0;\n  }\n  return e.getError();\n}\n`,
+    'src/creator.ts': `export class ContextCreator {\n  createContext() { return []; }\n}\nexport class FiltersContext extends ContextCreator {\n  create() { return this.createContext(); }\n}\n`,
+    'test/filters.spec.ts': `import { FiltersContext } from '../src/creator';\ndescribe('createContext', () => {\n  const f = new FiltersContext();\n  sinon.stub(f, 'createContext').returns([]);\n});\n`,
     'binding/binding.go': `package binding\n\ntype Binding interface {\n\tName() string\n\tBind(v any) error\n}\n\ntype jsonBinding struct{}\n\nfunc (jsonBinding) Name() string { return "json" }\n\nfunc (jsonBinding) Bind(v any) error { return nil }\n\ntype half struct{}\n\nfunc (half) Name() string { return "half" }\n`,
 };
 
@@ -100,4 +104,17 @@ test('Go: a type implements an interface when its method set covers it', () => {
 test('the unbound footer says why unrelated same-name calls can be ignored', async () => {
     const text = await callTool(intel, 'find_references', { symbol: 'HandlerStorage.set' });
     assert.match(text, /none is in a file that mentions `HandlerStorage`/);
+});
+
+test('instanceof narrows the receiver, also after an early return', async () => {
+    const out = await callTool(intel, 'find_references', { symbol: 'WsError.getError' });
+    assert.match(out, /src\/errors\.ts[\s\S]*return e\.getError\(\)/);
+    assert.doesNotMatch(out, /Possibly missed/);
+});
+
+test('members named by string in stubs are reported for renames', async () => {
+    const out = await callTool(intel, 'find_references', { symbol: 'ContextCreator.createContext' });
+    assert.match(out, /named as a string/);
+    assert.match(out, /test\/filters\.spec\.ts:4 .*sinon\.stub\(f, 'createContext'\)/);
+    assert.doesNotMatch(out, /filters\.spec\.ts:2 /); // a describe() title is not a use
 });
