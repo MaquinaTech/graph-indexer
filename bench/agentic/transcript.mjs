@@ -57,6 +57,8 @@ export const POLICIES = {
     'grep+gi+': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated' },
     'grep+gi2': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated (adaptive rules)' },
     gi2: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (adaptive rules)' },
+    'grep+gi3': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, integrated (third card)' },
+    gi3: { forbidTools: ['Grep', 'Glob'], forbidBash: [{ test: isGrep }], label: 'graph-indexer instead of grep/glob (third card)' },
 };
 
 export function parseTranscript(file, { arm = null, repo = null } = {}) {

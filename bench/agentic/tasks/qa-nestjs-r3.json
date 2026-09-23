@@ -1,0 +1,654 @@
+[
+  {
+    "id": "qa-nestjs-r3-calls-01",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `ClientRedis.createResponseCallback` (declared in `packages/microservices/client/client-redis.ts`, line 108) is called — including calls in test/spec files. Other methods in the codebase share the name `createResponseCallback`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/microservices/client/client-redis.ts",
+          "line": 68
+        },
+        {
+          "path": "packages/microservices/test/client/client-redis.spec.ts",
+          "line": 128
+        },
+        {
+          "path": "packages/microservices/test/client/client-redis.spec.ts",
+          "line": 147
+        },
+        {
+          "path": "packages/microservices/test/client/client-redis.spec.ts",
+          "line": 174
+        }
+      ]
+    },
+    "meta": {
+      "target": "ClientRedis.createResponseCallback",
+      "path": "packages/microservices/client/client-redis.ts",
+      "line": 108,
+      "grepCallLines": 14,
+      "sameNameNoise": 10,
+      "testCalls": 3
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-calls-02",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Find every place under `packages/` where the method `HttpArgumentsHost.getResponse` (declared in `packages/common/interfaces/features/arguments-host.interface.ts`, line 16) is called — including calls in test/spec files. Other methods in the codebase share the name `getResponse`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/platform-express/multer/interceptors/any-files.interceptor.ts",
+          "line": 48
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/file-fields.interceptor.ts",
+          "line": 54
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/file.interceptor.ts",
+          "line": 52
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/files.interceptor.ts",
+          "line": 55
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/no-files.interceptor.ts",
+          "line": 48
+        },
+        {
+          "path": "packages/core/test/helpers/execution-context-host.spec.ts",
+          "line": 60
+        }
+      ]
+    },
+    "meta": {
+      "target": "HttpArgumentsHost.getResponse",
+      "path": "packages/common/interfaces/features/arguments-host.interface.ts",
+      "line": 16,
+      "grepCallLines": 24,
+      "sameNameNoise": 18,
+      "testCalls": 1
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-callers-01",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `InternalProvidersStorage.httpAdapter` (declared in `packages/core/injector/internal-providers-storage.ts`, line 16). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/injector/container.ts",
+          "start": 53,
+          "end": 61,
+          "name": "NestContainer.setHttpAdapter",
+          "level": 1
+        },
+        {
+          "path": "packages/core/injector/container.ts",
+          "start": 63,
+          "end": 65,
+          "name": "NestContainer.getHttpAdapterRef",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-factory.ts",
+          "start": 191,
+          "end": 235,
+          "name": "NestFactoryStatic.initialize",
+          "level": 2
+        },
+        {
+          "path": "packages/testing/testing-module.ts",
+          "start": 59,
+          "end": 82,
+          "name": "TestingModule.createNestApplication",
+          "level": 2
+        },
+        {
+          "path": "packages/core/middleware/middleware-module.ts",
+          "start": 53,
+          "end": 80,
+          "name": "MiddlewareModule.register",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 57,
+          "end": 441,
+          "name": "RouterExplorer",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 263,
+          "end": 313,
+          "name": "RouterExplorer.applyHostFilter",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 31,
+          "end": 219,
+          "name": "RoutesResolver",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 142,
+          "end": 156,
+          "name": "RoutesResolver.registerNotFoundHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/routes-resolver.ts",
+          "start": 158,
+          "end": 179,
+          "name": "RoutesResolver.registerExceptionHandler",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "InternalProvidersStorage.httpAdapter",
+      "path": "packages/core/injector/internal-providers-storage.ts",
+      "line": 16,
+      "level1": 2,
+      "total": 10
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-callers-02",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `GraphInspector.insertOrphanedEnhancer` (declared in `packages/core/inspector/graph-inspector.ts`, line 86). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 396,
+          "end": 405,
+          "name": "NestApplication.useGlobalFilters",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 407,
+          "end": 416,
+          "name": "NestApplication.useGlobalPipes",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 418,
+          "end": 427,
+          "name": "NestApplication.useGlobalInterceptors",
+          "level": 1
+        },
+        {
+          "path": "packages/core/nest-application.ts",
+          "start": 429,
+          "end": 438,
+          "name": "NestApplication.useGlobalGuards",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/nest-microservice.ts",
+          "start": 110,
+          "end": 119,
+          "name": "NestMicroservice.useGlobalFilters",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/nest-microservice.ts",
+          "start": 121,
+          "end": 130,
+          "name": "NestMicroservice.useGlobalPipes",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/nest-microservice.ts",
+          "start": 132,
+          "end": 141,
+          "name": "NestMicroservice.useGlobalInterceptors",
+          "level": 1
+        },
+        {
+          "path": "packages/microservices/nest-microservice.ts",
+          "start": 143,
+          "end": 152,
+          "name": "NestMicroservice.useGlobalGuards",
+          "level": 1
+        }
+      ]
+    },
+    "meta": {
+      "target": "GraphInspector.insertOrphanedEnhancer",
+      "path": "packages/core/inspector/graph-inspector.ts",
+      "line": 86,
+      "level1": 8,
+      "total": 8
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-callers-03",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `HttpArgumentsHost.getRequest` (declared in `packages/common/interfaces/features/arguments-host.interface.ts`, line 12). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/platform-express/multer/interceptors/any-files.interceptor.ts",
+          "start": 41,
+          "end": 57,
+          "name": "MixinInterceptor.intercept",
+          "level": 1
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/file-fields.interceptor.ts",
+          "start": 45,
+          "end": 65,
+          "name": "MixinInterceptor.intercept",
+          "level": 1
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/file.interceptor.ts",
+          "start": 43,
+          "end": 63,
+          "name": "MixinInterceptor.intercept",
+          "level": 1
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/files.interceptor.ts",
+          "start": 46,
+          "end": 66,
+          "name": "MixinInterceptor.intercept",
+          "level": 1
+        },
+        {
+          "path": "packages/platform-express/multer/interceptors/no-files.interceptor.ts",
+          "start": 41,
+          "end": 57,
+          "name": "MixinInterceptor.intercept",
+          "level": 1
+        },
+        {
+          "path": "packages/core/interceptors/interceptors-consumer.ts",
+          "start": 28,
+          "end": 37,
+          "name": "nextFn",
+          "level": 2
+        },
+        {
+          "path": "packages/core/interceptors/interceptors-context-creator.ts",
+          "start": 38,
+          "end": 59,
+          "name": "InterceptorsContextCreator.createConcreteContext",
+          "level": 2
+        },
+        {
+          "path": "packages/core/interceptors/interceptors-context-creator.ts",
+          "start": 61,
+          "end": 81,
+          "name": "InterceptorsContextCreator.getInterceptorInstance",
+          "level": 2
+        },
+        {
+          "path": "packages/core/guards/guards-consumer.ts",
+          "start": 8,
+          "end": 29,
+          "name": "GuardsConsumer.tryActivate",
+          "level": 2
+        },
+        {
+          "path": "packages/core/guards/guards-context-creator.ts",
+          "start": 39,
+          "end": 54,
+          "name": "GuardsContextCreator.createConcreteContext",
+          "level": 2
+        },
+        {
+          "path": "packages/core/guards/guards-context-creator.ts",
+          "start": 56,
+          "end": 76,
+          "name": "GuardsContextCreator.getGuardInstance",
+          "level": 2
+        },
+        {
+          "path": "packages/core/exceptions/base-exception-filter-context.ts",
+          "start": 39,
+          "end": 57,
+          "name": "BaseExceptionFilterContext.getFilterInstance",
+          "level": 2
+        },
+        {
+          "path": "packages/core/exceptions/exceptions-handler.ts",
+          "start": 12,
+          "end": 17,
+          "name": "ExceptionsHandler.next",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "HttpArgumentsHost.getRequest",
+      "path": "packages/common/interfaces/features/arguments-host.interface.ts",
+      "line": 12,
+      "level1": 5,
+      "total": 13
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-callers-04",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "I plan to change the behaviour of the method `Injector.loadEnhancersPerContext` (declared in `packages/core/injector/injector.ts`, line 797). List every function or method under `packages/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/injector/injector.ts",
+          "start": 205,
+          "end": 219,
+          "name": "Injector.loadController",
+          "level": 1
+        },
+        {
+          "path": "packages/core/injector/injector.ts",
+          "start": 237,
+          "end": 252,
+          "name": "Injector.loadProvider",
+          "level": 1
+        },
+        {
+          "path": "packages/core/injector/injector.ts",
+          "start": 776,
+          "end": 795,
+          "name": "Injector.loadPerContext",
+          "level": 1
+        },
+        {
+          "path": "packages/core/injector/instance-loader.ts",
+          "start": 87,
+          "end": 96,
+          "name": "InstanceLoader.createInstancesOfControllers",
+          "level": 2
+        },
+        {
+          "path": "packages/core/injector/injector.ts",
+          "start": 472,
+          "end": 518,
+          "name": "Injector.resolveComponentHost",
+          "level": 2
+        },
+        {
+          "path": "packages/core/injector/injector.ts",
+          "start": 583,
+          "end": 651,
+          "name": "Injector.lookupComponentInImports",
+          "level": 2
+        },
+        {
+          "path": "packages/core/injector/instance-loader.ts",
+          "start": 69,
+          "end": 78,
+          "name": "InstanceLoader.createInstancesOfProviders",
+          "level": 2
+        },
+        {
+          "path": "packages/core/injector/abstract-instance-resolver.ts",
+          "start": 59,
+          "end": 77,
+          "name": "pluckInstance",
+          "level": 2
+        },
+        {
+          "path": "packages/core/middleware/middleware-module.ts",
+          "start": 235,
+          "end": 290,
+          "name": "MiddlewareModule.bindHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/core/router/router-explorer.ts",
+          "start": 356,
+          "end": 406,
+          "name": "RouterExplorer.createRequestScopedHandler",
+          "level": 2
+        },
+        {
+          "path": "packages/microservices/listeners-controller.ts",
+          "start": 234,
+          "end": 294,
+          "name": "requestScopedHandler",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "Injector.loadEnhancersPerContext",
+      "path": "packages/core/injector/injector.ts",
+      "line": 797,
+      "level1": 3,
+      "total": 11
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-impls-01",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "List every class under `packages/` (excluding test/spec files) that implements the interface `LoggerService` declared in `packages/common/services/logger.service.ts`, line 14 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/common/services/logger.service.ts",
+          "start": 78,
+          "end": 335,
+          "name": "Logger"
+        },
+        {
+          "path": "packages/common/services/console-logger.service.ts",
+          "start": 41,
+          "end": 365,
+          "name": "ConsoleLogger"
+        },
+        {
+          "path": "packages/core/injector/helpers/silent-logger.ts",
+          "start": 5,
+          "end": 13,
+          "name": "SilentLogger"
+        },
+        {
+          "path": "packages/testing/services/testing-logger.service.ts",
+          "start": 8,
+          "end": 20,
+          "name": "TestingLogger"
+        },
+        {
+          "path": "packages/core/repl/repl-logger.ts",
+          "start": 6,
+          "end": 20,
+          "name": "ReplLogger"
+        }
+      ]
+    },
+    "meta": {
+      "target": "LoggerService",
+      "path": "packages/common/services/logger.service.ts",
+      "line": 14,
+      "total": 5
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-impls-02",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "List every class under `packages/` (excluding test/spec files) that implements the interface `CustomTransportStrategy` declared in `packages/microservices/interfaces/custom-transport-strategy.interface.ts`, line 6 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/microservices/server/server-grpc.ts",
+          "start": 49,
+          "end": 693,
+          "name": "ServerGrpc"
+        },
+        {
+          "path": "packages/microservices/server/server-kafka.ts",
+          "start": 42,
+          "end": 323,
+          "name": "ServerKafka"
+        },
+        {
+          "path": "packages/microservices/server/server-mqtt.ts",
+          "start": 32,
+          "end": 226,
+          "name": "ServerMqtt"
+        },
+        {
+          "path": "packages/microservices/server/server-nats.ts",
+          "start": 19,
+          "end": 176,
+          "name": "ServerNats"
+        },
+        {
+          "path": "packages/microservices/server/server-redis.ts",
+          "start": 25,
+          "end": 201,
+          "name": "ServerRedis"
+        },
+        {
+          "path": "packages/microservices/server/server-rmq.ts",
+          "start": 42,
+          "end": 258,
+          "name": "ServerRMQ"
+        },
+        {
+          "path": "packages/microservices/server/server-tcp.ts",
+          "start": 32,
+          "end": 150,
+          "name": "ServerTCP"
+        }
+      ]
+    },
+    "meta": {
+      "target": "CustomTransportStrategy",
+      "path": "packages/microservices/interfaces/custom-transport-strategy.interface.ts",
+      "line": 6,
+      "total": 7
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-impls-03",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "List every class under `packages/` (excluding test/spec files) that implements the interface `HttpServer` declared in `packages/common/interfaces/http/http-server.interface.ts`, line 21 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/core/adapters/http-adapter.ts",
+          "start": 12,
+          "end": 141,
+          "name": "AbstractHttpAdapter"
+        },
+        {
+          "path": "packages/platform-express/adapters/express-adapter.ts",
+          "start": 54,
+          "end": 456,
+          "name": "ExpressAdapter"
+        },
+        {
+          "path": "packages/platform-fastify/adapters/fastify-adapter.ts",
+          "start": 121,
+          "end": 739,
+          "name": "FastifyAdapter"
+        }
+      ]
+    },
+    "meta": {
+      "target": "HttpServer",
+      "path": "packages/common/interfaces/http/http-server.interface.ts",
+      "line": 21,
+      "total": 3
+    }
+  },
+  {
+    "id": "qa-nestjs-r3-impls-04",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "List every class under `packages/` (excluding test/spec files) that implements the interface `WebSocketAdapter` declared in `packages/common/interfaces/websockets/web-socket-adapter.interface.ts`, line 14 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/websockets/adapters/ws-adapter.ts",
+          "start": 13,
+          "end": 59,
+          "name": "AbstractWsAdapter"
+        },
+        {
+          "path": "packages/platform-ws/adapters/ws-adapter.ts",
+          "start": 34,
+          "end": 228,
+          "name": "WsAdapter"
+        },
+        {
+          "path": "packages/platform-socket.io/adapters/io-adapter.ts",
+          "start": 14,
+          "end": 85,
+          "name": "IoAdapter"
+        }
+      ]
+    },
+    "meta": {
+      "target": "WebSocketAdapter",
+      "path": "packages/common/interfaces/websockets/web-socket-adapter.interface.ts",
+      "line": 14,
+      "total": 3
+    }
+  }
+]

@@ -1,0 +1,35 @@
+{
+  "target": {
+    "file": "packages/core/helpers/context-creator.ts",
+    "cls": "ContextCreator",
+    "name": "getContextId",
+    "newName": "getContextIdChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/core/injector/injector.ts",
+      "cls": "Injector",
+      "name": "getContextId",
+      "params": 2
+    },
+    {
+      "file": "packages/core/middleware/middleware-module.ts",
+      "cls": "MiddlewareModule",
+      "name": "getContextId",
+      "params": 2
+    },
+    {
+      "file": "packages/core/router/router-explorer.ts",
+      "cls": "RouterExplorer",
+      "name": "getContextId",
+      "params": 2
+    },
+    {
+      "file": "packages/microservices/listeners-controller.ts",
+      "cls": "ListenersController",
+      "name": "getContextId",
+      "params": 2
+    }
+  ]
+}

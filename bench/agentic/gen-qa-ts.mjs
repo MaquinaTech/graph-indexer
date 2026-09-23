@@ -12,7 +12,10 @@
  * used for call questions, so "the calls of X" has one unambiguous compiler answer.
  *
  *   node bench/agentic/gen-qa-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ \
- *        --out bench/agentic/tasks/qa-nestjs.json [--seed 3] [--calls 8] [--callers 4] [--impls 3]
+ *        [--seed 3] [--calls 8] [--callers 4] [--impls 3] [--set NAME]
+ *
+ * --set NAME writes a separate task set (tasks/qa-<name>-<set>.json, ids qa-<name>-<set>-…) whose
+ * targets avoid every method and interface used by the repository's other question sets.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +29,14 @@ const { opt } = argv();
 const repo = path.resolve(GI_ROOT, opt('--repo', 'test/fixtures/nestjs'));
 const name = opt('--name', path.basename(repo));
 const scope = opt('--scope', 'packages/');
-const out = path.resolve(GI_ROOT, opt('--out', `bench/agentic/tasks/qa-${name}.json`));
+const set = opt('--set', null);
+const prefix = set ? `${name}-${set}` : name;
+const out = path.resolve(GI_ROOT, opt('--out', `bench/agentic/tasks/qa-${prefix}.json`));
+// targets taken by the repository's other question sets: method names, and interfaces by qualified name
+const tasksDir = path.dirname(out);
+const taken = new Set(fs.readdirSync(tasksDir)
+    .filter(f => f.startsWith(`qa-${name}`) && f.endsWith('.json') && path.join(tasksDir, f) !== out)
+    .flatMap(f => JSON.parse(fs.readFileSync(path.join(tasksDir, f), 'utf8')).flatMap(t => [t.meta.target, t.meta.target.split('.').pop()])));
 const seed = Number(opt('--seed', 3));
 const want = { calls: Number(opt('--calls', 8)), callers: Number(opt('--callers', 4)), impls: Number(opt('--impls', 3)) };
 
@@ -76,7 +86,7 @@ const used = new Set();
 // ── call sites with same-name noise ─────────────────────────────────────────────
 for (const m of methods) {
     if (tasks.filter(t => t.kind === 'call-sites').length >= want.calls) break;
-    if (used.has(m.name)) continue;
+    if (used.has(m.name) || taken.has(m.name)) continue;
     const r = oracle.references(m.path, m.name_line, m.name_col);
     if (!r || r.groups !== 1) continue;
     const calls = [...new Map(r.refs.filter(x => x.call && inScope(x.path)).map(x => [`${x.path}:${x.line}`, x])).values()];
@@ -89,7 +99,7 @@ for (const m of methods) {
     used.add(m.name);
     const n = tasks.filter(t => t.kind === 'call-sites').length + 1;
     tasks.push({
-        id: `qa-${name}-calls-${String(n).padStart(2, '0')}`,
+        id: `qa-${prefix}-calls-${String(n).padStart(2, '0')}`,
         family: 'qa', kind: 'call-sites', repo: name, base,
         statement: `Find every place under \`${scope}\` where the ${m.is_static ? 'static ' : ''}method \`${m.qname}\` (declared in \`${m.path}\`, line ${m.start_line}) is called — including calls in test/spec files. Other methods in the codebase share the name \`${m.name}\`; calls to those must not be listed.`,
         answerFormat: 'One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.',
@@ -102,7 +112,7 @@ for (const m of methods) {
 // ── two-level callers ───────────────────────────────────────────────────────────
 for (const m of methods) {
     if (tasks.filter(t => t.kind === 'callers-2').length >= want.callers) break;
-    if (used.has(m.name)) continue;
+    if (used.has(m.name) || taken.has(m.name)) continue;
     const r = oracle.references(m.path, m.name_line, m.name_col);
     if (!r || r.groups !== 1) continue;
     const items = oracle.incomingCalls(m.path, m.name_line, m.name_col, 2).filter(c => inScope(c.path) && !isTest(c.path) && c.kind !== 'script' && c.kind !== 'module');
@@ -126,7 +136,7 @@ for (const m of methods) {
     used.add(m.name);
     const n = tasks.filter(t => t.kind === 'callers-2').length + 1;
     tasks.push({
-        id: `qa-${name}-callers-${String(n).padStart(2, '0')}`,
+        id: `qa-${prefix}-callers-${String(n).padStart(2, '0')}`,
         family: 'qa', kind: 'callers-2', repo: name, base,
         statement: `I plan to change the behaviour of the ${m.is_static ? 'static ' : ''}method \`${m.qname}\` (declared in \`${m.path}\`, line ${m.start_line}). List every function or method under \`${scope}\` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.`,
         answerFormat: 'One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.',
@@ -141,12 +151,13 @@ const ifaces = shuffle(intel.store.all(`SELECT s.name, s.qname, s.name_line, s.n
     WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'interface' AND length(s.name) >= 4`).filter(s => inScope(s.path)));
 for (const it of ifaces) {
     if (tasks.filter(t => t.kind === 'implementations').length >= want.impls) break;
+    if (taken.has(it.qname)) continue;
     const impls = oracle.implementations(it.path, it.name_line, it.name_col).filter(c => inScope(c.path) && !isTest(c.path));
     const uniq = [...new Map(impls.map(c => [`${c.path}:${c.start}`, c])).values()];
     if (uniq.length < 3 || uniq.length > 15) continue;
     const n = tasks.filter(t => t.kind === 'implementations').length + 1;
     tasks.push({
-        id: `qa-${name}-impls-${String(n).padStart(2, '0')}`,
+        id: `qa-${prefix}-impls-${String(n).padStart(2, '0')}`,
         family: 'qa', kind: 'implementations', repo: name, base,
         statement: `List every class under \`${scope}\` (excluding test/spec files) that implements the interface \`${it.qname}\` declared in \`${it.path}\`, line ${it.start_line} — directly or by extending a class that implements it.`,
         answerFormat: 'One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.',

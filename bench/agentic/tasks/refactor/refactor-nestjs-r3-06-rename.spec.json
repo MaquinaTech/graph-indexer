@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/microservices/client/client-proxy.ts",
+    "cls": "ClientProxy",
+    "name": "normalizePattern",
+    "newName": "normalizePatternChecked",
+    "params": 1
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/server/server.ts",
+      "cls": "Server",
+      "name": "normalizePattern",
+      "params": 1
+    }
+  ]
+}

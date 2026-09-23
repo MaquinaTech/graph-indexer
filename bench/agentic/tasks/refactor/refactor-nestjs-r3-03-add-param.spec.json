@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/websockets/web-sockets-controller.ts",
+    "cls": "WebSocketsController",
+    "name": "pickResult",
+    "params": 2,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/core/guards/guards-consumer.ts",
+      "cls": "GuardsConsumer",
+      "name": "pickResult",
+      "params": 1
+    }
+  ]
+}

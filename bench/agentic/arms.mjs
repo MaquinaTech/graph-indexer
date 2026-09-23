@@ -11,12 +11,14 @@
  *   grep+gi2  second iteration of the integrated card: verification only for changes that cross a
  *             function's boundary
  *   gi2       the grep-free arm with the second card (plus `gi files` for file names)
+ *   grep+gi3  the second card for graph-indexer with indirect subtypes, `refs --path` and complete-list notes
+ *   gi3       its grep-free counterpart
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3'];
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {
@@ -63,7 +65,7 @@ Commands:
  * fresh bug-fix tasks the first card's unconditional "check / impact before finishing" added turns
  * without adding solved tasks. Without grep (gi2) the card also covers text and file-name search.
  */
-function integratedCard2(gi, { grep = true } = {}) {
+function integratedCard2(gi, { grep = true, v = 2 } = {}) {
     const head = `## graph-indexer (code index for this repository)
 A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).`;
     const rules = [
@@ -78,7 +80,9 @@ A live structural index of the repository — definitions, references bound thro
     ];
     const commands = [
         'Commands:',
-        '- `gi refs <symbol> [--kind call|type|inherit|new|value] [--no-tests]` — every use, grouped by file, with confidence; lists same-name calls it could not bind and names used as strings (stubs, getattr).',
+        v >= 3
+            ? '- `gi refs <symbol> [--kind call|type|inherit|new|value] [--path DIR] [--no-tests]` — every use, grouped by file, with confidence; for a class or interface also what inherits it indirectly; says when the list is complete, lists same-name calls it could not bind and names used as strings (stubs, getattr).'
+            : '- `gi refs <symbol> [--kind call|type|inherit|new|value] [--no-tests]` — every use, grouped by file, with confidence; lists same-name calls it could not bind and names used as strings (stubs, getattr).',
         '- `gi symbol <Name | Class.member | path:Name | path:LINE>… [--no-code]` — definitions with line numbers, members, callers/callees summary.',
         '- `gi search "<behaviour or identifier>" [--path DIR] [--kind K] [--limit N]` — ranked symbols with location and matching lines.',
         '- `gi grep <regex> [--path DIR] [--literal] [-i]` — text search over all files; each code match shows its enclosing definition and, for identifiers, the definition it refers to.',
@@ -98,10 +102,13 @@ const POLICY = {
     'grep+gi2': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below) where it saves work.',
 };
 POLICY.gi2 = POLICY.gi;
+POLICY['grep+gi3'] = POLICY['grep+gi2'];
+POLICY.gi3 = POLICY.gi;
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
     if (arm === 'grep+gi2' || arm === 'gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi2' })}`;
+    if (arm === 'grep+gi3' || arm === 'gi3') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi3', v: 3 })}`;
     const grep = arm !== 'gi';
     const card = arm === 'grep+gi+' || (arm === 'gi' && (caps.grep || caps.check)) ? integratedCard(gi, caps, { grep }) : basicCard(gi, { grep });
     return `# Tools\n${POLICY[arm]}\n\n${card}`;

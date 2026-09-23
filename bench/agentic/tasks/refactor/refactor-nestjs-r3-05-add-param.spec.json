@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/microservices/client/client-grpc.ts",
+    "cls": "ClientGrpcProxy",
+    "name": "createUnaryServiceMethod",
+    "params": 3,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/server/server-grpc.ts",
+      "cls": "ServerGrpc",
+      "name": "createUnaryServiceMethod",
+      "params": 1
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "target": {
+    "file": "packages/common/module-utils/configurable-module.builder.ts",
+    "cls": "ConfigurableModuleBuilder",
+    "name": "build",
+    "params": 1,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/common/pipes/file/parse-file-pipe.builder.ts",
+      "cls": "ParseFilePipeBuilder",
+      "name": "build",
+      "params": 1
+    },
+    {
+      "file": "packages/core/middleware/builder.ts",
+      "cls": "MiddlewareBuilder",
+      "name": "build",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/record-builders/mqtt.record-builder.ts",
+      "cls": "MqttRecordBuilder",
+      "name": "build",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/record-builders/nats.record-builder.ts",
+      "cls": "NatsRecordBuilder",
+      "name": "build",
+      "params": 0
+    },
+    {
+      "file": "packages/microservices/record-builders/rmq.record-builder.ts",
+      "cls": "RmqRecordBuilder",
+      "name": "build",
+      "params": 0
+    }
+  ]
+}

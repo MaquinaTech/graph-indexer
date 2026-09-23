@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/microservices/helpers/tcp-socket.ts",
+    "cls": "TcpSocket",
+    "name": "sendMessage",
+    "newName": "sendMessageChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/server/server-kafka.ts",
+      "cls": "ServerKafka",
+      "name": "sendMessage",
+      "params": 4
+    },
+    {
+      "file": "packages/microservices/server/server-rmq.ts",
+      "cls": "ServerRMQ",
+      "name": "sendMessage",
+      "params": 3
+    }
+  ]
+}
