@@ -10,6 +10,9 @@
  */
 import fs from 'node:fs';
 
+// tokens a tool result adds to the next call's context: 2.63 characters per token, fitted on 301 calls
+// (237 runs) that follow a message without reasoning
+const RESULT_CHARS_PER_TOKEN = 2.63;
 const GREP_CMD = /(^|[|;&(\s])(grep|egrep|fgrep|rg|ag|ack|git\s+grep)(\s|$)/;
 const FIND_NAME = /(^|[|;&(\s])find\s+\S.*-(i?name|i?path|regex)\b/;
 const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
@@ -71,18 +74,36 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     // one assistant message can span several lines (one per content block), each repeating a usage
     // snapshot that grows while streaming: keep the largest value of each field per message
     const perMessage = new Map();
+    const order = [];                 // message keys in the order the model produced them
     const outChars = new Map();
+    const resultChars = new Map();    // message key → characters of the tool results that answered it
     const usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
     const tools = [];
     const models = new Set();
+    const usedAt = new Map();
     let first = null, last = null, result = null, finalText = '';
+    let lastKey = null, lastResultAt = null, modelMs = 0, toolMs = 0, firstEditTurn = null;
     for (const ev of events) {
         const ts = ev.timestamp ? Date.parse(ev.timestamp) : null;
         if (ts) { first ??= ts; last = ts; }
         if (ev.type === 'result') { result = ev; continue; }
         const msg = ev.message;
+        if (ev.type === 'user' && Array.isArray(msg?.content)) {
+            for (const c of msg.content) {
+                if (c.type !== 'tool_result') continue;
+                const text = Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? '');
+                if (lastKey) resultChars.set(lastKey, (resultChars.get(lastKey) ?? 0) + text.length);
+                if (ts && usedAt.has(c.tool_use_id)) { toolMs += ts - usedAt.get(c.tool_use_id); lastResultAt = ts; }
+            }
+            continue;
+        }
         if (ev.type !== 'assistant' || !msg || msg.role !== 'assistant') continue;
         const key = msg.id ?? ev.requestId ?? ev.uuid;
+        if (!perMessage.has(key)) {
+            order.push(key);
+            if (ts && lastResultAt) { modelMs += ts - lastResultAt; lastResultAt = null; }
+        }
+        lastKey = key;
         if (msg.model) models.add(msg.model);
         const u = msg.usage ?? {};
         const prev = perMessage.get(key) ?? { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
@@ -93,15 +114,30 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
             output: Math.max(prev.output, u.output_tokens ?? 0),
         });
         for (const c of msg.content ?? []) {
-            if (c.type === 'tool_use') { tools.push({ name: c.name, input: c.input ?? {} }); outChars.set(key, (outChars.get(key) ?? 0) + JSON.stringify(c.input ?? {}).length); }
+            if (c.type === 'tool_use') {
+                tools.push({ name: c.name, input: c.input ?? {} });
+                outChars.set(key, (outChars.get(key) ?? 0) + JSON.stringify(c.input ?? {}).length);
+                if (ts) usedAt.set(c.id, ts);
+                if (firstEditTurn == null && /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(c.name)) firstEditTurn = order.length;
+            }
             else if (c.type === 'text' && c.text) { finalText = c.text; outChars.set(key, (outChars.get(key) ?? 0) + c.text.length); }
             else if (c.type === 'thinking' && c.thinking) outChars.set(key, (outChars.get(key) ?? 0) + c.thinking.length);
         }
     }
-    // Transcripts do not always record the final usage of a streamed message (output_tokens stays at
-    // its first snapshot), so output tokens are the larger of the recorded value and ~4 chars/token
-    // over the message's text, thinking and tool inputs.
-    for (const [key, u] of perMessage) u.output = Math.max(u.output, Math.round((outChars.get(key) ?? 0) / 4));
+    // Transcripts often keep a streamed message's usage from its first snapshot (output_tokens 1–10) and
+    // store its thinking redacted, so the recorded output misses the model's reasoning. A message's output
+    // stays in the context of the next call, so it is recovered as that call's context minus this call's
+    // context minus the tool results in between (2.63 characters per token, fitted on calls that follow a
+    // message without reasoning); the larger of that, the recorded value and ~4 chars/token of visible text.
+    const ctxOf = (u) => u.input + u.cacheWrite + u.cacheRead;
+    let outputRecorded = 0;
+    order.forEach((key, i) => {
+        const u = perMessage.get(key);
+        outputRecorded += u.output;
+        let est = Math.round((outChars.get(key) ?? 0) / 4);
+        if (i + 1 < order.length) est = Math.max(est, Math.round(ctxOf(perMessage.get(order[i + 1])) - ctxOf(u) - (resultChars.get(key) ?? 0) / RESULT_CHARS_PER_TOKEN));
+        u.output = Math.max(u.output, est);
+    });
     for (const u of perMessage.values()) for (const k of Object.keys(usage)) usage[k] += u[k];
     const turns = perMessage.size;
     // headless runs report authoritative totals in the final result event
@@ -181,6 +217,9 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         models: [...models],
         turns: result?.num_turns ?? turns,
         usage,
+        outputRecorded,
+        firstEditTurn,
+        modelMs, toolMs,
         // input-equivalent tokens: a model-agnostic cost proxy with the usual price ratios
         // (cache write 1.25×, cache read 0.1×, output 5× the uncached input price)
         costUnits: Math.round(usage.input + 1.25 * usage.cacheWrite + 0.1 * usage.cacheRead + 5 * usage.output),

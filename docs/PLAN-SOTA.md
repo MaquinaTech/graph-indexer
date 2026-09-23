@@ -1,6 +1,6 @@
 # Plan de ingeniería: llevar graph-indexer al estado del arte
 
-Fecha: 2026-09-22 · Estado: tres rondas de evaluación completadas (ver §7 y §9)
+Fecha: 2026-09-22 · Estado: tres rondas de evaluación completadas (ver §7 y §9) · Sustituido como plan activo por [PLAN-AGENTES.md](PLAN-AGENTES.md) el 2026-09-23
 
 Base empírica: [informe de investigación](research/reports/Impacto%20real%20de%20indexación%20en%20agentes.md) y sus [notas](research/research_notes/Impacto%20real%20de%20indexación%20en%20agentes/), la investigación previa ([informe](research/Indexación%20de%20código%20para%20agentes%20IA.md)), dos estudios de uso con agentes sobre nestjs, fastapi y gin, y un pilotaje del benchmark agéntico.
 
@@ -111,7 +111,7 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 **Limitaciones del entorno actual:**
 - Los registros de paquetes (npm, PyPI, Go, crates, Maven) están bloqueados por la política de red. Por eso los cambios reales con tests se limitan a proyectos sin dependencias (sqlglot, networkx) y los de TypeScript se corrigen con `tsc` diferencial.
 - No se pueden lanzar agentes `claude -p` anidados, así que las ejecuciones usan subagentes. Las herramientas de cada brazo se fijan por instrucciones y se comprueban después en la trayectoria.
-- El arnés headless con hooks y MCP reales (`claude -p --tools … --mcp-config … --settings …`) queda preparado para ejecutarse en local.
+- El arnés headless con hooks y MCP reales (`claude -p --tools … --mcp-config … --settings …`) no está implementado: el lector de transcripciones admite su formato, pero falta el script que lance las ejecuciones.
 
 ## 6. Líneas de trabajo
 
@@ -155,7 +155,7 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 ## 8. Riesgos
 
 - **Potencia.** Con 30–60 tareas solo son detectables efectos de 10–15 puntos en resolución o del 20–30 % en coste. Los resultados se darán con sus IC y sin extrapolar.
-- **Fidelidad.** Un subagente con restricciones por instrucciones no es idéntico a un agente con herramientas eliminadas, y los hooks no se pueden medir en esta sesión. El arnés headless cubre ese caso en local.
+- **Fidelidad.** Un subagente con restricciones por instrucciones no es idéntico a un agente con herramientas eliminadas, y los hooks no se pueden medir en esta sesión. Un arnés headless en local cubriría ese caso (pendiente de escribir).
 - **Contaminación.** B1 y B2 son tareas nuevas por construcción; B3 usa commits posteriores al corte de los modelos.
 - **Sobreajuste.** B1 lo verifica el compilador, no graph-indexer. Los pesos de búsqueda solo se ajustan con la partición de ajuste.
 - **Coste de verificación.** `check` y los hooks deben seguir siendo rápidos y silenciosos cuando no hay nada que decir; si no, restarían en lugar de sumar.
@@ -182,7 +182,7 @@ Detalle en [AGENTIC-BENCHMARK.md](AGENTIC-BENCHMARK.md). Mismo modelo, una ejecu
 **Conclusiones.**
 - En preguntas de código y refactorizaciones multi-sitio, graph-indexer junto a grep cuesta en torno a tres cuartos de grep solo, sin perder tareas. Para responder por cadenas de llamadores el agente lee una cuarta parte del código, y "qué clases implementan X" pasó de costar 1,46 veces grep a 0,62 tras la iteración rc5.
 - Sin grep no se pierde nada y el coste es parecido.
-- Arreglar issues reales (B3) cuesta lo mismo con o sin graph-indexer: el 70–80 % de lo que lee el agente es el código alrededor del fallo y la salida de los tests.
+- Arreglar issues reales (B3) cuesta lo mismo con o sin graph-indexer. El 70–80 % de lo que lee el agente es el código alrededor del fallo y la salida de los tests, pero el coste es sobre todo el razonamiento del modelo y el prefijo que se relee en cada turno ([PLAN-AGENTES.md](PLAN-AGENTES.md) §2).
 - Casi todas las ejecuciones resuelven su tarea en todos los brazos, así que el benchmark mide sobre todo coste.
 
 **Siguientes pasos.**

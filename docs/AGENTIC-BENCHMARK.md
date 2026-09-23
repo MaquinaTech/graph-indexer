@@ -133,10 +133,50 @@ Three rounds, 69 tasks, 237 graded runs. In short:
 - **Without grep, nothing is lost and the cost is about the same:** 0.82 (0.59–1.12) on B1 + B2
   in the third round, 1.02 over all tasks in the held-out round.
 - **Fixing real issues (B3) costs the same with or without graph-indexer** (cost ratios between
-  0.96 and 1.10 across arms and rounds): reading the code around the fault and running tests are
-  most of the work.
+  0.96 and 1.10 across arms and rounds): the agent explores by chasing names one search at a
+  time in every arm, and most of the cost is its own reasoning and the prefix it re-reads at every
+  call (see [where the cost goes](#measurement-correction-and-where-the-cost-goes)).
 - **Nearly every run solves its task in every arm**, so the benchmark mostly measures cost; the
   one failure of the third round was in the `grep` arm.
+
+### Measurement correction and where the cost goes
+
+Transcripts keep a streamed message's usage from its first snapshot, and the model's reasoning is
+stored redacted, so the output tokens counted when these rounds were graded miss most of the
+model's reasoning — calls that add 8,600 tokens to the context show 5 output tokens. The output of
+a call stays in the context of the next one, so [`transcript.mjs`](../bench/agentic/transcript.mjs)
+now recovers it as the growth of the context between two calls minus the tool results in between
+(2.63 characters per token, fitted on 301 calls that follow a message without reasoning). The real
+cost of a run is 1.3–1.5 times the recorded one; ratios between arms move by at most 0.04. Pooled
+over the three rounds, paired by task (`reaudit.mjs --usage`, then the statistics of `report.mjs`):
+
+| suite | tasks | graph-indexer with grep: cost vs `grep` (95% CI) | turns | time | without grep: cost |
+|---|---|---|---|---|---|
+| B1 | 25 | 0.67 (0.56–0.83) | 0.76 | 0.68 | 0.68 (0.53–0.87) |
+| B2 | 20 | 0.81 (0.73–0.89) | 0.85 | 0.82 | 0.96 (0.83–1.11) |
+| B1 + B2 | 45 | 0.74 (0.65–0.83) | 0.81 | 0.73 | 0.81 (0.69–0.95) |
+| B3 | 24 | 0.95 (0.83–1.07) | 1.00 | 0.96 | 1.04 (0.90–1.21) |
+| all | 69 | 0.87 (0.78–0.95) | 0.90 | 0.87 | 0.95 (0.84–1.06) |
+
+Where the cost goes, `grep` arm ([`anatomy.mjs`](../bench/agentic/anatomy.mjs); each part includes
+being written once and re-read by every later call):
+
+| | B1 | B2 | B3 |
+|---|---|---|---|
+| calls / output tokens / real cost | 20.6 / 25k / 319k | 28.9 / 20k / 351k | 46.9 / 55k / 951k |
+| fixed prefix (~42k tokens, re-read at every call) | 31% | 38% | 22% |
+| generating the model's output | 39% | 29% | 29% |
+| re-reading that output in later calls | 18% | 16% | 28% |
+| tool results (reads, searches, tests, edits…) | 11% | 15% | 21% |
+| time / share spent in the model | 3.2 min / 83% | 2.6 min / 58% | 9.1 min / 59% |
+
+In B3 the agent reaches a file of the fix around its 4th call but first edits around its
+15th–19th. Before that it makes ~21 calls, 18 of them searches and reads. 71% of its searches look
+for a name it has just seen in the code it read — go-to-definition done with grep, one hop per
+call. Only 14% of the code lines it reads fall in the functions the fix changes; 21% with
+graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
+is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
+below keep the costs recorded when each round was graded.
 
 ### Third round: 16 tasks, 48 runs
 
@@ -331,10 +371,11 @@ grep or find despite the policy, most of them to read a configuration file.
 
 ## What the rounds leave open
 
-- **Fixing issues.** B3 cost did not move in any round: the agents spend 70–80% of what they
-  read on the code around the fault and on test output. What could change that is less of both —
-  running only the tests that exercise a change (`check` and `tests` already name them) and
-  showing the relevant part of long outputs — measured on a repeated B3.
+- **Fixing issues.** B3 cost did not move in any round. The prefix and the model's reasoning are
+  about 79% of it and tool output about 21%, so what could change it is fewer calls and less
+  reasoning — reads that already say where each name they use is defined, several lookups per
+  call, and hooks that add this to the agent's own reads and searches — measured on new B3 tasks
+  ([PLAN-AGENTES.md](PLAN-AGENTES.md)).
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
@@ -344,8 +385,10 @@ grep or find despite the policy, most of them to read a configuration file.
   runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
   intervals can show.
 - **The real integration:** the MCP server and hooks inside the agent harness instead of
-  sub-agents following instructions; the headless harness for that runs locally
-  (`bench/agentic/`).
+  sub-agents following instructions. That needs the hooks registered for the agent under test —
+  in a session that allows it, or in a local headless run (`claude -p` with `--mcp-config` and
+  `--settings`); the transcript parser already reads that format, the script that launches such
+  runs is still to be written.
 
 ## Reproducing
 

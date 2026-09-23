@@ -6,7 +6,9 @@
  *   node bench/agentic/reaudit.mjs --gi LABEL[,LABEL…] [--transcripts DIR] [--dry-run]
  *
  * For each run, the graded transcript is the last registered agent whose transcript ended before
- * the grading. Changed runs get a new result row (same gradedAt, plus reauditedAt).
+ * the grading. Changed runs get a new result row (same gradedAt, plus reauditedAt). With --usage the
+ * token usage, cost and timing fields are recomputed too (e.g. after a change in how output tokens are
+ * recovered from a transcript).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,11 +39,12 @@ for (const label of list('--gi')) {
         if (!transcript) continue;
         const meta = JSON.parse(fs.readFileSync(path.join(WORK, 'runs', label, run, 'meta.json'), 'utf8'));
         const a = parseTranscript(transcript, { arm: row.arm, repo: meta.checkout, own: [meta.runDir, meta.checkout], work: WORK });
-        const keys = ['violations', 'benign', 'leaks', 'giCalls', 'grepCalls'];
+        const keys = ['violations', 'benign', 'leaks', 'giCalls', 'grepCalls',
+            ...(flag('--usage') ? ['usage', 'costUnits', 'outputRecorded', 'firstEditTurn', 'modelMs', 'toolMs'] : [])];
         // rows graded before a field existed lack it: that alone is not a change
         if (keys.every(k => JSON.stringify(a[k]) === JSON.stringify(row.agent[k] ?? (Array.isArray(a[k]) ? [] : a[k])))) continue;
         changed++;
-        console.log(`${label} ${run}: violations ${row.agent.violations.length}→${a.violations.length}, leaks ${row.agent.leaks?.length ?? 0}→${a.leaks.length}, gi ${row.agent.giCalls}→${a.giCalls}, grep ${row.agent.grepCalls}→${a.grepCalls}`);
+        console.log(`${label} ${run}: violations ${row.agent.violations.length}→${a.violations.length}, leaks ${row.agent.leaks?.length ?? 0}→${a.leaks.length}, gi ${row.agent.giCalls}→${a.giCalls}, grep ${row.agent.grepCalls}→${a.grepCalls}, cost ${row.agent.costUnits}→${a.costUnits}`);
         if (!flag('--dry-run')) fs.appendFileSync(resFile, JSON.stringify({ ...row, agent: { ...row.agent, ...Object.fromEntries(keys.map(k => [k, a[k]])) }, reauditedAt: new Date().toISOString() }) + '\n');
     }
     console.log(`${label}: ${changed} run(s) ${flag('--dry-run') ? 'would change' : 'updated'}`);
