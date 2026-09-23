@@ -29,7 +29,12 @@ let rows = labels.flatMap(l => readJsonl(path.join(WORK, 'results', `${l}.jsonl`
 // gradings made before a run was discarded (runs/<label>/discarded.tsv: run id, time, reason) are void
 const discardedAt = new Map(labels.flatMap(l => {
     const f = path.join(WORK, 'runs', l, 'discarded.tsv');
-    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(line => { const [run, at] = line.split('\t'); return [`${l}|${run}`, at]; }) : [];
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(line => {
+        const [run, at] = line.split('\t');
+        // anything else in the time column would void every grading of the run, re-runs included
+        if (!/^\d{4}-\d\d-\d\dT\S+Z$/.test(at ?? '')) throw new Error(`${f}: "${at}" is not a discard time (each line: run id, ISO time, reason)`);
+        return [`${l}|${run}`, at];
+    }) : [];
 }));
 rows = rows.filter(r => !(discardedAt.get(`${r.giLabel}|${r.runId}`) >= r.gradedAt));
 // keep the latest grading of each run
