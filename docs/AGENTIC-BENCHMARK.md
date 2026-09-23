@@ -87,10 +87,10 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
 
 ## Protocol: a development round and a held-out round
 
-1. **Development round** (snapshots `v3.1-rc2`/`rc3`, arms `grep`, `gi`, `grep+gi`, `grep+gi+`):
+1. **Development round** (snapshots `rc2`/`rc3`, arms `grep`, `gi`, `grep+gi`, `grep+gi+`):
    B1 (8 tasks), B2 (8), B3 (14). The transcripts were read to find where the tools cost more
-   than they saved, and graph-indexer was changed accordingly (`v3.1-rc4`).
-2. **Held-out round** (snapshot `v3.1-rc4`, arms `grep`, `gi2`, `grep+gi2`): tasks that played no
+   than they saved, and graph-indexer was changed accordingly (`rc4`).
+2. **Held-out round** (snapshot `rc4`, arms `grep`, `gi2`, `grep+gi2`): tasks that played no
    part in development — B1 (7), a new B2 set (6) generated to avoid every method used before,
    and B3 (10). The held-out round is the estimate to trust; the development round shows where
    the changes came from.
@@ -102,12 +102,12 @@ _Filled in when the held-out round completes._
 ## Reproducing
 
 ```sh
-node bench/agentic/prepare.mjs snapshot --label v3.1-rc4          # freeze the version under test
-node bench/agentic/prepare.mjs batch --tasks refactor-nestjs-held.json --arms grep,gi2,grep+gi2 --reps 1 --gi v3.1-rc4
+node bench/agentic/prepare.mjs snapshot --label rc4          # freeze the version under test
+node bench/agentic/prepare.mjs batch --tasks refactor-nestjs-held.json --arms grep,gi2,grep+gi2 --reps 1 --gi rc4
 # launch one agent per printed prompt (any agent harness), then record which agent ran which run:
-node bench/agentic/grade-batch.mjs --gi v3.1-rc4 --register "<agent id> <run id>"
-node bench/agentic/grade-batch.mjs --gi v3.1-rc4 --agents <agent ids>   # only once they have finished
-node bench/agentic/report.mjs --gi v3.1-rc4 --integrated grep+gi2 --nogrep gi2
+node bench/agentic/grade-batch.mjs --gi rc4 --register "<agent id> <run id>"
+node bench/agentic/grade-batch.mjs --gi rc4 --agents <agent ids>   # only once they have finished
+node bench/agentic/report.mjs --gi rc4 --integrated grep+gi2 --nogrep gi2
 ```
 
 The TypeScript suites need the nestjs fixture (`node bench/fixtures.mjs`); the B3 suites need

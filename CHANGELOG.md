@@ -4,91 +4,26 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
-## [3.1.0] — 2026-09-23
-
-Built and measured against one question: does an agent with graph-indexer finish more coding
-tasks, or the same tasks for less? A new end-to-end benchmark answers it
-([docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md)), and most changes below come from reading
-its transcripts.
-
-### Added
-
-- **`search_text`** (`graph-indexer grep`): text search over every file in the repository —
-  code, configuration, docs. Each code match carries its enclosing definition and, for
-  identifiers, the symbol the match refers to, one compact line per match.
-- **`check_changes`** (`graph-indexer check`): verifies uncommitted edits without building —
-  syntax errors introduced, calls that no longer fit a changed signature, removed or renamed
-  definitions still in use, callers the edit did not touch — and names the tests to run with the
-  command for the project's runner (jest, vitest, mocha, pytest, unittest, Django, go test,
-  cargo, Maven/Gradle). About 1 s on nestjs.
-- **Agent hooks:** `graph-indexer hook post-tool|session-start|subagent-start` adds context only
-  when it helps: after an edit, the edit check of that file; after a grep for an identifier that
-  several definitions share, which definition is which. It fails open under a deadline and says
-  nothing otherwise. `graph-indexer init --hooks` merges the hooks into `.claude/settings.json`;
-  a Claude Code plugin (`integrations/claude-code`) bundles the MCP server and the hooks.
-- **Members named by string:** `find_references` and `change_impact` list
-  `sinon.stub(obj, 'name')`, `jest.spyOn`, `getattr(o, "name")` and `patch("pkg.C.name")` in
-  files that use the class, since a rename has to update them too.
-- CLI: `graph-indexer files <text|glob>` finds files by path, for agents without `find` or Glob;
-  `symbol A B C` reads several definitions in one call.
-- **Agentic benchmark** (`bench/agentic/`): code questions graded by the TypeScript compiler,
-  multi-site refactors graded by differential `tsc`, and real issues from after the model's
-  training cutoff graded by the hidden tests of their fix; arms with and without grep, paired
-  statistics and acceptance gates.
-
-### Changed
-
-- Server instructions and the `CLAUDE.md`/`AGENTS.md` block are short decision rules: text
-  search through `search_text`, `find_references` before changing a signature or renaming,
-  `change_impact`/`check_changes` for edits that cross a function's boundary, and only the
-  tests for a fix inside one function. `search_text`, `find_references` and `check_changes` are
-  marked always-loaded for clients that defer MCP tools.
-- `change_impact` lists the call sites to update, overrides and implementations, constructor
-  calls, tests inside describe blocks and blind spots, and says "risk: unknown" instead of a
-  false "low".
-- `find_references`, `call_graph` and `get_symbol` separate plausible unbound call sites from
-  unrelated same-name ones, count what they truncate and list method families.
-- Graph: results typed through generic defaults and bounds (`create<T = INestApplication>()`)
-  and through value roots (`export const NestFactory = new NestFactoryStatic()`); Go implicit
-  interface satisfaction, field reads and struct literal keys; Python `super()`, string
-  annotations, `self` attributes as fields, package re-exports in any indexing order; TypeScript
-  computed keys and `typeof`. Ambiguous and standard-library method names (`get`, `set`,
-  `apply`…) stay unbound instead of being guessed.
-
-### Fixed
-
-- A `super()` call no longer counts as a call of a sibling class's override.
-- `check_changes` no longer reports arity findings for Python definitions wrapped in
-  property-like or class decorators.
-- Path arguments accept absolute and `./` paths in every tool; hints in CLI output name CLI
-  commands rather than MCP tools.
-- TypeScript calls with type arguments under `await` are calls; locals named like globals
-  (`module`, `process`) keep their calls.
-
-### Results (see docs/BENCHMARKS.md)
-
-- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.958,
-  exact reference sets 0.887 (3.0.0: 0.979 / 0.895 / 0.835).
-- Localization over 169 real commits and symbol search over 377 queries: unchanged within 0.01.
-
----
-
-## [3.0.0] — 2026-09-22
+## [3.0.0] — 2026-09-23
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.
-Search, a real reference graph and change impact, from a zero-dependency package that needs no
-model, network or native build.
+Search, a real reference graph, change impact and edit checks, from a zero-dependency package
+that needs no model, network or native build. Measured offline against the TypeScript compiler
+and real commits, and end to end with coding agents
+([docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md)).
 
 ### Breaking
 
 - **Node.js 22.5+** is required (the index uses the built-in `node:sqlite`).
-- **New tool surface** (six read-only MCP tools): `search_code`, `get_symbol`, `find_references`,
-  `call_graph`, `change_impact`, `outline`. The 2.x tools and their option set are gone.
+- **New tool surface** (eight read-only MCP tools): `search_code`, `search_text`, `get_symbol`,
+  `find_references`, `call_graph`, `change_impact`, `check_changes`, `outline`. The 2.x tools and
+  their option set are gone.
 - **Removed:** dense embeddings, Ollama/MLX/in-process embedders, LLM enrichment and reranking,
   the watch daemon, sealed mode and its attestation, taint tools, and the grammar auto-installer.
   Search is lexical + structural and needs no model.
-- **CLI:** `graph-indexer init | serve | index | status | search | symbol | refs | callgraph |
-  impact | outline`. `idx-mcp` and `idx-index` remain as aliases of `serve` and `index`.
+- **CLI:** `graph-indexer init | serve | index | status | search | grep | files | symbol | refs |
+  callgraph | impact | check | outline | hook`. `idx-mcp` and `idx-index` remain as aliases of
+  `serve` and `index`.
 - The index lives in `.graph-indexer/index.db` (SQLite); 2.x index files are ignored.
 
 ### Added
@@ -100,9 +35,14 @@ model, network or native build.
   member-read reference is bound to its definition through lexical scopes, the enclosing type and
   its bases, imports (barrels, tsconfig paths, workspaces, Go modules, Python packages, Rust
   crates, C includes), packages and globals, with a confidence label. `find_references` includes
-  overload sets and calls through base types, labelled.
+  overload sets and calls through base types, labelled. Ambiguous and standard-library method
+  names (`get`, `set`, `apply`…) stay unbound instead of being guessed; `super()` calls reach the
+  parent's method only. Go implicit interface satisfaction, field reads and struct literal keys;
+  Python `super()`, string annotations and `self` attributes as fields; TypeScript computed keys
+  and `typeof`.
 - **Receiver type inference** across languages: annotations, initialisers, casts, `await`,
-  declared and inferred return types (including generic bounds and `Self`/`this`), fields and
+  declared and inferred return types (including generic bounds and defaults, and `Self`/`this`),
+  value roots (`export const NestFactory = new NestFactoryStatic()`), fields and
   constructor-injected dependencies, collections and their elements (`xs[i]`, loops, array
   callbacks, `list.get(0)`), optional/nullable and wrapper types, closures and access chains.
   Members of primitives and collections are never guessed.
@@ -111,31 +51,55 @@ model, network or native build.
   centrality, with per-file diversification.
 - **Maps and dictionaries** in the type model (`Map<K, V>`, `dict[K, V]`, `HashMap<K, V>`, Go
   `map[K]V`, classes that extend them): `m.get(k)`, `m[k]` and `m.values()` reach the value type.
-- `find_references` states where other same-name references resolve, and ambiguous names list the
-  alternatives as ready-to-use qualified targets (overloads count as one definition).
-- **Change impact:** transitive dependents by distance, tests that exercise them, public surface,
-  git co-change history, and `diff: true` for the uncommitted working tree.
+- `find_references` states where other same-name references resolve, separates plausible unbound
+  call sites from unrelated ones, and lists members named by string (`sinon.stub(obj, 'name')`,
+  `jest.spyOn`, `getattr(o, "name")`, `patch("pkg.C.name")`), which a rename has to update too.
+  Ambiguous names list the alternatives as ready-to-use qualified targets (overloads count as one
+  definition).
+- **`search_text`** (`graph-indexer grep`): text search over every file — code, configuration,
+  docs. Each code match carries its enclosing definition and, for identifiers, the symbol it
+  refers to, one compact line per match. `graph-indexer files` finds files by path or glob.
+- **Change impact:** call sites to update, overrides and implementations, transitive dependents
+  by distance, tests that exercise them (including describe blocks), public surface, git
+  co-change history, blind spots, and `diff: true` for the uncommitted working tree; "risk:
+  unknown" when the graph cannot tell.
+- **`check_changes`** (`graph-indexer check`): verifies uncommitted edits without building —
+  syntax errors introduced, calls that no longer fit a changed signature, removed or renamed
+  definitions still in use, callers the edit did not touch — and names the tests to run with the
+  command for the project's runner (jest, vitest, mocha, pytest, unittest, Django, go test,
+  cargo, Maven/Gradle). About 1 s on nestjs.
 - **Freshness:** file watcher plus stat sweeps; changed files are re-indexed before every answer
   and re-validated before their lines are rendered. Symbol ids stay stable across edits.
 - **Robustness:** the index rebuilds itself when the extractor changes (fingerprint), recovers
   from interrupted runs, never reuses row ids, skips minified/generated/huge files, and ignores
-  symlinks that point outside the repository.
+  symlinks that point outside the repository. Path arguments accept absolute and `./` paths.
 - **MCP** implemented without an SDK: stdio JSON-RPC, protocol versions 2024-11-05 to
-  2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), concise server
-  instructions, read-only tool annotations, plain-text replies with token caps.
+  2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), read-only tool
+  annotations, plain-text replies with token caps. Server instructions are short decision rules:
+  text search through `search_text`, `find_references` before changing a signature or renaming,
+  `change_impact`/`check_changes` for edits that cross a function's boundary, and only the tests
+  for a fix inside one function. `search_text`, `find_references` and `check_changes` are marked
+  always-loaded for clients that defer MCP tools.
 - **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI and Codex, and adds a
-  short managed block to `CLAUDE.md`/`AGENTS.md`.
+  short managed block to `CLAUDE.md`/`AGENTS.md`. `init --hooks` adds `graph-indexer hook` to
+  Claude Code: after an edit it runs the edit check on that file, after a grep for an identifier
+  several definitions share it says which definition is which, and otherwise stays silent (it
+  fails open under a deadline). A Claude Code plugin (`integrations/claude-code`) bundles the
+  server and the hooks.
 - **Benchmarks** (`bench/`): symbol-search suites (377 queries, 9 repositories), reference
   accuracy against the TypeScript compiler, and localization replayed from real commits, with
-  pinned fixtures (`bench/fixtures.mjs`).
+  pinned fixtures (`bench/fixtures.mjs`). An agentic benchmark (`bench/agentic/`): code questions
+  graded by the TypeScript compiler, multi-site refactors graded by differential `tsc`, and real
+  issues from after the model's training cutoff graded by the hidden tests of their fix, with and
+  without grep, paired statistics and acceptance gates.
 
 ### Results (see docs/BENCHMARKS.md)
 
-- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.979, recall 0.895
-  (grep: 0.128 / 0.993; name-only: 0.246 / 0.921).
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.958
+  (grep: 0.128 / 0.993; name-only: 0.251 / 0.974).
 - Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
-  ranking 0.485 / 0.374; BM25 0.373 / 0.293).
-- Symbol search (377 queries): rank-1 0.706, MRR 0.761 (2.x on the same queries: 0.552 / 0.646).
+  ranking 0.485 / 0.374; BM25 0.373 / 0.290).
+- Symbol search (377 queries): rank-1 0.700, MRR 0.759 (2.x on the same queries: 0.552 / 0.646).
 - Paired agent test (5 tasks): same answers with and without graph-indexer; 20 vs 44 tool calls on
   a two-level impact question.
 

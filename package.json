@@ -1,6 +1,6 @@
 {
     "name": "graph-indexer",
-    "version": "3.1.0",
+    "version": "3.0.0",
     "description": "Live code graph and search for AI coding agents over MCP: tree-sitter (WASM) symbols, scope/import/type-aware references, call graphs, change impact and hybrid search — local, zero-dependency, no native builds.",
     "type": "module",
     "main": "src/query/intel.mjs",

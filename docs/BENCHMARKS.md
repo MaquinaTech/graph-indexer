@@ -9,7 +9,7 @@ Three benchmarks, each answering a question an agent actually depends on:
    queries, compared with graph-indexer 2.x.
 
 Everything runs offline on public repositories pinned to exact commits (`bench/fixtures.mjs`).
-Numbers below were produced with graph-indexer 3.1.0 on Node.js 22.
+Numbers below were produced with graph-indexer 3.0.0 on Node.js 22.
 
 ## Setup
 
@@ -67,8 +67,8 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 | rename | name-only | 0.262 | 0.975 | 0.413 | 0.752 | 0.976 | 0.604 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
 
-graph-indexer 3.0.0 with the same seed: dispatch precision 0.979, recall 0.895, exact sets
-0.835; the [changelog](../CHANGELOG.md) lists the changes in between.
+An earlier 3.0 build, before the correctness work that followed the agent studies, gave with the
+same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835.
 
 Micro averages pool all reference lines (dominated by heavily used symbols); macro averages
 weigh each symbol equally; "exact set" is the share of symbols whose reference set matches the
@@ -173,7 +173,7 @@ fastapi 0.63 / 0.64, nestjs 0.68 / 0.59. 2.x ranks better on axios, and on fasta
 
 The file-level channel added last trades some top-5 recall on the semantic queries of the tuning
 split (0.706 → 0.608) for better rank-1 and better localization; overall MRR rose from 0.755 to
-0.761. Since 3.0.0 a few tuning-split queries moved down (MRR 0.752 → 0.747, all
+0.761. Later changes moved a few tuning-split queries down (MRR 0.752 → 0.747, all
 queries 0.761 → 0.759); the held-out split did not change.
 
 ## 4. Agents with and without graph-indexer

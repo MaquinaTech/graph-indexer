@@ -142,9 +142,9 @@ La estadística es pareada por tarea: IC por bootstrap, McNemar exacto, permutac
 2. ✅ W1–W4, con tests de regresión (`test/honesty.test.mjs`) y benchmarks B5 sin regresiones.
 3. ✅ W5: instrucciones, descripciones, `init`, `graph-indexer hook` y plugin.
 4. ✅ B2 y B3: generación, validación de cada tarea (la solución de referencia pasa, el checkout sin tocar falla) y pilotaje.
-5. ✅ Ronda de desarrollo (v3.1-rc2/rc3): brazos `grep`, `gi`, `grep+gi` y `grep+gi+` sobre B1 (8), B2 (8) y B3 (14), una ejecución por tarea y brazo con el mismo modelo.
-6. ✅ Iteración sobre las trayectorias (v3.1-rc4): reglas adaptativas (verificar solo lo que cruza el límite de una función), líneas de `search_text` compactas, `symbol` con varios objetivos, `files`, miembros nombrados por cadena, `super()` sin despacho a hermanos y sin falsos positivos de `check` con decoradores.
-7. ⏳ Ronda reservada (v3.1-rc4): brazos `grep`, `gi2` y `grep+gi2` sobre tareas que no se usaron en el desarrollo: B1 (7), B2 (6) y B3 (10).
+5. ✅ Ronda de desarrollo (instantáneas rc2 y rc3): brazos `grep`, `gi`, `grep+gi` y `grep+gi+` sobre B1 (8), B2 (8) y B3 (14), una ejecución por tarea y brazo con el mismo modelo.
+6. ✅ Iteración sobre las trayectorias (instantánea rc4): reglas adaptativas (verificar solo lo que cruza el límite de una función), líneas de `search_text` compactas, `symbol` con varios objetivos, `files`, miembros nombrados por cadena, `super()` sin despacho a hermanos y sin falsos positivos de `check` con decoradores.
+7. ⏳ Ronda reservada (instantánea rc4): brazos `grep`, `gi2` y `grep+gi2` sobre tareas que no se usaron en el desarrollo: B1 (7), B2 (6) y B3 (10).
 8. W6–W8 según lo que muestren los datos.
 
 ## 8. Riesgos
