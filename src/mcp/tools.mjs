@@ -92,6 +92,7 @@ export const TOOLS = [
                 direction: { type: 'string', enum: ['callers', 'callees', 'both'], default: 'both' },
                 depth: { type: 'integer', minimum: 1, maximum: 4, default: 2 },
                 limit: { type: 'integer', minimum: 5, maximum: 200, default: 40, description: 'Max nodes per direction.' },
+                include_tests: { type: 'boolean', default: true, description: 'Include callers in test files.' },
             },
             required: ['symbol'],
         },
@@ -634,41 +635,65 @@ function stringMentionNote(intel, s, max = 8) {
         ...(sm.length > max ? [`  … ${sm.length - max} more`] : [])];
 }
 
-async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, limit = 40 }) {
+async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, limit = 40, include_tests = true }) {
     const matches = pickSymbol(intel, symbol);
     if (!matches.length) return notFound(intel, symbol);
     const s = matches[0];
     const out = [`Call graph of ${s.qname} (${s.kind}) ${loc(s)}`];
     if (direction === 'callers' || direction === 'both') {
-        const { nodes, fileLevel } = intel.dependents([s.id], { depth, maxNodes: limit * 3, kinds: ['call', 'new', 'value', 'decorator'] });
-        const byVia = new Map();
-        for (const [id, info] of nodes) (byVia.get(info.via) ?? byVia.set(info.via, []).get(info.via)).push({ id, ...info });
-        out.push(`callers (${nodes.size + fileLevel.size}, depth ≤ ${depth}; indentation = one call level):`);
-        let count = 0;
-        const moduleVia = new Map();
-        for (const [file, info] of fileLevel) (moduleVia.get(info.via) ?? moduleVia.set(info.via, []).get(info.via)).push({ file, ...info });
-        const walk = (parent, indent, d) => {
-            const kids = (byVia.get(parent) ?? []).map(k => ({ ...k, s: intel.sym(k.id) })).filter(k => k.s)
-                .sort((a, b) => (a.s.is_test - b.s.is_test) || pathRank(a.s.path) - pathRank(b.s.path) || (b.conf - a.conf) || a.s.path.localeCompare(b.s.path));
-            for (const k of kids) {
-                if (count >= limit) return;
-                const ks = k.s;
+        const kinds = ['call', 'new', 'value', 'decorator'];
+        const isTestFile = (p) => Boolean(intel.store.get('SELECT is_test FROM files WHERE path = ?', p)?.is_test);
+        // every direct caller of every node shown, so a function called from two places appears under
+        // both; one reached again is marked instead of expanded twice
+        const direct = (id) => {
+            const { nodes, fileLevel } = intel.dependents([id], { depth: 1, maxNodes: 400, kinds });
+            const callers = [...nodes].map(([k, info]) => ({ id: k, ...info, s: intel.sym(k) }))
+                .filter(k => k.s && (include_tests || !k.s.is_test))
+                .sort((a, b) => (a.s.is_test - b.s.is_test) || pathRank(a.s.path) - pathRank(b.s.path) || (b.conf - a.conf) || a.s.path.localeCompare(b.s.path) || a.s.start_line - b.s.start_line);
+            const modules = [...fileLevel].filter(([f]) => include_tests || !isTestFile(f));
+            return { callers, modules };
+        };
+        // levels first (breadth-first), so a function reachable at two depths is expanded at the
+        // shallower one; then print every edge, a node's callers under its first appearance at its level
+        const level = new Map([[s.id, 0]]), kids = new Map();
+        let frontier = [s.id];
+        for (let d = 1; d <= depth && frontier.length; d++) {
+            const next = [];
+            for (const id of frontier) {
+                const got = direct(id);
+                kids.set(id, got);
+                for (const k of got.callers) if (!level.has(k.id)) { level.set(k.id, d); next.push(k.id); }
+            }
+            frontier = next;
+        }
+        const lines = [];
+        const expanded = new Set([s.id]);
+        let count = 0, cut = false;
+        const walk = (id, indent, d) => {
+            const { callers, modules } = kids.get(id) ?? { callers: [], modules: [] };
+            for (const k of callers) {
+                if (count >= limit) { cut = true; return; }
+                const ks = k.s, here = level.get(k.id) === d && !expanded.has(k.id);
                 count++;
-                out.push(`${'  '.repeat(indent)}← ${ks.qname}  ${loc(ks)}${ks.is_test ? '  (test)' : ''}${k.kind === 'override' ? '  (override)' : ''}${k.conf < 0.9 ? `  [${confWord(k.conf)}]` : ''}`);
-                if (d < depth) walk(k.id, indent + 1, d + 1);
+                lines.push(`${'  '.repeat(indent)}← ${ks.qname}  ${loc(ks)}${ks.is_test ? '  (test)' : ''}${k.kind === 'override' ? '  (override)' : ''}${k.conf < 0.9 ? `  [${confWord(k.conf)}]` : ''}${here ? '' : '  (also listed elsewhere)'}`);
+                if (here) { expanded.add(k.id); if (d < depth) walk(k.id, indent + 1, d + 1); }
             }
             // module-level code (scripts, describe blocks) calling this node, placed under it
-            for (const m of moduleVia.get(parent) ?? []) {
-                if (count >= limit) return;
+            for (const [file, m] of modules) {
+                if (count >= limit) { cut = true; return; }
                 count++;
-                out.push(`${'  '.repeat(indent)}← module level of ${m.file}:${m.sites[0]}${m.conf < 0.9 ? `  [${confWord(m.conf)}]` : ''}`);
+                lines.push(`${'  '.repeat(indent)}← module level of ${file}:${m.sites[0]}${isTestFile(file) ? '  (test)' : ''}${m.conf < 0.9 ? `  [${confWord(m.conf)}]` : ''}`);
             }
         };
         walk(s.id, 1, 1);
-        if (!nodes.size && !fileLevel.size) out.push('  (no bound callers — entry point, framework-invoked, or dynamic dispatch)');
-        const totalCallers = nodes.size + fileLevel.size;
-        if (count < totalCallers) out.push(`  … ${totalCallers - count} more callers not shown (raise limit or lower depth)`);
-        out.push(...unboundNote(intel.unboundFor(s.id), s, 5).map(l => '  ' + l));
+        const distinct = level.size - 1 + new Set([...kids.values()].flatMap(g => g.modules.map(([f]) => f))).size;
+        out.push(`callers (${distinct} distinct${cut ? ' shown' : ''}, depth ≤ ${depth}${include_tests ? '' : ', tests left out'}; indentation = one call level):`);
+        out.push(...lines);
+        if (!lines.length) out.push('  (no bound callers — entry point, framework-invoked, or dynamic dispatch)');
+        if (cut) out.push(`  … more callers not shown (raise limit or lower depth)`);
+        const unbound = unboundNote(intel.unboundFor(s.id), s, 5);
+        if (unbound.length) out.push(...unbound.map(l => '  ' + l));
+        else if (!cut) out.push(`  Complete: every call the index binds is listed${depth > 1 ? ' at each level' : ''}, and no same-name call with a receiver of unknown type could reach ${s.name}.`);
     }
     if (direction === 'callees' || direction === 'both') {
         out.push('callees:');

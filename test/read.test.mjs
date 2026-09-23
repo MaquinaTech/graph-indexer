@@ -75,3 +75,21 @@ test('search_text says where a definition is when the search did not find it', a
     const found = await callTool(intel, 'search_text', { pattern: 'class Point' });
     assert.doesNotMatch(found, /is defined:/);
 });
+
+test('call_graph lists every caller of every node, expanding each at its shallowest level', async () => {
+    const dir = makeRepo({
+        'src/chain.js': `function target() {}\nfunction x() { target(); y(); }\nfunction y() { target(); }\nfunction z() { x(); }\nmodule.exports = { x, y, z };\n`,
+        'test/chain.test.js': `const { x } = require('../src/chain');\ntest('x', () => { x(); });\n`,
+    });
+    const i = new CodeIntel({ root: dir });
+    await i.open();
+    try {
+        const t = await callTool(i, 'call_graph', { symbol: 'target', direction: 'callers', depth: 2, include_tests: false });
+        assert.match(t, /callers \(4 distinct, depth ≤ 2, tests left out/); // x, y, z and the module's exports
+        // x is a direct caller (level 1) and also calls y: expanded under itself, marked under y
+        assert.match(t, /\n {2}← x {2}src\/chain\.js:2\n {4}← z {2}src\/chain\.js:4\n/);
+        assert.match(t, /\n {2}← y {2}src\/chain\.js:3\n {4}← x {2}src\/chain\.js:2 {2}\(also listed elsewhere\)/);
+        assert.doesNotMatch(t, /chain\.test\.js/);
+        assert.match(t, /Complete: every call the index binds is listed/);
+    } finally { i.close(); rmrf(dir); }
+});

@@ -138,7 +138,7 @@ Commands:
 - \`gi grep <regex> [--path DIR] [--literal] [-i]\` — text search over all files; code matches show their enclosing definition and, for identifiers, the definition they refer to.
 - \`gi search "<behaviour or identifier>" [--path DIR] [--kind K]\` — ranked symbols for a behaviour described in words.
 - \`gi impact [--symbols A,B] [--files X,Y] [--diff]\` · \`gi check [--files X,Y]\` — call sites to update and tests to run; what an edit broke.
-- \`gi callgraph <symbol> [--direction callers|callees|both]\` · \`gi outline [path]\` — call hierarchy; file skeleton or area map.`;
+- \`gi callgraph <symbol> [--direction callers|callees|both] [--depth N] [--no-tests]\` · \`gi outline [path]\` — call hierarchy (every caller at each level, and whether the list is complete); file skeleton or area map.`;
 }
 
 const POLICY = {

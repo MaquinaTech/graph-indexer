@@ -11,7 +11,7 @@
  *                                                        definitions each one uses
  *   graph-indexer symbol   <name>…  [--no-code]
  *   graph-indexer refs     <name>   [--kind K] [--path P] [--no-tests] [--limit N]
- *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N]
+ *   graph-indexer callgraph <name>  [--direction callers|callees|both] [--depth N] [--no-tests]
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
  *   graph-indexer outline  [path]   [--focus TEXT] [--max-tokens N]
  *   graph-indexer files    <text|glob> [--path P]
@@ -98,7 +98,7 @@ Usage:
                                                    with where each name they use is defined
   graph-indexer symbol <name>… [--no-code]         one or several definitions
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--path P] [--no-tests]
-  graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
+  graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N] [--no-tests]
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
@@ -167,8 +167,8 @@ async function main() {
             return runTool('find_references', { symbol: argv.join(' '), kind, include_tests: !noTests, limit, ...(pathF ? { path: pathF } : {}) });
         }
         case 'callgraph': {
-            const direction = opt('--direction', 'both'); const depth = Number(opt('--depth', 2)); const limit = Number(opt('--limit', 40));
-            return runTool('call_graph', { symbol: argv.join(' '), direction, depth, limit });
+            const direction = opt('--direction', 'both'); const depth = Number(opt('--depth', 2)); const limit = Number(opt('--limit', 40)); const noTests = flag('--no-tests');
+            return runTool('call_graph', { symbol: argv.join(' '), direction, depth, limit, include_tests: !noTests });
         }
         case 'impact': {
             const symbols = (opt('--symbols') ?? '').split(',').filter(Boolean);
