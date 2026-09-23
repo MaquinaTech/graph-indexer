@@ -393,7 +393,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             visibility: d.isDefault ? 'default' : (spec.visibility ? spec.visibility(node, name) : null),
             decorators: spec.decoratorsOf ? spec.decoratorsOf(node) : [],
             bases: [],
-            type: d.type ? normalizeType(typeParamBound(node, d.type) ?? d.type, spec) : null,
+            type: d.type ? declaredType(node, d.type, spec) : null,
             isStatic: isStaticMember(node, d.nameNode, spec),
             startIndex: node.startIndex,
             endIndex: node.endIndex,
@@ -794,6 +794,23 @@ const CALLABLE_KINDS = new Set(['function', 'method']);
 const CONSTRUCTOR_NAMES = new Set(['constructor', '__construct']);
 
 /** `get<T extends Foo = Foo>(): T` → the declared return type `T` means `Foo` (bound or default). */
+/**
+ * Declared type of a definition, with the definition's own type parameters replaced by their
+ * bound or default: `create<T extends App = App>(): Promise<T>` is typed `App` (the wrapper is
+ * unwrapped first, then `T` looked up).
+ */
+function declaredType(defNode, typeText, spec) {
+    const direct = typeParamBound(defNode, typeText);
+    if (direct !== undefined) return direct === null ? null : normalizeType(direct, spec);
+    const n = normalizeType(typeText, spec);
+    if (!n) return null;
+    const elem = n.endsWith('[]') ? '[]' : '';
+    const bound = typeParamBound(defNode, elem ? n.slice(0, -2) : n);
+    if (bound === undefined) return n;
+    const b = bound === null ? null : normalizeType(bound, spec);
+    return b ? b + elem : null;
+}
+
 function typeParamBound(defNode, typeText) {
     const name = String(typeText).trim();
     if (!/^[A-Za-z_$][\w$]*$/.test(name)) return undefined;

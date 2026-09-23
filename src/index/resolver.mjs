@@ -16,6 +16,7 @@
 import path from 'node:path';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
+const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
 const CALLABLE_KINDS = new Set(['function', 'method', 'constructor', 'macro']);
 const MEMBER_HOLDERS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'object', 'impl', 'module']);
 const PACKAGE_LANGS = new Set(['java', 'kotlin', 'scala', 'csharp', 'php']);
@@ -275,6 +276,13 @@ export class Resolver {
             // same-file qualified name first (this.x → Class#x uses the class qname)
             const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
             cur = q ?? this.typeFromString(head.name.split('.').pop(), fileId);
+            if (!cur && !head.name.includes('.')) {
+                // a capitalised root can be a value rather than a type: `export const NestFactory =
+                // new NestFactoryStatic()` makes `NestFactory.create()` a member of NestFactoryStatic
+                const r = this.#resolveName(head.name, 'value', fileId, srcId);
+                const v = r?.id != null ? this.t.sym(r.id) : null;
+                if (v && VALUE_TYPED_KINDS.has(v.kind) && v.type && v.type !== head.name) cur = this.typeFromString(v.type, v.fileId);
+            }
             if (!cur && head.name.includes('.')) {
                 // enclosing class that is not a symbol itself (e.g. JS prototype owner)
                 cur = { id: null, name: head.name.split('.').pop(), fileId };
