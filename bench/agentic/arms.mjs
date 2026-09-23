@@ -8,12 +8,15 @@
  *   grep+gi   built-in tools plus graph-indexer, introduced like an MCP server (tool card)
  *   grep+gi+  built-in tools plus graph-indexer with the integrated workflow (decision rules and
  *             the verification commands the integration adds)
+ *   grep+gi2  second iteration of the integrated card: verification only for changes that cross a
+ *             function's boundary
+ *   gi2       the grep-free arm with the second card (plus `gi files` for file names)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2'];
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {
@@ -58,26 +61,33 @@ Commands:
  * Integrated card, second iteration (after the first benchmark round): the verification steps
  * are for changes that cross a function's boundary; a local fix is checked by its tests. On the
  * fresh bug-fix tasks the first card's unconditional "check / impact before finishing" added turns
- * without adding solved tasks.
+ * without adding solved tasks. Without grep (gi2) the card also covers text and file-name search.
  */
-function integratedCard2(gi) {
-    return `## graph-indexer (code index for this repository)
-A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).
-
-When it saves work (otherwise use your usual tools):
-- Uses of a known function/method/class, especially when other classes share the name → \`gi refs\` (exact call sites; same-name methods told apart) instead of grepping the name.
-- Where a behaviour described in words lives → \`gi search\`, then \`gi symbol\` on the hit (several targets at once: \`gi symbol A B C\`).
-- Changing a signature, renaming or removing something, or changing behaviour other code relies on → \`gi impact --symbols X\` first (all call sites and tests), \`gi check\` after editing.
-- A fix inside one function that keeps its signature needs neither impact nor check: run the tests that cover it and finish.
-
-Commands:
-- \`gi refs <symbol> [--kind call|type|inherit|new|value] [--no-tests]\` — every use, grouped by file, with confidence; lists same-name calls it could not bind and names used as strings (stubs, getattr).
-- \`gi symbol <Name | Class.member | path:Name | path:LINE>… [--no-code]\` — definitions with line numbers, members, callers/callees summary.
-- \`gi search "<behaviour or identifier>" [--path DIR] [--kind K] [--limit N]\` — ranked symbols with location and matching lines.
-- \`gi grep <regex> [--path DIR] [--literal] [-i]\` — text search over all files; each code match shows its enclosing definition and, for identifiers, the definition it refers to.
-- \`gi impact [--symbols A,B] [--files X,Y] [--diff]\` — call sites to update, overrides, dependents, tests to run.
-- \`gi check [--files X,Y]\` — after a cross-function change: broken call sites, references to removed names, tests to run.
-- \`gi callgraph <symbol> [--direction callers|callees|both] [--depth N]\` · \`gi outline [path]\` — call hierarchy; file skeleton or area map.`;
+function integratedCard2(gi, { grep = true } = {}) {
+    const head = `## graph-indexer (code index for this repository)
+A live structural index of the repository — definitions, references bound through scopes/imports/receiver types, call graph, tests — re-synced with the files on every call. Run it through the shell with the executable \`${gi}\` (written \`gi\` below — type the full path).`;
+    const rules = [
+        grep ? 'When it saves work (otherwise use your usual tools):' : 'When to use what:',
+        ...(grep ? [] : [
+            '- Files by name or path → `gi files <text|glob>`; text anywhere (identifiers, strings, config, docs) → `gi grep <regex>`.',
+        ]),
+        `- Uses of a known function/method/class, especially when other classes share the name → \`gi refs\` (exact call sites; same-name methods told apart)${grep ? ' instead of grepping the name' : ''}.`,
+        '- Where a behaviour described in words lives → `gi search`, then `gi symbol` on the hit (several targets at once: `gi symbol A B C`).',
+        '- Changing a signature, renaming or removing something, or changing behaviour other code relies on → `gi impact --symbols X` first (all call sites and tests), `gi check` after editing.',
+        '- A fix inside one function that keeps its signature needs neither impact nor check: run the tests that cover it and finish.',
+    ];
+    const commands = [
+        'Commands:',
+        '- `gi refs <symbol> [--kind call|type|inherit|new|value] [--no-tests]` — every use, grouped by file, with confidence; lists same-name calls it could not bind and names used as strings (stubs, getattr).',
+        '- `gi symbol <Name | Class.member | path:Name | path:LINE>… [--no-code]` — definitions with line numbers, members, callers/callees summary.',
+        '- `gi search "<behaviour or identifier>" [--path DIR] [--kind K] [--limit N]` — ranked symbols with location and matching lines.',
+        '- `gi grep <regex> [--path DIR] [--literal] [-i]` — text search over all files; each code match shows its enclosing definition and, for identifiers, the definition it refers to.',
+        ...(grep ? [] : ['- `gi files <text|glob> [--path DIR]` — files whose path contains the text, or matches a glob (`*.toml`, `tests/test_*.py`).']),
+        '- `gi impact [--symbols A,B] [--files X,Y] [--diff]` — call sites to update, overrides, dependents, tests to run.',
+        '- `gi check [--files X,Y]` — after a cross-function change: broken call sites, references to removed names, tests to run.',
+        '- `gi callgraph <symbol> [--direction callers|callees|both] [--depth N]` · `gi outline [path]` — call hierarchy; file skeleton or area map.',
+    ];
+    return [head, '', rules.join('\n'), '', commands.join('\n')].join('\n');
 }
 
 const POLICY = {
@@ -87,10 +97,11 @@ const POLICY = {
     'grep+gi+': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its "when to use what" rules.',
     'grep+gi2': 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below) where it saves work.',
 };
+POLICY.gi2 = POLICY.gi;
 
 export function toolSection(arm, gi, caps = {}) {
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
-    if (arm === 'grep+gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi)}`;
+    if (arm === 'grep+gi2' || arm === 'gi2') return `# Tools\n${POLICY[arm]}\n\n${integratedCard2(gi, { grep: arm === 'grep+gi2' })}`;
     const grep = arm !== 'gi';
     const card = arm === 'grep+gi+' || (arm === 'gi' && (caps.grep || caps.check)) ? integratedCard(gi, caps, { grep }) : basicCard(gi, { grep });
     return `# Tools\n${POLICY[arm]}\n\n${card}`;
