@@ -134,6 +134,15 @@ and real commits, and end to end with coding agents
   `initialize` method, in the call graph or the edit check. A map built with type arguments
   (`new Map<string, Foo>()`) types the values taken from it, and `call_graph` lists a recursive
   function among its own callers.
+- **Anonymous classes and map values.** A class expression without a name (`return class extends
+  ModuleRef {…}`, `mixin(class extends Base {…})`) is a class of its own, `<anonymous>` in the
+  index, so `this` in its methods reaches its bases' members: before, `this.find()` there was
+  bound to a `find` of the class around it and reported as complete. A default-exported anonymous
+  class is a class too. The values of a map reach the code that takes them — `m.forEach(v => …)`,
+  `for (const v of m.values())`, `Array.from(m.values())`, `[...m.values()]` — also when the map
+  is a class that extends `Map<K, V>`; a loop over such a class's `values()` used to be taken for
+  the language's own and left out without a mention. On nestjs this binds 4 more calls and 9 more
+  member reads, and changes no other binding in any of the seven benchmark repositories.
 - **Resident process.** The MCP server, or `graph-indexer daemon` when no server runs (the hooks
   start it and it exits after 30 idle minutes), keeps the index open and in sync and answers hooks
   and CLI queries over a socket only its owner can reach, inside `.graph-indexer/` (a named pipe
@@ -189,6 +198,11 @@ and real commits, and end to end with coding agents
   answered 20 of 24 exactly, as many as a general-purpose sub-agent with grep, at 0.24 (0.18–0.33)
   of its cost and 0.28 of its time; Claude Code's Explore agent came to 0.76. Each handed back
   about 170 tokens, against the 23k that looking the answer up adds to the asking agent's context.
+  After the fixes that followed the round, the index alone answers all 24 exactly.
+- Real sessions: `bench/agentic/session-round.mjs` runs Claude Code as shipped, with graph-indexer
+  as `init --no-helper` installs it and as `init` installs it, on 12 new questions and 8 refactors,
+  and reports in dollars across models whether the main agent hands questions to the helper and
+  what that does to cost, time, results and its own context. It needs an authenticated `claude`.
 
 ---
 

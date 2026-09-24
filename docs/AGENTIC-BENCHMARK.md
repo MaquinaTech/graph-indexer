@@ -29,9 +29,13 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `ask-grep` | a general-purpose sub-agent with the built-in tools | none: it gets a question as the message a main agent sends when it hands one off, and its reply is the answer |
 | `ask-explore` | Claude Code's built-in Explore agent (read-only search) | none, with the same message |
 | `ask-helper` | graph-indexer, through the structural helper | the helper's instructions (`src/cli/helper.mjs`, what `init` installs as the sub-agent's system prompt), then the same message |
+| `cc` | a real Claude Code session with the tools it ships with, sub-agents (Explore, general-purpose) included | none |
+| `cc+gi` | the same session with graph-indexer's MCP server | as `init --no-helper` installs it: the server and the CLAUDE.md block |
+| `cc+gi+helper` | the same, with the structural helper among the sub-agents | as `init` installs it; the main agent decides on its own whether to hand a question to the helper |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
-exactly what the MCP tools return. The tool policy of each arm is stated in the instructions and
+exactly what the MCP tools return — except the `cc` arms, which are real sessions (`claude -p`,
+[`run-headless.mjs`](../bench/agentic/run-headless.mjs)) where graph-indexer is the MCP server. The tool policy of each arm is stated in the instructions and
 audited afterwards in every transcript: a `grep` piped from another command or run on a file
 outside the repository is filtering, not searching, and is allowed in the grep-free arms.
 
@@ -145,6 +149,12 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    new code questions (set `r5`), each given as the message a main agent sends when it hands a
    question off — to a general-purpose sub-agent with grep, to Claude Code's Explore agent and to
    the structural helper `init` now installs — all on the smaller model.
+
+8. **Real sessions** (prepared, not yet run; arms `cc`, `cc+gi`, `cc+gi+helper`): 12 new code
+   questions (set `r6`) and 8 refactors — the two new targets left (set `r5`) and the six of the
+   held-out round — each given to a Claude Code session with its usual model, so that the main
+   agent chooses whether to hand work to a sub-agent. The report is in dollars, since the helper
+   runs on a smaller model; `session-round.mjs` runs it (see Reproducing).
 
 Each of the four rounds and the delegation round is held out for the snapshot it tests — its tasks
 played no part in the changes. The resolved-indirection and smaller-model comparisons reuse
@@ -290,10 +300,13 @@ By kind of question (solved, mean cost, mean time):
   `InstanceWrapper.initialize` — a method called `initialize` was taken for a constructor in
   every language, while it is one only in Ruby — and missed a call on a value taken from a
   `new Map<K, V>()`; and it left out that a recursive method is one of its own callers. All three
-  were fixed after the round: the index alone now answers 22 of the 24 questions exactly, against
-  20, and the two it misses are two calls it flags for checking (a receiver it cannot type), which
+  were fixed after the round: the index alone then answered 22 of the 24 questions exactly, against
+  20, and the two it missed were two calls it flags for checking (a receiver it cannot type), which
   the helper checked and got right. Against the TypeScript compiler over 400 symbols, recall went
-  from 0.960 to 0.961 and exact sets from 0.902 to 0.905, with precision unchanged.
+  from 0.960 to 0.961 and exact sets from 0.902 to 0.905, with precision unchanged. A second pass
+  closed those two as well — `this` inside an anonymous class (`return class extends ModuleRef
+  {…}`), which the index had bound to the class around it, and the values of a class that extends
+  `Map` handed to `forEach` — and the index alone now answers all 24; exact sets 0.907.
 - In `rc8small` the smaller model with grep spent 0.35 of what the usual model spent with grep on
   code questions; at 0.24 of that, the helper would come to under a tenth — an estimate across
   rounds and question sets, not a measurement.
@@ -664,13 +677,14 @@ grep or find despite the policy, most of them to read a configuration file.
   helper answers as exactly as the main agent's own tools, at a quarter of the cost and time, and
   hands back about 170 tokens. What is left is the rest of the session: whether a main model hands
   structural questions to the helper at the right moments, and what a clean context saves over a
-  long task. That needs sub-agents that can start sub-agents, which the sessions that ran the
-  rounds did not allow, or the real harness (below).
+  long task. The sessions that ran the rounds could not start sub-agents from sub-agents, so this
+  runs in real sessions: the round is prepared (protocol item 8, `session-round.mjs`) and needs a
+  machine with an authenticated `claude`.
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
-- **Recall gaps that remain** (object literals typed by an interface, destructuring, class
-  expressions, a value taken from a class that extends `Map`; see
+- **Recall gaps that remain** (object literals typed by an interface, destructuring, generic
+  instantiation; see
   [BENCHMARKS.md](BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler)). The
   index flags the calls it could not bind for checking.
 - **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
@@ -736,6 +750,32 @@ node bench/agentic/report.mjs --gi local --integrated mcp+hooks --nogrep grep+ru
 `GI_AGENTIC_WORK` moves the work area from `/tmp/gi-agentic`. The 76 runs use the account's
 quota: in the fourth round a run cost between 0.1M and 1.9M input-equivalent tokens, and an
 issue took 1–15 minutes.
+
+**Real sessions and the helper (protocol item 8).** One command prepares, checks, runs, grades
+and reports the round:
+
+```sh
+node bench/fixtures.mjs --only nestjs
+npm install -g typescript                      # grades the refactors (or set TYPESCRIPT_PATH)
+node bench/agentic/session-round.mjs --model M --pilot    # 1 question + 1 refactor per arm
+node bench/agentic/session-round.mjs --model M            # the 20 tasks × 3 arms
+```
+
+`--model` pins the sessions' model (the usual model of the earlier rounds, for comparison with
+them); without it the CLI's default runs.
+
+It freezes the working graph-indexer, prepares the runs (a graph-indexer arm's run directory gets
+the CLAUDE.md block, and the helper arm's also `.claude/agents/code-structure.md`, as `init` writes
+them), and starts one short session per arm that must show the Agent tool, the graph-indexer server
+connected and the helper offered only where it belongs — nothing else runs if one of them does
+not. The sessions run under `acceptEdits` with Bash and graph-indexer's tools allowed, the web
+tools off, no MCP server but graph-indexer's and none of the machine's own settings, with a
+ceiling of $5 each (`--max-budget`). The report (`/tmp/gi-agentic/reports/<label>.md`) compares
+dollars, every model included, and adds a table of what the main agent handed to sub-agents, to
+which, and the context it carried itself. With the usual model the 60 sessions should come to
+tens of dollars, billed to the account the `claude` CLI is logged in with (a subscription's quota,
+or `ANTHROPIC_API_KEY`); the runs are graded where they ran, since the answers and edits stay in
+the work area.
 
 ## Limitations
 

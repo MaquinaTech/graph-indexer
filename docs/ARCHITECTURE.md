@@ -59,7 +59,8 @@ Capture conventions:
 
 - **symbols** — nested by syntax (`Class.method`), with signature (text up to the body), doc
   comment, export/visibility, static flag, decorators and bases. Constructor parameter properties
-  are hoisted to class fields; class expressions assigned to fields/variables are classes.
+  are hoisted to class fields; class expressions assigned to fields/variables are classes, and
+  one without a name is the class `<anonymous>` (so `this` in its methods is its own).
 - **references** — one per name node (the most specific kind wins: a decorator call is a
   `decorator`, `new X()` is `new`), with the enclosing symbol, a receiver descriptor and, when it
   can be inferred from the file alone, the receiver's static type.

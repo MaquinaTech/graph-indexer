@@ -59,18 +59,20 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 
 | oracle | system | micro-P | micro-R | micro-F1 | macro-P | macro-R | exact set |
 |---|---|---|---|---|---|---|---|
-| dispatch | graph-indexer | 0.996 (0.999) | 0.961 (0.887) | 0.978 (0.940) | 0.967 | 0.960 | 0.905 |
-| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.961 (0.887) | 0.978 (0.940) | 0.969 | 0.960 | 0.910 |
+| dispatch | graph-indexer | 0.996 (0.999) | 0.961 (0.887) | 0.978 (0.940) | 0.969 | 0.962 | 0.907 |
+| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.961 (0.887) | 0.979 (0.940) | 0.971 | 0.962 | 0.912 |
 | dispatch | name-only | 0.252 | 0.975 | 0.400 | 0.735 | 0.976 | 0.591 |
 | dispatch | grep | 0.128 | 0.993 | 0.227 | 0.515 | 0.994 | 0.226 |
-| rename | graph-indexer | 0.996 (0.999) | 0.924 (0.767) | 0.959 (0.868) | 0.967 | 0.944 | 0.875 |
+| rename | graph-indexer | 0.996 (0.999) | 0.925 (0.767) | 0.959 (0.868) | 0.969 | 0.946 | 0.877 |
 | rename | name-only | 0.262 | 0.976 | 0.413 | 0.752 | 0.977 | 0.607 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
 
 An earlier 3.0 build, before the correctness work that followed the agent studies, gave with the
-same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835. The last change — constructors
-recognised by language and the type arguments of a constructed map kept — moved recall from 0.960
-to 0.961 and exact sets from 0.902 to 0.905.
+same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835. Constructors recognised by
+language and the type arguments of a constructed map kept moved recall from 0.960 to 0.961 and
+exact sets from 0.902 to 0.905; anonymous classes and the values of maps (below) moved exact sets
+to 0.907 and per-symbol recall and precision up by 0.002 each. The sample leaves out anonymous
+classes, which nobody looks up by name, so it is the same symbols as before.
 
 Micro averages pool all reference lines (dominated by heavily used symbols); macro averages
 weigh each symbol equally; "exact set" is the share of symbols whose reference set matches the
@@ -78,13 +80,14 @@ oracle exactly.
 
 **What is still missed.** Receivers whose type only a type checker knows: object literals
 contextually typed by an interface (`{ useFactory: … }` as a `FactoryProvider`), generic
-instantiation, destructured property reads, classes declared as expressions, and `any`-typed
-values; type names in JSDoc tags are not references at all. These show up as lower recall, not
+instantiation, destructured property reads, and `any`-typed values; type names in JSDoc tags are not references at all. These show up as lower recall, not
 as wrong answers, and `find_references` names the same-name call sites it could not bind, in the
 files that use the type or a subclass of it, so an agent knows what to check. Callback parameters
 typed only by the signature of the function they are passed to
 (`helpers.connect((err, socket) => socket.send(…))`) are followed, as are fluent chains formatted
-one call per line and chains that start with `(await …)`.
+one call per line, chains that start with `(await …)`, `this` inside an anonymous class
+(`return class extends ModuleRef {…}`), and the values of a map handed to `forEach`, a
+`values()` loop or a copy (`Array.from`, spread), also from a class that extends `Map<K, V>`.
 
 **A caveat on the oracle.** The fixture is checked out without `node_modules`, so values that
 flow through third-party libraries (for example `iterate(instances).filter(([_, w]) =>

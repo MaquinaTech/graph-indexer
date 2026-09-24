@@ -153,7 +153,7 @@ own `findReferences` (import lines and declarations excluded):
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
 *Dispatch semantics: calls through a base class or interface count, calls to sibling overrides
-do not. Against the compiler's full rename set (sibling overrides included) recall is 0.924. The
+do not. Against the compiler's full rename set (sibling overrides included) recall is 0.925. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.*
 
