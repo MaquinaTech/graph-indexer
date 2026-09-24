@@ -214,8 +214,8 @@ All 22 runs solved their task. The facts made reading more precise and trimmed s
 
 Two measurement lessons came out of this round:
 
-- **The model had changed since round 4.** The same alias (`claude-sonnet-5`) solved these tasks for 337k mean cost with `grep` alone, against 751k in round 4, and reasoned 11.8k tokens before editing instead of 22k. Comparing a new arm with an earlier round's runs measures the model, not the arm. Every comparison needs a concurrent control, and `report.mjs` now warns when the arms ran on different models.
-- **Sub-agents take the session's model unless told otherwise.** The benchmark's sub-agents are launched with `model: sonnet` so that every round runs on the same model. Five runs launched by mistake on the session's model were discarded (`runs/rc8/discarded.tsv`).
+- **The model had changed since round 4.** The same model alias solved these tasks for 337k mean cost with `grep` alone, against 751k in round 4, and reasoned 11.8k tokens before editing instead of 22k. Comparing a new arm with an earlier round's runs measures the model, not the arm. Every comparison needs a concurrent control, and `report.mjs` now warns when the arms ran on different models.
+- **Sub-agents take the session's model unless told otherwise.** The benchmark's sub-agents are now launched on a fixed model, the one the earlier rounds used, so that every round runs on the same model. Five runs launched by mistake on the session's model were discarded (`runs/rc8/discarded.tsv`).
 
 With today's model the fixed prefix is 38–39% of an issue's cost. Each turn re-reads it, so the remaining levers are fewer turns and a smaller prefix, including graph-indexer's own share of it (tool definitions and instructions).
 
