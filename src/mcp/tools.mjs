@@ -1,6 +1,6 @@
 /**
  * The MCP tool surface: eight read-only tools, each answering one kind of question an agent has
- * while changing code (`get_symbol`, which `read_code` replaced, stays callable for older clients).
+ * while changing code; descriptions are short because clients re-read them on every turn (`get_symbol`, which `read_code` replaced, stays callable for older clients).
  * Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
  */
@@ -24,7 +24,7 @@ export const TOOLS = [
     {
         name: 'search_code',
         title: 'Search code',
-        description: 'Find where something is implemented in this repository. Ranks functions, methods, classes and types by name, signature, docs and body, with graph-aware ranking. Use it when you do not know the exact file or symbol name — natural language ("where are JWT tokens validated") or identifiers ("parseHeaders", "UserService.find") both work. Returns ranked symbols with location, signature, doc line and the lines that matched. Filters: `path` (directory or file prefix), `kind` (function, method, class, interface, struct, type…). Prefer grep for exact string literals, log messages or config keys.',
+        description: 'Ranked functions, classes and types for a behaviour described in words ("where are JWT tokens validated") or identifiers, with location, signature and matching lines. Filters: `path`, `kind`. Grep is better for literal strings and config keys.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -39,7 +39,7 @@ export const TOOLS = [
     {
         name: 'search_text',
         title: 'Search text',
-        description: 'Grep with structure: search the text of every file in the repository (code, config, docs, tests) for a regular expression or literal string. Each code match shows its enclosing function/class, and when the pattern is an identifier each match says what it is — the definition, a reference bound to a specific symbol (so same-named methods of different classes are told apart), an unbound reference, or a comment/string — with a summary per target at the end. Use it for string literals, error messages, config keys, and whenever you would grep an identifier; use find_references when you already know which symbol you mean.',
+        description: 'Grep over every file (regex or literal) that also gives each code match its enclosing function and, for an identifier, what the match is: the definition, a reference bound to a symbol, an unbound one, or a comment/string.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -55,7 +55,7 @@ export const TOOLS = [
     {
         name: 'read_code',
         title: 'Read code',
-        description: 'Read code without searching for what it uses: a function, class or method by name ("Parser.parse_interval", "handleRequest"), a line range ("src/app.py:120-180") or a file — several targets per call. Returns the code with line numbers and, below it, where each name the code uses is defined (file:line and signature), so following a call or a type means reading the listed targets instead of grepping for them. For a symbol it also shows what it overrides, who uses it and which tests exercise it. A file over 300 lines comes back as its outline (definitions with line ranges); read the parts you need, or pass full: true. Your editor may still ask you to open the lines you change with its own read tool.',
+        description: 'Read functions, methods or classes by name ("Parser.parse"), ranges ("src/app.py:120-180") or files, several per call, with where each name the code uses is defined (file:line, signature) and, for a symbol, its overrides, users and tests. Files over 300 lines come back as an outline unless full: true.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -69,7 +69,7 @@ export const TOOLS = [
     {
         name: 'find_references',
         title: 'Find references',
-        description: 'Every place that uses a symbol — calls, instantiations, type annotations, inheritance, decorators, field reads and function references passed as values — grouped by file with the enclosing function and the source line. Methods that merely share the name (other classes, standard-library `get`/`set`…) are kept apart. Use it before renaming or changing a signature, or to learn how something is used. References are bound through scopes, imports and inferred receiver types (including injected fields); calls through a parent class or interface are included and marked. For a class or interface it also lists the types that inherit it indirectly, through a subclass or sub-interface. The footer lists same-name calls whose receiver type is unknown and says whether any of them is plausible (its file mentions the type), so a grep cross-check is only needed when it says so.',
+        description: 'Every use of a symbol (calls, instantiations, types, inheritance, decorators, values) by file with the enclosing function and line. Bound through scopes, imports and receiver types, so same-name methods of other classes are kept apart; calls through a parent type are marked. The footer says whether the list is complete and whether unbound same-name calls are plausible.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -85,7 +85,7 @@ export const TOOLS = [
     {
         name: 'call_graph',
         title: 'Call graph',
-        description: 'Show the call hierarchy around a function or method: who calls it (callers, transitively up to `depth`) and/or what it calls (callees), as a tree with locations and confidence. Use it to trace a request/data flow across files or to understand the execution path into and out of a function without opening every file. direction: "callers", "callees" or "both" (default).',
+        description: 'Callers (transitively, up to `depth`) and/or callees of a function or method, as a tree with locations and confidence: request and data flow across files.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -101,7 +101,7 @@ export const TOOLS = [
     {
         name: 'change_impact',
         title: 'Change impact',
-        description: 'What a change to some symbols or files affects: the call sites to update (file:line), overrides and implementations that must stay in line, subclasses that inherit a changed method, callers of callers, the tests that exercise the code, the public surface, files that historically change together (git), and what the index cannot see. Pass `symbols` and/or `files`, or `diff: true` for your uncommitted changes. Use it before changing a widely used function or a signature; after editing, check_changes verifies what you actually changed.',
+        description: 'What changing some symbols or files (or `diff: true`, your uncommitted changes) affects: call sites to update, overrides and subclasses, callers of callers, tests that exercise it, files that change together, and what the index cannot see.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -115,7 +115,7 @@ export const TOOLS = [
     {
         name: 'check_changes',
         title: 'Check changes',
-        description: 'Verify your uncommitted edits before you finish, without building: compares every changed file with the last commit and reports syntax errors you introduced, calls whose argument count no longer fits a changed definition (call sites across the repository and calls you wrote), definitions you removed or renamed that are still used or imported, callers of a changed signature in files you did not touch, the subclasses that inherit a method you changed (they run the new code too), and the tests that exercise the changed code — the closest test functions first, and the tests of those subclasses — with the commands to run them. Use it after editing and before declaring a task done; it complements, not replaces, running the tests and the type checker.',
+        description: 'Checks your uncommitted edits without building: syntax errors, calls whose argument count no longer fits, removed or renamed names still in use, callers in files you did not touch, subclasses that inherit changed methods, and the closest tests with the command to run them.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -127,7 +127,7 @@ export const TOOLS = [
     {
         name: 'outline',
         title: 'Outline',
-        description: 'Structure without bodies. For a file: every definition with its signature and line range (cheap way to see what a file contains before reading parts of it). For a directory or the whole repository (empty path): the most important symbols ranked by how central they are in the dependency graph, grouped by file, within a token budget — a map for orienting in unfamiliar code. `focus` (a query or symbol names) personalizes the map around a task.',
+        description: 'Definitions without bodies: for a file, signatures and line ranges; for a directory or the repository (empty path), the most central symbols within a token budget, optionally centred on `focus`.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -157,25 +157,16 @@ export const LEGACY_TOOLS = [
     },
 ];
 
-// loaded up front even when the client defers MCP tools behind a tool search: the tools an agent
-// needs at the moments it would otherwise guess (which uses? what does this change reach? what did
-// I break? where is the definition my search missed?). Text search stays with the agent's own grep.
-const ALWAYS_LOAD = new Set(['find_references', 'change_impact', 'check_changes', 'read_code']);
+// loaded up front even when the client defers MCP tools behind a tool search: the one tool agents
+// called in real sessions (docs/AGENTIC-BENCHMARK.md, rt1–rt2); every loaded definition is re-read
+// on every turn, so the others wait behind the client's tool search.
+const ALWAYS_LOAD = new Set(['find_references']);
 for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
-export const SERVER_INSTRUCTIONS = `graph-indexer keeps a live structural index of this repository: definitions, references bound through scopes, imports and receiver types, the call graph, and the tests that exercise each function. It re-syncs with the files before every answer, so results include edits made seconds ago.
-
-Use it for what a text search cannot answer exactly, and keep reading and searching text with your own tools — the function or lines you need, several lookups per message:
-- Uses of a known symbol, even when other classes have same-name methods: find_references gives the exact call sites and says when the list is complete, or which same-name calls could not be bound and whether they are plausible; for a class or interface, every type that inherits it.
-- Callers of callers and request flows: call_graph.
-- Before changing a signature, renaming or removing something, or changing behaviour other code relies on: change_impact (call sites to update, overrides, subclasses that inherit it, dependents, tests to run). When you are done: check_changes (syntax errors, calls that no longer fit, removed names still in use, subclasses that inherit the changed code, the closest tests and the command to run them). A fix inside one function that keeps its signature needs no change_impact: run the tests that cover it, once.
-- A definition your search did not find, or several at once: read_code with names (Class.method) or ranges (file:120-180); it also lists where each name the code uses is defined.
-- search_text: grep that also gives each code match's enclosing function and the definition an identifier refers to. search_code: code for a behaviour described in words. outline: a map of an unfamiliar area.
-
-Every answer states its confidence and what the index cannot see (dynamic dispatch, untyped receivers); an empty result says why.`;
+export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 

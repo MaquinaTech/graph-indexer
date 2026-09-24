@@ -156,6 +156,11 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    agent chooses whether to hand work to a sub-agent. The report is in dollars, since the helper
    runs on a smaller model; `session-round.mjs` runs it (see Reproducing).
 
+9. **Real sessions on issues, and a lean tool surface** (snapshots `rt2`, `rt3i`, `rt3q`): the
+   fourth round's 11 issues in real sessions, two runs per task and arm (`rt2`); then the same
+   issues (`rt3i`) and `rt1`'s 20 tasks (`rt3q`) again with the tool surface trimmed, every arm
+   re-run the same day so that `cc` is a concurrent control.
+
 Each of the four rounds and the delegation round is held out for the snapshot it tests — its tasks
 played no part in the changes. The resolved-indirection and smaller-model comparisons reuse
 earlier tasks. Every comparison is within a round, against the `grep` (or `ask-grep`) arm on the
@@ -296,6 +301,52 @@ solved (0…30), cost 0.91 (0.85–0.98), cost per solved task 0.78 (0.60–0.93
   hand a question off, which on these tasks it never did. The helper costs nothing when unused
   (the helper arm cost no more than `cc+gi`), so `init` keeps installing it; whether a main agent
   delegates during a long task is still unmeasured.
+
+### Real sessions on issues (rt2) and the lean tool surface (rt3): 252 runs
+
+**Issues in real sessions (`rt2`).** The fourth round's 11 issues (8 sqlglot, 3 networkx), set up
+as in `rt1`, two runs per task and arm, 66 sessions, $7.62. Every run fixed its issue (the real
+fix's hidden tests pass). **No session with graph-indexer called it**, and none delegated. Those
+arms still cost 1.07 (0.86–1.37) and 1.10 (0.95–1.33) of `cc`, and 1.29 (1.07–1.58) on the 6
+one-file fixes. The transcripts show why: graph-indexer's fixed share of the prompt — the tool
+definitions Claude Code loads up front, the server's instructions and the CLAUDE.md block — added
+2,930 tokens to a 15,900-token first turn, and every turn re-reads it. Of the 64 graph-indexer
+calls in `rt1`, 62 were `find_references`, one `call_graph` and one `read_code`.
+
+**The lean surface.** Claude Code keeps MCP tools behind its tool search unless a tool asks to be
+loaded up front; four did (`find_references`, `change_impact`, `check_changes`, `read_code`). Now
+only `find_references` does, every tool description is a sentence or two, the server's
+instructions are one paragraph and the CLAUDE.md block names the tools in three lines. The other
+tools are still listed, found through the tool search, and callable. Graph-indexer's share of the
+first turn fell from 2,930 to 1,190 tokens.
+
+| suite | arm | before (`rt1`, `rt2`) | lean (`rt3q`, `rt3i`) |
+|---|---|---|---|
+| B1 questions (12) | `cc` | 9 / 12 | 8 / 12 |
+| | `cc+gi` | 12 / 12 · cost 0.89 (0.82–0.96) | **12 / 12 · cost 0.84 (0.75–0.94)** |
+| | `cc+gi+helper` | 12 / 12 · cost 0.86 (0.81–0.92) | **12 / 12 · cost 0.80 (0.69–0.93)** |
+| B2 refactors (8) | `cc+gi` | 8 / 8 · cost 1.03 (0.87–1.27) | 8 / 8 · cost 1.07 (0.94–1.24) |
+| | `cc+gi+helper` | 8 / 8 · cost 0.98 (0.86–1.10) | 8 / 8 · cost 1.07 (0.91–1.24) |
+| B3 issues (11 × 2) | `cc+gi` | 22 / 22 · cost 1.07 (0.86–1.37) | 22 / 22 · **cost 1.02 (0.96–1.09)** |
+| | `cc+gi+helper` | 22 / 22 · cost 1.10 (0.95–1.33) | 22 / 22 · **cost 1.05 (0.97–1.15)** |
+| first turn | graph-indexer's share | +2,930 tokens | **+1,190 tokens** |
+
+Cost ratios are paired by task against the same round's `cc` (bootstrap 95% CI). `rt3i` and
+`rt3q` cost $7.38 and $4.28. Over B1 + B2 in `rt3q`, `cc+gi+helper` against `cc`: +20 points
+solved (5…40), cost per solved task 0.73 (0.52–0.93).
+
+**What it shows.**
+
+- **On issues the agent does not reach for graph-indexer, so what it costs there is its share of
+  the prompt.** A one-function fix in a Python package takes 7–8 turns of grep and reads; the
+  question graph-indexer answers exactly (every use of a symbol) does not come up. Trimming the
+  surface brought the overhead from 7–10% to 2–5%, inside the run-to-run noise.
+- **Questions stayed exact and got cheaper.** Both graph-indexer arms answered all 12 exactly
+  again, calling it 1.5–1.9 times per question, and `cc` missed 4 of 12 (the caller questions
+  again). Cost fell to 0.80–0.84 and time to 0.65–0.70.
+- **Refactors: still no difference** (1.07 with an interval from 0.91 to 1.24, one run per
+  task; `cc` happened to need fewer turns this time).
+- **Nobody delegated in 252 sessions**, questions, refactors or issues.
 
 ### Delegated questions (rc9): 24 new questions, 72 runs
 
@@ -732,9 +783,9 @@ grep or find despite the policy, most of them to read a configuration file.
   is left to measure there.
 - **Delegation inside a long session.** The delegated part is measured (`rc9`): the structural
   helper answers as exactly as the main agent's own tools, at a quarter of the cost and time, and
-  hands back about 170 tokens. In real sessions on single questions and refactors (`rt1`) the
-  main agent never delegated — to the helper or to Explore. Whether it delegates during a long
-  task, where a clean context would pay, needs long tasks (issues, features) in real sessions.
+  hands back about 170 tokens. In 252 real sessions on questions, refactors and issues (`rt1`–`rt3`)
+  the main agent never delegated — to the helper or to Explore. Whether it delegates during a
+  task much longer than an issue fix (a feature across several packages) is still unmeasured.
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
@@ -745,8 +796,8 @@ grep or find despite the policy, most of them to read a configuration file.
 - **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
   runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
   intervals can show.
-- **The real integration on issues:** B1 and B2 now ran in real sessions (`rt1`); B3 has not, nor
-  have the hooks. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
+- **The hooks in real sessions:** B1, B2 and B3 ran in real sessions (`rt1`–`rt3`); the hooks
+  have not. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
   launches prepared runs with `claude -p` — the `mcp` arm with the MCP server and the block
   `init` writes, `mcp+hooks` with the Claude Code hooks as well — and registers the stream-json
   transcripts for grading; it needs an authenticated `claude` CLI, which the sessions that ran

@@ -10,7 +10,7 @@
  *
  *   node bench/agentic/session-round.mjs [--label rt1] [--model M] [--concurrency 3] [--max-budget 5] [--pilot]
  *        [--arms cc,cc+gi,cc+gi+helper] [--tasks qa-nestjs-r6.json,refactor-nestjs-r5.json,refactor-nestjs-held.json]
- *        [--claude-bin claude]
+ *        [--claude-bin claude] [--reps 1]
  *
  * Steps: check what it needs (the claude CLI, the nestjs fixture, TypeScript for grading) →
  * freeze this graph-indexer → prepare the runs → one one-turn session per arm to check its setup →
@@ -37,6 +37,9 @@ const taskFiles = list('--tasks', ['qa-nestjs-r6.json', 'refactor-nestjs-r5.json
 const pilot = flag('--pilot');
 // dollars one session may spend at most (a run that reaches it stops, unsolved; runs cost far less)
 const maxBudget = opt('--max-budget', '5');
+// runs per task and arm (issues vary more from run to run than questions)
+const reps = Number(opt('--reps', '1'));
+const repIds = Array.from({ length: reps }, (_, i) => `r${i + 1}`);
 
 const node = process.execPath;
 const step = (title) => console.error(`\n── ${title}`);
@@ -67,10 +70,12 @@ run([path.join(HERE, 'prepare.mjs'), 'snapshot', '--label', label]);
 const runsDir = path.join(WORK, 'runs', label);
 const tasks = taskFiles.flatMap(f => readJson(path.join(HERE, 'tasks', f), []));
 const chosen = pilot ? [tasks.find(t => t.family === 'qa'), tasks.find(t => t.family !== 'qa')].filter(Boolean) : tasks;
-const toPrepare = chosen.filter(t => arms.some(a => !fs.existsSync(path.join(runsDir, `${t.id}__${a}__r1`, 'meta.json'))));
-step(`preparing ${chosen.length} task(s) × ${arms.length} arm(s) (${toPrepare.length} task(s) not prepared yet)`);
-for (const t of toPrepare) run([path.join(HERE, 'prepare.mjs'), 'batch', '--tasks', t.id, '--arms', arms.join(','), '--reps', '1', '--gi', label]);
-const runIds = chosen.flatMap(t => arms.map(a => `${t.id}__${a}__r1`));
+// runs already prepared are left as they are (their checkout may hold a finished run's changes)
+const toPrepare = chosen.flatMap(t => arms.flatMap(a => repIds.map((r, i) => ({ t, a, rep: i + 1 }))))
+    .filter(({ t, a, rep }) => !fs.existsSync(path.join(runsDir, `${t.id}__${a}__r${rep}`, 'meta.json')));
+step(`preparing ${chosen.length} task(s) × ${arms.length} arm(s) × ${reps} run(s) (${toPrepare.length} run(s) not prepared yet)`);
+for (const { t, a, rep } of toPrepare) run([path.join(HERE, 'prepare.mjs'), 'run', '--task', t.id, '--arm', a, '--rep', String(rep), '--gi', label]);
+const runIds = chosen.flatMap(t => arms.flatMap(a => repIds.map(r => `${t.id}__${a}__${r}`)));
 
 // ── check each arm's session, then run ────────────────────────────────────────
 const headless = [path.join(HERE, 'run-headless.mjs'), '--gi', label, '--claude-bin', claude, '--max-budget', maxBudget, ...(model ? ['--model', model] : [])];

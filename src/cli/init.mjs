@@ -25,10 +25,9 @@ const SNIPPET = `${BLOCK_START}
 - To find where a name is defined, search for its definition line (\`def name\`, \`class Name\`, \`function name\`) across the package in one search, not directory by directory.
 - Check once: run the tests that cover your change when you are done; do not re-run a check nothing has changed.
 
-The \`graph-indexer\` MCP server keeps a live index of this repository — definitions, references, call graph, tests — re-synced before every answer. Use it for what a text search cannot answer exactly:
-- Uses of a function, method or class, even when other code shares its name: \`find_references\` (exact call sites; it says when the list is complete). Callers of callers: \`call_graph\`. Classes that implement or extend a type: \`find_references\` with kind \`inherit\`.
-- Before changing a signature or behaviour other code relies on: \`change_impact\`. When you are done: \`check_changes\` says what your edit broke, which subclasses inherit the changed code and which tests are closest to it — run those.
-- A definition your search did not find: \`read_code\` with its name.
+The \`graph-indexer\` MCP server answers what a text search cannot answer exactly:
+- Uses of a function, method or class that other code shares a name with: \`find_references\` (exact call sites, says when the list is complete; kind \`inherit\` for subclasses and implementations). Callers of callers: \`call_graph\`.
+- Before changing a signature other code relies on: \`change_impact\`; after: \`check_changes\`.
 ${BLOCK_END}`;
 
 /** The managed instructions block `init` writes to CLAUDE.md / AGENTS.md (markers included). */

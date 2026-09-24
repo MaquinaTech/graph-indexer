@@ -186,9 +186,10 @@ by the structural helper `init` installs as exactly as by a general-purpose sub-
 handed back instead of the 23k a lookup adds to the asking agent's context. Fixing real issues
 does not get cheaper: 0.85 (0.76–0.96) in the fourth round, a gain the lookup rules it installs
 give on their own (0.86), and 1.05 (0.82–1.46) with the smaller model. In real Claude Code
-sessions (20 new tasks, 60 runs) graph-indexer as `init` installs it answered all 12 code
-questions exactly against 9 of 12 without it — the misses were all two-level caller questions —
-at 0.86 of the cost and 0.68 of the time; refactors came out the same. With the usual model every
+sessions (252 runs) graph-indexer as `init` installs it answered all 12 code questions exactly
+against 8–9 of 12 without it — the misses were the two-level caller questions — at 0.80 of the
+cost and 0.65 of the time; refactors came out the same, and on real issues, where the agent never
+called it, it cost 1.02–1.05 once its tool definitions were trimmed to what agents use. With the usual model every
 run with graph-indexer solved its task. Details in
 [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 

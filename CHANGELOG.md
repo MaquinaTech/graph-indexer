@@ -19,6 +19,11 @@ and real commits, and end to end with coding agents
   `find_references`, `call_graph`, `change_impact`, `check_changes`, `outline`. `get_symbol`
   (one definition by name, which `read_code` replaced) stays callable for clients configured for
   it. The 2.x tools and their option set are gone.
+- **Lean tool surface.** Only `find_references` asks MCP clients that defer tools behind a tool
+  search to load it up front — it was 62 of the 64 graph-indexer calls in real sessions; the
+  others are found through the tool search. Descriptions, the server instructions and the
+  CLAUDE.md / AGENTS.md block are a few lines each: graph-indexer adds 1,190 tokens to a Claude
+  Code prompt instead of 2,930, re-read at every turn.
 - **Removed:** dense embeddings, Ollama/MLX/in-process embedders, LLM enrichment and reranking,
   the watch daemon, sealed mode and its attestation, taint tools, and the grammar auto-installer.
   Search is lexical + structural and needs no model.
@@ -204,6 +209,10 @@ and real commits, and end to end with coding agents
   without it (the misses were the three two-level caller questions), at 0.86 (0.81–0.92) of the
   cost and 0.68 of the time; refactors were all solved either way at the same cost. The main agent
   never handed a question to the structural helper or to Explore on these short tasks.
+- Real sessions on the fourth round's 11 issues (66 runs): every run fixed its issue with or without
+  graph-indexer, and no agent called it; its tool definitions, instructions and CLAUDE.md block
+  alone made those sessions cost 1.07–1.10. With the lean surface (below) that fell to 1.02–1.05,
+  and the questions stayed exact at 0.80–0.84 of the cost (126 runs).
 
 ---
 
