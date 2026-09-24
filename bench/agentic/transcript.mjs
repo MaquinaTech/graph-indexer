@@ -7,6 +7,9 @@
  *   - Claude Code session/sub-agent JSONL (one event per line; an assistant message may be split
  *     over several lines that repeat the same usage, so usage is counted once per message id);
  *   - `claude -p --output-format stream-json` (same message shapes plus a final `result` event).
+ *     A session's sub-agents stream their messages into it, marked with the id of the Agent tool call
+ *     that started them (`parent_tool_use_id`): the main agent's own turns and context are told apart
+ *     from what each delegation did (`session` in the result).
  */
 import fs from 'node:fs';
 
@@ -76,6 +79,9 @@ export const POLICIES = {
     'ask-helper': { forbidTools: [], forbidBash: [], label: 'a delegated question, the structural helper with graph-indexer' },
     mcp: { forbidTools: [], forbidBash: [], label: 'built-in tools and the graph-indexer MCP server with its instructions block' },
     'mcp+hooks': { forbidTools: [], forbidBash: [], label: 'built-in tools, the graph-indexer MCP server and its Claude Code hooks' },
+    cc: { forbidTools: [], forbidBash: [GI_CMD], label: 'a Claude Code session with the tools it ships with, sub-agents included' },
+    'cc+gi': { forbidTools: [], forbidBash: [], label: 'the same with graph-indexer as init installs it, without the helper' },
+    'cc+gi+helper': { forbidTools: [], forbidBash: [], label: 'the same with graph-indexer as init installs it, the structural helper included' },
 };
 
 export function parseTranscript(file, { arm = null, repo = null, own = [], work = null } = {}) {
@@ -101,12 +107,20 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     const tools = [];
     const models = new Set();
     const usedAt = new Map();
-    let first = null, last = null, result = null, finalText = '';
-    let lastKey = null, lastResultAt = null, modelMs = 0, toolMs = 0, firstEditTurn = null;
+    // conversations in a session: null for the main agent's, else the Agent tool call that started a sub-agent
+    const convOf = new Map();         // message key → its conversation
+    const modelOf = new Map();        // message key → the model that produced it
+    const lastKeyOf = new Map();      // conversation → its latest message key (tool results answer it)
+    const delegations = new Map();    // Agent tool call id → { type, description, promptChars, replyChars }
+    let first = null, last = null, result = null, init = null, finalText = '';
+    let lastResultAt = null, modelMs = 0, toolMs = 0, firstEditTurn = null;
     for (const ev of events) {
         const ts = ev.timestamp ? Date.parse(ev.timestamp) : null;
         if (ts) { first ??= ts; last = ts; }
         if (ev.type === 'result') { result = ev; continue; }
+        if (ev.type === 'system' && ev.subtype === 'init') { init ??= ev; continue; }
+        const conv = ev.parent_tool_use_id ?? null;
+        const lastKey = lastKeyOf.get(conv) ?? null;
         const msg = ev.message;
         if (ev.type === 'user' && typeof msg?.content === 'string' && /^\[(handback-send-enforce|Your previous response had no visible output)/.test(msg.content)) {
             nudgeAt ??= order.length;     // assistant messages produced before the first nudge
@@ -117,6 +131,8 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
                 if (c.type !== 'tool_result') continue;
                 const text = Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? '');
                 if (lastKey) resultChars.set(lastKey, (resultChars.get(lastKey) ?? 0) + text.length);
+                // what a sub-agent handed back: the main agent's context receives it
+                if (conv === null && delegations.has(c.tool_use_id)) delegations.get(c.tool_use_id).replyChars = text.length;
                 if (ts && usedAt.has(c.tool_use_id)) { toolMs += ts - usedAt.get(c.tool_use_id); lastResultAt = ts; }
             }
             continue;
@@ -125,11 +141,12 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         const key = msg.id ?? ev.requestId ?? ev.uuid;
         if (!perMessage.has(key)) {
             order.push(key);
+            convOf.set(key, conv);
             if (ts) tsOf.set(key, ts);
             if (ts && lastResultAt) { modelMs += ts - lastResultAt; lastResultAt = null; }
         }
-        lastKey = key;
-        if (msg.model) models.add(msg.model);
+        lastKeyOf.set(conv, key);
+        if (msg.model) { models.add(msg.model); modelOf.set(key, msg.model); }
         const u = msg.usage ?? {};
         const prev = perMessage.get(key) ?? { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
         perMessage.set(key, {
@@ -146,7 +163,11 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
                 continue;
             }
             if (c.type === 'tool_use') {
-                tools.push({ name: c.name, input: c.input ?? {} });
+                tools.push({ name: c.name, input: c.input ?? {}, conv });
+                if (conv === null && (c.name === 'Agent' || c.name === 'Task')) {
+                    delegations.set(c.id, { type: c.input?.subagent_type ?? 'general-purpose', description: String(c.input?.description ?? '').slice(0, 120),
+                        promptChars: String(c.input?.prompt ?? '').length, replyChars: null });
+                }
                 outChars.set(key, (outChars.get(key) ?? 0) + JSON.stringify(c.input ?? {}).length);
                 if (ts) usedAt.set(c.id, ts);
                 if (firstEditTurn == null && /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(c.name)) firstEditTurn = order.length;
@@ -165,30 +186,41 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     // context minus the tool results in between (2.63 characters per token, fitted on calls that follow a
     // message without reasoning); the larger of that, the recorded value and ~4 chars/token of visible text.
     const ctxOf = (u) => u.input + u.cacheWrite + u.cacheRead;
+    // the next call of the same conversation (a sub-agent's calls interleave with the main agent's)
+    const nextOf = new Map(), seenConv = new Map();
+    for (let i = order.length - 1; i >= 0; i--) {
+        const c = convOf.get(order[i]) ?? null;
+        if (seenConv.has(c)) nextOf.set(order[i], seenConv.get(c));
+        seenConv.set(c, order[i]);
+    }
     let outputRecorded = 0;
-    order.forEach((key, i) => {
+    order.forEach((key) => {
         const u = perMessage.get(key);
         outputRecorded += u.output;
         let est = Math.round((outChars.get(key) ?? 0) / 4);
-        if (i + 1 < order.length) est = Math.max(est, Math.round(ctxOf(perMessage.get(order[i + 1])) - ctxOf(u) - (resultChars.get(key) ?? 0) / RESULT_CHARS_PER_TOKEN));
+        const next = nextOf.get(key);
+        if (next) est = Math.max(est, Math.round(ctxOf(perMessage.get(next)) - ctxOf(u) - (resultChars.get(key) ?? 0) / RESULT_CHARS_PER_TOKEN));
         u.output = Math.max(u.output, est);
     });
     for (const u of perMessage.values()) for (const k of Object.keys(usage)) usage[k] += u[k];
     const turns = perMessage.size;
+    // the main agent's calls (all of them in a transcript without sub-agents)
+    const mainOrder = order.filter(k => (convOf.get(k) ?? null) === null);
     // the context of the first and the last call: what the agent's own work added to its context
-    const contextFirst = order.length ? ctxOf(perMessage.get(order[0])) : null;
-    const contextLast = order.length ? ctxOf(perMessage.get(order[order.length - 1])) : null;
+    const contextFirst = mainOrder.length ? ctxOf(perMessage.get(mainOrder[0])) : null;
+    const contextLast = mainOrder.length ? ctxOf(perMessage.get(mainOrder[mainOrder.length - 1])) : null;
     // the reply: what the harness handed back, or the text of the last message that has any (what a
     // delegating agent receives)
-    const lastText = [...order].reverse().find(k => textOf.has(k));
+    const lastText = [...mainOrder].reverse().find(k => textOf.has(k));
     const reply = handback ?? (lastText ? textOf.get(lastText).join('\n') : '');
     // up to the answer: the messages before the harness's first nudge, or up to the hand-back
     const answerN = Math.min(nudgeAt ?? Infinity, handbackAt ?? Infinity, order.length) || order.length;
     const toAnswer = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
     for (const key of order.slice(0, answerN)) for (const k of Object.keys(toAnswer)) toAnswer[k] += perMessage.get(key)[k];
     const answeredTs = tsOf.get(order[answerN - 1]) ?? null;
-    // headless runs report authoritative totals in the final result event
-    if (result?.usage) {
+    // headless runs report authoritative totals in the final result event (for the main agent's
+    // calls: a session whose sub-agents ran keeps the sum over every call, theirs included)
+    if (result?.usage && mainOrder.length === order.length) {
         const u = result.usage;
         usage.input = u.input_tokens ?? usage.input;
         usage.cacheWrite = u.cache_creation_input_tokens ?? usage.cacheWrite;
@@ -245,6 +277,30 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
             }
         }
     }
+    // a real session: the main agent's own work, and each sub-agent it started (the Agent tool)
+    const units = (u) => Math.round(u.input + 1.25 * u.cacheWrite + 0.1 * u.cacheRead + 5 * u.output);
+    const sumOf = (keys) => {
+        const u = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+        for (const key of keys) for (const f of Object.keys(u)) u[f] += perMessage.get(key)[f];
+        return u;
+    };
+    let session = null;
+    if (init || delegations.size || mainOrder.length < order.length) {
+        const byConv = new Map();
+        for (const key of order) { const c = convOf.get(key) ?? null; if (c !== null) (byConv.get(c) ?? byConv.set(c, []).get(c)).push(key); }
+        const mainUsage = sumOf(mainOrder);
+        session = {
+            model: init?.model ?? null,
+            main: { turns: mainOrder.length, usage: mainUsage, costUnits: units(mainUsage), contextFirst, contextLast, toolCalls: tools.filter(t => t.conv === null).length },
+            delegations: [...delegations].map(([id, d]) => {
+                const keys = byConv.get(id) ?? [];
+                const u = sumOf(keys);
+                return { ...d, turns: keys.length, models: [...new Set(keys.map(k => modelOf.get(k)).filter(Boolean))], usage: u, costUnits: units(u), toolCalls: tools.filter(t => t.conv === id).length };
+            }),
+            // per model as the CLI totals it, sub-agents included, with each model's cost in dollars
+            modelUsage: result?.modelUsage ?? null,
+        };
+    }
     const policy = arm ? POLICIES[arm] : null;
     if (policy) {
         for (const t of tools) {
@@ -280,7 +336,7 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         costUsd: result?.total_cost_usd ?? null,
         violations, benign, leaks,
         finalText: finalText.slice(0, 2000),
-        reply, contextFirst, contextLast,
+        reply, contextFirst, contextLast, session,
         // the same measures up to the answer, without the harness's hand-back turns
         turnsToAnswer: answerN,
         costUnitsToAnswer: Math.round(toAnswer.input + 1.25 * toAnswer.cacheWrite + 0.1 * toAnswer.cacheRead + 5 * toAnswer.output),

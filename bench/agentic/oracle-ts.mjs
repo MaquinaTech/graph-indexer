@@ -128,8 +128,11 @@ export function createTsOracle(root, relFiles, tsPath = process.env.TYPESCRIPT_P
         return [...out.values()];
     }
 
-    /** Classes implementing the interface/abstract class declared at (relPath, line, col). */
-    function implementations(relPath, line, col) {
+    /**
+     * Classes implementing the interface/abstract class declared at (relPath, line, col). With
+     * `anonymous`, class expressions without a name (`return class extends Base {…}`) too, marked.
+     */
+    function implementations(relPath, line, col, { anonymous = false } = {}) {
         const at = posOf(relPath, line, col);
         if (!at) return [];
         const impls = ls.getImplementationAtPosition(at.file, at.pos) ?? [];
@@ -142,6 +145,10 @@ export function createTsOracle(root, relFiles, tsPath = process.env.TYPESCRIPT_P
             // literal or a value typed with the interface inside some unrelated class
             const tok = ts.getTokenAtPosition(sf, i.textSpan.start);
             const n = tok?.parent;
+            if (n && ts.isClassExpression(n) && !n.name) {
+                if (anonymous) out.push({ path: rel(i.fileName), name: null, anonymous: true, start: lineOf(sf, n.getStart(sf)), end: lineOf(sf, n.getEnd()) });
+                continue;
+            }
             if (!n || !ts.isClassLike(n) || n.name !== tok) continue;
             out.push({ path: rel(i.fileName), name: n.name.text, start: lineOf(sf, n.getStart(sf)), end: lineOf(sf, n.getEnd()) });
         }

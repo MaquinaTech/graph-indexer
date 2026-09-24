@@ -1,0 +1,150 @@
+[
+  {
+    "id": "refactor-nestjs-r5-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ServerRMQ.handleMessage` (declared in `packages/microservices/server/server-rmq.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `handleMessage` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-r5-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/server/server-rmq.ts:159",
+        "packages/microservices/test/server/server-rmq.spec.ts:132",
+        "packages/microservices/test/server/server-rmq.spec.ts:136",
+        "packages/microservices/test/server/server-rmq.spec.ts:150",
+        "packages/microservices/test/server/server-rmq.spec.ts:165",
+        "packages/microservices/test/server/server-rmq.spec.ts:171",
+        "packages/microservices/test/server/server-rmq.spec.ts:182"
+      ],
+      "files": [
+        "packages/microservices/server/server-rmq.ts",
+        "packages/microservices/test/server/server-rmq.spec.ts",
+        "packages/microservices/server/server-rmq.ts"
+      ]
+    },
+    "meta": {
+      "target": "ServerRMQ.handleMessage",
+      "path": "packages/microservices/server/server-rmq.ts",
+      "line": 172,
+      "callSites": 7,
+      "files": 2,
+      "decoys": [
+        "JsonSocket.handleMessage (packages/microservices/helpers/json-socket.ts)",
+        "ServerKafka.handleMessage (packages/microservices/server/server-kafka.ts)",
+        "ServerMqtt.handleMessage (packages/microservices/server/server-mqtt.ts)",
+        "ServerNats.handleMessage (packages/microservices/server/server-nats.ts)",
+        "ServerRedis.handleMessage (packages/microservices/server/server-redis.ts)",
+        "ServerTCP.handleMessage (packages/microservices/server/server-tcp.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 8,
+      "naiveCallEdits": 36,
+      "naiveFailure": [
+        "no new type errors: 8298 diagnostics, 26 new (6686 ms) |   packages/microservices/client/client-rmq.ts:273 TS2554 Expected 2-3 arguments, but got 4. |   packages/microservices/helpers/json-socket.ts:45 TS2554 Expected 1 arguments, but got 2. |   packages/microservices/helpers/json-socket.ts:49 TS2554 Expected 1 arguments, but got 2."
+      ]
+    }
+  },
+  {
+    "id": "refactor-nestjs-r5-02-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "nestjs",
+    "base": "416830c3924b37ec354d4e15c14119519e389afc",
+    "statement": "Rename the method `ClientProxy.getOptionsProp` (declared in `packages/microservices/client/client-proxy.ts`) to `getOptionsPropChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `getOptionsProp` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 416830c3924b37ec354d4e15c14119519e389afc",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-nestjs-r5-02-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/microservices/client/client-kafka.ts:72",
+        "packages/microservices/client/client-kafka.ts:77",
+        "packages/microservices/client/client-kafka.ts:82",
+        "packages/microservices/client/client-kafka.ts:83",
+        "packages/microservices/client/client-grpc.ts:29",
+        "packages/microservices/client/client-grpc.ts:32",
+        "packages/microservices/client/client-grpc.ts:278",
+        "packages/microservices/client/client-mqtt.ts:35",
+        "packages/microservices/client/client-redis.ts:99",
+        "packages/microservices/client/client-redis.ts:100",
+        "packages/microservices/client/client-redis.ts:105",
+        "packages/microservices/client/client-rmq.ts:70",
+        "packages/microservices/client/client-rmq.ts:72",
+        "packages/microservices/client/client-rmq.ts:74",
+        "packages/microservices/client/client-rmq.ts:77",
+        "packages/microservices/client/client-rmq.ts:79",
+        "packages/microservices/client/client-rmq.ts:81",
+        "packages/microservices/client/client-rmq.ts:137",
+        "packages/microservices/client/client-rmq.ts:153",
+        "packages/microservices/client/client-rmq.ts:184",
+        "packages/microservices/client/client-rmq.ts:187",
+        "packages/microservices/client/client-rmq.ts:199",
+        "packages/microservices/client/client-tcp.ts:35",
+        "packages/microservices/client/client-tcp.ts:36",
+        "packages/microservices/client/client-tcp.ts:38",
+        "packages/microservices/client/client-tcp.ts:39"
+      ],
+      "files": [
+        "packages/microservices/client/client-kafka.ts",
+        "packages/microservices/client/client-grpc.ts",
+        "packages/microservices/client/client-mqtt.ts",
+        "packages/microservices/client/client-redis.ts",
+        "packages/microservices/client/client-rmq.ts",
+        "packages/microservices/client/client-tcp.ts",
+        "packages/microservices/client/client-proxy.ts"
+      ]
+    },
+    "meta": {
+      "target": "ClientProxy.getOptionsProp",
+      "path": "packages/microservices/client/client-proxy.ts",
+      "line": 129,
+      "callSites": 26,
+      "files": 6,
+      "decoys": [
+        "Server.getOptionsProp (packages/microservices/server/server.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 27,
+      "naiveCallEdits": 57,
+      "naiveFailure": [
+        "no new type errors: 8277 diagnostics, 31 new (6084 ms) |   packages/microservices/server/server-grpc.ts:57 TS2551 Property 'getOptionsPropChecked' does not exist on type 'ServerGrpc'. Did you mean 'getOptionsProp'? |   packages/microservices/server/server-grpc.ts:60 TS2551 Property 'getOptionsPropChecked' does not exist on type 'ServerGrpc'. Did you mean 'getOptionsProp'? |   packages/microservices/server/server-grpc.ts:94 TS2551 Property 'getOptionsPropChecked' does not exist on type 'ServerGrpc'. Did you mean 'getOptionsProp'?"
+      ]
+    }
+  }
+]

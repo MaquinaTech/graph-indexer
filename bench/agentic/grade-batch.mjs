@@ -27,6 +27,12 @@ const { opt, list, args, flag } = argv();
  */
 function finished(transcript, minIdleSec) {
     const lines = fs.readFileSync(transcript, 'utf8').trim().split('\n');
+    // a headless session ends with its result event; one stopped by its spending ceiling is graded
+    // as it stands (the ceiling is the same for every arm), one stopped by an error is re-run
+    try {
+        const end = JSON.parse(lines[lines.length - 1]);
+        if (end.type === 'result') return !end.is_error || /budget/i.test(end.subtype ?? '') ? true : 'interrupted';
+    } catch { /* partial line */ }
     let last = null;
     for (let i = lines.length - 1; i >= 0 && !last; i--) {
         try { const e = JSON.parse(lines[i]); if (e.type === 'assistant' || e.type === 'user') last = e; } catch { /* partial line */ }

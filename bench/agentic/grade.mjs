@@ -139,6 +139,8 @@ export function gradeRun(label, id, transcript = null) {
             outputRecorded: t.outputRecorded, firstEditTurn: t.firstEditTurn, modelMs: t.modelMs, toolMs: t.toolMs, violations: t.violations, benign: t.benign, leaks: t.leaks,
             contextFirst: t.contextFirst, contextLast: t.contextLast, contextAtAnswer: t.contextAtAnswer,
             turnsToAnswer: t.turnsToAnswer, costUnitsToAnswer: t.costUnitsToAnswer, wallMsToAnswer: t.wallMsToAnswer,
+            // a real session: what it cost in dollars (all models), the main agent's own work and each delegation
+            ...(t.costUsd != null ? { costUsd: t.costUsd } : {}), ...(t.session ? { session: t.session } : {}),
             // what a delegating agent's context receives: the reply, at the density of a tool result
             ...(meta.deliver === 'reply' ? { agentType: meta.agentType, replyChars: t.reply.length, replyTokens: Math.round(t.reply.length / RESULT_CHARS_PER_TOKEN) } : {}) } : null,
     };

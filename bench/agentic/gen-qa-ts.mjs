@@ -83,7 +83,7 @@ function declPos(item) {
 // accessors are left out: the compiler treats a get/set pair as one symbol, so "the callers of the
 // setter" would include every reader of the getter
 const methods = shuffle(intel.store.all(`SELECT s.name, s.qname, s.kind, s.name_line, s.name_col, s.start_line, s.is_static, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 3 AND s.name <> 'constructor'
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 3 AND s.name <> 'constructor' AND s.qname NOT LIKE '%<%'
     AND s.sig NOT LIKE 'get %' AND s.sig NOT LIKE 'set %' AND s.sig NOT LIKE 'static get %' AND s.sig NOT LIKE 'static set %'`).filter(s => inScope(s.path)));
 
 const tasks = [];
@@ -156,11 +156,15 @@ for (const m of methods) {
 
 // ── implementations ─────────────────────────────────────────────────────────────
 const ifaces = shuffle(intel.store.all(`SELECT s.name, s.qname, s.name_line, s.name_col, s.start_line, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'interface' AND length(s.name) >= 4`).filter(s => inScope(s.path)));
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'interface' AND length(s.name) >= 4 AND s.qname NOT LIKE '%<%'`).filter(s => inScope(s.path)));
+// an anonymous class (\`return class extends Base {…}\`) is a judgement call: neither required nor penalised
+const withAnonymous = (list, named) => [...named.map(x => ({ path: x.path, start: x.start, end: x.end, name: x.name })),
+    ...list.filter(x => x.anonymous).map(x => ({ path: x.path, start: x.start, end: x.end, name: '(anonymous class)', optional: true }))];
 for (const it of ifaces) {
     if (tasks.filter(t => t.kind === 'implementations').length >= want.impls) break;
     if (taken.has(it.qname)) continue;
-    const impls = oracle.implementations(it.path, it.name_line, it.name_col).filter(c => inScope(c.path) && !isTest(c.path));
+    const all = oracle.implementations(it.path, it.name_line, it.name_col, { anonymous: true }).filter(c => inScope(c.path) && !isTest(c.path));
+    const impls = all.filter(c => !c.anonymous);
     const uniq = [...new Map(impls.map(c => [`${c.path}:${c.start}`, c])).values()];
     if (uniq.length < 3 || uniq.length > implMax) continue;
     const n = tasks.filter(t => t.kind === 'implementations').length + 1;
@@ -169,7 +173,7 @@ for (const it of ifaces) {
         family: 'qa', kind: 'implementations', repo: name, base,
         statement: `List every class under \`${scope}\` (excluding test/spec files) that implements the interface \`${it.qname}\` declared in \`${it.path}\`, line ${it.start_line} — directly or by extending a class that implements it.`,
         answerFormat: 'One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.',
-        gold: { type: 'spans', items: uniq.map(c => ({ path: c.path, start: c.start, end: c.end, name: c.name })) },
+        gold: { type: 'spans', items: withAnonymous(all, uniq) },
         meta: { target: it.qname, path: it.path, line: it.start_line, total: uniq.length },
     });
     console.error(`implementations: ${it.qname} total=${uniq.length}`);
@@ -179,12 +183,13 @@ for (const it of ifaces) {
 // the compiler's implementations of a class are the class itself and every class that extends it,
 // directly or through another subclass
 const classes = shuffle(intel.store.all(`SELECT s.name, s.qname, s.name_line, s.name_col, s.start_line, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'class' AND length(s.name) >= 4`).filter(s => inScope(s.path)));
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'class' AND length(s.name) >= 4 AND s.qname NOT LIKE '%<%'`).filter(s => inScope(s.path)));
 for (const c of classes) {
     if (tasks.filter(t => t.kind === 'subclasses').length >= want.subclasses) break;
     // a class whose method is already the target of a question in this set is left out
     if (taken.has(c.qname) || taken.has(c.name) || tasks.some(t => t.meta.target.startsWith(`${c.qname}.`))) continue;
-    const subs = oracle.implementations(c.path, c.name_line, c.name_col).filter(x => inScope(x.path) && !isTest(x.path) && !(x.path === c.path && x.name === c.name));
+    const all = oracle.implementations(c.path, c.name_line, c.name_col, { anonymous: true }).filter(x => inScope(x.path) && !isTest(x.path) && !(x.path === c.path && x.name === c.name));
+    const subs = all.filter(x => !x.anonymous);
     const uniq = [...new Map(subs.map(x => [`${x.path}:${x.start}`, x])).values()];
     if (uniq.length < 3 || uniq.length > implMax) continue;
     const n = tasks.filter(t => t.kind === 'subclasses').length + 1;
@@ -193,7 +198,7 @@ for (const c of classes) {
         family: 'qa', kind: 'subclasses', repo: name, base,
         statement: `List every class under \`${scope}\` (excluding test/spec files) that extends the class \`${c.qname}\` declared in \`${c.path}\`, line ${c.start_line} — directly or through another class that extends it.`,
         answerFormat: 'One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.',
-        gold: { type: 'spans', items: uniq.map(x => ({ path: x.path, start: x.start, end: x.end, name: x.name })) },
+        gold: { type: 'spans', items: withAnonymous(all, uniq) },
         meta: { target: c.qname, path: c.path, line: c.start_line, total: uniq.length },
     });
     console.error(`subclasses: ${c.qname} total=${uniq.length}`);

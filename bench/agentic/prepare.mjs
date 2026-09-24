@@ -15,6 +15,10 @@
  * the grep arm, "indexed" for graph-indexer arms, so the grep arm never sees an index). Edit tasks
  * get a fresh worktree per run.
  *
+ * Real-session arms (cc, cc+gi, cc+gi+helper) run in their run directory as a project: graph-indexer
+ * arms get there the CLAUDE.md block and the helper arm the sub-agent file, as `init` writes them
+ * into a repository (run-headless.mjs adds the MCP server).
+ *
  * Delegated-question arms (ask-*) get, in their instructions file, the message a main agent sends
  * when it hands a question off (the helper arm's starts with the helper's instructions); they are
  * launched as the sub-agent type the run's meta names (agentType), and their reply is the answer
@@ -24,7 +28,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { argv, git, sh, readJson, writeJson, loadTasks, runId, WORK, GI_ROOT, HERE } from './lib.mjs';
-import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS, ASK_ARMS, askMessage } from './arms.mjs';
+import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS, ASK_ARMS, SESSION_ARMS, askMessage } from './arms.mjs';
+import { managedBlock } from '../../src/cli/init.mjs';
+import { HELPER_NAME, claudeAgentFile } from '../../src/cli/helper.mjs';
 import { REPOS } from './repos.mjs';
 
 const { opt, list, args } = argv();
@@ -164,7 +170,8 @@ export function prepareRun(task, arm, rep, label) {
     fs.mkdirSync(runDir, { recursive: true });
     const { dir: checkout, indexMs } = checkoutFor(task, arm, `${label}__${id}`, label);
     let gi = null, caps = {};
-    if (usesIndex(arm)) {
+    // a real session reaches graph-indexer through its MCP server alone, as users install it
+    if (usesIndex(arm) && !SESSION_ARMS[arm]) {
         gi = path.join(runDir, 'gi');
         fs.writeFileSync(gi, `#!/bin/sh\nexec node ${JSON.stringify(giBin(label))} "$@" --repo ${JSON.stringify(checkout)}\n`, { mode: 0o755 });
         caps = capabilities(label);
@@ -178,6 +185,13 @@ export function prepareRun(task, arm, rep, label) {
     if (ask && task.family !== 'qa') throw new Error(`${arm} answers questions; ${task.id} is an edit task`);
     const message = ask ? askMessage(arm, task, checkout, gi) : null;
     fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), message ?? instructions(task, arm, runDir, checkout, gi, caps, view));
+    // a real session in the run directory finds what `init` writes into a repository for Claude Code
+    const session = SESSION_ARMS[arm];
+    if (session?.index) fs.writeFileSync(path.join(runDir, 'CLAUDE.md'), managedBlock() + '\n');
+    if (session?.helper) {
+        fs.mkdirSync(path.join(runDir, '.claude', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(runDir, '.claude', 'agents', `${HELPER_NAME}.md`), claudeAgentFile());
+    }
     const baseHead = git(checkout, 'rev-parse', 'HEAD').trim();
     const meta = { runId: id, taskId: task.id, family: task.family, arm, rep, giLabel: label, checkout, runDir, baseHead, indexMs, caps, preparedAt: new Date().toISOString(),
         ...(ask ? { deliver: 'reply', agentType: ask.agentType } : {}) };

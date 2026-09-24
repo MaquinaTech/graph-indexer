@@ -32,12 +32,18 @@
  *   mcp       graph-indexer as users install it: the MCP server plus the block `init` writes to
  *             CLAUDE.md/AGENTS.md; needs a harness with MCP (run-headless.mjs)
  *   mcp+hooks the same plus the Claude Code hooks (edit check, definition rescue, crawl-gated context)
+ *   cc        a real Claude Code session with the tools it ships with, sub-agents (Explore,
+ *             general-purpose) included; no graph-indexer (run-headless.mjs)
+ *   cc+gi     the same with graph-indexer as `init --no-helper` installs it: the MCP server and the
+ *             CLAUDE.md block
+ *   cc+gi+helper  as `init` installs it: also the structural helper sub-agent, which the main agent
+ *             may hand structural questions to (routing inside a session)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper'];
 
 /**
  * Arms that answer a delegated question: the sub-agent type to launch, and whether the message
@@ -52,11 +58,22 @@ export const ASK_ARMS = {
 /** Arms that read through \`view\` (Read plus the post-read hook's context). */
 export const VIEW_ARMS = new Set(['grep+gi7']);
 
+/**
+ * Real Claude Code sessions: whether graph-indexer is installed (the MCP server, and the CLAUDE.md
+ * block in the session's directory) and whether the structural helper is (.claude/agents/ there),
+ * each exactly as `init` writes them.
+ */
+export const SESSION_ARMS = {
+    cc: { index: false, helper: false },
+    'cc+gi': { index: true, helper: false },
+    'cc+gi+helper': { index: true, helper: true },
+};
+
 /** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */
-export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks']);
+export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks', ...Object.keys(SESSION_ARMS)]);
 
 /** Arms whose agent gets graph-indexer (an index is built for their checkout). */
-export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules' && !(ASK_ARMS[arm] && !ASK_ARMS[arm].helper);
+export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules' && !(ASK_ARMS[arm] && !ASK_ARMS[arm].helper) && !(SESSION_ARMS[arm] && !SESSION_ARMS[arm].index);
 
 import { managedBlock } from '../../src/cli/init.mjs';
 import { helperInstructions } from '../../src/cli/helper.mjs';
@@ -246,10 +263,13 @@ POLICY['grep+gi6'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Wri
 POLICY['grep+gi7'] = 'Use your built-in tools (Grep, Glob, Bash, Edit, Write), following the rules below, and graph-indexer where it says — except for reading source code: read it only with `view` (see "Reading code" below), never with Read, cat, sed, head or tail, apart from the Read your Edit tool requires right before an edit.';
 POLICY.mcp = 'Use your built-in tools and the graph-indexer MCP tools as you see fit.';
 POLICY['mcp+hooks'] = POLICY.mcp;
+// a session's own configuration (CLAUDE.md, MCP servers, sub-agents) is all that differs between these
+for (const a of Object.keys(SESSION_ARMS)) POLICY[a] = 'Use your tools as you normally would.';
 
 export function toolSection(arm, gi, caps = {}, view = null) {
     if (arm === 'grep+gi7') return `# Tools\n${POLICY[arm]}\n\n${giCard7(gi, view)}`;
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
+    if (SESSION_ARMS[arm]) return `# Tools\n${POLICY[arm]}`;
     if (arm === 'grep+rules') return `# Tools\n${POLICY[arm]}\n\n${rulesCard()}`;
     if (arm === 'grep+gi4') return `# Tools\n${POLICY[arm]}\n\n${giCard4(gi)}`;
     if (arm === 'grep+gi5') return `# Tools\n${POLICY[arm]}\n\n${giCard5(gi)}`;

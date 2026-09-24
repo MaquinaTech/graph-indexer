@@ -5,13 +5,14 @@
  *   add-param   add a required last parameter to a method and pass a given value at every call
  *   rename      rename a method whose name other methods share (those keep their name)
  *
- * Targets are methods with 4–15 compiler-verified call sites in at least two files, no overriding
+ * Targets are methods with 4–15 (--min-calls, --max-calls) compiler-verified call sites in at least two files, no overriding
  * or overridden declarations, and same-name methods elsewhere (so a text search over-matches).
  * Grading: no TypeScript diagnostic that the base commit did not have (a missed call site is a
  * new "Expected N arguments" / "Property does not exist" error) and a structural check that the
  * target changed while the same-name methods did not.
  *
  *   node bench/agentic/gen-refactor-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ [--seed 5] [--n 6] [--set NAME]
+ *        [--min-calls 4] [--max-calls 15]
  *
  * --set NAME writes a separate task set (tasks/refactor-<name>-<set>.json, ids refactor-<name>-<set>-NN-…)
  * whose targets avoid every method name used by the repository's other refactor sets: a held-out set
@@ -32,6 +33,8 @@ const scope = opt('--scope', 'packages/');
 const seed = Number(opt('--seed', 5));
 const n = Number(opt('--n', 6));
 const set = opt('--set', null);
+// call sites of a target (the earlier sets used 4–15; later held-out sets widen it as targets run out)
+const minCalls = Number(opt('--min-calls', 4)), maxCalls = Number(opt('--max-calls', 15));
 const prefix = set ? `${name}-${set}` : name;
 const out = path.join(HERE, 'tasks', `refactor-${prefix}.json`);
 // method names taken by the repository's other task sets
@@ -69,7 +72,7 @@ function declInfo(file, line, col) {
 }
 
 const cands = shuffle(intel.store.all(`SELECT s.name, s.qname, s.name_line, s.name_col, s.start_line, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 4 AND s.name NOT IN ('constructor')`).filter(s => s.path.startsWith(scope)));
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'method' AND length(s.name) >= 4 AND s.name NOT IN ('constructor') AND s.qname NOT LIKE '%<%'`).filter(s => s.path.startsWith(scope)));
 
 /**
  * Files that may refer to the method by a string (`sinon.stub(obj, 'name')`, `keyof` lookups):
@@ -98,7 +101,7 @@ for (const m of cands) {
     const calls = [...new Map(r.refs.filter(x => x.call).map(x => [`${x.path}:${x.line}`, x])).values()];
     const files = new Set(calls.map(c => c.path));
     // every use must be a call we can see (no method references passed around, no JS callers)
-    if (calls.length < 4 || calls.length > 15 || files.size < 2 || r.refs.some(x => !x.call)) continue;
+    if (calls.length < minCalls || calls.length > maxCalls || files.size < 2 || r.refs.some(x => !x.call)) continue;
     const decoys = intel.store.all(`SELECT s.qname, s.name_line, s.name_col, f.path FROM symbols s JOIN files f ON f.id = s.file_id
         WHERE s.name = ? AND s.kind = 'method' AND f.lang = 'typescript' AND f.path <> ? AND f.path LIKE ?`, m.name, m.path, scope + '%')
         .map(d => ({ ...d, info: declInfo(d.path, d.name_line, d.name_col) })).filter(d => d.info).slice(0, 6);

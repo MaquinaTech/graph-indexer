@@ -3,7 +3,8 @@
  * Aggregate graded runs into comparison tables.
  *
  *   node bench/agentic/report.mjs --gi LABEL[,LABEL…] [--baseline grep] [--integrated grep+gi+] [--nogrep gi]
- *                                 [--family qa|refactor|fresh] [--tasks ID,ID|file.json] [--to-answer] [--json out.json] [--md out.md]
+ *                                 [--family qa|refactor|fresh] [--tasks ID,ID|file.json] [--to-answer] [--cost units|usd]
+ *                                 [--json out.json] [--md out.md]
  *
  * Per arm: runs, solve rate (Wilson 95% CI), mean score (F1 for questions, share of checks passed
  * for edits), and median/mean agent cost (input-equivalent tokens), turns, tool calls and wall
@@ -11,11 +12,16 @@
  * first): difference in solve rate and score with a bootstrap 95% CI and an exact McNemar /
  * sign-flip p-value, and the cost ratio with its CI. Runs that broke their arm's tool policy are
  * listed and kept (intention to treat); --exclude-violations drops them as a sensitivity check.
+ * --cost usd compares dollars (what a real session reports, every model it used) instead of
+ * input-equivalent tokens, which cannot add a main model's tokens to a cheaper sub-agent's; real
+ * sessions also get a table of what the main agent handed to sub-agents and what it carried itself.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { argv, readJsonl, loadTasks, WORK } from './lib.mjs';
 import { compare, wilson, mean, median, holm, bootstrap } from './stats.mjs';
+import { RESULT_CHARS_PER_TOKEN } from './transcript.mjs';
+import { HELPER_NAME } from '../../src/cli/helper.mjs';
 
 const { opt, list, flag } = argv();
 const labels = list('--gi');
@@ -53,13 +59,17 @@ if (flag('--to-answer')) for (const r of rows) {
     const a = r.agent;
     r.agent = { ...a, costUnits: a.costUnitsToAnswer ?? a.costUnits, turns: a.turnsToAnswer ?? a.turns, wallMs: a.wallMsToAnswer ?? a.wallMs, contextLast: a.contextAtAnswer ?? a.contextLast };
 }
+// --cost usd: dollars (in millionths, so the token formats and ratios work unchanged)
+const usd = opt('--cost', 'units') === 'usd';
+if (usd) for (const r of rows) r.agent = { ...r.agent, costUnits: Number.isFinite(r.agent?.costUsd) ? r.agent.costUsd * 1e6 : NaN };
 // runs that looked the answer up outside the repository (web, upstream fetch, task files) are invalid
 const leaked = rows.filter(r => r.agent?.leaks?.length);
 rows = rows.filter(r => !r.agent?.leaks?.length);
 // arms compared on different models measure the models, not the arms
 {
     const byArm = new Map();
-    for (const r of rows) for (const m of r.agent?.models ?? []) (byArm.get(r.arm) ?? byArm.set(r.arm, new Set()).get(r.arm)).add(m);
+    // a real session is compared on its main model (its sub-agents may run on another by design)
+    for (const r of rows) for (const m of (r.agent?.session?.model ? [r.agent.session.model] : r.agent?.models ?? [])) (byArm.get(r.arm) ?? byArm.set(r.arm, new Set()).get(r.arm)).add(m);
     const all = new Set([...byArm.values()].flatMap(s => [...s]));
     if (all.size > 1) console.error(`warning: the runs used different models — ${[...byArm].map(([a, s]) => `${a}: ${[...s].join('/')}`).join('; ')}`);
 }
@@ -71,7 +81,7 @@ if (flag('--exclude-violations')) rows = rows.filter(r => !r.agent?.violations?.
 const arms = [...new Set(rows.map(r => r.arm))].sort((a, b) => (a === baseline ? -1 : b === baseline ? 1 : a.localeCompare(b)));
 const fmt = (x, d = 2) => Number.isFinite(x) ? x.toFixed(d) : '–';
 const pct = (x) => Number.isFinite(x) ? `${(100 * x).toFixed(0)}%` : '–';
-const k = (x) => Number.isFinite(x) ? `${(x / 1000).toFixed(0)}k` : '–';
+const k = (x) => !Number.isFinite(x) ? '–' : usd ? `$${(x / 1e6).toFixed(2)}` : `${(x / 1000).toFixed(0)}k`;
 
 function byTask(rs, f) {
     const m = new Map();
@@ -124,6 +134,25 @@ for (const fam of groups) {
             out.push(`| ${a} | ${fmt(reply, 0)} | ${fmt(work, 0)} | ${fmt(reply / work, 3)} |`);
         }
     }
+    // real sessions: what the main agent handed to sub-agents, to which, and what it carried itself
+    if (rs.some(r => r.agent?.session)) {
+        out.push('\n| arm | runs | runs that delegated | to the helper | to Explore | to other sub-agents | main agent turns | main context at the end (tokens) | reply per delegation (tokens) | cost on other models |');
+        out.push('|---|---|---|---|---|---|---|---|---|---|');
+        for (const a of arms) {
+            const x = rs.filter(r => r.arm === a && r.agent?.session);
+            if (!x.length) continue;
+            const dels = x.map(r => r.agent.session.delegations ?? []);
+            const share = (f) => pct(dels.filter(d => d.some(f)).length / x.length);
+            const replies = dels.flat().map(d => d.replyChars).filter(Number.isFinite);
+            // the dollars spent on models other than the session's main one (the helper's, when it runs on a smaller model)
+            const other = x.map(r => { const mu = r.agent.session.modelUsage, main = r.agent.session.model; if (!mu || !main) return NaN; const all = Object.values(mu).reduce((t, m) => t + (m.costUSD ?? 0), 0); return all ? 1 - (mu[main]?.costUSD ?? 0) / all : NaN; }).filter(Number.isFinite);
+            const row = { runs: x.length, delegated: dels.filter(d => d.length).length / x.length, perRun: mean(dels.map(d => d.length)),
+                mainTurns: mean(x.map(r => r.agent.session.main.turns)), mainContext: mean(x.map(r => r.agent.session.main.contextLast).filter(Number.isFinite)),
+                replyTokens: replies.length ? mean(replies) / RESULT_CHARS_PER_TOKEN : NaN, otherShare: other.length ? mean(other) : NaN };
+            (json.sessions ??= {})[a] = row;
+            out.push(`| ${a} | ${x.length} | ${pct(row.delegated)} (${fmt(row.perRun, 1)} per run) | ${share(d => d.type === HELPER_NAME)} | ${share(d => d.type === 'Explore')} | ${share(d => d.type !== HELPER_NAME && d.type !== 'Explore')} | ${fmt(row.mainTurns, 1)} | ${fmt(row.mainContext, 0)} | ${fmt(row.replyTokens, 0)} | ${pct(row.otherShare)} |`);
+        }
+    }
     const base = rs.filter(r => r.arm === baseline);
     if (!base.length) continue;
     const cmp = [];
@@ -146,7 +175,7 @@ for (const fam of groups) {
         out.push(`| ${c.arm} | ${c.solved.n} | ${fmt(100 * c.solved.diff.est, 0)} pts | ${fmt(100 * c.solved.diff.lo, 0)}…${fmt(100 * c.solved.diff.hi, 0)} | ${fmt(adj[i], 3)} | ${fmt(c.score.diff.est)} | ${fmt(c.score.diff.lo)}…${fmt(c.score.diff.hi)} | ${fmt(adjScore[i], 3)} | ${fmt(c.cost.ratio?.est)} | ${fmt(c.cost.ratio?.lo)}…${fmt(c.cost.ratio?.hi)} | ${fmt(c.calls.ratio?.est)} | ${fmt(c.wall.ratio?.est)} |`);
     });
     // per-task detail
-    out.push(`\nPer task (mean score / mean cost in k):\n`);
+    out.push(`\nPer task (mean score / mean cost${usd ? '' : ' in k'}):\n`);
     out.push(`| task | ${arms.join(' | ')} |`);
     out.push(`|---|${arms.map(() => '---').join('|')}|`);
     for (const t of [...tasks].sort()) {

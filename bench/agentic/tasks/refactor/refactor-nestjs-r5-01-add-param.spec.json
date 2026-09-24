@@ -1,0 +1,47 @@
+{
+  "target": {
+    "file": "packages/microservices/server/server-rmq.ts",
+    "cls": "ServerRMQ",
+    "name": "handleMessage",
+    "params": 3,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/microservices/helpers/json-socket.ts",
+      "cls": "JsonSocket",
+      "name": "handleMessage",
+      "params": 1
+    },
+    {
+      "file": "packages/microservices/server/server-kafka.ts",
+      "cls": "ServerKafka",
+      "name": "handleMessage",
+      "params": 1
+    },
+    {
+      "file": "packages/microservices/server/server-mqtt.ts",
+      "cls": "ServerMqtt",
+      "name": "handleMessage",
+      "params": 4
+    },
+    {
+      "file": "packages/microservices/server/server-nats.ts",
+      "cls": "ServerNats",
+      "name": "handleMessage",
+      "params": 2
+    },
+    {
+      "file": "packages/microservices/server/server-redis.ts",
+      "cls": "ServerRedis",
+      "name": "handleMessage",
+      "params": 4
+    },
+    {
+      "file": "packages/microservices/server/server-tcp.ts",
+      "cls": "ServerTCP",
+      "name": "handleMessage",
+      "params": 2
+    }
+  ]
+}
