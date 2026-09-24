@@ -176,7 +176,7 @@ Detalle en [AGENTIC-BENCHMARK.md](AGENTIC-BENCHMARK.md). Mismo modelo, una ejecu
 | G2 (todo, integrado) | no cumplida: 0,90 en la ronda reservada frente a 0,85; B3 no se movió y la tercera ronda no lo repitió |
 | G3 (sin grep) | cumplida en desarrollo (0,97), no en la reservada (1,02, IC 0,89–1,15); 0,82 en B1 + B2 de la tercera |
 | G4 (tareas sencillas) | cumplida (1,06 y 0,98) |
-| G5 (grafo frente al compilador) | cumplida: precisión 0,996, cobertura 0,960 |
+| G5 (grafo frente al compilador) | cumplida: precisión 0,996, cobertura 0,961 |
 | G6 (adopción) | cumplida: 100 % en las tres rondas |
 
 **Conclusiones.**

@@ -53,11 +53,14 @@ Code, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `opencode
 OpenCode and Kilo Code, `.junie/mcp/mcp.json`, `.zed/settings.json`; it prints the Codex TOML
 and Devin's server entry), merges instead of overwriting other servers, adds `.graph-indexer/`
 to `.gitignore`, and adds a short block to `CLAUDE.md` / `AGENTS.md` on how to look code up.
-`--hooks` adds the Claude Code hooks to `.claude/settings.json`, which Devin, Copilot CLI and
-Cursor also run, and the OpenCode / Kilo Code plugin that appends the same context to their tool
-output. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
+For Claude Code it also writes a structural helper, `.claude/agents/code-structure.md`: a
+read-only sub-agent on a small model that answers call-site, caller, subclass and impact
+questions from the index, so the main agent can hand them off and get back only the list (the
+Claude Code plugin ships it too). `--hooks` adds the Claude Code hooks to `.claude/settings.json`,
+which Devin, Copilot CLI and Cursor also run, and the OpenCode / Kilo Code plugin that appends the
+same context to their tool output. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
 `--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,
-`--no-instructions`.
+`--no-instructions`, `--no-helper`.
 
 <details>
 <summary>Manual configuration</summary>
@@ -145,8 +148,8 @@ own `findReferences` (import lines and declarations excluded):
 
 | | precision | recall | F1 |
 |---|---|---|---|
-| graph-indexer `find_references` | **0.996** | **0.960** | **0.978** |
-| same-name references (no binding) | 0.252 | 0.974 | 0.400 |
+| graph-indexer `find_references` | **0.996** | **0.961** | **0.978** |
+| same-name references (no binding) | 0.252 | 0.975 | 0.400 |
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
 *Dispatch semantics: calls through a base class or interface count, calls to sibling overrides
@@ -177,10 +180,14 @@ cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the mode
 smaller model, at half the price per token, answered the same questions exactly with graph-indexer
 (7 of 7, against 5 of 7 with grep alone) at 0.26 of the cost (0.18–0.50) and 0.32 of the time — a
 tenth of what the larger model spent with grep — and did multi-site refactors at 0.69
-(0.56–0.87). Fixing real issues does not get cheaper: 0.85 (0.76–0.96) in the fourth round, a gain
-the lookup rules it installs give on their own (0.86), and 1.05 (0.82–1.46) with the smaller
-model. Every run with graph-indexer solved its task; the failures were runs with grep alone or the
-rules alone. Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
+(0.56–0.87). Handed off the way a main agent delegates them, 24 new code questions were answered
+by the structural helper `init` installs as exactly as by a general-purpose sub-agent with grep
+(20 of 24 each), at 0.24 of the cost (0.18–0.33) and 0.28 of the time, with about 170 tokens
+handed back instead of the 23k a lookup adds to the asking agent's context. Fixing real issues
+does not get cheaper: 0.85 (0.76–0.96) in the fourth round, a gain the lookup rules it installs
+give on their own (0.86), and 1.05 (0.82–1.46) with the smaller model. With the usual model every
+run with graph-indexer solved its task. Details in
+[docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed
 files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30 ms for search and
@@ -220,7 +227,7 @@ Python, Go, Java, C# and Rust.
 The CLI runs the same tools, which is handy for scripts and for checking what an agent sees:
 
 ```text
-graph-indexer init [--repo DIR] [--agents …] [--all] [--hooks] [--local] [--dry-run] [--no-instructions]
+graph-indexer init [--repo DIR] [--agents …] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper]
 graph-indexer serve [--repo DIR]            MCP server on stdio
 graph-indexer index [--repo DIR]            build or update the index
 graph-indexer status [--repo DIR]

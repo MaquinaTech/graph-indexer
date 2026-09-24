@@ -26,6 +26,9 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `grep+gi4` | built-in tools and graph-indexer | fourth card: the same rules, with reads and searches through `gi read` (code plus where each name it uses is defined) and `gi grep` |
 | `grep+gi5` | built-in tools and graph-indexer | fifth card: the rules, with definitions read by name through `gi read` and its card trimmed to the rows that matter |
 | `grep+gi6` | built-in tools and graph-indexer | sixth card: the control's rules word for word for reading and searching; graph-indexer only for exact uses, callers, impact, the final check and a definition a search missed |
+| `ask-grep` | a general-purpose sub-agent with the built-in tools | none: it gets a question as the message a main agent sends when it hands one off, and its reply is the answer |
+| `ask-explore` | Claude Code's built-in Explore agent (read-only search) | none, with the same message |
+| `ask-helper` | graph-indexer, through the structural helper | the helper's instructions (`src/cli/helper.mjs`, what `init` installs as the sub-agent's system prompt), then the same message |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
 exactly what the MCP tools return. The tool policy of each arm is stated in the instructions and
@@ -138,15 +141,20 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
 6. **A smaller model** (snapshot `rc8small`, the product of `rc8` unchanged; arms `grep`,
    `grep+gi7` and, on B3, `grep+rules`): the fourth round's B1 and B3 tasks and the B2 tasks of
    the third and fourth rounds, run by a smaller model at half the usual model's price per token.
+7. **Delegated questions** (snapshot `rc9`, arms `ask-grep`, `ask-explore`, `ask-helper`): 24
+   new code questions (set `r5`), each given as the message a main agent sends when it hands a
+   question off — to a general-purpose sub-agent with grep, to Claude Code's Explore agent and to
+   the structural helper `init` now installs — all on the smaller model.
 
-Each of the four rounds is held out for the snapshot it tests — its tasks played no part in the
-changes. The last two comparisons reuse earlier tasks. Every comparison is within a round, against
-the `grep` arm on the same tasks, run at the same time.
+Each of the four rounds and the delegation round is held out for the snapshot it tests — its tasks
+played no part in the changes. The resolved-indirection and smaller-model comparisons reuse
+earlier tasks. Every comparison is within a round, against the `grep` (or `ask-grep`) arm on the
+same tasks, run at the same time.
 
 ## Results
 
-Four rounds (88 tasks, 359 graded runs) and two later comparisons on earlier tasks (83 runs). In
-short:
+Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs) and a
+round of delegated questions on 24 new ones (72 runs). In short:
 
 - **On code questions (B1), graph-indexer next to grep costs less than half of grep alone, and it
   is what makes a smaller model answer them right:** 0.44 (0.32–0.67) of grep's cost and 0.37 of
@@ -156,6 +164,12 @@ short:
   (0.18–0.50) of the cost and 0.32 of the time: a tenth of what the usual model spent with grep.
   On B1 + B2 graph-indexer cost 0.76, 0.81 and 0.73 of grep in the first three rounds and 0.48 in
   the fourth.
+- **Handed to graph-indexer's structural helper, a code question costs a quarter as much and takes
+  a quarter of the time.** On 24 new questions asked the way a main agent delegates them, the
+  helper (the smaller model with graph-indexer, as `init` installs it) answered as many exactly
+  as a general-purpose sub-agent with grep — 20 of 24 — at 0.24 (0.18–0.33) of its cost and 0.28
+  of its time; Claude Code's Explore agent came to 0.76. Whichever answers, the agent that asked
+  gets about 170 tokens back instead of the 23k that looking it up itself adds to its context.
 - **Multi-site refactors (B2) cost a fifth to a third less:** 0.81 (0.73–0.89) pooled over three
   rounds with the usual model, 0.69 (0.56–0.87) with the smaller one; every refactor passed its
   checks in every arm.
@@ -174,7 +188,8 @@ short:
 - **The usual model solves nearly every task in every arm** — all 122 in the fourth round — so
   with it the benchmark mostly measures cost; its one failure in four rounds was a run of the
   `grep` arm. The smaller model missed 2 of 7 questions and 1 of 11 issues with grep alone, one
-  issue with the rules alone, and none with graph-indexer.
+  issue with the rules alone, and none with graph-indexer; on the 24 delegated questions every
+  arm missed 4, all of them two-level caller questions.
 
 ### Measurement correction and where the cost goes
 
@@ -214,6 +229,74 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### Delegated questions (rc9): 24 new questions, 72 runs
+
+A smaller model with graph-indexer answered the fourth round's code questions as the usual model
+did, at a tenth of its spend (below). This round measures that where it would be used: a main
+agent handing a structural question to a helper. `init` now installs one for Claude Code
+(`.claude/agents/code-structure.md`, instructions in [`src/cli/helper.mjs`](../src/cli/helper.mjs)):
+a read-only sub-agent on a small model that answers call-site, caller, subclass and impact
+questions from the index and replies with the list alone. The sessions that run the benchmark
+cannot let a sub-agent start another, so each run is the delegated part: a sub-agent gets the
+message a main agent sends — the repository, the question and the answer format — and its reply
+is graded. Three sub-agents get the same message, all on the smaller model:
+
+- `ask-grep`, a general-purpose sub-agent with the built-in tools — the main agent's own tools;
+- `ask-explore`, Claude Code's Explore agent, the read-only searcher it delegates to today;
+- `ask-helper`, the structural helper with graph-indexer.
+
+The 24 questions (set `r5`, targets unused by earlier sets, answers from the TypeScript compiler)
+are 12 lists of call sites of a method that shares its name with others, 7 lists of callers and
+callers of callers, and 5 lists of the classes that extend a class, directly or through another —
+a new kind. One run per question and arm; the 72 runs started within eight minutes. The harness
+makes a sub-agent hand its result back with a tool call and nudges it once or twice afterwards;
+the figures stop at the answer (with those turns the cost ratios are 0.28 and 0.77).
+
+Paired by question against `ask-grep` (bootstrap 95% CI):
+
+| arm | solved | mean F1 | cost (mean) | cost ratio | time (mean) | time ratio | calls | context the work added | reply |
+|---|---|---|---|---|---|---|---|---|---|
+| `ask-grep` | 20 / 24 | 0.97 | 215k | 1 | 118 s | 1 | 28.6 | 22.8k tokens | 173 tokens |
+| `ask-explore` | 20 / 24 | 0.98 | 164k | 0.76 (0.66–0.89) | 94 s | 0.80 | 26.3 | 24.4k | 180 |
+| `ask-helper` | 20 / 24 | 0.98 | 52k | **0.24** (0.18–0.33) | 33 s | **0.28** | 4.7 | 5.9k | 171 |
+
+By kind of question (solved, mean cost, mean time):
+
+| kind | `ask-grep` | `ask-explore` | `ask-helper` |
+|---|---|---|---|
+| call sites (12) | 12 · 128k · 67 s | 12 · 100k · 58 s | 12 · 33k · 15 s |
+| callers of callers (7) | 3 · 443k · 247 s | 3 · 337k · 196 s | 3 · 96k · 76 s |
+| subclasses (5) | 5 · 104k · 58 s | 5 · 73k · 40 s | 5 · 33k · 15 s |
+
+**What it shows.**
+
+- **The helper answers as often and as exactly, for a quarter of the cost and time.** It made 4.7
+  calls per question against 28.6, and wrote about 4k output tokens against 11k. The gain holds for
+  every kind of question: 0.26 of the cost on call sites, 0.22 on callers of callers, 0.32 on
+  subclasses.
+- **Delegating keeps the asking agent's context clean whoever answers.** Every arm replied with
+  the list alone (about 170 tokens). Looking the answer up in its own context would have added
+  about 23k tokens with grep, which every later call of that agent reads again.
+- **Explore is cheaper than a general-purpose sub-agent (0.76), but not a structural tool.** It
+  searched as much (26 calls) and missed the same questions. In Claude Code, Explore runs on the
+  main model ([research notes](research/research_notes/Impacto%20real%20de%20indexaci%C3%B3n%20en%20agentes/integracion_en_agentes.md));
+  the helper declares the small model, so its work is billed at the small model's price.
+- **Every arm missed four two-level caller questions, for different reasons.** Of the helper's
+  four: on one, three calls go through a receiver the compiler cannot type (`this.socketModule`,
+  loaded at run time), which all three arms listed and the compiler's answer leaves out; on one,
+  the helper added the method that encloses a nested caller, where the index's answer was exact;
+  the other two were the index's. It listed every `new InstanceWrapper()` as a caller of
+  `InstanceWrapper.initialize` — a method called `initialize` was taken for a constructor in
+  every language, while it is one only in Ruby — and missed a call on a value taken from a
+  `new Map<K, V>()`; and it left out that a recursive method is one of its own callers. All three
+  were fixed after the round: the index alone now answers 22 of the 24 questions exactly, against
+  20, and the two it misses are two calls it flags for checking (a receiver it cannot type), which
+  the helper checked and got right. Against the TypeScript compiler over 400 symbols, recall went
+  from 0.960 to 0.961 and exact sets from 0.902 to 0.905, with precision unchanged.
+- In `rc8small` the smaller model with grep spent 0.35 of what the usual model spent with grep on
+  code questions; at 0.24 of that, the helper would come to under a tenth — an estimate across
+  rounds and question sets, not a measurement.
 
 ### A smaller model (rc8small): 25 tasks, 61 runs
 
@@ -577,17 +660,19 @@ grep or find despite the policy, most of them to read a configuration file.
   reasoning and the prefix it re-reads at every call, which a code index does not reach, so this
   line of work is closed ([PLAN-AGENTES.md](PLAN-AGENTES.md)); only the real integration (below)
   is left to measure there.
-- **Structural questions answered by a smaller model, inside a session.** A smaller model with
-  graph-indexer answered code questions as the usual model did, at a tenth of the usual model's
-  spend with grep. The next step is to measure that where it would be used: the usual model
-  handing structural questions (callers, implementations, impact) to a helper on a smaller model
-  that answers them with graph-indexer, against the usual model alone, on more questions than
-  the seven measured so far.
+- **Delegation inside a session.** The delegated part is measured (`rc9`): the structural
+  helper answers as exactly as the main agent's own tools, at a quarter of the cost and time, and
+  hands back about 170 tokens. What is left is the rest of the session: whether a main model hands
+  structural questions to the helper at the right moments, and what a clean context saves over a
+  long task. That needs sub-agents that can start sub-agents, which the sessions that ran the
+  rounds did not allow, or the real harness (below).
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
 - **Recall gaps that remain** (object literals typed by an interface, destructuring, class
-  expressions; see [BENCHMARKS.md](BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler)).
+  expressions, a value taken from a class that extends `Map`; see
+  [BENCHMARKS.md](BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler)). The
+  index flags the calls it could not bind for checking.
 - **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
   runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
   intervals can show.
@@ -608,6 +693,16 @@ node bench/agentic/prepare.mjs batch --tasks refactor-nestjs-r3.json --arms grep
 node bench/agentic/grade-batch.mjs --gi rc5 --register "<agent id> <run id>"
 node bench/agentic/grade-batch.mjs --gi rc5 --agents <agent ids>   # only once they have finished
 node bench/agentic/report.mjs --gi rc5 --integrated grep+gi3 --nogrep gi3
+```
+
+Delegated questions: prepare the `ask-*` arms, launch each run as the sub-agent type its
+`meta.json` names (`agentType`) with the printed prompt, and report from `ask-grep`:
+
+```sh
+node bench/agentic/gen-qa-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ --seed 5 \
+     --calls 12 --callers 7 --impls 5 --subclasses 5 --impl-max 30 --set r5
+node bench/agentic/prepare.mjs batch --tasks qa-nestjs-r5.json --arms ask-grep,ask-explore,ask-helper --reps 1 --gi rc9
+node bench/agentic/report.mjs --gi rc9 --baseline ask-grep --family qa --to-answer
 ```
 
 The TypeScript suites need the nestjs fixture (`node bench/fixtures.mjs`); the B3 suites need
@@ -644,15 +739,18 @@ issue took 1–15 minutes.
 
 ## Limitations
 
-- **Two models, sub-agents.** Every run uses the usual model, or in one comparison a smaller one,
-  as a sub-agent with instructions that fix its tools; a harness with the tools actually removed,
-  and with the MCP server and hooks wired in, may behave differently.
+- **Two models, sub-agents.** Every run uses the usual model, or in two comparisons a smaller
+  one, as a sub-agent with instructions that fix its tools; a harness with the tools actually
+  removed, and with the MCP server and hooks wired in, may behave differently. Sub-agents here
+  cannot start sub-agents, so delegation is measured as the delegated part, and the helper's
+  instructions reach it in its first message instead of as its system prompt.
 - **One run per task and arm.** Run-to-run variance of an agent is large; paired comparisons over
   tasks absorb part of it, but differences under about 20% in cost are within noise at this size.
   With the smaller model, the estimate for issues moved from 0.84 after nine tasks to 1.05 after
   eleven.
 - **Ceiling.** The usual model solves almost every task in every arm, so with it the benchmark
-  mostly measures cost. The smaller model missed some tasks with grep alone, but seven questions
-  are too few to measure a difference in accuracy.
+  mostly measures cost. The smaller model missed some tasks with grep alone, but on 31 questions
+  (7 in `rc8small`, 24 in `rc9`) the arms with and without graph-indexer differ by two answers,
+  too few to measure a difference in accuracy.
 - **Coverage.** B1 and B2 are TypeScript on one repository; B3 is Python on two. The third
   round did not repeat B3, so for fixing issues the held-out round's estimate (`rc4`) stands.

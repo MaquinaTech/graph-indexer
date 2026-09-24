@@ -121,6 +121,19 @@ and real commits, and end to end with coding agents
   stays silent, and it fails open under a deadline. The same hook reads Codex, Copilot CLI,
   Devin and Gemini CLI payloads, and answers Cursor's events with Cursor's field. A Claude Code plugin (`integrations/claude-code`) bundles the
   server and the hooks.
+- **Structural helper.** For Claude Code, `init` writes `.claude/agents/code-structure.md` (the
+  plugin ships the same file; `--no-helper` skips it, and a file of that name the user wrote is
+  left alone): a read-only sub-agent on a small model that answers call-site, caller, subclass
+  and impact questions from the index and replies with the `path:line` list alone, saying whether
+  it is complete. The main agent hands the question off and gets back the answer, not the
+  searches and reads behind it. Its instructions are in `src/cli/helper.mjs`, for the MCP tools
+  or, in shells without MCP, the CLI.
+- **Constructors by language.** `initialize` is a constructor only in Ruby (`__init__` and
+  `__new__` in Python, `__construct` in PHP, `constructor` in JavaScript and TypeScript, declared
+  constructors elsewhere), so `new Foo()` no longer shows up as a caller of an ordinary
+  `initialize` method, in the call graph or the edit check. A map built with type arguments
+  (`new Map<string, Foo>()`) types the values taken from it, and `call_graph` lists a recursive
+  function among its own callers.
 - **Resident process.** The MCP server, or `graph-indexer daemon` when no server runs (the hooks
   start it and it exits after 30 idle minutes), keeps the index open and in sync and answers hooks
   and CLI queries over a socket only its owner can reach, inside `.graph-indexer/` (a named pipe
@@ -156,8 +169,8 @@ and real commits, and end to end with coding agents
 
 ### Results (see docs/BENCHMARKS.md)
 
-- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.960
-  (grep: 0.128 / 0.993; name-only: 0.252 / 0.974).
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.961
+  (grep: 0.128 / 0.993; name-only: 0.252 / 0.975).
 - Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
   ranking 0.485 / 0.374; BM25 0.373 / 0.290).
 - Symbol search (377 queries): rank-1 0.700, MRR 0.759 (2.x on the same queries: 0.552 / 0.646).
@@ -172,6 +185,10 @@ and real commits, and end to end with coding agents
   against 5 of 7 with grep alone — a tenth of what the usual model spent with grep; multi-site
   refactors at 0.69 (0.56–0.87); real issues at 1.05 (0.82–1.46), and 1.19 with the lookup rules
   alone.
+- Delegated code questions (24 new, 72 runs, all on the smaller model): the structural helper
+  answered 20 of 24 exactly, as many as a general-purpose sub-agent with grep, at 0.24 (0.18–0.33)
+  of its cost and 0.28 of its time; Claude Code's Explore agent came to 0.76. Each handed back
+  about 170 tokens, against the 23k that looking the answer up adds to the asking agent's context.
 
 ---
 

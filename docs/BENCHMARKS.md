@@ -59,16 +59,18 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 
 | oracle | system | micro-P | micro-R | micro-F1 | macro-P | macro-R | exact set |
 |---|---|---|---|---|---|---|---|
-| dispatch | graph-indexer | 0.996 (0.999) | 0.960 (0.886) | 0.978 (0.939) | 0.967 | 0.959 | 0.902 |
-| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.960 (0.886) | 0.978 (0.940) | 0.969 | 0.959 | 0.907 |
-| dispatch | name-only | 0.252 | 0.974 | 0.400 | 0.735 | 0.975 | 0.589 |
+| dispatch | graph-indexer | 0.996 (0.999) | 0.961 (0.887) | 0.978 (0.940) | 0.967 | 0.960 | 0.905 |
+| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.961 (0.887) | 0.978 (0.940) | 0.969 | 0.960 | 0.910 |
+| dispatch | name-only | 0.252 | 0.975 | 0.400 | 0.735 | 0.976 | 0.591 |
 | dispatch | grep | 0.128 | 0.993 | 0.227 | 0.515 | 0.994 | 0.226 |
-| rename | graph-indexer | 0.996 (0.999) | 0.924 (0.767) | 0.959 (0.868) | 0.967 | 0.943 | 0.872 |
-| rename | name-only | 0.262 | 0.975 | 0.413 | 0.752 | 0.976 | 0.604 |
+| rename | graph-indexer | 0.996 (0.999) | 0.924 (0.767) | 0.959 (0.868) | 0.967 | 0.944 | 0.875 |
+| rename | name-only | 0.262 | 0.976 | 0.413 | 0.752 | 0.977 | 0.607 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
 
 An earlier 3.0 build, before the correctness work that followed the agent studies, gave with the
-same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835.
+same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835. The last change — constructors
+recognised by language and the type arguments of a constructed map kept — moved recall from 0.960
+to 0.961 and exact sets from 0.902 to 0.905.
 
 Micro averages pool all reference lines (dominated by heavily used symbols); macro averages
 weigh each symbol equally; "exact set" is the share of symbols whose reference set matches the
