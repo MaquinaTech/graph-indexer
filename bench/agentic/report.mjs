@@ -50,6 +50,13 @@ rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1);
 // runs that looked the answer up outside the repository (web, upstream fetch, task files) are invalid
 const leaked = rows.filter(r => r.agent?.leaks?.length);
 rows = rows.filter(r => !r.agent?.leaks?.length);
+// arms compared on different models measure the models, not the arms
+{
+    const byArm = new Map();
+    for (const r of rows) for (const m of r.agent?.models ?? []) (byArm.get(r.arm) ?? byArm.set(r.arm, new Set()).get(r.arm)).add(m);
+    const all = new Set([...byArm.values()].flatMap(s => [...s]));
+    if (all.size > 1) console.error(`warning: the runs used different models — ${[...byArm].map(([a, s]) => `${a}: ${[...s].join('/')}`).join('; ')}`);
+}
 // intention-to-treat: runs that broke their arm's tool policy stay in (dropping them would bias
 // the arm towards the runs that happened to comply); --exclude-violations is the sensitivity check
 const violating = rows.filter(r => r.agent?.violations?.length);

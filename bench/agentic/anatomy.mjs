@@ -11,6 +11,8 @@
  *   - time: model vs tool execution;
  *   - exploration: calls before the first edit, how many of them look code up, and how many searches
  *     chase a name the agent had already seen in code it read or in a search result;
+ *   - hidden reasoning (output that is neither text nor tool input) and decisions (model calls) up to
+ *     the first edit and after it: the mechanism a representation must move to lower the cost of issues;
  *   - context precision (fresh issues): the share of code lines read that fall inside the functions the
  *     gold patch or the agent's own patch changes (±20 lines for changes outside a function), in the base
  *     version of each file.
@@ -138,7 +140,7 @@ function shellRead(cmd) {
 
 // ── one run ───────────────────────────────────────────────────────────────────
 async function analyse(r, file) {
-    const turns = [], usage = new Map(), results = [], calls = [];
+    const turns = [], usage = new Map(), results = [], calls = [], visible = [];
     let pending = [];
     const uses = new Map();
     for (const l of fs.readFileSync(file, 'utf8').trim().split('\n')) {
@@ -146,7 +148,13 @@ async function analyse(r, file) {
         const m = e.message; if (!m) continue;
         if (e.type === 'assistant' && m.id) {
             if (!usage.has(m.id)) { if (turns.length) results.push(pending); pending = []; turns.push(m.id); usage.set(m.id, m.usage ?? {}); }
-            for (const c of Array.isArray(m.content) ? m.content : []) if (c.type === 'tool_use') { const call = { name: c.name, input: c.input ?? {}, turn: turns.length - 1, kind: kindOf(c.name, c.input ?? {}) }; uses.set(c.id, call); calls.push(call); }
+            for (const c of Array.isArray(m.content) ? m.content : []) {
+                // what the call shows of its output (text, tool inputs); the rest of it is hidden reasoning
+                if (c.type === 'text') visible[turns.length - 1] = (visible[turns.length - 1] ?? 0) + (c.text ?? '').length / 3.5;
+                if (c.type !== 'tool_use') continue;
+                visible[turns.length - 1] = (visible[turns.length - 1] ?? 0) + JSON.stringify(c.input ?? {}).length / RESULT_CHARS_PER_TOKEN;
+                const call = { name: c.name, input: c.input ?? {}, turn: turns.length - 1, kind: kindOf(c.name, c.input ?? {}) }; uses.set(c.id, call); calls.push(call);
+            }
         } else if (e.type === 'user' && Array.isArray(m.content)) {
             for (const c of m.content) if (c.type === 'tool_result') {
                 const call = uses.get(c.tool_use_id); if (!call) continue;
@@ -163,12 +171,16 @@ async function analyse(r, file) {
     // written once and re-read by every later call
     const parts = {}; const add = (k, v) => { parts[k] = (parts[k] ?? 0) + v; };
     let cost = 0, out = 0;
+    // hidden reasoning before and after the first edit, and the decisions (calls to the model) it spans
+    const editTurn = calls.find(c => c.kind === 'edit')?.turn ?? T;
+    const reason = { pre: 0, post: 0, preTurns: Math.min(editTurn + 1, T), postTurns: Math.max(0, T - editTurn - 1) };
     for (const u of U) cost += (u.input_tokens ?? 0) + 1.25 * (u.cache_creation_input_tokens ?? 0) + 0.1 * (u.cache_read_input_tokens ?? 0);
     add('prefix', 0.1 * T * ctx[0] + 0.9 * (U[0].input_tokens ?? 0) + 1.15 * (U[0].cache_creation_input_tokens ?? 0));
     for (let t = 0; t < T; t++) {
         const rTok = results[t].reduce((s, c) => s + (c.text?.length ?? 0) / RESULT_CHARS_PER_TOKEN, 0);
         const o = t < T - 1 ? Math.max(U[t].output_tokens ?? 0, ctx[t + 1] - ctx[t] - rTok) : (U[t].output_tokens ?? 0);
         out += o;
+        reason[t <= editTurn ? 'pre' : 'post'] += Math.max(0, o - (visible[t] ?? 0));
         if (t < T - 1) {
             const w = 1.15 + 0.1 * (T - 1 - t);
             for (const c of results[t]) add(`results:${c.kind}`, (c.text?.length ?? 0) / RESULT_CHARS_PER_TOKEN * w);
@@ -206,7 +218,7 @@ async function analyse(r, file) {
             relevantLines += lines.filter(n => rs.some(([a, b]) => a <= n && n <= b)).length;
         }
     }
-    return { T, cost, out, parts, calls: calls.length, preCalls: pre.length, preLookups: pre.filter(c => c.kind === 'search' || c.kind === 'read').length,
+    return { T, cost, out, parts, reason, calls: calls.length, preCalls: pre.length, preLookups: pre.filter(c => c.kind === 'search' || c.kind === 'read').length,
         lookups, chases, codeLines, relevantLines, modelMs: r.agent.modelMs ?? null, toolMs: r.agent.toolMs ?? null, wallMs: r.agent.wallMs ?? null };
 }
 
@@ -232,11 +244,14 @@ for (const [key, xs] of [...groups].sort()) {
         callsBeforeFirstEdit: mean(xs, x => x.preCalls), lookupsBeforeFirstEdit: mean(xs, x => x.preLookups),
         chaseShare: mean(xs, x => x.chases) / Math.max(1e-9, mean(xs, x => x.lookups)),
         contextPrecision: code ? rel / code : null,
+        reasoningBeforeEdit: mean(xs, x => x.reason.pre), reasoningAfterEdit: mean(xs, x => x.reason.post),
+        decisionsBeforeEdit: mean(xs, x => x.reason.preTurns), decisionsAfterEdit: mean(xs, x => x.reason.postTurns),
     };
     out[key] = g;
     console.log(`\n${key}: ${g.runs} runs · ${g.calls.toFixed(1)} calls · real cost ${(cost / 1000).toFixed(0)}k · output ${(g.outputTokens / 1000).toFixed(1)}k tokens · ${g.minutes.toFixed(1)} min (model ${pc(g.modelShare, 1)})`);
     console.log(`  cost: ` + Object.entries(g.split).map(([k, v]) => `${k} ${pc(v, 1)}`).join(' · '));
     console.log(`  before the first edit: ${g.callsBeforeFirstEdit.toFixed(1)} calls, ${g.lookupsBeforeFirstEdit.toFixed(1)} searches/reads; ${pc(g.chaseShare, 1)} of searches chase a name already seen`
         + (g.contextPrecision != null ? ` · context precision ${(100 * g.contextPrecision).toFixed(1)}%` : ''));
+    console.log(`  hidden reasoning: ${(g.reasoningBeforeEdit / 1000).toFixed(1)}k over ${g.decisionsBeforeEdit.toFixed(1)} decisions up to the first edit, ${(g.reasoningAfterEdit / 1000).toFixed(1)}k over ${g.decisionsAfterEdit.toFixed(1)} after it`);
 }
 if (opt('--json')) fs.writeFileSync(opt('--json'), JSON.stringify(out, null, 2));

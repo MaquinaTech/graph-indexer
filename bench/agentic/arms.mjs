@@ -195,7 +195,7 @@ function giCard7(gi, view) {
     return `${giCard6(gi)}
 
 ## Reading code
-Read source files with \`${view} <path> [offset] [limit]\` (written \`view\` here — type the full path) instead of the Read tool: it prints the same numbered lines as Read, followed by graph-indexer's notes on those lines when there is something to resolve — which override of a method a subclass runs and which subclasses inherit it, which registration-table entry handles a key, what calls a method by a name built at run time, what a decorator is — each with its location, so you can use it instead of looking it up. Your Edit tool may require its own Read of a file before editing it: Read just the lines you change.`;
+Read source code only with \`${view} <path> [offset] [limit]\` (written \`view\` here — type the full path), not with the Read tool, cat, sed, head or tail: it prints the same numbered lines as Read, followed by graph-indexer's notes on those lines when there is something to resolve — which override of a method a subclass runs and which subclasses inherit it, which registration-table entry handles a key, what calls a method by a name built at run time, what a decorator is — each with its location, so you can use it instead of looking it up. The one exception: your Edit tool may require its own Read of a file before editing it — Read just the lines you change.`;
 }
 
 const POLICY = {
