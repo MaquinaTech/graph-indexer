@@ -133,6 +133,8 @@ and real commits, and end to end with coding agents
   that reach the changed code through calls the index sees (directly or through one helper), with
   a command that runs only them (pytest, unittest, Django, `go test -run`, Maven, Gradle), before
   the test files that exercise the change.
+- **Resolved indirection after reads**: `read_code`, `get_symbol` and the post-read hook say which code actually runs. For a method, which override a subclass uses, which subclasses inherit it unchanged, and what a `self.x()` call can dispatch to. For registration tables (dict/object literals of handlers, extended with `**Base.TABLE` or `...base`), which entry handles a key and what a subclass table replaces. They also say which method a name built at run time reaches (`getattr(self, f"{key}_sql")`, `dir(cls)` + `endswith`) and what a decorator is. Static analysis only: silent when the lines have no indirection, never repeated in a session. Checked against the running program in the benchmark: precision 1.000 for overrides and inheritors, 0.995 for table keys on sqlglot.
+- **Method resolution order**: which subclasses inherit a member is decided by C3 linearization. With multiple inheritance, the index used to count classes that run another base's override (inheriting-subclass precision on sqlglot went from 0.59 to 1.000).
 - **Subclasses that inherit a changed method**: `check_changes` and `change_impact` list the
   subclasses (transitively) that inherit a changed method without redeclaring it — they run the
   new code too — and those that override it, and add the inheriting subclasses' test files to the
