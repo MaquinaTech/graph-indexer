@@ -57,6 +57,7 @@ function transcriptOf(r) {
 
 // ── what a tool call is for ───────────────────────────────────────────────────
 const GI = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+\w/;
+const VIEW = /(^|\/)view\s+\S/;
 const TESTS = /\b(pytest|unittest|tsc|jest|mocha|vitest|npm\s+test|go\s+test|cargo\s+test|tsdiag)\b/;
 const stripCd = (c) => c.replace(/^\s*cd\s+\S+\s*&&\s*/, '');
 function kindOf(name, input = {}) {
@@ -66,6 +67,7 @@ function kindOf(name, input = {}) {
     if (name.startsWith('mcp__') && /graph-indexer/.test(name)) return 'gi';
     if (name !== 'Bash') return 'other';
     const c = stripCd(input.command ?? '');
+    if (VIEW.test(c)) return 'read'; // Read plus the post-read hook (grep+gi7)
     if (GI.test(c)) return 'gi';
     if (TESTS.test(c)) return 'tests';
     if (/^(ls|find|tree)\b/.test(c) || /\b(grep|rg|ag|ack)\b/.test(c)) return 'search';
@@ -125,6 +127,7 @@ async function changedRegions(repo, base, patch, into = new Map()) {
 }
 function shellRead(cmd) {
     const c = stripCd(cmd); let m;
+    if ((m = /(?:^|\/)view\s+(\S+)(?:\s+(\d+))?/.exec(c))) return [m[1], +(m[2] ?? 1)];
     if ((m = /^(?:nl\s+-ba\s+|cat\s+-n\s+)(\S+)\s*\|\s*sed\s+-n\s+['"](\d+),(\d+)p['"]/.exec(c))) return [m[1], +m[2]];
     if ((m = /^sed\s+-n\s+['"](\d+),(\d+)p['"]\s+(\S+)/.exec(c))) return [m[3], +m[1]];
     if ((m = /^head\s+-(?:n\s*)?\d+\s+(\S+)/.exec(c))) return [m[1], 1];

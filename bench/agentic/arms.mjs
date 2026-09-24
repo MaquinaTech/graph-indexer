@@ -21,6 +21,9 @@
  *             (a definition by name, uses, the tests closest to an edit), with compact reads
  *   grep+gi6  the control's rules for reading and searching, and graph-indexer only for exact uses,
  *             callers, impact and the edit check
+ *   grep+gi7  grep+gi6 with graph-indexer's post-read hook: code is read with a \`view\` command that
+ *             prints what Read prints plus what the hook adds after a Read (the indirection the lines
+ *             involve, resolved; where names are defined while crawling) — hooks do not run in sub-agents
  *   mcp       graph-indexer as users install it: the MCP server plus the block `init` writes to
  *             CLAUDE.md/AGENTS.md; needs a harness with MCP (run-headless.mjs)
  *   mcp+hooks the same plus the Claude Code hooks (edit check, definition rescue, crawl-gated context)
@@ -29,7 +32,10 @@
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'mcp', 'mcp+hooks'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'mcp', 'mcp+hooks'];
+
+/** Arms that read through \`view\` (Read plus the post-read hook's context). */
+export const VIEW_ARMS = new Set(['grep+gi7']);
 
 /** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */
 export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks']);
@@ -181,6 +187,17 @@ A live index of this repository's definitions, references, call graph and tests,
 - A definition a search did not find: \`gi read <name>\`.`;
 }
 
+/**
+ * Seventh card: the sixth, with reads through the post-read hook. The hook's context after a Read is
+ * what the product adds in hosts with hooks; \`view\` gives the same text in one shell command.
+ */
+function giCard7(gi, view) {
+    return `${giCard6(gi)}
+
+## Reading code
+Read source files with \`${view} <path> [offset] [limit]\` (written \`view\` here — type the full path) instead of the Read tool: it prints the same numbered lines as Read, followed by graph-indexer's notes on those lines when there is something to resolve — which override of a method a subclass runs and which subclasses inherit it, which registration-table entry handles a key, what calls a method by a name built at run time, what a decorator is — each with its location, so you can use it instead of looking it up. Your Edit tool may require its own Read of a file before editing it: Read just the lines you change.`;
+}
+
 const POLICY = {
     grep: 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) as you normally would.',
     gi: 'For searching and navigating code use graph-indexer (below) instead of Grep/Glob: do NOT use the Grep or Glob tools, and do NOT run grep, rg, ag, ack, git grep or find in the shell. You may use Read, Edit, Write, and Bash for everything else (running tests or builds, ls, git status/diff).',
@@ -195,10 +212,12 @@ POLICY['grep+rules'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, W
 POLICY['grep+gi4'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its rules.';
 POLICY['grep+gi5'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following the rules below.';
 POLICY['grep+gi6'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below, and graph-indexer where it says.';
+POLICY['grep+gi7'] = POLICY['grep+gi6'];
 POLICY.mcp = 'Use your built-in tools and the graph-indexer MCP tools as you see fit.';
 POLICY['mcp+hooks'] = POLICY.mcp;
 
-export function toolSection(arm, gi, caps = {}) {
+export function toolSection(arm, gi, caps = {}, view = null) {
+    if (arm === 'grep+gi7') return `# Tools\n${POLICY[arm]}\n\n${giCard7(gi, view)}`;
     if (arm === 'grep') return `# Tools\n${POLICY.grep}`;
     if (arm === 'grep+rules') return `# Tools\n${POLICY[arm]}\n\n${rulesCard()}`;
     if (arm === 'grep+gi4') return `# Tools\n${POLICY[arm]}\n\n${giCard4(gi)}`;

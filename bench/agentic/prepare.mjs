@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { argv, git, sh, readJson, writeJson, loadTasks, runId, WORK, GI_ROOT, HERE } from './lib.mjs';
-import { toolSection, ARM_NAMES, usesIndex } from './arms.mjs';
+import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS } from './arms.mjs';
 import { REPOS } from './repos.mjs';
 
 const { opt, list, args } = argv();
@@ -129,7 +129,7 @@ function tryRemoveWorktree(src, dir) {
     try { git(src, 'worktree', 'remove', '--force', dir); } catch { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
-function instructions(task, arm, runDir, checkout, gi, caps) {
+function instructions(task, arm, runDir, checkout, gi, caps, view) {
     const repo = REPOS[task.repo];
     const deliver = task.family === 'qa'
         ? `# Deliverable\nWrite your answer to the file \`${path.join(runDir, 'answer.txt')}\`.\n${task.answerFormat}`
@@ -147,7 +147,7 @@ ${deliver}
 - Be efficient, but the result must be complete and correct.
 - When you are finished, your final reply must be just the word DONE — the ${task.family === 'qa' ? 'answer file' : 'changes in the repository'} are what count.
 
-${toolSection(arm, gi, caps)}
+${toolSection(arm, gi, caps, view)}
 `;
 }
 
@@ -164,7 +164,12 @@ export function prepareRun(task, arm, rep, label) {
         fs.writeFileSync(gi, `#!/bin/sh\nexec node ${JSON.stringify(giBin(label))} "$@" --repo ${JSON.stringify(checkout)}\n`, { mode: 0o755 });
         caps = capabilities(label);
     }
-    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), instructions(task, arm, runDir, checkout, gi, caps));
+    let view = null;
+    if (VIEW_ARMS.has(arm)) {
+        view = path.join(runDir, 'view');
+        fs.writeFileSync(view, `#!/bin/sh\nexec node ${JSON.stringify(path.join(HERE, 'view.mjs'))} --gi ${JSON.stringify(giBin(label))} --repo ${JSON.stringify(checkout)} --session ${JSON.stringify(`${label}__${id}`)} "$@"\n`, { mode: 0o755 });
+    }
+    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), instructions(task, arm, runDir, checkout, gi, caps, view));
     const baseHead = git(checkout, 'rev-parse', 'HEAD').trim();
     const meta = { runId: id, taskId: task.id, family: task.family, arm, rep, giLabel: label, checkout, runDir, baseHead, indexMs, caps, preparedAt: new Date().toISOString() };
     writeJson(path.join(runDir, 'meta.json'), meta);
