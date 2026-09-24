@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { grepPattern } from '../src/cli/hook.mjs';
+import { claudeAgentFile, helperInstructions } from '../src/cli/helper.mjs';
 import { makeRepo, writeFile, rmrf } from './helpers.mjs';
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'graph-indexer.mjs');
@@ -115,6 +116,42 @@ test('init --hooks merges Claude Code hooks idempotently and keeps foreign ones'
         assert.equal(post.filter(c => /graph-indexer@3 hook post-tool$/.test(c)).length, 1);
         assert.ok(cfg.hooks.SubagentStart[0].hooks[0].command.endsWith('hook subagent-start'));
     } finally { rmrf(dir); }
+});
+
+test('init writes the structural helper for Claude Code once, keeps a user file of that name, and the plugin ships the same file', () => {
+    const dir = makeRepo({ 'src/a.ts': 'export const a = 1;\n' });
+    const mine = makeRepo({ '.claude/agents/code-structure.md': '---\nname: code-structure\n---\nmine\n' });
+    try {
+        const runs = [0, 1].map(() => spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--agents', 'claude'], { encoding: 'utf8' }));
+        assert.equal(runs[0].status, 0, runs[0].stderr);
+        assert.match(runs[0].stdout, /structural helper written to \.claude\/agents\/code-structure\.md/);
+        assert.match(runs[1].stdout, /structural helper already in/);
+        const file = fs.readFileSync(path.join(dir, '.claude/agents/code-structure.md'), 'utf8');
+        assert.equal(file, claudeAgentFile());
+        const front = file.split('---\n')[1];
+        assert.match(front, /^name: code-structure$/m);
+        assert.match(front, /^model: haiku$/m);
+        assert.match(front, /^disallowedTools: Edit, Write, MultiEdit, NotebookEdit$/m);
+        // a quoted description: YAML would read "…model: every call site…" as a mapping otherwise
+        const desc = front.match(/^description: (.*)$/m)[1];
+        assert.ok(JSON.parse(desc).startsWith('Exact answers to structural questions'));
+        assert.match(file, /`find_references` with kind `inherit`/);
+        const kept = spawnSync(process.execPath, [BIN, 'init', '--repo', mine, '--agents', 'claude'], { encoding: 'utf8' });
+        assert.match(kept.stdout, /code-structure\.md exists and is not graph-indexer's, so it was left as is/);
+        assert.match(fs.readFileSync(path.join(mine, '.claude/agents/code-structure.md'), 'utf8'), /^mine$/m);
+        const skipped = makeRepo({ 'src/a.ts': 'export const a = 1;\n' });
+        try {
+            spawnSync(process.execPath, [BIN, 'init', '--repo', skipped, '--agents', 'claude', '--no-helper'], { encoding: 'utf8' });
+            assert.ok(!fs.existsSync(path.join(skipped, '.claude/agents')));
+        } finally { rmrf(skipped); }
+        const plugin = path.join(path.dirname(BIN), '..', 'integrations', 'claude-code', 'agents', 'code-structure.md');
+        assert.equal(fs.readFileSync(plugin, 'utf8'), claudeAgentFile(), 'regenerate integrations/claude-code/agents/code-structure.md from src/cli/helper.mjs');
+        // through a shell, the same instructions name the CLI's commands
+        const cli = helperInstructions({ cli: '/x/gi' });
+        assert.match(cli, /`\/x\/gi refs <Name> --kind inherit`/);
+        assert.match(cli, /`\/x\/gi callgraph <Class\.method> --direction callers --depth N`/);
+        assert.doesNotMatch(cli, /find_references/);
+    } finally { rmrf(dir); rmrf(mine); }
 });
 
 test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; Devin gets instructions and hooks', () => {

@@ -3,12 +3,15 @@
  *
  * Writes project-level MCP configuration (merged, never clobbering other servers) and, unless
  * --no-instructions, a short managed block in AGENTS.md / CLAUDE.md naming the tools and when to
- * use them (a few lines — long generated context files measurably hurt agents). Idempotent.
+ * use them (a few lines — long generated context files measurably hurt agents). For Claude Code it
+ * also writes, unless --no-helper, the structural helper sub-agent (.claude/agents/code-structure.md,
+ * src/cli/helper.mjs). Idempotent.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findRepoRoot } from '../util/paths.mjs';
+import { HELPER_NAME, claudeAgentFile } from './helper.mjs';
 
 const BLOCK_START = '<!-- graph-indexer:start -->';
 const BLOCK_END = '<!-- graph-indexer:end -->';
@@ -164,12 +167,31 @@ function upsertClaudeHooks(repo, local, dryRun) {
     return `Claude Code hooks: ${changed ? 'written to' : 'already in'} .claude/settings.json (post-edit check, grep disambiguation, session line)`;
 }
 
+/**
+ * The structural helper for Claude Code (.claude/agents/code-structure.md). A file of that name the
+ * user wrote is left alone; an earlier version of ours is updated.
+ */
+function upsertClaudeHelper(repo, dryRun) {
+    const rel = `.claude/agents/${HELPER_NAME}.md`;
+    const file = path.join(repo, rel);
+    const want = claudeAgentFile();
+    const have = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    if (have === want) return `Claude Code: structural helper already in ${rel}`;
+    if (have != null && !have.includes("graph-indexer's index")) return `Claude Code: ${rel} exists and is not graph-indexer's, so it was left as is`;
+    if (!dryRun) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, want);
+    }
+    return `Claude Code: structural helper ${have == null ? 'written to' : 'updated in'} ${rel} (a sub-agent on a small model that answers call-site, caller, subclass and impact questions from the index)`;
+}
+
 export async function runInit({ opt, flag, repo: repoArg = null }) {
     const repo = path.resolve(repoArg ?? opt('--repo') ?? findRepoRoot(process.cwd()));
     const dryRun = flag('--dry-run');
     const local = flag('--local');
     const hooks = flag('--hooks');
     const noInstructions = flag('--no-instructions');
+    const noHelper = flag('--no-helper');
     const all = flag('--all');
     const agentList = opt('--agents');
     let chosen;
@@ -212,6 +234,7 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
             report.push(`Devin: reads AGENTS.md${hooks ? ' and the Claude Code hooks in .claude/settings.json' : ' (and, with --hooks, the Claude Code hooks)'}; add the MCP server in Devin's MCP settings → command "${entry.command}", args ${JSON.stringify([...entry.args, '--repo', repo])}`);
         }
     }
+    if (!noHelper && chosen.includes('claude')) report.push(upsertClaudeHelper(repo, dryRun));
     // Devin Desktop/CLI, Copilot CLI and Cursor also run the Claude Code hooks in .claude/settings.json
     if (hooks && (chosen.includes('claude') || chosen.includes('devin'))) report.push(upsertClaudeHooks(repo, local, dryRun));
     if (hooks && chosen.includes('opencode')) report.push(writeOpenCodePlugin(repo, local, dryRun));
