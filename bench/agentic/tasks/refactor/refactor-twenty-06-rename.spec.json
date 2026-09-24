@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts",
+    "cls": "WorkspaceRepository",
+    "name": "exists",
+    "newName": "existsChecked",
+    "params": 1
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository.ts",
+      "cls": "WorkspaceScopedRepository",
+      "name": "exists",
+      "params": 2
+    }
+  ]
+}

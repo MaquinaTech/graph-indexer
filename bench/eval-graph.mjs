@@ -14,8 +14,18 @@
  * Two baselines are scored on the same sample:
  *   - grep:      every line containing the name as a whole word (what an agent does by default);
  *   - name-only: every syntactic reference (call/new/type/…) with the same name, unresolved.
+ * With --v2 <dir>, graph-indexer 2.x is scored too, through its own MCP server and index:
+ *   - v2:        its find_references (called by, subclassed by, used as a type by) for the name,
+ *                scoped to the owning class for a method. 2.x answers with the referencing chunks
+ *                (function, method or whole class), not lines: its lines are those of each chunk
+ *                that contain the name as a word — what an agent finds reading the chunks it names;
+ *   - v2 (high): the same without the references it marks unverified (name-only).
+ * Every system is also scored at file level (the files holding references), where 2.x needs no
+ * derivation, and the size of each tool's answer (the text an agent reads) is reported.
+ * A monorepo whose packages carry their own path aliases sets its program with GI_TSCONFIG
+ * (bench/agentic/tsconfig.mjs).
  *
- *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7]
+ *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7] [--v2 ~/.gi-agentic/v2]
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,6 +33,9 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
+import { tsSetup } from './agentic/tsconfig.mjs';
+import { callTool } from '../src/mcp/tools.mjs';
+import { v2Comparison, answerSizes } from './v2-client.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -41,9 +54,9 @@ const intel = new CodeIntel({ root, dbPath: path.join(opt('--db-dir', path.join(
 await intel.open();
 
 // ── TypeScript language service over the whole repo's .ts files ───────────────────
-const tsFiles = intel.store.all("SELECT path FROM files WHERE lang IN ('typescript','tsx')").map(r => r.path);
-const cfgFile = ts.findConfigFile(root, ts.sys.fileExists, 'tsconfig.json');
-const cfg = cfgFile ? ts.parseJsonConfigFileContent(ts.readConfigFile(cfgFile, ts.sys.readFile).config, ts.sys, root) : { options: {} };
+const cfg = tsSetup(ts, root);
+const inProgram = cfg.files && new Set(cfg.files.map(f => path.relative(root, f).split(path.sep).join('/')));
+const tsFiles = intel.store.all("SELECT path FROM files WHERE lang IN ('typescript','tsx')").map(r => r.path).filter(f => !inProgram || inProgram.has(f));
 const options = { ...cfg.options, noEmit: true, skipLibCheck: true, types: [] };
 const versions = new Map();
 const host = {
@@ -196,14 +209,22 @@ const sample = [];
 const pool = [...cands];
 while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
 
-const systems = { 'graph-indexer': oursRefs, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs };
-const ORACLES = ['dispatch', 'rename'];
+// ── graph-indexer 2.x, and the size of each tool's answer ────────────────────────────
+const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.homedir()));
+const fileLines = (f) => { let l = grepCache.get(f); if (!l) { l = fs.readFileSync(path.join(root, f), 'utf8').split('\n'); grepCache.set(f, l); } return l; };
+const v2 = v2Root ? await v2Comparison({ v2Root, root, sample, intel, fileRe: TS_FILE, linesOf: fileLines, reindex: args.includes('--v2-reindex'), callTool }) : null;
+
+const systems = { 'graph-indexer': oursRefs, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs,
+    ...(v2 ? { v2: v2.refs, 'v2 (high)': (s) => v2.refs(s, { highOnly: true }) } : {}) };
+const ORACLES = ['dispatch', 'rename', 'dispatch/files'];
+const filesOf = (set) => new Set([...set].map(x => x.slice(0, x.lastIndexOf(':'))));
 const newAgg = () => Object.fromEntries(Object.keys(systems).map(k => [k, { tp: 0, fp: 0, fn: 0, pSum: 0, rSum: 0, n: 0, perfect: 0 }]));
 const aggs = Object.fromEntries(ORACLES.map(o => [o, newAgg()]));
 let evaluated = 0, withRefs = 0;
 const t1 = Date.now();
 for (const sym of sample) {
     const golds = { dispatch: oracleRefs(sym, { dispatch: true }), rename: oracleRefs(sym) };
+    if (golds.dispatch) golds['dispatch/files'] = filesOf(golds.dispatch);
     if (!golds.rename) continue;
     const gold = golds.dispatch;
     evaluated++;
@@ -219,9 +240,10 @@ for (const sym of sample) {
         }
     }
     for (const [name, fn] of Object.entries(systems)) {
-        const got = fn(sym);
+        const lines = fn(sym);
         for (const o of ORACLES) {
             const g = golds[o];
+            const got = o.endsWith('/files') ? filesOf(lines) : lines;
             let tp = 0;
             for (const x of got) if (g.has(x)) tp++;
             const fp = got.size - tp, fnn = g.size - tp;
@@ -237,7 +259,7 @@ for (const sym of sample) {
 console.log(`\n${fixture} (${scope.join(', ')}): ${evaluated} sampled symbols (${withRefs} with ≥1 dispatch-oracle reference), oracle = TypeScript findReferences, ${Date.now() - t1} ms`);
 const result = {};
 for (const o of ORACLES) {
-    console.log(`\noracle: ${o === 'dispatch' ? 'dispatch (self + overridden + overriding members)' : 'rename (full Find All References, incl. sibling overrides)'}`);
+    console.log(`\noracle: ${o === 'dispatch' ? 'dispatch (self + overridden + overriding members)' : o === 'rename' ? 'rename (full Find All References, incl. sibling overrides)' : 'dispatch, file level (the files holding references)'}`);
     console.log('system          micro-P  micro-R  micro-F1 | macro-P  macro-R | exact-set');
     result[o] = {};
     for (const [name, a] of Object.entries(aggs[o])) {
@@ -246,5 +268,6 @@ for (const o of ORACLES) {
         console.log(`${name.padEnd(15)} ${P.toFixed(3).padStart(7)}  ${R.toFixed(3).padStart(7)}  ${F.toFixed(3).padStart(8)} | ${(a.pSum / a.n).toFixed(3).padStart(7)}  ${(a.rSum / a.n).toFixed(3).padStart(7)} | ${(a.perfect / a.n).toFixed(3)}`);
     }
 }
-if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ fixture, scope, n: evaluated, result }, null, 2));
+const answers = v2 ? answerSizes(v2.answers) : {};
+if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ fixture, scope, n: evaluated, result, answers }, null, 2));
 intel.close();

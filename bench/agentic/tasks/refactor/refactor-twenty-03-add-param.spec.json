@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/engine/twenty-orm/query-builder/workspace-select-query-builder.ts",
+    "cls": "WorkspaceSelectQueryBuilder",
+    "name": "softDelete",
+    "params": 1,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts",
+      "cls": "WorkspaceRepository",
+      "name": "softDelete",
+      "params": 1
+    },
+    {
+      "file": "packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository.ts",
+      "cls": "WorkspaceScopedRepository",
+      "name": "softDelete",
+      "params": 2
+    }
+  ]
+}

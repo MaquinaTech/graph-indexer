@@ -43,6 +43,7 @@ import { argv, WORK } from './lib.mjs';
 import { giBin } from './prepare.mjs';
 import { usesIndex, SESSION_ARMS } from './arms.mjs';
 import { HELPER_NAME } from '../../src/cli/helper.mjs';
+import { serverV2 } from './v2.mjs';
 
 const { opt, list, flag } = argv();
 const label = opt('--gi');
@@ -77,7 +78,8 @@ function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } =
             '--setting-sources', 'project,local'];
         if (model) args.push('--model', model);
         if (budget ?? maxBudget) args.push('--max-budget-usd', String(budget ?? maxBudget));
-        const servers = session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } : {};
+        const servers = session.v2 ? { 'graph-indexer': serverV2(meta.checkout) }
+            : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } : {};
         return { args, files: { 'mcp.json': { mcpServers: servers } } };
     }
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions',

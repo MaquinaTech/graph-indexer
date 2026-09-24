@@ -1,0 +1,761 @@
+[
+  {
+    "id": "qa-twenty-calls-01",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `FileStorageService.readFile` (declared in `packages/twenty-server/src/engine/core-modules/file-storage/services/file-storage.service.ts`, line 635) is called — including calls in test/spec files. Other methods in the codebase share the name `readFile`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-resource/logic-function-resource.service.ts",
+          "line": 186
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-resource/logic-function-resource.service.ts",
+          "line": 364
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/sdk-client/sdk-client-archive.service.ts",
+          "line": 143
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/services/file.service.ts",
+          "line": 132
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/services/file.service.ts",
+          "line": 259
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/services/file.service.ts",
+          "line": 273
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/services/file.service.ts",
+          "line": 325
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/file-upload/services/file-upload-completion.service.ts",
+          "line": 261
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/file-core-picture/services/file-core-picture.service.ts",
+          "line": 527
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-manifest/application-sync.service.ts",
+          "line": 255
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-package/application-package-fetcher.service.ts",
+          "line": 243
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-registration/application-tarball.service.ts",
+          "line": 172
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/front-component/front-component.service.ts",
+          "line": 340
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.service.ts",
+          "line": 351
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/front-component-shared-dependencies/front-component-shared-dependencies.service.ts",
+          "line": 75
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/record-export/services/record-export.workspace-service.ts",
+          "line": 388
+        }
+      ]
+    },
+    "meta": {
+      "target": "FileStorageService.readFile",
+      "path": "packages/twenty-server/src/engine/core-modules/file-storage/services/file-storage.service.ts",
+      "line": 635,
+      "grepCallLines": 54,
+      "sameNameNoise": 38,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-twenty-calls-02",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `FileStorageService.getFileMetadata` (declared in `packages/twenty-server/src/engine/core-modules/file-storage/services/file-storage.service.ts`, line 585) is called — including calls in test/spec files. Other methods in the codebase share the name `getFileMetadata`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/file-upload/services/file-upload-completion.service.ts",
+          "line": 95
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/file/file-upload/services/file-upload-completion.service.ts",
+          "line": 298
+        },
+        {
+          "path": "packages/twenty-server/src/database/commands/upgrade-version-command/2-43/2-43-workspace-command-1790262034322-backfill-logic-function-file-rows.command.ts",
+          "line": 160
+        }
+      ]
+    },
+    "meta": {
+      "target": "FileStorageService.getFileMetadata",
+      "path": "packages/twenty-server/src/engine/core-modules/file-storage/services/file-storage.service.ts",
+      "line": 585,
+      "grepCallLines": 15,
+      "sameNameNoise": 12,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-twenty-calls-03",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `StripeSubscriptionService.updateSubscription` (declared in `packages/twenty-server/src/engine/core-modules/billing/stripe/services/stripe-subscription.service.ts`, line 88) is called — including calls in test/spec files. Other methods in the codebase share the name `updateSubscription`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/billing/services/billing-subscription.service.ts",
+          "line": 207
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/billing/services/billing-subscription.service.ts",
+          "line": 314
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/billing/services/billing-subscription-update.service.ts",
+          "line": 494
+        }
+      ]
+    },
+    "meta": {
+      "target": "StripeSubscriptionService.updateSubscription",
+      "path": "packages/twenty-server/src/engine/core-modules/billing/stripe/services/stripe-subscription.service.ts",
+      "line": 88,
+      "grepCallLines": 10,
+      "sameNameNoise": 7,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-twenty-calls-04",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `PageLayoutWidgetService.create` (declared in `packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts`, line 218) is called — including calls in test/spec files. Other methods in the codebase share the name `create`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/add-dashboard-widget.tool.ts",
+          "line": 79
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/create-complete-dashboard.tool.ts",
+          "line": 159
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/controllers/page-layout-widget.controller.ts",
+          "line": 129
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/resolvers/page-layout-widget.resolver.ts",
+          "line": 104
+        }
+      ]
+    },
+    "meta": {
+      "target": "PageLayoutWidgetService.create",
+      "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+      "line": 218,
+      "grepCallLines": 117,
+      "sameNameNoise": 113,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-twenty-calls-05",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `PageLayoutWidgetService.findByIdOrThrow` (declared in `packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts`, line 190) is called — including calls in test/spec files. Other methods in the codebase share the name `findByIdOrThrow`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/delete-dashboard-widget.tool.ts",
+          "line": 21
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/update-dashboard-widget.tool.ts",
+          "line": 98
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/controllers/page-layout-widget.controller.ts",
+          "line": 103
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/resolvers/page-layout-widget.resolver.ts",
+          "line": 92
+        }
+      ]
+    },
+    "meta": {
+      "target": "PageLayoutWidgetService.findByIdOrThrow",
+      "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+      "line": 190,
+      "grepCallLines": 15,
+      "sameNameNoise": 11,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-twenty-calls-06",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Find every place under `packages/twenty-server/src/` where the method `configTransformers.string` (declared in `packages/twenty-server/src/engine/core-modules/twenty-config/utils/config-transformers.util.ts`, line 56) is called — including calls in test/spec files. Other methods in the codebase share the name `string`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/type-transformers.registry.ts",
+          "line": 117
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 67
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 68
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 72
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 73
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 74
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 78
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 79
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 83
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 84
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 88
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 89
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/__tests__/config-transformers.util.spec.ts",
+          "line": 97
+        }
+      ]
+    },
+    "meta": {
+      "target": "configTransformers.string",
+      "path": "packages/twenty-server/src/engine/core-modules/twenty-config/utils/config-transformers.util.ts",
+      "line": 56,
+      "grepCallLines": 481,
+      "sameNameNoise": 468,
+      "testCalls": 12
+    }
+  },
+  {
+    "id": "qa-twenty-callers-01",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "I plan to change the behaviour of the method `UserSessionCookieService.attachSessionTokenToResponse` (declared in `packages/twenty-server/src/engine/core-modules/user-session/services/user-session-cookie.service.ts`, line 77). List every function or method under `packages/twenty-server/src/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/user-session/services/user-session.service.ts",
+          "start": 69,
+          "end": 184,
+          "name": "UserSessionService.issueSessionForTokenPair",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/impersonation/services/impersonation.service.ts",
+          "start": 170,
+          "end": 213,
+          "name": "ImpersonationService.restoreImpersonatorSession",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 256,
+          "end": 302,
+          "name": "AuthResolver.signIn",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 349,
+          "end": 411,
+          "name": "AuthResolver.verifyEmailAndGetWorkspaceAgnosticToken",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 413,
+          "end": 454,
+          "name": "AuthResolver.getAuthTokensFromOTP",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 456,
+          "end": 518,
+          "name": "AuthResolver.signUp",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 758,
+          "end": 820,
+          "name": "AuthResolver.getAuthTokensFromLoginToken",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 822,
+          "end": 859,
+          "name": "AuthResolver.getAuthTokensFromSSOExchangeToken",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/auth/auth.resolver.ts",
+          "start": 1034,
+          "end": 1052,
+          "name": "AuthResolver.renewToken",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/impersonation/services/impersonation.service.ts",
+          "start": 100,
+          "end": 168,
+          "name": "ImpersonationService.stopImpersonation",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "UserSessionCookieService.attachSessionTokenToResponse",
+      "path": "packages/twenty-server/src/engine/core-modules/user-session/services/user-session-cookie.service.ts",
+      "line": 77,
+      "level1": 2,
+      "total": 10
+    }
+  },
+  {
+    "id": "qa-twenty-callers-02",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "I plan to change the behaviour of the method `LogicFunctionPrebuiltWarmUpService.ensurePrebuiltBundleInstalled` (declared in `packages/twenty-server/src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/logic-function-prebuilt-warm-up.service.ts`, line 29). List every function or method under `packages/twenty-server/src/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/logic-function-prebuilt-warm-up.service.ts",
+          "start": 69,
+          "end": 137,
+          "name": "LogicFunctionPrebuiltWarmUpService.warmUpApplicationLogicFunctions",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-executor/logic-function-executor.service.ts",
+          "start": 129,
+          "end": 237,
+          "name": "LogicFunctionExecutorService.execute",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/jobs/warm-up-application-logic-functions.job.ts",
+          "start": 16,
+          "end": 21,
+          "name": "WarmUpApplicationLogicFunctionsJob.handle",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-trigger/logic-function-job-runner.service.ts",
+          "start": 31,
+          "end": 102,
+          "name": "LogicFunctionJobRunnerService.run",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/connection-provider/connection-provider-lifecycle-hook.service.ts",
+          "start": 89,
+          "end": 131,
+          "name": "ConnectionProviderLifecycleHookService.runOnDisconnect",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-manifest/services/application-uninstall.service.ts",
+          "start": 189,
+          "end": 225,
+          "name": "ApplicationUninstallService.runUninstallHook",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-install/application-install.service.ts",
+          "start": 475,
+          "end": 560,
+          "name": "ApplicationInstallService.runPreInstallHook",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-install/application-install.service.ts",
+          "start": 599,
+          "end": 691,
+          "name": "ApplicationInstallService.runPostInstallHook",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/logic-function/services/logic-function-from-source.service.ts",
+          "start": 347,
+          "end": 394,
+          "name": "LogicFunctionFromSourceService.executeOneFromSource",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/application/application-health/application-health-check.service.ts",
+          "start": 52,
+          "end": 96,
+          "name": "ApplicationHealthCheckService.executeHealthCheck",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/tool-provider/services/tool-executor.service.ts",
+          "start": 340,
+          "end": 366,
+          "name": "ToolExecutorService.dispatchLogicFunction",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/modules/workflow/workflow-executor/workflow-actions/code/code.workflow-action.ts",
+          "start": 33,
+          "end": 80,
+          "name": "CodeWorkflowAction.execute",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/modules/workflow/workflow-executor/workflow-actions/logic-function/logic-function.workflow-action.ts",
+          "start": 30,
+          "end": 97,
+          "name": "LogicFunctionWorkflowAction.execute",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-trigger/logic-function-trigger.service.ts",
+          "start": 24,
+          "end": 69,
+          "name": "LogicFunctionTriggerService.run",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/server-route-trigger/server-route-trigger.service.ts",
+          "start": 281,
+          "end": 317,
+          "name": "ServerRouteTriggerService.runFunction",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "LogicFunctionPrebuiltWarmUpService.ensurePrebuiltBundleInstalled",
+      "path": "packages/twenty-server/src/engine/core-modules/logic-function/logic-function-prebuilt-warm-up/logic-function-prebuilt-warm-up.service.ts",
+      "line": 29,
+      "level1": 2,
+      "total": 15
+    }
+  },
+  {
+    "id": "qa-twenty-callers-03",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "I plan to change the behaviour of the method `PageLayoutWidgetService.validateAndRunWidgetMigration` (declared in `packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts`, line 66). List every function or method under `packages/twenty-server/src/` that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude test/spec files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+          "start": 218,
+          "end": 308,
+          "name": "PageLayoutWidgetService.create",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+          "start": 310,
+          "end": 446,
+          "name": "PageLayoutWidgetService.update",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+          "start": 470,
+          "end": 504,
+          "name": "PageLayoutWidgetService.destroy",
+          "level": 1
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/add-dashboard-widget.tool.ts",
+          "start": 41,
+          "end": 106,
+          "name": "createAddDashboardWidgetTool",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/create-complete-dashboard.tool.ts",
+          "start": 57,
+          "end": 231,
+          "name": "createCreateCompleteDashboardTool",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/controllers/page-layout-widget.controller.ts",
+          "start": 123,
+          "end": 133,
+          "name": "PageLayoutWidgetController.create",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/resolvers/page-layout-widget.resolver.ts",
+          "start": 98,
+          "end": 108,
+          "name": "PageLayoutWidgetResolver.createPageLayoutWidget",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/update-dashboard-widget.tool.ts",
+          "start": 46,
+          "end": 154,
+          "name": "createUpdateDashboardWidgetTool",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/controllers/page-layout-widget.controller.ts",
+          "start": 135,
+          "end": 147,
+          "name": "PageLayoutWidgetController.update",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/resolvers/page-layout-widget.resolver.ts",
+          "start": 110,
+          "end": 122,
+          "name": "PageLayoutWidgetResolver.updatePageLayoutWidget",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/modules/dashboard/tools/delete-dashboard-widget.tool.ts",
+          "start": 12,
+          "end": 47,
+          "name": "createDeleteDashboardWidgetTool",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/controllers/page-layout-widget.controller.ts",
+          "start": 149,
+          "end": 159,
+          "name": "PageLayoutWidgetController.destroy",
+          "level": 2
+        },
+        {
+          "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/resolvers/page-layout-widget.resolver.ts",
+          "start": 124,
+          "end": 134,
+          "name": "PageLayoutWidgetResolver.destroyPageLayoutWidget",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "PageLayoutWidgetService.validateAndRunWidgetMigration",
+      "path": "packages/twenty-server/src/engine/metadata-modules/page-layout-widget/services/page-layout-widget.service.ts",
+      "line": 66,
+      "level1": 3,
+      "total": 13
+    }
+  },
+  {
+    "id": "qa-twenty-impls-01",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "List every class under `packages/twenty-server/src/` (excluding test/spec files) that implements the interface `EmailDriverInterface` declared in `packages/twenty-server/src/engine/core-modules/email/drivers/interfaces/email-driver.interface.ts`, line 3 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/email/drivers/logger.driver.ts",
+          "start": 7,
+          "end": 20,
+          "name": "LoggerDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/email/drivers/smtp.driver.ts",
+          "start": 13,
+          "end": 34,
+          "name": "SmtpDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/email/email-sender.service.ts",
+          "start": 9,
+          "end": 18,
+          "name": "EmailSenderService"
+        }
+      ]
+    },
+    "meta": {
+      "target": "EmailDriverInterface",
+      "path": "packages/twenty-server/src/engine/core-modules/email/drivers/interfaces/email-driver.interface.ts",
+      "line": 3,
+      "total": 3
+    }
+  },
+  {
+    "id": "qa-twenty-impls-02",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "List every class under `packages/twenty-server/src/` (excluding test/spec files) that implements the interface `CodeInterpreterDriver` declared in `packages/twenty-server/src/engine/core-modules/code-interpreter/drivers/interfaces/code-interpreter-driver.interface.ts`, line 33 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/code-interpreter/drivers/disabled.driver.ts",
+          "start": 9,
+          "end": 20,
+          "name": "DisabledDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/code-interpreter/drivers/e2b.driver.ts",
+          "start": 54,
+          "end": 211,
+          "name": "E2BDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/code-interpreter/drivers/local.driver.ts",
+          "start": 91,
+          "end": 560,
+          "name": "LocalDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/code-interpreter/code-interpreter.service.ts",
+          "start": 16,
+          "end": 105,
+          "name": "CodeInterpreterService"
+        }
+      ]
+    },
+    "meta": {
+      "target": "CodeInterpreterDriver",
+      "path": "packages/twenty-server/src/engine/core-modules/code-interpreter/drivers/interfaces/code-interpreter-driver.interface.ts",
+      "line": 33,
+      "total": 4
+    }
+  },
+  {
+    "id": "qa-twenty-impls-03",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "List every class under `packages/twenty-server/src/` (excluding test/spec files) that implements the interface `EmailingDomainDriverInterface` declared in `packages/twenty-server/src/engine/core-modules/emailing-domain/drivers/interfaces/emailing-domain-driver.interface.ts`, line 18 — directly or by extending a class that implements it.",
+    "answerFormat": "One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/emailing-domain/drivers/aws-ses/services/aws-ses-driver.service.ts",
+          "start": 44,
+          "end": 431,
+          "name": "AwsSesDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/emailing-domain/drivers/log/services/log-emailing-domain-driver.service.ts",
+          "start": 30,
+          "end": 238,
+          "name": "LogEmailingDomainDriver"
+        },
+        {
+          "path": "packages/twenty-server/src/engine/core-modules/emailing-domain/drivers/resend/services/resend-driver.service.ts",
+          "start": 33,
+          "end": 307,
+          "name": "ResendDriver"
+        }
+      ]
+    },
+    "meta": {
+      "target": "EmailingDomainDriverInterface",
+      "path": "packages/twenty-server/src/engine/core-modules/emailing-domain/drivers/interfaces/emailing-domain-driver.interface.ts",
+      "line": 18,
+      "total": 3
+    }
+  }
+]

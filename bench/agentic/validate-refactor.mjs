@@ -15,6 +15,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { argv, git, tryGit, sh, readJson, writeJson, HERE, WORK, GI_ROOT } from './lib.mjs';
 import { createTsOracle } from './oracle-ts.mjs';
+import { tsSetup } from './tsconfig.mjs';
+import { createRequire } from 'node:module';
 import { REPOS } from './repos.mjs';
 
 const { opt, list } = argv();
@@ -23,6 +25,8 @@ const only = new Set(list('--only'));
 const tasks = readJson(tasksFile, []);
 
 function tsFilesOf(root) {
+    const scoped = process.env.GI_TSCONFIG && tsSetup(createRequire(import.meta.url)(process.env.TYPESCRIPT_PATH ?? '/opt/node22/lib/node_modules/typescript'), root).files;
+    if (scoped) return scoped.map(f => path.relative(root, f).split(path.sep).join('/'));
     return sh('git ls-files -co --exclude-standard -- "*.ts" "*.tsx"', { cwd: root }).stdout.split('\n').filter(f => f && !f.includes('node_modules'));
 }
 

@@ -1,0 +1,480 @@
+[
+  {
+    "id": "refactor-twenty-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ApplicationFileUploadService.createApplicationFileUploads` (declared in `packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `createApplicationFileUploads` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts:130",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:99",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:128",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:154",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:180",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:209",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:230",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:256",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:379",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:393",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:404"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts"
+      ]
+    },
+    "meta": {
+      "target": "ApplicationFileUploadService.createApplicationFileUploads",
+      "path": "packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts",
+      "line": 44,
+      "callSites": 11,
+      "files": 2,
+      "decoys": [
+        "ApplicationDevelopmentResolver.createApplicationFileUploads (packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": false,
+      "referenceEdits": 12,
+      "naiveCallEdits": 11,
+      "naiveFailure": []
+    }
+  },
+  {
+    "id": "refactor-twenty-02-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Rename the method `ObjectMetadataService.deleteOneObject` (declared in `packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.service.ts`) to `deleteOneObjectChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `deleteOneObject` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-02-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/controllers/object-metadata.controller.ts:221",
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.resolver.ts:375",
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/tools/object-metadata-tools.factory.ts:333",
+        "packages/twenty-server/src/database/commands/upgrade-version-command/2-7/2-7-workspace-command-1798000030000-drop-favorite-objects.command.ts:95"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/controllers/object-metadata.controller.ts",
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.resolver.ts",
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/tools/object-metadata-tools.factory.ts",
+        "packages/twenty-server/src/database/commands/upgrade-version-command/2-7/2-7-workspace-command-1798000030000-drop-favorite-objects.command.ts",
+        "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.service.ts"
+      ]
+    },
+    "meta": {
+      "target": "ObjectMetadataService.deleteOneObject",
+      "path": "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.service.ts",
+      "line": 296,
+      "callSites": 4,
+      "files": 4,
+      "decoys": [
+        "ObjectMetadataResolver.deleteOneObject (packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.resolver.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": false,
+      "referenceEdits": 5,
+      "naiveCallEdits": 4,
+      "naiveFailure": []
+    }
+  },
+  {
+    "id": "refactor-twenty-03-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `WorkspaceSelectQueryBuilder.softDelete` (declared in `packages/twenty-server/src/engine/twenty-orm/query-builder/workspace-select-query-builder.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `softDelete` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-03-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts:1747",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts:103",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts:122",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts:207",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts:253",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts:322"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/__tests__/workspace-mutation-query-builder.spec.ts",
+        "packages/twenty-server/src/engine/twenty-orm/query-builder/workspace-select-query-builder.ts"
+      ]
+    },
+    "meta": {
+      "target": "WorkspaceSelectQueryBuilder.softDelete",
+      "path": "packages/twenty-server/src/engine/twenty-orm/query-builder/workspace-select-query-builder.ts",
+      "line": 755,
+      "callSites": 6,
+      "files": 2,
+      "decoys": [
+        "WorkspaceRepository.softDelete (packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts)",
+        "WorkspaceScopedRepository.softDelete (packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 7,
+      "naiveCallEdits": 29,
+      "naiveFailure": [
+        "no new type errors: 68091 diagnostics, 9 new (16821 ms) |   packages/twenty-server/src/engine/core-modules/workflow/services/core-workflow-mutation.workspace-service.ts:597 TS2554 Expected 1 arguments, but got 2. |   packages/twenty-server/src/engine/core-modules/workflow/services/core-workflow-mutation.workspace-service.ts:739 TS2554 Expected 1 arguments, but got 2. |   packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/__tests__/workspace-scoped-repository.spec.ts:64 TS2554 Expected 2 arguments, but got 3."
+      ]
+    }
+  },
+  {
+    "id": "refactor-twenty-04-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Rename the method `MessagingWebhookSubscriptionService.createSubscription` (declared in `packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts`) to `createSubscriptionChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `createSubscription` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-04-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts:189",
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts:219",
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts:275",
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/jobs/create-webhook-subscription.job.ts:28"
+      ],
+      "files": [
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts",
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/jobs/create-webhook-subscription.job.ts",
+        "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts"
+      ]
+    },
+    "meta": {
+      "target": "MessagingWebhookSubscriptionService.createSubscription",
+      "path": "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts",
+      "line": 42,
+      "callSites": 4,
+      "files": 2,
+      "decoys": [
+        "GoogleWebhookSubscriptionDriver.createSubscription (packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/google/google-webhook-subscription.driver.ts)",
+        "MicrosoftWebhookSubscriptionDriver.createSubscription (packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/microsoft/microsoft-webhook-subscription.driver.ts)",
+        "CalendarWebhookSubscriptionService.createSubscription (packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/calendar-webhook-subscription.service.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 5,
+      "naiveCallEdits": 16,
+      "naiveFailure": [
+        "no new type errors: 68094 diagnostics, 12 new (16618 ms) |   packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/google/google-webhook-subscription.driver.dev.spec.ts:75 TS2551 Property 'createSubscriptionChecked' does not exist on type 'GoogleWebhookSubscriptionDriver'. Did you mean 'createSubscription'? |   packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/google/google-webhook-subscription.driver.dev.spec.ts:88 TS2551 Property 'createSubscriptionChecked' does not exist on type 'GoogleWebhookSubscriptionDriver'. Did you mean 'createSubscription'? |   packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/google/google-webhook-subscription.driver.dev.spec.ts:99 TS2551 Property 'createSubscriptionChecked' does not exist on type 'GoogleWebhookSubscriptionDriver'. Did you mean 'createSubscription'?"
+      ]
+    }
+  },
+  {
+    "id": "refactor-twenty-05-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `AgentHistoryRepository.insertAndReturnOne` (declared in `packages/twenty-server/src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `insertAndReturnOne` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-05-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-agent-monitor/services/agent-turn-grader.service.ts:47",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-agent-monitor/resolvers/agent-turn.resolver.ts:82",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-agent-monitor/resolvers/agent-turn.resolver.ts:90",
+        "packages/twenty-server/src/database/commands/agent-history/__tests__/agent-history-migration.postgres.spec.ts:648",
+        "packages/twenty-server/src/database/commands/agent-history/__tests__/agent-history-migration.postgres.spec.ts:681",
+        "packages/twenty-server/src/database/commands/agent-history/__tests__/agent-history-migration.postgres.spec.ts:760",
+        "packages/twenty-server/src/database/commands/agent-history/__tests__/agent-history-migration.postgres.spec.ts:770"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-agent-monitor/services/agent-turn-grader.service.ts",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-agent-monitor/resolvers/agent-turn.resolver.ts",
+        "packages/twenty-server/src/database/commands/agent-history/__tests__/agent-history-migration.postgres.spec.ts",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository.ts"
+      ]
+    },
+    "meta": {
+      "target": "AgentHistoryRepository.insertAndReturnOne",
+      "path": "packages/twenty-server/src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository.ts",
+      "line": 222,
+      "callSites": 7,
+      "files": 3,
+      "decoys": [
+        "WorkspaceScopedRepository.insertAndReturnOne (packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 8,
+      "naiveCallEdits": 16,
+      "naiveFailure": [
+        "no new type errors: 68091 diagnostics, 9 new (16717 ms) |   packages/twenty-server/src/engine/core-modules/api-key/services/api-key.service.ts:40 TS2554 Expected 2 arguments, but got 3. |   packages/twenty-server/src/engine/core-modules/approved-access-domain/services/approved-access-domain.service.ts:273 TS2554 Expected 2 arguments, but got 3. |   packages/twenty-server/src/engine/core-modules/emailing-domain/services/emailing-domain.service.ts:95 TS2554 Expected 2 arguments, but got 3."
+      ]
+    }
+  },
+  {
+    "id": "refactor-twenty-06-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Rename the method `WorkspaceRepository.exists` (declared in `packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts`) to `existsChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `exists` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-06-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts:398",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository.ts:192",
+        "packages/twenty-server/src/modules/emailing/services/message-campaign-recovery.service.ts:90",
+        "packages/twenty-server/src/modules/workflow/common/workspace-services/workflow-version-query-validation.workspace-service.ts:60",
+        "packages/twenty-server/src/modules/workflow/common/workspace-services/workflow-version-query-validation.workspace-service.ts:141",
+        "packages/twenty-server/src/modules/workflow/workflow-runner/workflow-run-queue/cron/jobs/workflow-clean-workflow-runs.cron.job.ts:147"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts",
+        "packages/twenty-server/src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository.ts",
+        "packages/twenty-server/src/modules/emailing/services/message-campaign-recovery.service.ts",
+        "packages/twenty-server/src/modules/workflow/common/workspace-services/workflow-version-query-validation.workspace-service.ts",
+        "packages/twenty-server/src/modules/workflow/workflow-runner/workflow-run-queue/cron/jobs/workflow-clean-workflow-runs.cron.job.ts",
+        "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts"
+      ]
+    },
+    "meta": {
+      "target": "WorkspaceRepository.exists",
+      "path": "packages/twenty-server/src/engine/twenty-orm/repository/workspace-repository.ts",
+      "line": 383,
+      "callSites": 6,
+      "files": 5,
+      "decoys": [
+        "WorkspaceScopedRepository.exists (packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 7,
+      "naiveCallEdits": 20,
+      "naiveFailure": [
+        "no new type errors: 68086 diagnostics, 4 new (16762 ms) |   packages/twenty-server/src/engine/core-modules/workflow/services/core-workflow-mutation.workspace-service.ts:888 TS2339 Property 'existsChecked' does not exist on type 'WorkspaceScopedRepository<WorkflowEntity>'. |   packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/__tests__/workspace-scoped-repository.spec.ts:58 TS2339 Property 'existsChecked' does not exist on type 'WorkspaceScopedRepository<FakeEntity>'. |   packages/twenty-server/src/engine/twenty-orm/workspace-scoped-repository/__tests__/workspace-scoped-repository.spec.ts:225 TS2339 Property 'existsChecked' does not exist on type 'WorkspaceScopedRepository<FakeEntity>'."
+      ]
+    }
+  },
+  {
+    "id": "refactor-twenty-07-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Add a required parameter `strict: boolean` as the last parameter of the method `ApplicationFileUploadService.completeApplicationFileUploads` (declared in `packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts`), and update every place in the repository that calls it (including tests) to pass `false` for it. The method's behaviour does not need to change. Methods of other classes that happen to be called `completeApplicationFileUploads` must not be modified.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-07-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts:146",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:293",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:321",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:339",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts:415"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/__tests__/application-file-upload.service.spec.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts"
+      ]
+    },
+    "meta": {
+      "target": "ApplicationFileUploadService.completeApplicationFileUploads",
+      "path": "packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts",
+      "line": 116,
+      "callSites": 5,
+      "files": 2,
+      "decoys": [
+        "ApplicationDevelopmentResolver.completeApplicationFileUploads (packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": false,
+      "referenceEdits": 6,
+      "naiveCallEdits": 5,
+      "naiveFailure": []
+    }
+  },
+  {
+    "id": "refactor-twenty-08-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "twenty",
+    "base": "4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+    "statement": "Rename the method `ApplicationRegistrationService.findOneById` (declared in `packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts`) to `findOneByIdChecked`, and update every place in the repository that uses it (including tests). Methods of other classes that are also called `findOneById` must keep their name.",
+    "testHint": "The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.",
+    "grade": {
+      "checks": [
+        {
+          "name": "no new type errors",
+          "cmd": "GI_TSCONFIG={GI}/bench/agentic/tsconfig/twenty.json node {GI}/bench/agentic/tsdiag.mjs --baseline-rev 4c28e34f094ea3d0435681ca4895e8a4aff377b2",
+          "timeoutSec": 900
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/refactor-twenty-08-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:576",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:585",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:773",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:805",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:1067",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts:1288",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.resolver.ts:124",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.resolver.ts:327"
+      ],
+      "files": [
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.resolver.ts",
+        "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts"
+      ]
+    },
+    "meta": {
+      "target": "ApplicationRegistrationService.findOneById",
+      "path": "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts",
+      "line": 398,
+      "callSites": 8,
+      "files": 2,
+      "decoys": [
+        "CoreWorkflowListService.findOneById (packages/twenty-server/src/engine/core-modules/workflow/services/core-workflow-list.service.ts)"
+      ]
+    },
+    "validation": {
+      "ok": true,
+      "unmodifiedFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceEdits": 9,
+      "naiveCallEdits": 15,
+      "naiveFailure": [
+        "no new type errors: 68089 diagnostics, 7 new (17165 ms) |   packages/twenty-server/src/engine/core-modules/workflow/resolvers/core-workflow.resolver.ts:106 TS2339 Property 'findOneByIdChecked' does not exist on type 'CoreWorkflowListService'. |   packages/twenty-server/src/engine/core-modules/workflow/resolvers/core-workflow.resolver.ts:203 TS2339 Property 'findOneByIdChecked' does not exist on type 'CoreWorkflowListService'. |   packages/twenty-server/src/engine/core-modules/workflow/resolvers/core-workflow.resolver.ts:231 TS2339 Property 'findOneByIdChecked' does not exist on type 'CoreWorkflowListService'."
+      ]
+    }
+  }
+]

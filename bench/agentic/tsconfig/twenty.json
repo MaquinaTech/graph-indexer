@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "src/*": ["packages/twenty-server/src/*"],
+      "test/*": ["packages/twenty-server/test/*"],
+      "twenty-shared": ["packages/twenty-shared/src/index.ts"],
+      "twenty-shared/*": ["packages/twenty-shared/src/*"],
+      "@/*": ["packages/twenty-shared/src/*"]
+    },
+    "target": "es2018",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["es2022", "dom"],
+    "jsx": "react-jsx",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "alwaysStrict": true
+  },
+  "include": ["packages/twenty-server/src/**/*.ts", "packages/twenty-server/test/**/*.ts", "packages/twenty-shared/src/**/*.ts"]
+}

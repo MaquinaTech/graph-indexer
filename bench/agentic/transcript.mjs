@@ -82,6 +82,7 @@ export const POLICIES = {
     cc: { forbidTools: [], forbidBash: [GI_CMD], label: 'a Claude Code session with the tools it ships with, sub-agents included' },
     'cc+gi': { forbidTools: [], forbidBash: [], label: 'the same with graph-indexer as init installs it, without the helper' },
     'cc+gi+helper': { forbidTools: [], forbidBash: [], label: 'the same with graph-indexer as init installs it, the structural helper included' },
+    'cc+v2': { forbidTools: [], forbidBash: [GI_CMD], label: 'the same with graph-indexer 2.x as its init installed it' },
 };
 
 export function parseTranscript(file, { arm = null, repo = null, own = [], work = null } = {}) {

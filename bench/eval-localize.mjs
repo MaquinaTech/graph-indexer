@@ -12,6 +12,9 @@
  *   bm25           the same FTS5 index ranked by BM25F alone (no name channel, priors or graph)
  *   grep           what an agent gets from grepping the query words: files ranked by summed
  *                  idf-weighted term hits, functions by the best-matching line inside them
+ *   v2             (--v2 <dir>) graph-indexer 2.x's search_code through its own MCP server, over its
+ *                  own index of the same snapshot (top 20, no score floor); a chunk it returns counts
+ *                  as the functions it spans, in order (a whole class spans its methods)
  * Metrics: file Acc@1/@5 (a changed file among the first k distinct files), function Acc@5/@10
  * and MRR@10 over changed functions/methods.
  *
@@ -29,6 +32,7 @@ import { SearchEngine, DEFAULT_WEIGHTS } from '../src/search/search.mjs';
 import { computeCentrality } from '../src/index/graph.mjs';
 import { specForPath } from '../src/parse/languages.mjs';
 import { FIXTURES } from './fixtures.mjs';
+import { startV2, buildIndexV2 } from './v2-client.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -38,6 +42,7 @@ const N = Number(opt('--n', 40));
 const FIXDIR = path.resolve(opt('--fixture-dir', path.join(here, '../test/fixtures')));
 const WORK = path.resolve(opt('--work-dir', path.join(os.tmpdir(), 'gi-localize')));
 const verbose = args.includes('--verbose');
+const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.homedir()));
 const WEIGHTS = opt('--weights', null) ? { ...DEFAULT_WEIGHTS, ...JSON.parse(opt('--weights')) } : DEFAULT_WEIGHTS;
 
 const NOISE_SUBJECT = /^(merge|revert|release|bump|chore|docs?|test|tests|ci|build|style|lint|format|typo|deps|prepare|version|v?\d+\.\d+)\b/i;
@@ -205,6 +210,18 @@ async function runFixture(fx) {
             const ids = fn(c.query);
             row[name] = score(filesOf(store, ids), ids, c, goldSyms);
         }
+        if (v2Root) {
+            buildIndexV2(v2Root, wt);
+            const v2 = await startV2(v2Root, wt);
+            let res;
+            try { res = JSON.parse(await v2.call('search_code', { query: c.query, top_k: 20, min_score: 0, include_topology: false, detail: 'signatures', response_format: 'json' })).results ?? []; }
+            finally { v2.stop(); }
+            const files = [...new Set(res.map(r => r.file_path))];
+            const ids = [];
+            for (const r of res) for (const x of store.all(`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? AND s.start_line >= ? AND s.end_line <= ?
+                AND s.kind IN ('function','method','constructor') ORDER BY s.start_line`, r.file_path, r.start_line, r.end_line)) if (!ids.includes(x.id)) ids.push(x.id);
+            row.v2 = score(files, ids, c, goldSyms);
+        }
         const g = grepRank(store, wt, c.query);
         row.grep = score(g.files, g.syms, c, goldSyms);
         rows.push(row);
@@ -215,7 +232,7 @@ async function runFixture(fx) {
     return { fx, rows, ms: Date.now() - t0 };
 }
 
-const SYSTEMS = ['graph-indexer', 'bm25', 'grep'];
+const SYSTEMS = ['graph-indexer', 'bm25', 'grep', ...(v2Root ? ['v2'] : [])];
 function aggregate(rows) {
     const out = {};
     for (const s of SYSTEMS) {

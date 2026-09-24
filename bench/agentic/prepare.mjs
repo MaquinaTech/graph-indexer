@@ -31,6 +31,7 @@ import { argv, git, sh, readJson, writeJson, loadTasks, runId, WORK, GI_ROOT, HE
 import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS, ASK_ARMS, SESSION_ARMS, askMessage } from './arms.mjs';
 import { managedBlock } from '../../src/cli/init.mjs';
 import { HELPER_NAME, claudeAgentFile } from '../../src/cli/helper.mjs';
+import { buildIndexV2, projectFilesV2 } from './v2.mjs';
 import { REPOS } from './repos.mjs';
 
 const { opt, list, args } = argv();
@@ -99,7 +100,7 @@ function checkoutFor(task, arm, id, label) {
     const indexed = usesIndex(arm);
     let dir;
     if (task.family === 'qa') {
-        dir = path.join(WORK, 'checkouts', `${task.repo}@${task.base.slice(0, 10)}`, indexed ? `indexed-${label}` : 'plain');
+        dir = path.join(WORK, 'checkouts', `${task.repo}@${task.base.slice(0, 10)}`, SESSION_ARMS[arm]?.v2 ? 'indexed-v2' : indexed ? `indexed-${label}` : 'plain');
         addWorktree(src, dir, task.base);
     } else {
         dir = path.join(WORK, 'wt', id);
@@ -110,7 +111,7 @@ function checkoutFor(task, arm, id, label) {
         const setup = REPOS[task.repo].setupWorktree;
         if (setup) { const r = sh(setup, { cwd: dir, timeout: 1_800_000 }); if (r.code !== 0) throw new Error(`setup of ${dir} failed: ${r.stderr.slice(-400)}`); }
     }
-    const indexMs = indexed ? buildIndex(label, dir) : null;
+    const indexMs = !indexed ? null : SESSION_ARMS[arm]?.v2 ? buildIndexV2(dir) : buildIndex(label, dir);
     return { dir, indexMs };
 }
 
@@ -187,7 +188,8 @@ export function prepareRun(task, arm, rep, label) {
     fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), message ?? instructions(task, arm, runDir, checkout, gi, caps, view));
     // a real session in the run directory finds what `init` writes into a repository for Claude Code
     const session = SESSION_ARMS[arm];
-    if (session?.index) fs.writeFileSync(path.join(runDir, 'CLAUDE.md'), managedBlock() + '\n');
+    if (session?.v2) for (const [name, text] of Object.entries(projectFilesV2(task.repo))) fs.writeFileSync(path.join(runDir, name), text);
+    else if (session?.index) fs.writeFileSync(path.join(runDir, 'CLAUDE.md'), managedBlock() + '\n');
     if (session?.helper) {
         fs.mkdirSync(path.join(runDir, '.claude', 'agents'), { recursive: true });
         fs.writeFileSync(path.join(runDir, '.claude', 'agents', `${HELPER_NAME}.md`), claudeAgentFile());

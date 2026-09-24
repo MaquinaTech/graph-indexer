@@ -5,13 +5,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { tsSetup } from './tsconfig.mjs';
 
 export function createTsOracle(root, relFiles, tsPath = process.env.TYPESCRIPT_PATH ?? '/opt/node22/lib/node_modules/typescript') {
     const ts = createRequire(import.meta.url)(tsPath);
-    const cfgFile = ts.findConfigFile(root, ts.sys.fileExists, 'tsconfig.json');
-    const cfg = cfgFile ? ts.parseJsonConfigFileContent(ts.readConfigFile(cfgFile, ts.sys.readFile).config, ts.sys, root) : { options: {} };
+    const cfg = tsSetup(ts, root);
     const options = { ...cfg.options, noEmit: true, skipLibCheck: true, types: [] };
-    const files = relFiles.map(f => path.join(root, f));
+    // a GI_TSCONFIG program names its own files (its `include`)
+    const files = cfg.files ?? relFiles.map(f => path.join(root, f));
     const host = {
         getScriptFileNames: () => files,
         getScriptVersion: () => '0',

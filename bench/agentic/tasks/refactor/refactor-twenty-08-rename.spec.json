@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/engine/core-modules/application/application-registration/application-registration.service.ts",
+    "cls": "ApplicationRegistrationService",
+    "name": "findOneById",
+    "newName": "findOneByIdChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/engine/core-modules/workflow/services/core-workflow-list.service.ts",
+      "cls": "CoreWorkflowListService",
+      "name": "findOneById",
+      "params": 1
+    }
+  ]
+}

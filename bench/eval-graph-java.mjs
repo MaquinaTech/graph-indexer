@@ -22,6 +22,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
+import { callTool } from '../src/mcp/tools.mjs';
+import { v2Comparison, answerSizes } from './v2-client.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -83,7 +85,11 @@ function grepRefs(sym) {
     return drop(out, sym);
 }
 const systems = { 'graph-indexer': oursRefs, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs };
-const ORACLES = ['dispatch', 'exact'];
+const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.homedir()));
+const v2 = v2Root ? await v2Comparison({ v2Root, root, sample, intel, fileRe: /\.java$/, linesOf, reindex: args.includes('--v2-reindex'), callTool }) : null;
+if (v2) Object.assign(systems, { v2: (s) => drop(v2.refs(s), s), 'v2 (high)': (s) => drop(v2.refs(s, { highOnly: true }), s) });
+const ORACLES = ['dispatch', 'exact', 'dispatch/files'];
+const filesOf = (set) => new Set([...set].map(x => x.slice(0, x.lastIndexOf(':'))));
 
 const newAgg = () => Object.fromEntries(Object.keys(systems).map(k => [k, { tp: 0, fp: 0, fn: 0, pSum: 0, rSum: 0, n: 0, perfect: 0 }]));
 const aggs = Object.fromEntries(ORACLES.map(o => [o, newAgg()]));
@@ -91,6 +97,7 @@ let evaluated = 0, withRefs = 0;
 queries.forEach((sym, i) => {
     if (!truth[i]) return;
     const golds = { dispatch: drop(new Set(truth[i].dispatch), sym), exact: drop(new Set(truth[i].exact), sym) };
+    golds['dispatch/files'] = filesOf(golds.dispatch);
     evaluated++;
     if (golds.dispatch.size) withRefs++;
     if (args.includes('--debug')) {
@@ -103,9 +110,10 @@ queries.forEach((sym, i) => {
         }
     }
     for (const [name, fn] of Object.entries(systems)) {
-        const got = fn(sym);
+        const lines = fn(sym);
         for (const o of ORACLES) {
             const g = golds[o];
+            const got = o.endsWith('/files') ? filesOf(lines) : lines;
             let tp = 0;
             for (const x of got) if (g.has(x)) tp++;
             const fp = got.size - tp, fnn = g.size - tp, a = aggs[o][name];
@@ -120,7 +128,7 @@ queries.forEach((sym, i) => {
 console.log(`\n${fixture}${scope.length ? ` (${scope.join(', ')})` : ''}: ${evaluated} sampled symbols (${withRefs} with ≥1 dispatch-oracle reference), oracle = javac`);
 const result = {};
 for (const o of ORACLES) {
-    console.log(`\noracle: ${o === 'dispatch' ? 'dispatch (self + overridden + overriding methods)' : 'exact (uses of the element itself)'}`);
+    console.log(`\noracle: ${o === 'dispatch' ? 'dispatch (self + overridden + overriding methods)' : o === 'exact' ? 'exact (uses of the element itself)' : 'dispatch, file level (the files holding references)'}`);
     console.log('system          micro-P  micro-R  micro-F1 | macro-P  macro-R | exact-set');
     result[o] = {};
     for (const [name, a] of Object.entries(aggs[o])) {
@@ -129,5 +137,6 @@ for (const o of ORACLES) {
         console.log(`${name.padEnd(15)} ${P.toFixed(3).padStart(7)}  ${R.toFixed(3).padStart(7)}  ${F.toFixed(3).padStart(8)} | ${(a.pSum / a.n).toFixed(3).padStart(7)}  ${(a.rSum / a.n).toFixed(3).padStart(7)} | ${(a.perfect / a.n).toFixed(3)}`);
     }
 }
-if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ fixture, scope, n: evaluated, result }, null, 2));
+const answers = v2 ? answerSizes(v2.answers) : {};
+if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ fixture, scope, n: evaluated, result, answers }, null, 2));
 intel.close();

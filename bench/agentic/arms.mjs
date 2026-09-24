@@ -38,12 +38,14 @@
  *             CLAUDE.md block
  *   cc+gi+helper  as `init` installs it: also the structural helper sub-agent, which the main agent
  *             may hand structural questions to (routing inside a session)
+ *   cc+v2     the same session with graph-indexer 2.x as its `init` installed it: its MCP server over
+ *             its own index, and CLAUDE.md importing its assembled prompt suite (bench/agentic/v2.mjs)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper', 'cc+v2'];
 
 /**
  * Arms that answer a delegated question: the sub-agent type to launch, and whether the message
@@ -67,6 +69,8 @@ export const SESSION_ARMS = {
     cc: { index: false, helper: false },
     'cc+gi': { index: true, helper: false },
     'cc+gi+helper': { index: true, helper: true },
+    // graph-indexer 2.x as its `init` installed it (MCP server, index and prompt suite), for the v2 comparison
+    'cc+v2': { index: true, helper: false, v2: true },
 };
 
 /** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */

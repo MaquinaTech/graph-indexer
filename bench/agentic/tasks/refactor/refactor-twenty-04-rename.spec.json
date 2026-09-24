@@ -1,0 +1,29 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/messaging-webhook-subscription.service.ts",
+    "cls": "MessagingWebhookSubscriptionService",
+    "name": "createSubscription",
+    "newName": "createSubscriptionChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/google/google-webhook-subscription.driver.ts",
+      "cls": "GoogleWebhookSubscriptionDriver",
+      "name": "createSubscription",
+      "params": 3
+    },
+    {
+      "file": "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/drivers/microsoft/microsoft-webhook-subscription.driver.ts",
+      "cls": "MicrosoftWebhookSubscriptionDriver",
+      "name": "createSubscription",
+      "params": 3
+    },
+    {
+      "file": "packages/twenty-server/src/modules/connected-account/webhook-subscription-manager/services/calendar-webhook-subscription.service.ts",
+      "cls": "CalendarWebhookSubscriptionService",
+      "name": "createSubscription",
+      "params": 2
+    }
+  ]
+}

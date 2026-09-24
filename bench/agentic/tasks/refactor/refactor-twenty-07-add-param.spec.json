@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/engine/core-modules/application/application-development/application-file-upload.service.ts",
+    "cls": "ApplicationFileUploadService",
+    "name": "completeApplicationFileUploads",
+    "params": 2,
+    "lastParam": "strict"
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/engine/core-modules/application/application-development/application-development.resolver.ts",
+      "cls": "ApplicationDevelopmentResolver",
+      "name": "completeApplicationFileUploads",
+      "params": 2
+    }
+  ]
+}

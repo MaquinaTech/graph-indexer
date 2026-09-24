@@ -15,14 +15,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { argv, sh, git, tryGit, WORK } from './lib.mjs';
+import { tsSetup } from './tsconfig.mjs';
 
 const tsPath = process.env.TYPESCRIPT_PATH ?? '/opt/node22/lib/node_modules/typescript';
 const ts = createRequire(import.meta.url)(tsPath);
 
 export function diagnostics(root) {
-    const files = sh('git ls-files -co --exclude-standard -- "*.ts" "*.tsx"', { cwd: root }).stdout.split('\n').filter(f => f && !f.includes('node_modules')).map(f => path.join(root, f));
-    const cfgFile = ts.findConfigFile(root, ts.sys.fileExists, 'tsconfig.json');
-    const cfg = cfgFile ? ts.parseJsonConfigFileContent(ts.readConfigFile(cfgFile, ts.sys.readFile).config, ts.sys, root) : { options: {} };
+    const cfg = tsSetup(ts, root);
+    const files = cfg.files ?? sh('git ls-files -co --exclude-standard -- "*.ts" "*.tsx"', { cwd: root }).stdout.split('\n').filter(f => f && !f.includes('node_modules')).map(f => path.join(root, f));
     const options = { ...cfg.options, noEmit: true, skipLibCheck: true, types: [], incremental: false, composite: false };
     const program = ts.createProgram(files, options);
     const out = [];
@@ -31,7 +31,9 @@ export function diagnostics(root) {
         const rel = path.relative(root, d.file.fileName).split(path.sep).join('/');
         if (rel.startsWith('..') || rel.includes('node_modules')) continue;
         const { line } = d.file.getLineAndCharacterOfPosition(d.start ?? 0);
-        out.push({ file: rel, line: line + 1, code: d.code, message: ts.flattenDiagnosticMessageText(d.messageText, ' ').slice(0, 300) });
+        // messages can name types by absolute path (import("/…/x").T): make them checkout-independent
+        const message = ts.flattenDiagnosticMessageText(d.messageText, ' ').split(root + path.sep).join('').slice(0, 300);
+        out.push({ file: rel, line: line + 1, code: d.code, message });
     }
     return out;
 }

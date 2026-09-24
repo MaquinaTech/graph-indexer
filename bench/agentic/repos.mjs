@@ -28,6 +28,13 @@ export const REPOS = {
         language: 'go',
         testHint: 'Go is installed and the modules are downloaded: `go build ./...` compiles the module, `go vet ./...` also compiles the tests, and `go test ./modules/caddyhttp/...` runs the tests of one directory tree.',
     },
+    // a product monorepo (NestJS server, React front, shared package), not a library; graded with
+    // its own TypeScript program: GI_TSCONFIG=bench/agentic/tsconfig/twenty.json
+    twenty: {
+        source: path.join(WORK, 'repos', 'twenty'),
+        fetch: `git clone --filter=blob:none https://github.com/twentyhq/twenty.git ${path.join(WORK, 'repos', 'twenty')}`,
+        language: 'typescript',
+    },
     networkx: {
         source: path.join(WORK, 'repos', 'networkx'),
         fetch: `git clone --filter=blob:none https://github.com/networkx/networkx.git ${path.join(WORK, 'repos', 'networkx')}`,

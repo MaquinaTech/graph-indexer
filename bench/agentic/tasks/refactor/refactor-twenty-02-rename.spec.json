@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.service.ts",
+    "cls": "ObjectMetadataService",
+    "name": "deleteOneObject",
+    "newName": "deleteOneObjectChecked",
+    "params": 1
+  },
+  "decoys": [
+    {
+      "file": "packages/twenty-server/src/engine/metadata-modules/object-metadata/object-metadata.resolver.ts",
+      "cls": "ObjectMetadataResolver",
+      "name": "deleteOneObject",
+      "params": 2
+    }
+  ]
+}

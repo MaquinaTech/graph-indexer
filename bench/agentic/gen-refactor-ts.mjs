@@ -42,6 +42,8 @@ const taken = new Set(fs.readdirSync(path.join(HERE, 'tasks'))
     .filter(f => f.startsWith(`refactor-${name}`) && f.endsWith('.json') && path.join(HERE, 'tasks', f) !== out)
     .flatMap(f => JSON.parse(fs.readFileSync(path.join(HERE, 'tasks', f), 'utf8')).map(t => t.meta.target.split('.').pop())));
 const specDir = path.join(HERE, 'tasks', 'refactor');
+// a monorepo graded with its own program (bench/agentic/tsconfig.mjs) passes it on to the grader
+const tsconfigEnv = process.env.GI_TSCONFIG ? `GI_TSCONFIG={GI}/${path.relative(GI_ROOT, path.resolve(process.env.GI_TSCONFIG))} ` : '';
 
 const base = git(repo, 'rev-parse', 'HEAD').trim();
 const intel = new CodeIntel({ root: repo, dbPath: path.join(os.tmpdir(), 'gi-agentic-gen', `${name}.db`) });
@@ -131,7 +133,7 @@ for (const m of cands) {
         testHint: 'The TypeScript compiler is available as `tsc` (global); third-party packages are not installed, so a full type check reports many unrelated missing-module errors.',
         grade: {
             checks: [
-                { name: 'no new type errors', cmd: `node {GI}/bench/agentic/tsdiag.mjs --baseline-rev ${base}`, timeoutSec: 600 },
+                { name: 'no new type errors', cmd: `${tsconfigEnv}node {GI}/bench/agentic/tsdiag.mjs --baseline-rev ${base}`, timeoutSec: 900 },
                 { name: 'target changed, same-name methods untouched', cmd: `node {GI}/bench/agentic/tsstruct.mjs --spec-file {GI}/bench/agentic/tasks/refactor/${id}.spec.json`, timeoutSec: 120 },
             ],
         },
