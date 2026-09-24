@@ -100,11 +100,10 @@ and real commits, and end to end with coding agents
   2025-11-25 plus the stateless 2026-07-28 revision (`server/discover`), read-only tool
   annotations, plain-text replies with token caps, and input schemas without `const` or
   `additionalProperties` (some Gemini-family hosts drop tools whose schemas use them). Server
-  instructions are short decision rules: keep reading and searching text with the agent's own
-  tools, several lookups per message; `find_references` for exact uses, `call_graph` for callers of
-  callers, `change_impact` before changing what other code relies on, `check_changes` when done,
-  and `read_code` for a definition a search did not find. `find_references`, `change_impact`,
-  `check_changes` and `read_code` are marked always-loaded for clients that defer MCP tools.
+  instructions are one paragraph: keep reading and searching text with the agent's own tools;
+  `find_references` for exact uses, `call_graph` for callers of callers, `change_impact` before
+  changing a signature, `check_changes` when done. Only `find_references` is marked
+  always-loaded for clients that defer MCP tools (see Lean tool surface).
 - **`graph-indexer init`** configures Claude Code, Cursor, VS Code, Gemini CLI, Codex, OpenCode and
   Kilo Code (`opencode.json`, or an existing `kilo.json`), Junie (`.junie/mcp/mcp.json`), Zed
   (`context_servers` in `.zed/settings.json`) and Devin (instructions and the Claude Code hooks it
