@@ -171,13 +171,16 @@ strictly at symbol level: rank-1 0.700 and MRR 0.759, against 0.552 and 0.646 fo
 **Agents.** The same model gets the same task with built-in tools only, with graph-indexer added,
 or with graph-indexer instead of grep, and an oracle it never sees grades the result: the
 TypeScript compiler for code questions and multi-site refactors, the hidden tests of the real fix
-for issues reported after the model's training cutoff. In the latest round (19 new tasks, 122
+for issues reported after the model's training cutoff. In the fourth round (19 new tasks, 122
 runs, all solved), graph-indexer as `init` installs it answered code questions at 0.44 of the
-cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's reasoning, and
-fixed real issues at 0.85 of the cost (0.76–0.96) — a gain the lookup rules it installs give on
-their own (0.86); simple one-file fixes did not cost more (0.85). Over four rounds (88 tasks, 359
-runs), every run with graph-indexer solved its task; the one failure was a run with grep alone.
-Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
+cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's reasoning. A
+smaller model, at half the price per token, answered the same questions exactly with graph-indexer
+(7 of 7, against 5 of 7 with grep alone) at 0.26 of the cost (0.18–0.50) and 0.32 of the time — a
+tenth of what the larger model spent with grep — and did multi-site refactors at 0.69
+(0.56–0.87). Fixing real issues does not get cheaper: 0.85 (0.76–0.96) in the fourth round, a gain
+the lookup rules it installs give on their own (0.86), and 1.05 (0.82–1.46) with the smaller
+model. Every run with graph-indexer solved its task; the failures were runs with grep alone or the
+rules alone. Details in [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed
 files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30 ms for search and

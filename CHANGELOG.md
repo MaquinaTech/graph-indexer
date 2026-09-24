@@ -167,6 +167,11 @@ and real commits, and end to end with coding agents
   reasoning; questions and refactors together at 0.48; real issues at 0.85 (0.76–0.96), the same
   as the lookup rules alone (0.86); one-file fixes at 0.85. On questions and refactors it cost
   0.76, 0.81 and 0.73 of grep in the first three rounds.
+- Agents with a smaller model at half the price per token (25 earlier tasks, 61 runs): code
+  questions at 0.26 of grep's cost (0.18–0.50) and 0.32 of the time, answered exactly in 7 of 7
+  against 5 of 7 with grep alone — a tenth of what the usual model spent with grep; multi-site
+  refactors at 0.69 (0.56–0.87); real issues at 1.05 (0.82–1.46), and 1.19 with the lookup rules
+  alone.
 
 ---
 

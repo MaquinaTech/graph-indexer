@@ -132,30 +132,49 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    repetition had shown where the fourth cost more (the fourth ran once), and ran on the same
    tasks: they compare arrangements on tasks that played no part in building graph-indexer, but
    they are not a second held-out test.
+5. **Resolved indirection** (snapshot `rc8`, arms `grep` and `grep+gi7`): the fourth round's B3
+   tasks again, after the facts of `src/query/facts.mjs` were built from their transcripts — a
+   development comparison, with a control run at the same time.
+6. **A smaller model** (snapshot `rc8small`, the product of `rc8` unchanged; arms `grep`,
+   `grep+gi7` and, on B3, `grep+rules`): the fourth round's B1 and B3 tasks and the B2 tasks of
+   the third and fourth rounds, run by a smaller model at half the usual model's price per token.
 
-Each round is held out for the snapshot it tests — its tasks played no part in the changes —
-and every comparison is within a round, against the `grep` arm on the same tasks.
+Each of the four rounds is held out for the snapshot it tests — its tasks played no part in the
+changes. The last two comparisons reuse earlier tasks. Every comparison is within a round, against
+the `grep` arm on the same tasks, run at the same time.
 
 ## Results
 
-Four rounds, 88 tasks, 359 graded runs. In short:
+Four rounds (88 tasks, 359 graded runs) and two later comparisons on earlier tasks (83 runs). In
+short:
 
-- **On code questions (B1), graph-indexer next to grep costs less than half of grep alone:** 0.44
-  (0.32–0.67) of grep's cost and 0.37 of its time in the fourth round, with the model writing less
-  than half the reasoning (12k output tokens per question against 30k). On B1 + B2 it was 0.76,
-  0.81 and 0.73 of grep in the first three rounds and 0.48 in the fourth.
-- **Fixing real issues (B3) costs 15% less with graph-indexer installed, and the lookup rules
-  it installs carry that gain:** 0.85 (0.76–0.96) of grep's cost with the sixth card, 0.86
-  (0.76–0.98) with the rules alone; earlier cards cost the same as grep (0.93–1.10). The agent's
-  own reasoning and the prefix it re-reads at every call are most of the cost in every arm (see
+- **On code questions (B1), graph-indexer next to grep costs less than half of grep alone, and it
+  is what makes a smaller model answer them right:** 0.44 (0.32–0.67) of grep's cost and 0.37 of
+  its time in the fourth round, with the model writing less than half the reasoning (12k output
+  tokens per question against 30k). A smaller model, at half the price per token, answered all 7
+  of that round's questions exactly with graph-indexer and 5 of 7 with grep alone, at 0.26
+  (0.18–0.50) of the cost and 0.32 of the time: a tenth of what the usual model spent with grep.
+  On B1 + B2 graph-indexer cost 0.76, 0.81 and 0.73 of grep in the first three rounds and 0.48 in
+  the fourth.
+- **Multi-site refactors (B2) cost a fifth to a third less:** 0.81 (0.73–0.89) pooled over three
+  rounds with the usual model, 0.69 (0.56–0.87) with the smaller one; every refactor passed its
+  checks in every arm.
+- **Fixing real issues (B3) costs the same with or without graph-indexer.** In the fourth round
+  graph-indexer as installed cost 0.85 (0.76–0.96) of grep and its lookup rules alone 0.86
+  (0.76–0.98), so the rules carry that gain; facts that resolve the code's indirection after each
+  read (0.95, 0.82–1.10) and a smaller model (1.05, 0.82–1.46) did not lower it. The agent's own
+  reasoning and the prefix it re-reads at every call are most of the cost in every arm (see
   [where the cost goes](#measurement-correction-and-where-the-cost-goes)).
 - **Reading through graph-indexer gives a cleaner context but not a cheaper run:** with reads by
   name, 42% of the code lines an agent reads fall in the functions its fix changes (13–16%
-  otherwise) and it makes a third of the lookups before its first edit, at the same cost.
+  otherwise) and it makes a third of the lookups before its first edit, at the same cost; with
+  facts after each read, 27–29% against 12–17%.
 - **Without grep, nothing is lost and the cost is about the same:** 0.82 (0.59–1.12) on B1 + B2
   in the third round, 1.02 over all tasks in the held-out round.
-- **Nearly every run solves its task in every arm** — all 122 in the fourth round — so the
-  benchmark mostly measures cost; the one failure in four rounds was a run of the `grep` arm.
+- **The usual model solves nearly every task in every arm** — all 122 in the fourth round — so
+  with it the benchmark mostly measures cost; its one failure in four rounds was a run of the
+  `grep` arm. The smaller model missed 2 of 7 questions and 1 of 11 issues with grep alone, one
+  issue with the rules alone, and none with graph-indexer.
 
 ### Measurement correction and where the cost goes
 
@@ -195,6 +214,70 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### A smaller model (rc8small): 25 tasks, 61 runs
+
+The usual model solves nearly every task in every arm, so the rounds below could only measure
+cost. This comparison runs the product of `rc8`, unchanged, with a smaller model at half the usual
+model's price per token, to answer two questions: do the gains on code questions and refactors
+hold on a current model, against a control run at the same time; and do exact structural answers
+let a cheaper model do what the usual one does?
+
+It uses the fourth round's 7 code questions and 11 issues, and 7 refactors (the fourth round's one
+and the third round's six). The arms are `grep` and `grep+gi7` (graph-indexer as installed, with
+the post-read hook given through `view`), one run per task and arm. On issues, a third arm,
+`grep+rules`, separates the lookup rules from the tools, as in the fourth round. The harness runs
+at most 20 sub-agents at once; the other runs started as those finished, all within about an hour.
+
+Within the smaller model, paired by task against `grep` (bootstrap 95% CI):
+
+| suite | arm | tasks | solved (`grep` / arm) | cost ratio | time ratio | calls (`grep` → arm) |
+|---|---|---|---|---|---|---|
+| B1 code questions | `grep+gi7` | 7 | 5 / 7 | **0.26** (0.18–0.50) | 0.32 | 29.9 → 9.0 |
+| B2 refactors | `grep+gi7` | 7 | 7 / 7 | **0.69** (0.56–0.87) | 0.75 | 34.1 → 28.1 |
+| B3 issues | `grep+gi7` | 11 | 10 / 11 | 1.05 (0.82–1.46) | 1.16 | 48.2 → 55.7 |
+| B3 issues | `grep+rules` | 11 | 10 / 10 | 1.19 (0.92–1.48) | 1.20 | 48.2 → 57.1 |
+
+Spend per task at list prices, relative to the usual model with `grep` (the smaller model's tokens
+count half), and tasks solved:
+
+| suite | usual model, `grep` | usual model, graph-indexer | smaller model, `grep` | smaller model, graph-indexer |
+|---|---|---|---|---|
+| B1 (7) | 1.00 · 7/7 | 0.44 · 7/7 | 0.35 · 5/7 | **0.09** · 7/7 |
+| B2 (7) | 1.00 · 7/7 | 0.86 · 7/7 | 0.37 · 7/7 | **0.26** · 7/7 |
+| B3 (11) | 1.00 · 11/11 | 0.95 · 11/11 | 0.68 · 10/11 | 0.71 · 11/11 |
+
+The usual model's runs are those of the fourth round (B1 and one refactor, `grep+gi6`), the third
+round (the other refactors, `grep+gi3`) and `rc8` (issues, `grep+gi7`, run the same day as this
+comparison). Its cost on issues halved between the fourth round and `rc8`. If its cost on
+questions and refactors fell as much, the smaller model with graph-indexer spends about a fifth of
+what it spends with grep on questions and about half on refactors.
+
+**What it shows.**
+
+- **On code questions, graph-indexer is what makes the smaller model reliable.** With it, the
+  smaller model answered all 7 questions exactly, in 9 calls and 39 seconds on average. With grep
+  alone it missed a call site in one answer and named a wrong caller in another (F1 0.92 and
+  0.89), and took 30 calls, two minutes and 7.1k tokens of hidden reasoning before writing its
+  answer, against 2.7k. Its answers matched the usual model's at a tenth of what the usual model
+  spent with grep and a fifth of what it spent with graph-indexer. Two tasks out of seven are not
+  a significant difference in accuracy (McNemar p = 0.5); the differences in cost and time are.
+- **On refactors, the smaller model gets every one right with or without graph-indexer**, and
+  graph-indexer cuts its cost by 31%, to about a quarter of the usual model's spend with grep.
+- **On issues, neither the tools nor the rules lower the cost.** Graph-indexer came to 1.05 of
+  grep's cost and the rules alone to 1.19, and each arm solved 10 or 11 of the 11. Reading
+  through `view` was more precise — 29% of the code lines read fall in the functions the fix
+  changes, against 12.5% with grep and 18% with the rules — but those agents made more calls. The
+  issue grep failed was solved in the other two arms, and the issue the rules failed was solved in
+  the other two: at one run per task that is run-to-run variance (the same issue cost 535k with
+  grep and 1,322k with graph-indexer). After nine of the eleven issues graph-indexer stood at 0.84
+  (0.78–0.94); the last two, the longest, took it to 1.05. With grep alone, the smaller model
+  solved 10 of the 11 issues at 0.68 of the usual model's spend.
+- The smaller model used graph-indexer's commands on questions and refactors (1.4 and 3.4 calls
+  per run) but hardly on issues (0.9), and read source with `sed` or `head` instead of `view` in
+  7 of the 11 issue runs and 2 of the 7 refactors (kept, intention to treat).
+- The audit counted writing a script with `cat > file.py` as reading source. The pattern now
+  excludes writes, and the runs were re-audited.
 
 ### Resolved indirection (development, rc8): 11 tasks, 22 runs
 
@@ -487,12 +570,19 @@ grep or find despite the policy, most of them to read a configuration file.
 
 ## What the rounds leave open
 
-- **Fixing issues.** In the fourth round B3 cost fell 15% with graph-indexer installed, and
-  the lookup rules alone gave the same; neither reads that carry definitions nor cleaner context
-  lowered it further. What is left to try is what removes turns after the first edit — a check
-  that names every subclass that runs the changed code and its tests (added after the round), and
-  hooks that bring the next hop to the agent's own reads, searches and edits without a call —
-  measured on new B3 tasks and with real hooks ([PLAN-AGENTES.md](PLAN-AGENTES.md)).
+- **Fixing issues: closed.** In the fourth round B3 cost fell 15% with graph-indexer installed,
+  and the lookup rules alone gave the same. Nothing tried since lowered it further: not reads that
+  carry definitions, not a cleaner context, not facts that resolve the code's indirection after
+  each read (`rc8`, 0.95), not a smaller model (1.05). What an issue costs is the model's own
+  reasoning and the prefix it re-reads at every call, which a code index does not reach, so this
+  line of work is closed ([PLAN-AGENTES.md](PLAN-AGENTES.md)); only the real integration (below)
+  is left to measure there.
+- **Structural questions answered by a smaller model, inside a session.** A smaller model with
+  graph-indexer answered code questions as the usual model did, at a tenth of the usual model's
+  spend with grep. The next step is to measure that where it would be used: the usual model
+  handing structural questions (callers, implementations, impact) to a helper on a smaller model
+  that answers them with graph-indexer, against the usual model alone, on more questions than
+  the seven measured so far.
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
@@ -523,6 +613,12 @@ node bench/agentic/report.mjs --gi rc5 --integrated grep+gi3 --nogrep gi3
 The TypeScript suites need the nestjs fixture (`node bench/fixtures.mjs`); the B3 suites need
 local clones of sqlglot and networkx with their history (`bench/agentic/repos.mjs`).
 
+Every arm of a comparison must run on the same model, launched at the same time: sub-agents take
+the session's model unless they are given one, and `report.mjs` warns when the arms of a
+comparison ran on different models. To compare models, run each on its own label and read their
+reports side by side; spend is cost × the model's price per input token, since both cost units
+and prices weigh output, cache writes and cache reads the same way.
+
 **With the real MCP server and hooks.** On a machine with an authenticated `claude` CLI,
 [`run-headless.mjs`](../bench/agentic/run-headless.mjs) runs each prepared run with `claude -p`:
 `mcp` gets graph-indexer's MCP server and the block `init` writes, `mcp+hooks` also gets the
@@ -548,12 +644,15 @@ issue took 1–15 minutes.
 
 ## Limitations
 
-- **One model, sub-agents.** Every run uses the same model as a sub-agent with instructions that
-  fix its tools; a harness with the tools actually removed, and with the MCP server and hooks
-  wired in, may behave differently.
+- **Two models, sub-agents.** Every run uses the usual model, or in one comparison a smaller one,
+  as a sub-agent with instructions that fix its tools; a harness with the tools actually removed,
+  and with the MCP server and hooks wired in, may behave differently.
 - **One run per task and arm.** Run-to-run variance of an agent is large; paired comparisons over
   tasks absorb part of it, but differences under about 20% in cost are within noise at this size.
-- **Ceiling.** The model solves almost every task in every arm, so the benchmark mostly measures
-  cost; a weaker model or harder tasks would test the solve rate.
+  With the smaller model, the estimate for issues moved from 0.84 after nine tasks to 1.05 after
+  eleven.
+- **Ceiling.** The usual model solves almost every task in every arm, so with it the benchmark
+  mostly measures cost. The smaller model missed some tasks with grep alone, but seven questions
+  are too few to measure a difference in accuracy.
 - **Coverage.** B1 and B2 are TypeScript on one repository; B3 is Python on two. The third
   round did not repeat B3, so for fixing issues the held-out round's estimate (`rc4`) stands.
