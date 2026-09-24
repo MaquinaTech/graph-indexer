@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS refs (
   recv_type TEXT,
   dst_id INTEGER,
   conf REAL NOT NULL DEFAULT 0,
-  ncand INTEGER NOT NULL DEFAULT 0
+  ncand INTEGER NOT NULL DEFAULT 0,
+  argc INTEGER -- arguments of a call or construction (-1: a spread makes it a lower bound), else NULL
 );
 CREATE INDEX IF NOT EXISTS refs_file ON refs(file_id);
 CREATE INDEX IF NOT EXISTS refs_dst ON refs(dst_id);

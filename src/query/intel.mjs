@@ -15,6 +15,7 @@ import { computeCentrality, loadGraph } from '../index/graph.mjs';
 import { confidenceLabel } from '../index/resolver.mjs';
 import { dataDir } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
+import { sigArity } from '../parse/arity.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
@@ -222,7 +223,7 @@ export class CodeIntel {
             for (const b of typeSym.bases ?? []) {
                 const bt = r.resolveTypeName(b, typeSym.fileId);
                 if (!bt) continue;
-                for (const mid of this.#membersNamed(bt.id, sym.name)) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: bt.name });
+                for (const mid of this.#membersNamed(bt.id, sym.name)) if (!t.sym(mid)?.isStatic && this.#sameArity(sym, mid)) out.push({ id: mid, via: bt.name });
                 visit(bt, depth + 1);
             }
         };
@@ -279,6 +280,14 @@ export class CodeIntel {
     }
 
     /** Members of a type with a name: declared in its body, or outside it with the type as owner (Go, Rust, C++). */
+    /** Where overloads are methods of their own, an override has the parameters of what it overrides. */
+    #sameArity(sym, otherId) {
+        if (!this.ix.resolver.specs[sym.lang]?.distinctOverloads) return true;
+        const o = this.store.get('SELECT name, sig FROM symbols WHERE id = ?', otherId);
+        const a = sigArity(sym.sig, sym.name), b = o ? sigArity(o.sig, o.name) : null;
+        return !a || !b || (a.min === b.min && a.max === b.max);
+    }
+
     #membersNamed(typeId, name) {
         const t = this.ix.table;
         const ty = t.sym(typeId);
@@ -295,6 +304,8 @@ export class CodeIntel {
 
     /** Overload set: same qualified name, same file, same container (TS/Java/C#/C++ overloads). */
     overloads(sym) {
+        // where each overload is a method of its own (Java, C#, Kotlin…), calls are bound to the one they reach
+        if (this.ix.resolver.specs[sym.lang]?.distinctOverloads) return [];
         return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?) AND is_static = ?',
             sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id, sym.is_static ? 1 : 0).map(r => r.id);
     }
@@ -321,7 +332,7 @@ export class CodeIntel {
                     seen.add(src_id);
                     next.push(src_id);
                     const st = t.sym(src_id);
-                    for (const mid of this.#membersNamed(src_id, sym.name)) if (!t.sym(mid)?.isStatic) out.push({ id: mid, via: st?.name ?? '?' });
+                    for (const mid of this.#membersNamed(src_id, sym.name)) if (!t.sym(mid)?.isStatic && this.#sameArity(sym, mid)) out.push({ id: mid, via: st?.name ?? '?' });
                 }
             }
             frontier = next;

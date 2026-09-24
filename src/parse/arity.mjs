@@ -109,6 +109,34 @@ export function callArgc(call) {
     return { n, open };
 }
 
+/**
+ * Accepted argument count read from a stored signature (`public List<T> find(String q, T... xs)`):
+ * for languages whose overloads are separate methods, to bind a call to the one it can reach.
+ * Parameters with a default value are optional; `...`, `vararg` and `params` make it open-ended.
+ * @returns {{ min: number, max: number } | null}
+ */
+export function sigArity(sig, name) {
+    if (!sig) return null;
+    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    if (!m) return null;
+    let depth = 0, cur = '', min = 0, max = 0, done = false;
+    const param = (p) => {
+        p = p.trim();
+        if (!p) return;
+        if (/\.\.\.|^vararg\s|^params\s/.test(p)) { max = Infinity; return; }
+        max++;
+        if (!/[^=!<>]=[^=]/.test(p)) min++;
+    };
+    for (let i = m.index + m[0].length; i < sig.length; i++) {
+        const ch = sig[i];
+        if (ch === ')' && depth === 0) { param(cur); done = true; break; }
+        if ('([{<'.includes(ch)) depth++;
+        else if (')]}>'.includes(ch)) depth--;
+        if (ch === ',' && depth === 0) { param(cur); cur = ''; } else cur += ch;
+    }
+    return done ? { min, max } : null;
+}
+
 /** Does a call passing `a` arguments fit a definition accepting `r`? */
 export function fits(a, r) {
     if (!a || !r) return true;

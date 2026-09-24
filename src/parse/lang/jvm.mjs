@@ -14,18 +14,26 @@ const JAVA_QUERY = `
 (constructor_declaration name: (identifier) @name) @def.constructor
 (field_declaration type: (_) @type declarator: (variable_declarator name: (identifier) @name)) @def.field
 (field_declaration declarator: (variable_declarator name: (identifier) @name)) @def.field
+(enum_constant name: (identifier) @name body: (class_body)) @def.class
 (enum_constant name: (identifier) @name) @def.constant
+(object_creation_expression "new" @name (class_body)) @def.class
 
 (method_invocation !object name: (identifier) @name) @ref.call
 (method_invocation object: (_) @recv name: (identifier) @name) @ref.call
 (object_creation_expression type: ${T('name')}) @ref.new
 (superclass ${T('name')}) @ref.inherit
 (super_interfaces (type_list ${T('name')})) @ref.inherit
+(object_creation_expression type: ${T('name')} (class_body)) @ref.inherit
 (extends_interfaces (type_list ${T('name')})) @ref.inherit
 (type_identifier) @name @ref.type
 (marker_annotation name: (identifier) @name) @ref.decorator
 (annotation name: (identifier) @name) @ref.decorator
 (method_reference . (identifier) @recv (identifier) @name) @ref.value
+; a class named on the left of a static access: StringUtil.join(…), Token.TokenType.EOF, Foo::bar
+; (a constant in capitals is not a class; a name that is no type of the repository resolves to nothing)
+(method_invocation object: ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
+(field_access object: ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
+(method_reference . ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
 (argument_list (identifier) @name) @ref.value
 
 (lambda_expression) @scope
@@ -67,6 +75,14 @@ function javaFileInfo(root) {
 
 export const java = {
     id: 'java',
+    distinctOverloads: true, // each overload is a method of its own: calls bind by argument count
+    localValues: true, // an argument named like a local or parameter is that variable
+    nestedTypes: true, // `Token.Comment` names the class Comment nested in Token
+    // an anonymous class (`new Transformer<>() {…}`) is `<anonymous>`, a subclass of what it instantiates
+    normalizeName: (name, d) => (d.node.type === 'object_creation_expression' ? '<anonymous>' : name),
+    // an enum constant with a body (`AfterBody { boolean process(…) {…} }`) is a subclass of its enum
+    refineKind: (kind, d) => (d.node.type === 'enum_constant' && d.node.childForFieldName('body') ? 'class' : kind),
+    implicitBases: (node) => (node.type === 'enum_constant' && node.childForFieldName('body') ? [node.parent?.parent?.childForFieldName('name')?.text].filter(Boolean) : []),
     grammar: 'java',
     extensions: ['.java'],
     family: 'jvm',

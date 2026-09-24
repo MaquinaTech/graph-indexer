@@ -308,8 +308,8 @@ export class Indexer {
         s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
         // refs (unresolved for now)
         for (const r of refs) {
-            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                fileId, r.symIdx >= 0 ? ids[r.symIdx] : null, r.name, r.kind, r.line, r.col, r.recv || null, r.recvType || null);
+            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, argc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                fileId, r.symIdx >= 0 ? ids[r.symIdx] : null, r.name, r.kind, r.line, r.col, r.recv || null, r.recvType || null, r.argc ?? null);
         }
         // imports (module resolution needs only the file list)
         const impRows = [];
@@ -446,7 +446,7 @@ export class Indexer {
         s.tx(() => {
             for (let i = 0; i < refIds.length; i += 900) {
                 const chunk = refIds.slice(i, i + 900);
-                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type, argc FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
                 for (const r of rows) {
                     const res = this.resolver.resolve(r);
                     if (res.id == null && (r.kind === 'value' || r.kind === 'read' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }

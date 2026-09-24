@@ -15,6 +15,7 @@
  */
 import path from 'node:path';
 import { normalizeType } from '../parse/extract.mjs';
+import { fits, sigArity } from '../parse/arity.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
@@ -230,6 +231,9 @@ export class Resolver {
     enclosingType(symId) {
         for (let s = this.t.sym(symId), guard = 0; s && guard < 32; s = s.parentId != null ? this.t.sym(s.parentId) : null, guard++) {
             if (MEMBER_HOLDERS.has(s.kind) && s.kind !== 'module') return { id: s.id, name: s.name, fileId: s.fileId };
+            // a member declared in its type's body: the type itself, not one found by name (`<anonymous>` repeats)
+            const parent = s.parentId != null ? this.t.sym(s.parentId) : null;
+            if (parent && MEMBER_HOLDERS.has(parent.kind) && parent.kind !== 'module' && (!s.owner || parent.name === s.owner)) continue;
             if (s.owner && (CALLABLE_KINDS.has(s.kind) || s.kind === 'field' || s.kind === 'property')) {
                 const typeSym = this.#typeByNameNear(s.owner, s.fileId);
                 return typeSym ? { id: typeSym.id, name: typeSym.name, fileId: typeSym.fileId } : { id: null, name: s.owner, fileId: s.fileId };
@@ -320,7 +324,7 @@ export class Resolver {
         const k = 't|' + fileId + '|' + name;
         if (this.memo.has(k)) return this.memo.get(k);
         this.memo.set(k, null); // cycle guard
-        const q = this.#qualifiedType(name, fileId);
+        const q = this.#qualifiedType(name, fileId) ?? this.#nestedType(name, fileId);
         const r = q !== undefined ? null : this.#resolveName(name, 'type', fileId, null);
         const s = q !== undefined ? (q === EXTERNAL ? null : q) : r && r.id != null ? this.t.sym(r.id) : null;
         const res = s && TYPE_KINDS.has(s.kind) ? s : null;
@@ -346,6 +350,25 @@ export class Resolver {
     }
 
     /**
+     * `Outer.Inner` in a language whose stored types keep their enclosing types (Java): the type
+     * nested in the one the first name resolves to; EXTERNAL when that one is the language's
+     * (`Map.Entry`); undefined when the name is not nested or its outer type is unknown.
+     */
+    #nestedType(name, fileId) {
+        const spec = this.specs[this.t.file(fileId)?.lang];
+        if (!spec?.nestedTypes || !name.includes('.')) return undefined;
+        const [head, ...rest] = name.split('.');
+        let cur = this.resolveTypeName(head, fileId);
+        if (!cur) return spec.isPrimitiveType?.(head) ? EXTERNAL : undefined;
+        for (const seg of rest) {
+            const ids = (this.t.byParent.get(cur.id)?.get(seg) ?? []).map(id => this.t.sym(id)).filter(x => x && TYPE_KINDS.has(x.kind));
+            if (!ids.length) return null;
+            cur = ids[0];
+        }
+        return cur;
+    }
+
+    /**
      * A stored type string (see extract.mjs) → type {id,name,fileId}, EXTERNAL (members never live
      * in the repository: primitives, builtins, collections) or null (unknown). `elem` applies
      * element access that many times (`xs[i]`, loop variables).
@@ -365,7 +388,7 @@ export class Resolver {
         if (s === '!') return EXTERNAL;
         if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
         if (s.endsWith('{}')) return { mapOf: s.slice(0, -2), fileId };   // a map value
-        if (this.#qualifiedType(s, fileId) === EXTERNAL) return EXTERNAL;
+        if (this.#qualifiedType(s, fileId) === EXTERNAL || this.#nestedType(s, fileId) === EXTERNAL) return EXTERNAL;
         const t = this.resolveTypeName(s, fileId);
         if (t) return t;
         const spec = this.specs[this.t.file(fileId)?.lang];
@@ -407,7 +430,7 @@ export class Resolver {
         } else if (!head.elem) {
             // same-file qualified name first (this.x → Class#x uses the class qname)
             const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
-            const qt = q ? undefined : this.#qualifiedType(head.name, fileId);
+            const qt = q ? undefined : this.#qualifiedType(head.name, fileId) ?? this.#nestedType(head.name, fileId);
             cur = q ?? (qt !== undefined ? qt : this.typeFromString(head.name.split('.').pop(), fileId));
             if (!cur && !head.name.includes('.')) {
                 // a capitalised root can be a value rather than a type: `export const NestFactory =
@@ -579,6 +602,7 @@ export class Resolver {
      * @returns {{ id: number|null, conf: number, ncand: number }}
      */
     resolve(ref) {
+        this.argc = ref.argc ?? null;
         const fileId = ref.file_id;
         const srcId = ref.src_id ?? null;
         const recv = ref.recv || '';
@@ -588,7 +612,30 @@ export class Resolver {
         return this.#resolveName(name, kind, fileId, srcId) ?? { id: null, conf: 0, ncand: 0 };
     }
 
+    /**
+     * Where overloads are methods of their own, a call none of a type's own overloads can take
+     * reaches an inherited one (`element.attr("x")` runs Node.attr(key) when Element declares only
+     * attr(key, value)): the nearest supertype declaring an overload the arguments fit.
+     */
+    #overloadsReached(type, ids, name) {
+        if (this.argc == null || !ids.length || type?.id == null || ids.some(id => this.#reaches(this.t.sym(id)))) return ids;
+        if (!ids.every(id => CALLABLE_KINDS.has(this.t.sym(id)?.kind))) return ids;
+        for (const tid of this.mro(type.id).slice(1)) {
+            const ts = this.t.sym(tid);
+            const own = ts ? this.membersOf({ id: ts.id, name: ts.name, fileId: ts.fileId }, name).filter(id => this.#reaches(this.t.sym(id))) : [];
+            if (own.length) return own;
+        }
+        return ids;
+    }
+
+    /** Can the call being resolved reach this callable (its arguments fit, where overloads are methods of their own)? */
+    #reaches(s) {
+        if (this.argc == null || !this.sigOf || !this.specs[this.t.file(s.fileId)?.lang]?.distinctOverloads) return true;
+        return fits({ n: Math.max(0, this.argc), open: this.argc < 0 }, sigArity(this.sigOf(s.id), s.name));
+    }
+
     #compatible(s, kind) {
+        if (kind === 'value' && CALLABLE_KINDS.has(s.kind) && this.specs[this.t.file(s.fileId)?.lang]?.localValues) return false; // Java: methods are no values
         if (kind === 'type' || kind === 'inherit') return TYPE_KINDS.has(s.kind);
         if (kind === 'new') return TYPE_KINDS.has(s.kind) || s.kind === 'function' || s.kind === 'constructor';
         if (kind === 'call') return CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind) || s.kind === 'variable' || s.kind === 'field' || s.kind === 'property' || s.kind === 'constant';
@@ -603,6 +650,16 @@ export class Resolver {
         if (cands.length === 1) return { id: cands[0].id, conf, ncand: 1 };
         // overloads / redeclarations in one type or file: prefer the definition with a body (larger span)
         const sameQ = cands.every(s => s.qname === cands[0].qname);
+        // where overloads are methods of their own, the call reaches the one its arguments fit
+        if (sameQ && this.argc != null && this.sigOf && this.specs[this.t.file(cands[0].fileId)?.lang]?.distinctOverloads) {
+            const a = { n: Math.max(0, this.argc), open: this.argc < 0 };
+            let fit = cands.filter(s => fits(a, sigArity(this.sigOf(s.id), s.name)));
+            // an overload that takes the arguments as they are wins over a variadic one (javac's phases)
+            const fixed = fit.filter(s => sigArity(this.sigOf(s.id), s.name)?.max !== Infinity);
+            if (fixed.length && fixed.length < fit.length) fit = fixed;
+            if (fit.length === 1) return { id: fit[0].id, conf, ncand: 1 };
+            if (fit.length > 1 && fit.length < cands.length) return this.#pick(fit.map(s => s.id), kind, conf, fileId);
+        }
         const scored = cands.map(s => ({ s, score: this.#proximity(s, fileId) + (s.endLine - s.startLine) / 1e4 }));
         scored.sort((a, b) => b.score - a.score || a.s.id - b.s.id);
         return { id: scored[0].s.id, conf: sameQ ? conf : conf * 0.75, ncand: cands.length };
@@ -637,13 +694,13 @@ export class Resolver {
                 const r = this.#pick(ids, kind, 0.95, fileId);
                 if (r) return r;
             }
-            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind)) return { id: s.id, conf: 0.9, ncand: 1 }; // recursion
+            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind) && this.#reaches(s)) return { id: s.id, conf: 0.9, ncand: 1 }; // recursion
         }
         // 2. implicit this: members of the enclosing type (Java/Kotlin/C#/Scala/C++/Ruby)
         if (spec?.implicitThis && srcId != null && kind !== 'type' && kind !== 'inherit') {
             const type = this.enclosingType(srcId);
             if (type) {
-                const r = this.#pick(this.membersOf(type, name), kind, 0.9, fileId);
+                const r = this.#pick(this.#overloadsReached(type, this.membersOf(type, name), name), kind, 0.9, fileId);
                 if (r) return r;
             }
         }
@@ -765,7 +822,7 @@ export class Resolver {
             const type = this.resolveRecvType(recvType, fileId, srcId);
             if (type === EXTERNAL) return { id: null, conf: 0, ncand: 0, external: true };
             if (type) {
-                const ids = this.#byStatic(this.membersOf(type, name), false);
+                const ids = this.#byStatic(this.#overloadsReached(type, this.membersOf(type, name), name), false);
                 const r = this.#pick(ids, kind, 0.9, fileId);
                 if (r) return r;
                 // interface / abstract receiver: the member may be declared only on implementations

@@ -12,6 +12,7 @@
  * Only captured nodes cross the WASM boundary, which keeps extraction fast.
  */
 import { compileQuery, createParser, loadGrammar } from './runtime.mjs';
+import { callArgc } from './arity.mjs';
 
 const MAX_SIG = 240;
 const MEMBER_PARENT = new Set(['class', 'interface', 'struct', 'trait', 'impl', 'enum', 'object', 'module']);
@@ -462,7 +463,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             exported: false,
             visibility: d.isDefault ? 'default' : (spec.visibility ? spec.visibility(node, name) : null),
             decorators: spec.decoratorsOf ? spec.decoratorsOf(node) : [],
-            bases: [],
+            bases: spec.implicitBases?.(node) ?? [],
             type: d.type ? declaredType(node, d.type, spec) : null,
             isStatic: isStaticMember(node, d.nameNode, spec),
             startIndex: node.startIndex,
@@ -719,7 +720,11 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const v = isCall ? null : nt ? { type: nt } : lookupLocal(ctx, first.name);
             if (v) t = applyOps(bindingType(v, depth), first.ops);
             else if (isCall) t = applyOps('call:' + first.name, first.ops.slice(1));
-            else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
+            else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) {
+                t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
+                // a field the class inherits (declared in a base, maybe in another file): the resolver's to find
+                if (!t && /^[a-z_]/.test(first.name) && !isDeclared(ctx, first.name)) t = applyOps(symbols[classOf(ctx.sym, symbols)].qname + '#' + first.name, first.ops);
+            }
             // `Type.staticField…`: a capitalised root that is not a local names a type
             if (!t && !v && segs.length > 1 && !first.ops.length && /^[A-Z]/.test(first.name)) t = first.name;
             // `b := Form`: a package-level variable, maybe of another file of the package; its type is
@@ -827,11 +832,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
         // a value or a call by the name of a local (`stack := stack(3); log(stack)`, `check := func…;
         // check()`) is the local, in languages where no local stands for repository code (Go: no
         // imports bind locals)
-        if ((kind === 'value' || kind === 'call') && !recv && spec.packageValues && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
+        if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues : kind === 'call' && spec.packageValues) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
         const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
-        refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl });
+        // arguments passed: tells overloads apart where each one is a method of its own
+        const a = spec.distinctOverloads && (kind === 'call' || kind === 'new') ? callArgc(r.node) : null;
+        refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl, argc: a ? (a.open ? -1 : a.n) : null });
     }
 
     // inheritance: attach base names to the enclosing class symbol
@@ -917,6 +924,12 @@ export function normalizeType(t, spec, depth = 0) {
     const segs = s.split(/::|\.|\\/).filter(Boolean);
     // `http.Request`: the package tells a type of the repository from a library's (see Resolver)
     if (spec?.qualifiedTypes && segs.length === 2 && /^[A-Za-z_]\w*\.[A-Za-z_]\w*$/.test(s)) return s;
+    // `Token.Comment`, `org.x.Outer.Inner`: a nested type keeps its enclosing types, not its package
+    if (spec?.nestedTypes && segs.length >= 2 && segs.every(x => /^[A-Za-z_$][\w$]*$/.test(x))) {
+        let k = segs.length - 1;
+        while (k > 0 && /^[A-Z]/.test(segs[k - 1])) k--;
+        if (k < segs.length - 1) return segs.slice(k).join('.');
+    }
     s = segs.length ? segs[segs.length - 1] : s;
     return /^[A-Za-z_$][\w$]*$/.test(s) ? s : null;
 }
