@@ -406,7 +406,7 @@ export class Indexer {
                 if (depth > 4 || seen.has(ty.id)) return out;
                 seen.add(ty.id);
                 // an alias (`type DummyLogger = testhelper.DummyLogger`) has its target's methods
-                const alias = ty.kind === 'type' && !out.size && ty.type ? this.resolver.resolveTypeName(ty.type, ty.fileId) : null;
+                const alias = ty.kind === 'type' && !out.size && ty.type && !/(\[\]|\{\})$/.test(ty.type) ? this.resolver.resolveTypeName(ty.type, ty.fileId) : null;
                 if (alias && alias.id !== ty.id) for (const [n, sh] of promoted(t.sym(alias.id) ?? alias, depth + 1, seen)) if (!out.has(n)) out.set(n, sh);
                 for (const b of ty.declaredBases ?? ty.bases ?? []) {
                     const e = this.resolver.resolveTypeName(b, ty.fileId);

@@ -142,6 +142,21 @@ function simplifyChain(text) {
     return CHAIN_RE.test(s) ? s : null;
 }
 
+/** The cast at the head of a member/call chain, and where it ends (its parentheses included). */
+function castHead(node) {
+    let n = node;
+    for (let k = 0; k < 16 && n && n.namedChildCount; k++) {
+        if (k > 0 && CASTS.has(n.type)) {
+            const end = n.parent?.type === 'parenthesized_expression' && n.parent.startIndex === n.startIndex - 1 ? n.parent.endIndex : n.endIndex;
+            return end < node.endIndex ? { node: n, end } : null;
+        }
+        const c = n.namedChildren[0];
+        if (!c || c.startIndex > n.startIndex + 1) return null; // not at the head of the chain
+        n = c;
+    }
+    return null;
+}
+
 /**
  * Compact descriptor of an expression, used for receivers and for variable initialisers:
  *   `this` · `super` · `x` · `a.b().c[]` (access chain) · `new X` · `as T` (cast) · `?` (opaque)
@@ -174,6 +189,14 @@ function receiverDescriptor(node, spec) {
     if (spec.receiverDescriptor) {
         const d = spec.receiverDescriptor(node);
         if (d !== undefined) return d;
+    }
+    // a chain that starts with a cast: `val.(Module).CaddyModule().ID`, `(x as Foo).bar()` → `(T).a().b`
+    const cast = castHead(node);
+    if (cast) {
+        const tn = cast.node.childForFieldName('type') ?? cast.node.namedChildren[cast.node.namedChildCount - 1];
+        const tt = tn && tn !== cast.node.namedChildren[0] ? normalizeType(tn.text, spec) : null;
+        const tail = tt && !/(\[\]|\{\})$/.test(tt) ? simplifyChain('x' + text.slice(cast.end - node.startIndex)) : null;
+        return tail?.startsWith('x.') ? `(${tt})${tail.slice(1)}` : '?';
     }
     if (/^[A-Za-z_$][\w$]*$/.test(text)) return text;
     const ctor = /^new\s+([A-Za-z_$][\w$.]*)\s*(?:<[^()]*>)?\s*(?:\([^]*\))?$/.exec(text);
@@ -664,6 +687,15 @@ function extractFromTree(spec, query, tree, source, relPath) {
             if (tn === 'Self' || tn === 'self' || tn === 'static' || tn === 'this') return selfType(ctx.sym)?.name ?? null;
             return typeText(tn);
         }
+        // `(T).a().b`: a chain on a cast value (see receiverDescriptor)
+        let cast = null;
+        if (desc.startsWith('(')) {
+            const k = desc.indexOf(')');
+            if (k < 0 || desc[k + 1] !== '.') return null;
+            cast = typeText(desc.slice(1, k));
+            if (!cast) return null;
+            desc = desc.slice(k + 2);
+        }
         const segs = [];
         for (const p of desc.split('.')) {
             const m = SEG_RE.exec(p);
@@ -672,7 +704,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
         }
         let t = null, i = 1;
         const first = segs[0];
-        if (first.name === 'this') {
+        if (cast) { t = cast; i = 0; }
+        else if (first.name === 'this') {
             const st = selfType(ctx.sym);
             if (!st) return null;
             if (segs.length === 1) return first.ops.length ? null : st.name;

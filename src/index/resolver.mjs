@@ -437,6 +437,13 @@ export class Resolver {
                 continue;
             }
             const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, name);
+            if (!mem.length && cur.id != null && spec?.qualifiedTypes) {
+                // Go: an embedded field is named after its type (`m.MatchRegexp` in a struct embedding MatchRegexp)
+                const os = this.t.sym(cur.id);
+                const emb = (os?.declaredBases ?? os?.bases ?? []).find(b => b === name || b.endsWith('.' + name));
+                const et = emb ? this.resolveTypeName(emb, os.fileId) : null;
+                if (et) { cur = elem ? this.#elementOf(et, elem) : et; continue; }
+            }
             if (!mem.length && cur.id != null) {
                 // a class that is a collection (`class Registry extends Map<string, Module>`): `get` & co.
                 const ct = this.t.sym(cur.id)?.type;

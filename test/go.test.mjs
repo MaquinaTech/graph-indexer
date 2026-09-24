@@ -81,6 +81,43 @@ const FILES = {
         '',
     ].join('\n'),
     'store/form.go': 'package store\n\nfunc (s *Store) PostForm() any { return nil }\n',
+    'match/match.go': [
+        'package match',
+        '',
+        'type Regexp struct{}',
+        '',
+        'func (r *Regexp) Match(s string) bool { return true }',
+        '',
+        'type PathRE struct{ Regexp }',
+        '',
+        'func (m PathRE) Check(s string) bool { return m.Regexp.Match(s) }',
+        '',
+        'type HeaderRE map[string]*Regexp',
+        '',
+        'func (m HeaderRE) Check(s string) bool {',
+        '\tfor _, rm := range m {',
+        '\t\tif !rm.Match(s) {',
+        '\t\t\treturn false',
+        '\t\t}',
+        '\t}',
+        '\treturn true',
+        '}',
+        '',
+        'type Info struct{ ID string }',
+        '',
+        'type Module interface {',
+        '\tInfo() Info',
+        '}',
+        '',
+        'func (i Info) Name() string { return i.ID }',
+        '',
+        'func Label(v any) string { return v.(Module).Info().Name() }',
+        '',
+        'type Other struct{}',
+        '',
+        'func (Other) Match(s string) bool { return false }',
+        '',
+    ].join('\n'),
 };
 
 let root, intel;
@@ -122,6 +159,13 @@ test('Go: implicit implementations count promoted methods and aliases, and compa
     const impl = (i) => refsTo(i).filter(r => r.kind === 'inherit').map(r => r.src_qname).sort();
     assert.deepEqual(impl('Handler'), ['Alias', 'Base', 'Engine']); // Alias = shop.Base
     assert.deepEqual(impl('AdminHandler'), ['Plain']);
+});
+
+test('Go: embedded fields by their type name, named collection types, chains on a type assertion', () => {
+    const match = refsTo('Regexp.Match');
+    assert.ok(at(match, 'match/match.go', 9), 'm.Regexp.Match(s): the embedded field is named after its type');
+    assert.ok(at(match, 'match/match.go', 15), 'range over `type HeaderRE map[string]*Regexp`');
+    assert.ok(at(refsTo('Info.Name'), 'match/match.go', 30), "v.(Module).Info().Name(): an interface method's result type");
 });
 
 test('Go: reopening the index keeps them', async () => {

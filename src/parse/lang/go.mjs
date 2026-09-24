@@ -13,9 +13,12 @@ const QUERY = `
 (method_declaration receiver: (parameter_list (parameter_declaration type: ${RECV_TYPE})) name: (field_identifier) @name) @def.method
 (type_spec name: (type_identifier) @name type: (struct_type)) @def.struct
 (type_spec name: (type_identifier) @name type: (interface_type)) @def.interface
+(type_spec name: (type_identifier) @name type: [(map_type) (slice_type) (array_type)] @type) @def.type
 (type_spec name: (type_identifier) @name type: [(type_identifier) (qualified_type) (function_type) (map_type) (slice_type) (array_type) (pointer_type) (generic_type) (channel_type)]) @def.type
 (type_alias name: (type_identifier) @name type: ${TYPE_HEAD}) @def.type
 (type_alias name: (type_identifier) @name) @def.type
+(method_elem name: (field_identifier) @name result: ${TYPE_HEAD}) @def.method
+(method_elem name: (field_identifier) @name result: (parameter_list . (parameter_declaration type: ${TYPE_HEAD}))) @def.method
 (method_elem name: (field_identifier) @name) @def.method
 (field_declaration name: (field_identifier) @name type: ${TYPE_HEAD}) @def.field
 (field_declaration name: (field_identifier) @name) @def.field
