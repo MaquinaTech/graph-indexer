@@ -212,7 +212,7 @@ POLICY['grep+rules'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, W
 POLICY['grep+gi4'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following its rules.';
 POLICY['grep+gi5'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write) together with graph-indexer (below), following the rules below.';
 POLICY['grep+gi6'] = 'Use your built-in tools (Read, Grep, Glob, Bash, Edit, Write), following the rules below, and graph-indexer where it says.';
-POLICY['grep+gi7'] = POLICY['grep+gi6'];
+POLICY['grep+gi7'] = 'Use your built-in tools (Grep, Glob, Bash, Edit, Write), following the rules below, and graph-indexer where it says — except for reading source code: read it only with `view` (see "Reading code" below), never with Read, cat, sed, head or tail, apart from the Read your Edit tool requires right before an edit.';
 POLICY.mcp = 'Use your built-in tools and the graph-indexer MCP tools as you see fit.';
 POLICY['mcp+hooks'] = POLICY.mcp;
 

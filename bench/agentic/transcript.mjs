@@ -52,6 +52,9 @@ export function grepUse(cmd, repo = null) {
     return use;
 }
 
+// reading a source file through the shell (the gi7 arm reads through `view`)
+const SHELL_READ = /(^|&&\s*|;\s*)(sed\s+-n|cat|head|tail|nl|awk)\b[^|]*\.(py|pyi|ts|tsx|js|mjs|go|rs|java|rb|php)\b/;
+
 /** Tool policy of each arm: which tool uses count as violations. */
 export const POLICIES = {
     grep: { forbidTools: [], forbidBash: [GI_CMD], label: 'built-in tools only' },
@@ -66,6 +69,7 @@ export const POLICIES = {
     'grep+gi4': { forbidTools: [], forbidBash: [], label: 'built-in tools and graph-indexer, fourth card (reads with definitions, same rules)' },
     'grep+gi5': { forbidTools: [], forbidBash: [], label: "built-in tools and graph-indexer, fifth card (the control's rules word for word, compact reads)" },
     'grep+gi6': { forbidTools: [], forbidBash: [], label: "built-in tools with the control's rules, graph-indexer for uses, callers, impact and the edit check" },
+    'grep+gi7': { forbidTools: [], forbidBash: [{ test: (c) => SHELL_READ.test(c) }], label: 'the sixth card, reading source through the post-read hook (view)' },
     mcp: { forbidTools: [], forbidBash: [], label: 'built-in tools and the graph-indexer MCP server with its instructions block' },
     'mcp+hooks': { forbidTools: [], forbidBash: [], label: 'built-in tools, the graph-indexer MCP server and its Claude Code hooks' },
 };
