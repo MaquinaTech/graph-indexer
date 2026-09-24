@@ -14,13 +14,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { specForPath } from '../parse/languages.mjs';
+import { specForPath, isConstructor } from '../parse/languages.mjs';
 import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
 
 const CALLABLE = new Set(['function', 'method', 'constructor']);
-const CONSTRUCTORS = new Set(['constructor', '__init__', 'initialize', '__construct']);
 const MEMBER_KINDS = new Set(['class', 'interface', 'struct', 'trait', 'enum', 'object', 'impl', 'module', 'type']);
 
 function git(root, args) {
@@ -218,7 +217,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         if (!rows.length) continue;
         const ids = rows.map(r => r.id);
         // a constructor is called through its class
-        if (CONSTRUCTORS.has(c.name) && rows[0].parent_id != null) ids.push(rows[0].parent_id);
+        if (isConstructor({ name: c.name, kind: c.kind, lang: specForPath(c.path)?.id }) && rows[0].parent_id != null) ids.push(rows[0].parent_id);
         const calls = intel.store.all(`SELECT r.line, r.col, r.kind, r.conf, f.path, src.qname AS src_qname FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols src ON src.id = r.src_id
             WHERE r.dst_id IN (${ids.map(() => '?').join(',')}) AND r.kind IN ('call','new') AND r.conf >= 0.7 ORDER BY f.is_test, f.path, r.line`, ...ids);
         const bad = [], untouched = [];
@@ -251,7 +250,9 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
             let calleePath = r.dpath, calleeQ = r.qname, calleeKind = r.kind;
             if (MEMBER_KINDS.has(r.kind)) {
                 // instantiation: check against the class's constructor
-                const ctor = intel.store.get(`SELECT s.qname, s.kind FROM symbols s WHERE s.parent_id = ? AND s.name IN ('constructor','__init__','initialize','__construct') LIMIT 1`, r.dst_id);
+                const lang = specForPath(r.dpath)?.id;
+                const ctor = intel.store.all(`SELECT s.name, s.qname, s.kind FROM symbols s WHERE s.parent_id = ? AND s.name IN ('constructor','__init__','initialize','__construct')`, r.dst_id)
+                    .find(s => isConstructor({ ...s, lang }));
                 if (!ctor) continue;
                 calleeQ = ctor.qname; calleeKind = ctor.kind;
             } else if (!CALLABLE.has(r.kind)) continue;

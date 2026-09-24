@@ -156,7 +156,9 @@ function receiverDescriptor(node, spec) {
     const t = node.type;
     if (CONSTRUCTIONS[t]) {
         const tn = node.childForFieldName(CONSTRUCTIONS[t]);
-        const tt = tn ? normalizeType(tn.text, spec) : null;
+        // `new Map<string, Foo>()`: the type arguments say what the collection holds
+        const targs = node.childForFieldName('type_arguments');
+        const tt = tn ? normalizeType(targs ? tn.text + targs.text : tn.text, spec) : null;
         if (tt) return 'new ' + tt;
     }
     const text = node.text;
@@ -833,6 +835,7 @@ export function normalizeType(t, spec, depth = 0) {
     let m;
     if ((m = /^\((.*)\)$/s.exec(s))) return normalizeType(m[1], spec, depth + 1);
     if ((m = /^(.+?)\s*\[\s*\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));      // T[]
+    if ((m = /^([A-Za-z_$][\w$.]*)\{\}$/.exec(s))) return mapOf(normalizeType(m[1], spec, depth + 1));  // a map of T, as normalised
     if ((m = /^\[\s*\]\s*(.+)$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));        // Go []T
     if ((m = /^map\s*\[[^\]]*\]\s*(.+)$/s.exec(s))) return mapOf(normalizeType(m[1], spec, depth + 1));  // Go map[K]V
     if ((m = /^\[([^;\]]+?)\s*(?:;[^\]]*)?\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1)); // Rust [T] / [T; N]

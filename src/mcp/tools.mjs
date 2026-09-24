@@ -704,8 +704,11 @@ async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, lim
                 lines.push(`${'  '.repeat(indent)}← module level of ${file}:${m.sites[0]}${isTestFile(file) ? '  (test)' : ''}${m.conf < 0.9 ? `  [${confWord(m.conf)}]` : ''}`);
             }
         };
+        // a recursive function is one of its own direct callers
+        const recursive = Boolean(intel.store.get(`SELECT 1 AS x FROM refs WHERE src_id = ? AND dst_id = ? AND kind = 'call' LIMIT 1`, s.id, s.id));
+        if (recursive) { lines.push(`  ← ${s.qname}  ${loc(s)}  (itself: recursive)`); count++; }
         walk(s.id, 1, 1);
-        const distinct = level.size - 1 + new Set([...kids.values()].flatMap(g => g.modules.map(([f]) => f))).size;
+        const distinct = level.size - 1 + (recursive ? 1 : 0) + new Set([...kids.values()].flatMap(g => g.modules.map(([f]) => f))).size;
         out.push(`callers (${distinct} distinct${cut ? ' shown' : ''}, depth ≤ ${depth}${include_tests ? '' : ', tests left out'}; indentation = one call level):`);
         out.push(...lines);
         if (!lines.length) out.push('  (no bound callers — entry point, framework-invoked, or dynamic dispatch)');

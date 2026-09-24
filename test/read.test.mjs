@@ -76,6 +76,41 @@ test('search_text says where a definition is when the search did not find it', a
     assert.doesNotMatch(found, /is defined:/);
 });
 
+test('call_graph: a constructor is reached through its class only in languages where it is one; a recursive function is its own caller', async () => {
+    const dir = makeRepo({
+        // TypeScript: `initialize` is an ordinary method, called here by the constructor only
+        'src/box.ts': `export class Box {\n  constructor(v: number) { this.initialize(v); }\n  initialize(v: number) { return v; }\n}\nexport function make() { return new Box(1); }\n`,
+        // Ruby: `initialize` is the constructor, run by `Box.new`
+        'lib/box.rb': `class Crate\n  def initialize(v)\n    @v = v\n  end\nend\n\ndef build\n  Crate.new(1)\nend\n`,
+        'src/walk.js': `function walk(n) { if (n) walk(n - 1); }\nfunction start() { walk(3); }\nmodule.exports = { start };\n`,
+    });
+    const i = new CodeIntel({ root: dir });
+    await i.open();
+    try {
+        const ts = await callTool(i, 'call_graph', { symbol: 'Box.initialize', direction: 'callers', depth: 1 });
+        assert.match(ts, /← Box\.constructor {2}src\/box\.ts:2/);
+        assert.doesNotMatch(ts, /← make\b/, 'new Box() runs the constructor, not initialize');
+        const rb = await callTool(i, 'call_graph', { symbol: 'Crate.initialize', direction: 'callers', depth: 1 });
+        assert.match(rb, /← build {2}lib\/box\.rb:7/);
+        const rec = await callTool(i, 'call_graph', { symbol: 'walk', direction: 'callers', depth: 1 });
+        assert.match(rec, /callers \(2 distinct/);
+        assert.match(rec, /\n {2}← walk {2}src\/walk\.js:1 {2}\(itself: recursive\)\n {2}← start {2}src\/walk\.js:2/);
+    } finally { i.close(); rmrf(dir); }
+});
+
+test('a map built with type arguments hands back its values: `new Map<K, V>().get(k)` is a V', async () => {
+    const dir = makeRepo({
+        'src/registry.ts': `export class Wrapper {\n  merge(o: object) { return o; }\n}\nexport class Other {\n  merge(o: object) { return o; }\n}\nexport class Registry {\n  private readonly items = new Map<string, Wrapper>();\n  replace(key: string) {\n    const w = this.items.get(key);\n    return w.merge({});\n  }\n}\n`,
+    });
+    const i = new CodeIntel({ root: dir });
+    await i.open();
+    try {
+        const refs = await callTool(i, 'find_references', { symbol: 'Wrapper.merge' });
+        assert.match(refs, /11 {2}call +in Registry\.replace/);
+        assert.doesNotMatch(await callTool(i, 'find_references', { symbol: 'Other.merge' }), /Registry\.replace/);
+    } finally { i.close(); rmrf(dir); }
+});
+
 test('call_graph lists every caller of every node, expanding each at its shallowest level', async () => {
     const dir = makeRepo({
         'src/chain.js': `function target() {}\nfunction x() { target(); y(); }\nfunction y() { target(); }\nfunction z() { x(); }\nmodule.exports = { x, y, z };\n`,

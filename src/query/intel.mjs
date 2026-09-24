@@ -14,11 +14,11 @@ import { SearchEngine } from '../search/search.mjs';
 import { computeCentrality, loadGraph } from '../index/graph.mjs';
 import { confidenceLabel } from '../index/resolver.mjs';
 import { dataDir } from '../util/paths.mjs';
+import { isConstructor } from '../parse/languages.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
 const DEP_KINDS = ['call', 'new', 'inherit', 'type', 'decorator', 'value', 'read'];
-const CONSTRUCTORS = new Set(['constructor', '__init__', '__new__', 'initialize', '__construct']);
 // examples, docs snippets and sample apps are visited after library code and tests
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|playground)\//i;
 
@@ -512,14 +512,14 @@ export class CodeIntel {
                 const targets = [id];
                 if (sym && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property')) for (const s of this.#supertypeMembers(sym)) targets.push(s.id);
                 // a constructor is invoked through its class: `new Foo()` / `Foo()` (Python)
-                if (sym && CONSTRUCTORS.has(sym.name) && sym.parent_id != null) targets.push(sym.parent_id);
+                if (isConstructor(sym) && sym.parent_id != null) targets.push(sym.parent_id);
                 const rows = this.store.all(`SELECT r.src_id, r.conf, r.kind, r.line, r.dst_id, r.recv, f.path, f.is_test FROM refs r JOIN files f ON f.id = r.file_id
                     WHERE r.dst_id IN (${targets.map(() => '?').join(',')}) AND r.kind IN (${kinds.map(() => '?').join(',')})`, ...targets, ...kinds);
                 const rank = (r) => (EXAMPLE_PATH.test(r.path) ? 2 : r.is_test ? 1 : 0);
                 rows.sort((a, b) => rank(a) - rank(b));
                 for (const r of rows) {
                     // through the class only its instantiations reach the constructor
-                    if (r.dst_id !== id && sym && CONSTRUCTORS.has(sym.name) && r.dst_id === sym.parent_id && r.kind !== 'call' && r.kind !== 'new') continue;
+                    if (r.dst_id !== id && isConstructor(sym) && r.dst_id === sym.parent_id && r.kind !== 'call' && r.kind !== 'new') continue;
                     // `super().m()` runs exactly the parent's m, never this override (it is static dispatch)
                     if (r.dst_id !== id && r.recv === 'super') continue;
                     const c = conf * r.conf;
