@@ -2,7 +2,8 @@
 
 Three benchmarks, each answering a question an agent actually depends on:
 
-1. **Are the references right?** — `bench/eval-graph.mjs`, against the TypeScript compiler.
+1. **Are the references right?** — `bench/eval-graph.mjs`, against the TypeScript compiler, and
+   `bench/eval-graph-go.mjs`, against the Go type checker.
 2. **Does search find the code a real change touched?** — `bench/eval-localize.mjs`, replaying
    real commits.
 3. **Does search find the symbol a developer means?** — `bench/eval-search.mjs`, 377 authored
@@ -94,6 +95,72 @@ flow through third-party libraries (for example `iterate(instances).filter(([_, 
 w.isDependencyTreeStatic())` with `iterare`) are `any` to the compiler and their references are
 missing from its answer. graph-indexer still finds some of them, and each one counts as a false
 positive here: the precision figures are a lower bound.
+
+### The same measurement for Go
+
+```bash
+brew install go                                   # or any Go ≥ 1.22
+(cd bench/oracle-go && go build -o ~/.gi-agentic/oracle-go .)
+(cd test/fixtures/gin && go mod download)
+node bench/eval-graph-go.mjs --n 150              # gin; --fixture/--fixture-dir for another module
+```
+
+**Method.** The oracle (`bench/oracle-go`) loads every package of the module, tests included,
+with `golang.org/x/tools/go/packages` and answers from `go/types`: the **exact** oracle is every
+identifier bound to the sampled declaration; the **dispatch** oracle adds, for a method, the uses
+of the interface methods it implements and, for an interface method, the uses of its
+implementations, which matches the contract of the TypeScript dispatch oracle. Lines the default build
+leaves out (files behind build tags) are excluded on both sides, since the checker has no answer
+there. graph-indexer's implicit implementations (`kind: inherit` on a type's declaration line, as
+Go has no `implements` clause) are not uses, so they are scored separately, for every
+interface in the repository, against `types.Implements` on the type or its pointer.
+
+Three repositories: gin (the fixture above) and two that graph-indexer had not been run on,
+caddy v2.8.4 (`7088605`, a module at major version 2 built around interfaces) and nats-server
+v2.10.22 (`240e9a4`, large types with many methods). Clone them at those tags and run
+`go mod download` in each. The seed is 7; the sample is 150 symbols for gin and 200 for the others.
+
+| repository | build | precision | recall | exact set | implementations P / R | grep P | name-only P |
+|---|---|---|---|---|---|---|---|
+| gin (146 symbols, 10 interfaces) | before | 0.992 | 0.952 | 0.911 | 1.000 / 0.936 | 0.238 | 0.373 |
+| | after | **1.000** | **0.981** | **0.986** | **1.000 / 1.000** | | |
+| caddy (196, 48) | before | 0.980 | 0.916 | 0.842 | 0.823 / 0.964 | 0.085 | 0.271 |
+| | after | **1.000** | **0.969** | **0.934** | **0.994 / 1.000** | | |
+| nats-server (199, 24) | before | 0.971 | 0.975 | 0.894 | 0.966 / 0.249 | 0.232 | 0.483 |
+| | after | **0.992** | **0.977** | **0.935** | **0.977 / 0.938** | | |
+
+(dispatch oracle, micro averages; grep's recall is 1.000 by construction.) The first run found
+seven faults, fixed in this order:
+
+- **Reopening an index lost Go's implicit implementations.** They lived only in memory after
+  indexing, so a server that opened an existing index (every session) no longer counted calls
+  through an interface as calls to its implementations. "Before" above was measured on fresh
+  indexes and does not show it. On a reopened gin index `find_references` on
+  `xmlBinding.Bind` found 0 of its 14 uses.
+- **A module at major version 2 or later** (`github.com/caddyserver/caddy/v2`) was imported
+  under the name `v2` rather than its package name, so no `caddy.X` in the repository resolved
+  (likewise `gopkg.in/yaml.v3`).
+- **Implementations were matched by method name only**: in caddy, `Handler.ServeHTTP(w, r,
+  next)` counted as implementing `AdminHandler.ServeHTTP(w, r)`. Parameter and result types
+  are now compared by their base names.
+- **Promoted methods and aliases were not counted**: `type Engine struct { RouterGroup }`
+  implements what `RouterGroup` implements, and `type DummyLogger = testhelper.DummyLogger`
+  has its target's methods.
+- **A package-level variable in another file** (`b := Form`, with `Form = formBinding{}`) left
+  the local untyped, and **conversions** `(*T)(nil)` were not references to `T`.
+- **Library types lost their package**: `req *http.Request` was stored as `Request`, and
+  `req.PostForm` was then bound by name to a repository method `PostForm`. Types now keep
+  their package, and a package outside the repository makes the type external.
+- **Locals did not shadow package functions**: `stack := stack(3); log(stack)` and a local
+  closure `check := func…; check()` were bound to the package's `stack` and `check`.
+
+**What is still missed.** Methods that a type gets from an embedded *library* type
+(`struct { net.Conn }` has `SetReadDeadline`; an interface embedding `io.Reader` needs
+`Read`): the index does not read the standard library or dependencies, so such types are not
+known to implement those interfaces, and calls through a library interface (`w.Write` on an
+`http.ResponseWriter`) are not tied to the repository's implementations. The rest is receiver
+types only a type checker knows: several values returned by one call, type switches and some
+chained calls. As in TypeScript, these lower recall and do not produce wrong answers.
 
 ## 2. Localization from real commits
 
