@@ -185,6 +185,11 @@ function receiverDescriptor(node, spec) {
     return parts.join('.');
 }
 
+/** The descriptor of a collection whose elements are wanted: a copy (`Array.from(xs)`, `[...xs]`) has those of xs. */
+function elementsDescriptor(node, spec) {
+    return receiverDescriptor(spec.collectionSource?.(node) ?? node, spec);
+}
+
 // ── type tests that narrow a variable (`x instanceof T`, `isinstance(x, T)`) ──
 const EXIT_STATEMENTS = new Set(['return_statement', 'throw_statement', 'raise_statement', 'continue_statement', 'break_statement']);
 const opText = (n) => n.childForFieldName('operator')?.text;
@@ -298,7 +303,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
 
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
-        let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, srcNode = null;
+        let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, bindEach = null, srcNode = null;
         let cbFn = null, cbArg = null;
         for (const c of m.captures) {
             const n = c.name;
@@ -320,6 +325,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'field.var') bindVar = c.node.text;
             else if (n === 'bind.expr' || n === 'field.expr') bindExpr = c.node;
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
+            else if (n === 'bind.each') bindEach = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
             else if (n === 'ret') { role = 'ret'; main = c.node; }
             else if (n === 'cb') { role = 'cb'; main = c.node; }
@@ -358,10 +364,11 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const list = role === 'bind' ? binds : fields;
             const key = role + ':' + main.id + ':' + bindName;
             const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar,
-                expr: bindExpr ? receiverDescriptor(bindExpr, spec) : null, elem: bindElem ? receiverDescriptor(bindElem, spec) : null };
+                expr: bindExpr ? receiverDescriptor(bindExpr, spec) : null, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
+                each: bindEach ? elementsDescriptor(bindEach, spec) : null };
             const prev = bindSites.get(key);
             if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
-            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem']) p[k] ??= rec[k]; }
+            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; }
         }
     }
 
@@ -378,6 +385,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const byNodeId = new Map();
     const hoisted = new Set();
     const defNameIds = new Set();
+    const anonQnames = new Set();
     const symbols = [];
     for (const d of filtered) {
         let name = d.nameNode.text;
@@ -406,10 +414,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (spec.refineKind) kind = spec.refineKind(kind, d, parent) ?? kind;
         let owner = d.owner;
         if (spec.ownerOf && !owner) owner = spec.ownerOf(d.node);
+        const node = d.node;
+        // an anonymous class (`<anonymous>`) that repeats in one scope is told apart by its line
+        if (name === '<anonymous>' && anonQnames.has((parent ? parent.qname + '.' : '') + name)) name = `<anonymous@${node.startPosition.row + 1}>`;
         let qname;
         if (owner && (!parent || parent.name !== owner)) qname = (parent ? parent.qname + '.' : '') + owner + '.' + name;
         else qname = parent ? parent.qname + '.' + name : name;
-        const node = d.node;
+        if (name.startsWith('<anonymous')) anonQnames.add(qname);
         const sym = {
             name,
             qname,
@@ -525,7 +536,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         return best?.type ?? null;
     };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
-    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.cb === b.cb;
+    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.each === b.each && a.cb === b.cb;
     // `helper((err, socket) => socket.send())`: an untyped parameter of a function passed to a call
     // takes its type from the callee's signature, resolved across files (the `cb:` types above)
     for (const { call, fn, arg } of cbSites) {
@@ -557,6 +568,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx });
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx });
         else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx });
+        else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx });
         else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx }); // shadows outer bindings
     }
     const lookupLocal = (ctx, name) => {
@@ -588,8 +600,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
         }
         return t;
     };
-    // iterating a map yields keys or entries except where the language hands out values (Go's `range`)
-    const elemOf = (t) => (!t ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2) : t.endsWith('{}') && spec.mapIterValues ? t.slice(0, -2) : null);
+    // Iterating a map yields keys or entries except where the language hands out values (Go's
+    // `range`). A named type may be a collection class (`class Registry extends Map<string,
+    // Module>`), which only the resolver can tell: `T#[]` is an element of T itself.
+    const elemOf = (t) => (!t || t === '!' ? null : deferred(t) ? t + '[]' : t.endsWith('[]') ? t.slice(0, -2)
+        : t.endsWith('{}') ? (spec.mapIterValues ? t.slice(0, -2) : null) : t + '#[]');
+    // what an element-wise method hands its callback (`xs.forEach(x => …)`): an element, or a map's value
+    const eachOf = (t) => (!t || t === '!' ? null : deferred(t) ? t + '[]' : /(\[\]|\{\})$/.test(t) ? t.slice(0, -2) : t + '#[]');
     /** The `cb:` type of a callback parameter, or null when the callee cannot be named. */
     const callbackType = ({ recv, method, i, j }, ctx, depth) => {
         let target = method; // a function in scope or imported
@@ -611,6 +628,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (v.cb) return depth > 5 ? null : callbackType(v.cb, v.ctx, depth);
         if (v.expr) return inferType(v.expr, v.ctx, depth + 1);
         if (v.elem) return elemOf(inferType(v.elem, v.ctx, depth + 1));
+        if (v.each) return eachOf(inferType(v.each, v.ctx, depth + 1));
         return null;
     };
     const SEG_RE = /^([A-Za-z_$@][\w$]*)((?:\(\)|\[\])*)$/;

@@ -336,7 +336,14 @@ export class Resolver {
         if (!str) return null;
         if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
         let s = str;
-        for (let i = 0; i < elem; i++) { if (!s.endsWith('[]') && !s.endsWith('{}')) return null; s = s.slice(0, -2); }
+        for (let i = 0; i < elem; i++) {
+            if (!s.endsWith('[]') && !s.endsWith('{}')) {
+                // an element of a collection class (`class Registry extends Map<string, Module>`)
+                const t = s !== '!' ? this.resolveTypeName(s, fileId) : null;
+                return t ? this.#elementOf(t, elem - i) : null;
+            }
+            s = s.slice(0, -2);
+        }
         if (s === '!') return EXTERNAL;
         if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
         if (s.endsWith('{}')) return { mapOf: s.slice(0, -2), fileId };   // a map value
@@ -344,6 +351,14 @@ export class Resolver {
         if (t) return t;
         const spec = this.specs[this.t.file(fileId)?.lang];
         return spec?.isPrimitiveType?.(s) ? EXTERNAL : null;
+    }
+
+    /** An element of a type, `elem` levels down: of a collection value, or of a collection class. */
+    #elementOf(t, elem) {
+        if (t.arrayOf != null) return this.typeFromString(t.arrayOf, t.fileId, elem - 1);
+        if (t.mapOf != null) return this.typeFromString(t.mapOf, t.fileId, elem - 1); // a map's value
+        const s = t.id != null ? this.t.sym(t.id) : null;
+        return s?.type && /(\[\]|\{\})$/.test(s.type) ? this.typeFromString(s.type, s.fileId, elem) : null;
     }
 
     /** Resolve an extraction-time receiver type descriptor to a type {id,name,fileId} or EXTERNAL. */
@@ -389,15 +404,16 @@ export class Resolver {
         const spec = this.specs[this.t.file(fileId)?.lang];
         for (let i = 1; i < parts.length && cur && cur !== EXTERNAL; i++) {
             const { name, elem } = parts[i];
+            if (!name) { cur = elem ? this.#elementOf(cur, elem) : cur; continue; } // `T#[]`: an element of T itself
             if (cur.arrayOf != null) {
                 // `list.get(0)` / `xs.first()` reach the element; other members are the language's
-                cur = spec?.elementMethods?.has(name) ? this.typeFromString(cur.arrayOf + '[]'.repeat(elem), cur.fileId) : EXTERNAL;
+                cur = spec?.elementMethods?.has(name) ? this.typeFromString(cur.arrayOf, cur.fileId, elem) : EXTERNAL;
                 continue;
             }
             if (cur.mapOf != null) {
                 // `m.get(k)` reaches a value, `m.values()` the collection of values
-                cur = spec?.mapMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]'.repeat(elem), cur.fileId)
-                    : spec?.mapValueMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]' + '[]'.repeat(elem), cur.fileId) : EXTERNAL;
+                cur = spec?.mapMethods?.has(name) ? this.typeFromString(cur.mapOf, cur.fileId, elem)
+                    : spec?.mapValueMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]', cur.fileId, elem) : EXTERNAL;
                 continue;
             }
             const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, name);

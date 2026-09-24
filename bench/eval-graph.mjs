@@ -186,8 +186,10 @@ function grepRefs(sym) {
 }
 
 // ── sample ───────────────────────────────────────────────────────────────────────
+// (an anonymous class, named `<anonymous>` in the index, is nothing anyone looks up by name)
 const cands = intel.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.name_line, s.name_col, f.path FROM symbols s JOIN files f ON f.id = s.file_id
-    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind IN ('function','method','class','interface') AND length(s.name) > 2 AND s.name NOT IN ('constructor')`)
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind IN ('function','method','class','interface') AND length(s.name) > 2 AND s.name NOT IN ('constructor')
+    AND s.name NOT LIKE '<%'`)
     .filter(s => scope.some(p => s.path.startsWith(p)) && !s.path.endsWith('.d.ts'));
 const rand = rng(seed);
 const sample = [];

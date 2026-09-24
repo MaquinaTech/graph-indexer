@@ -16,6 +16,7 @@ const DEFS_COMMON = `
 (generator_function_declaration name: (identifier) @name) @def.function
 (class_declaration name: (_) @name) @def.class
 (class name: (_) @name) @def.class
+(class "class" @name !name) @def.class
 (method_definition name: (_) @name) @def.method
 (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression) (generator_function)]) @def.function)
 (variable_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression) (generator_function)]) @def.function)
@@ -42,6 +43,7 @@ const DEFS_COMMON = `
 
 const DEFS_JS = `
 (field_definition property: (_) @name value: [(arrow_function) (function_expression)]) @def.method
+(field_definition property: (_) @name value: (class)) @def.class
 (field_definition property: (_) @name) @def.field
 `;
 
@@ -72,6 +74,9 @@ const DEFS_TS = `
 (property_signature name: (_) @name type: (type_annotation (_) @type)) @def.field
 (class_declaration name: (_) @name (class_heritage (extends_clause) @type)) @def.class
 (abstract_class_declaration name: (_) @name (class_heritage (extends_clause) @type)) @def.class
+(class name: (_) @name (class_heritage (extends_clause) @type)) @def.class
+(class "class" @name !name (class_heritage (extends_clause) @type)) @def.class
+(variable_declarator name: (identifier) @name value: (class (class_heritage (extends_clause) @type))) @def.class
 (required_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
 (required_parameter "readonly" pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
 (optional_parameter (accessibility_modifier) pattern: (identifier) @name type: (type_annotation (_) @type)) @def.field
@@ -134,9 +139,10 @@ const IMPORTS_COMMON = `
 (arrow_function body: [(call_expression) (new_expression) (member_expression) (identifier) (await_expression) (parenthesized_expression) (this) (subscript_expression)] @ret)
 `;
 
-// `xs.forEach(x => …)`: the first callback parameter of an element-wise array method is an element.
+// `xs.forEach(x => …)`: the first callback parameter of an element-wise method is an element (a
+// map's value for `m.forEach(v => …)`).
 const callbackParam = (param) => `(call_expression
-  function: (member_expression object: (_) @bind.elem property: (property_identifier) @_m)
+  function: (member_expression object: (_) @bind.each property: (property_identifier) @_m)
   arguments: (arguments . (arrow_function ${param}))
   (#match? @_m "^(forEach|map|filter|find|findLast|findIndex|findLastIndex|some|every|flatMap)$")) @bind`;
 
@@ -267,6 +273,46 @@ function parseRequire(callNode, srcNode) {
     return [{ source, imported: null, local: null }];
 }
 
+// what names a class expression (`const X = class {}`, a field, a default export) is the definition
+const CLASS_HOLDERS = new Set(['variable_declarator', 'public_field_definition', 'field_definition', 'export_statement']);
+const isAnonymousClass = (node) => node.type === 'class' && !node.childForFieldName('name');
+
+/**
+ * The name of an anonymous class expression: what importers call it when it is a CommonJS export
+ * (`module.exports = class …`, `exports.Foo = class …`), else `<anonymous>` (`return class extends
+ * ModuleRef {…}`, `{ useClass: class {…} }`), a name no code can refer to. It is a symbol of its
+ * own so that `this` in its methods is an instance of it and its bases.
+ */
+function anonymousClassName(node, relPath) {
+    const p = node.parent;
+    const left = p?.type === 'assignment_expression' && p.childForFieldName('right')?.id === node.id ? p.childForFieldName('left') : null;
+    const target = left?.type === 'member_expression' ? left.text.replace(/\s+/g, '') : '';
+    if (target === 'module.exports') return fileStem(relPath) || '<anonymous>';
+    if (/^(module\.)?exports\.[A-Za-z_$][\w$]*$/.test(target)) return target.slice(target.lastIndexOf('.') + 1);
+    return '<anonymous>';
+}
+
+/** What importers call a module's default export: its file name in camel case (`index` → its directory). */
+function fileStem(relPath) {
+    const base = String(relPath ?? '').split('/').pop().replace(/\.[^.]+$/, '');
+    const stem = base === 'index' ? String(relPath).split('/').slice(-2, -1)[0] ?? base : base;
+    return stem.replace(/[-_.](\w)/g, (_, c) => c.toUpperCase()) || null;
+}
+
+/** `Array.from(xs)` and `[...xs]` hold the elements of xs: the node of xs, else null. */
+function collectionSource(node) {
+    const only = (list) => { const kids = list?.namedChildren.filter(n => n.type !== 'comment') ?? []; return kids.length === 1 ? kids[0] : null; };
+    if (node.type === 'call_expression' && node.childForFieldName('function')?.text.replace(/\s+/g, '') === 'Array.from') {
+        const arg = only(node.childForFieldName('arguments')); // a second argument maps the elements
+        return arg && arg.type !== 'spread_element' ? arg : null;
+    }
+    if (node.type === 'array') {
+        const el = only(node);
+        return el?.type === 'spread_element' ? el.namedChildren[0] ?? null : null;
+    }
+    return null;
+}
+
 /** `const x = require('y')` / `const x = require('y').z` / `const {a} = require('y')` are imports, not definitions. */
 function isRequireBinding(node) {
     const decl = node.type === 'variable_declarator' ? node : node.namedChildren?.find(c => c.type === 'variable_declarator');
@@ -327,7 +373,11 @@ function makeSpec(id, grammar, extensions, { ts, jsx }) {
         commentTypes: ['comment'],
         containerKinds: new Set(['class', 'interface', 'module', 'enum', 'function', 'method']),
         parseImport: parseImportNode,
-        filterDef: (d) => !((d.kind === 'variable') && isRequireBinding(d.node)),
+        collectionSource,
+        filterDef: (d) => !((d.kind === 'variable') && isRequireBinding(d.node))
+            && !(isAnonymousClass(d.node) && CLASS_HOLDERS.has(d.node.parent?.type)), // named by its holder
+        // `export default class extends Base {…}` is a class (its methods' `this`), not a function
+        refineKind: (kind, d) => (d.node.type === 'export_statement' && (d.nameNode.type === 'class' || d.nameNode.type === 'class_declaration') ? 'class' : kind),
         normalizeName: (name, d, relPath) => {
             if (d.node.type === 'export_statement') {
                 // default export → its own name, else named after its file (what importers call it)
@@ -335,11 +385,9 @@ function makeSpec(id, grammar, extensions, { ts, jsx }) {
                 const inner = d.nameNode;
                 let own = inner.childForFieldName?.('name')?.text;
                 if (!own && inner.type === 'binary_expression') own = inner.childForFieldName('right')?.childForFieldName?.('name')?.text;
-                if (own) return own;
-                const base = String(relPath ?? '').split('/').pop().replace(/\.[^.]+$/, '');
-                const stem = base === 'index' ? String(relPath).split('/').slice(-2, -1)[0] ?? base : base;
-                return stem.replace(/[-_.](\w)/g, (_, c) => c.toUpperCase()) || null;
+                return own || fileStem(relPath);
             }
+            if (isAnonymousClass(d.node)) return anonymousClassName(d.node, relPath);
             return name;
         },
         parseRequire,

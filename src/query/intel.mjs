@@ -419,16 +419,18 @@ export class CodeIntel {
         if (!rows.length) return { total: 0, plausible: [], typeNames: [] };
         const typeNames = new Set();
         const owner = sym.parent_id != null ? this.sym(sym.parent_id) : null;
+        // a type is mentioned by its name; an anonymous class (`<anonymous>`) never is
+        const named = (n) => n && !n.startsWith('<anonymous');
         if (owner && TYPE_KINDS.has(owner.kind)) {
-            typeNames.add(owner.name);
+            if (named(owner.name)) typeNames.add(owner.name);
             // subclasses that inherit the member without redeclaring it: `jsonSocket.send()` on a
             // JsonSocket extends TcpSocket runs TcpSocket.send
-            if (!sym.is_static) for (const name of this.#inheritingSubtypes(owner.id, sym.name)) typeNames.add(name);
+            if (!sym.is_static) for (const name of this.#inheritingSubtypes(owner.id, sym.name)) if (named(name)) typeNames.add(name);
         }
         for (const id of ids) {
             const s = id === sym.id ? null : this.sym(id);
             const o = s?.parent_id != null ? this.sym(s.parent_id) : null;
-            if (o && TYPE_KINDS.has(o.kind)) typeNames.add(o.name);
+            if (o && TYPE_KINDS.has(o.kind) && named(o.name)) typeNames.add(o.name);
         }
         if (!typeNames.size) {
             // a free function: plausible where its file is imported, or next to it

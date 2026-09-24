@@ -111,6 +111,51 @@ test('a map built with type arguments hands back its values: `new Map<K, V>().ge
     } finally { i.close(); rmrf(dir); }
 });
 
+test('`this` in an anonymous class is an instance of it and its bases, not of the class around it', async () => {
+    const dir = makeRepo({
+        'src/resolver.ts': `export abstract class Resolver {\n  protected find(token: string) { return token; }\n}\nexport class Ref extends Resolver {\n  get(token: string) { return this.find(token); }\n}\n`,
+        'src/module.ts': `import { Ref } from './resolver';\nexport class Mod {\n  find(x: string) { return x; }\n  createRefType() {\n    const self = this;\n    return class extends Ref {\n      lookup(t: string) {\n        return this.find(t);\n      }\n      own() { return this.get(self.find('x')); }\n    };\n  }\n}\n`,
+        'src/base.ts': `export class Base {\n  helper() { return 1; }\n}\n`,
+        'src/job.ts': `import { Base } from './base';\nexport default class extends Base {\n  run() { return this.helper(); }\n}\n`,
+        // a key is no name to refer to the class by: `useClass` below stays the function's
+        'src/providers.ts': `export const provider = { useClass: class { run() { return 1; } } };\nexport function useClass() { return 2; }\n`,
+    });
+    const i = new CodeIntel({ root: dir });
+    await i.open();
+    try {
+        const find = await callTool(i, 'find_references', { symbol: 'Resolver.find' });
+        assert.match(find, /8 {2}call +in Mod\.createRefType\.<anonymous>\.lookup/);
+        assert.match(find, /Complete: every "find\(…\)" call/);
+        // the enclosing class's own `find` is reached only through `self`
+        const own = await callTool(i, 'find_references', { symbol: 'Mod.find' });
+        assert.match(own, /10 {2}call +in Mod\.createRefType\.<anonymous>\.own/);
+        assert.doesNotMatch(own, /\n +8 {2}call/);
+        assert.match(await callTool(i, 'find_references', { symbol: 'Ref.get' }), /10 {2}call +in Mod\.createRefType\.<anonymous>\.own/);
+        // a default-exported anonymous class is a class too
+        assert.match(await callTool(i, 'find_references', { symbol: 'Base.helper' }), /3 {2}call +in job\.run/);
+        assert.match(await callTool(i, 'outline', { path: 'src/module.ts' }), /class extends Ref\n.*method lookup/);
+        assert.match(await callTool(i, 'find_references', { symbol: 'useClass' }), /References to useClass \(function\)/);
+    } finally { i.close(); rmrf(dir); }
+});
+
+test('a map hands its values to forEach callbacks, values() loops and copies, also from a class that extends Map', async () => {
+    const dir = makeRepo({
+        'src/module.ts': `export class Mod {\n  replace(x: number) { return x; }\n}\nexport class Other {\n  replace(x: number) { return x; }\n}\n`,
+        'src/modules-container.ts': `import { Mod } from './module';\nexport class ModulesContainer extends Map<string, Mod> {\n  getById(id: string) { return Array.from(this.values()).find(m => m.replace(1)); }\n}\n`,
+        'src/container.ts': `import { ModulesContainer } from './modules-container';\nimport { Mod } from './module';\nexport class Container {\n  private readonly modules = new ModulesContainer();\n  private readonly plain = new Map<string, Mod>();\n  replace(x: number) {\n    this.modules.forEach(moduleRef => moduleRef.replace(x));\n  }\n  all() {\n    for (const m of this.modules.values()) m.replace(1);\n  }\n  plainEach() {\n    this.plain.forEach(p => p.replace(2));\n  }\n  spread() {\n    return [...this.plain.values()].map(q => q.replace(3));\n  }\n  viaCall() {\n    makeContainer().forEach(x => x.replace(4));\n  }\n}\nfunction makeContainer(): ModulesContainer { return new ModulesContainer(); }\n`,
+    });
+    const i = new CodeIntel({ root: dir });
+    await i.open();
+    try {
+        const refs = await callTool(i, 'find_references', { symbol: 'Mod.replace' });
+        for (const line of [7, 10, 13, 16, 19]) assert.match(refs, new RegExp(`\\n +${line} {2}call +in Container\\.`));
+        assert.match(refs, /3 {2}call +in ModulesContainer\.getById/);
+        assert.match(refs, /— 6 in 2 files/);
+        assert.match(refs, /Complete: every "replace\(…\)" call/);
+        assert.match(await callTool(i, 'find_references', { symbol: 'Other.replace' }), /0 in 0 files/);
+    } finally { i.close(); rmrf(dir); }
+});
+
 test('call_graph lists every caller of every node, expanding each at its shallowest level', async () => {
     const dir = makeRepo({
         'src/chain.js': `function target() {}\nfunction x() { target(); y(); }\nfunction y() { target(); }\nfunction z() { x(); }\nmodule.exports = { x, y, z };\n`,
