@@ -53,7 +53,8 @@ export function grepUse(cmd, repo = null) {
 }
 
 // reading a source file through the shell (the gi7 arm reads through `view`)
-const SHELL_READ = /(^|&&\s*|;\s*)(sed\s+-n|cat|head|tail|nl|awk)\b[^|]*\.(py|pyi|ts|tsx|js|mjs|go|rs|java|rb|php)\b/;
+// `cat > f.py` and `cat << EOF > f.py` write a file, they do not read one
+const SHELL_READ = /(^|&&\s*|;\s*)(sed\s+-n|cat(?!\s*(?:>|<<))|head|tail|nl|awk)\b[^|]*\.(py|pyi|ts|tsx|js|mjs|go|rs|java|rb|php)\b/;
 
 /** Tool policy of each arm: which tool uses count as violations. */
 export const POLICIES = {
