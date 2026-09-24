@@ -4,8 +4,8 @@
  *
  *   node bench/agentic/grade.mjs --gi LABEL --run RUN_ID [--transcript FILE]
  *
- * Question tasks: the answer file is compared with the compiler-verified gold set (precision,
- * recall, F1; "solved" = F1 of 1). Edit tasks: the task's hidden checks run in the run's worktree
+ * Question tasks: the answer file — or, for a delegated question (deliver: "reply"), the agent's
+ * reply — is compared with the compiler-verified gold set (precision, recall, F1; "solved" = F1 of 1). Edit tasks: the task's hidden checks run in the run's worktree
  * (tests added by the original commit, the repository's existing tests for the touched area,
  * compiler/type checks, and structural checks for refactors).
  * The agent transcript, when given, adds tokens, turns, tool calls and tool-policy violations.
@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
-import { parseTranscript } from './transcript.mjs';
+import { parseTranscript, RESULT_CHARS_PER_TOKEN } from './transcript.mjs';
 
 /** Parse "path:LINE" answers (tolerates bullets, backticks, "./" and absolute checkout paths). */
 export function parseAnswer(text, checkout) {
@@ -115,10 +115,15 @@ export function gradeRun(label, id, transcript = null) {
     if (!meta) throw new Error(`no run ${id} under ${label}`);
     const task = loadTasks().find(t => t.id === meta.taskId);
     if (!task) throw new Error(`task ${meta.taskId} not found`);
-    const res = task.family === 'qa' ? gradeQa(task, meta) : gradeEdit(task, meta);
     let t = null;
-    if (transcript && fs.existsSync(transcript)) {
-        t = parseTranscript(transcript, { arm: meta.arm, repo: meta.checkout, own: [meta.runDir, meta.checkout], work: WORK });
+    if (transcript && fs.existsSync(transcript)) t = parseTranscript(transcript, { arm: meta.arm, repo: meta.checkout, own: [meta.runDir, meta.checkout], work: WORK });
+    // a delegated question is answered by the reply: it becomes the answer file
+    if (meta.deliver === 'reply') {
+        if (!t) throw new Error(`${id} is answered by its reply: a transcript is required`);
+        fs.writeFileSync(path.join(runDir, 'answer.txt'), t.reply);
+    }
+    const res = task.family === 'qa' ? gradeQa(task, meta) : gradeEdit(task, meta);
+    if (t) {
         fs.copyFileSync(transcript, path.join(runDir, 'transcript.jsonl'));
         // reading benchmark internals would leak answers: file contents are a violation, a bare
         // file list (a search tool run from the wrong directory) is recorded
@@ -131,7 +136,11 @@ export function gradeRun(label, id, transcript = null) {
         giLabel: label, gradedAt: new Date().toISOString(), ...res,
         agent: t ? { models: t.models, turns: t.turns, usage: t.usage, costUnits: t.costUnits, toolCalls: t.toolCalls, toolCounts: t.toolCounts,
             giCalls: t.giCalls, grepCalls: t.grepCalls, filesRead: t.filesRead, filesEdited: t.filesEdited.length, wallMs: t.wallMs,
-            outputRecorded: t.outputRecorded, firstEditTurn: t.firstEditTurn, modelMs: t.modelMs, toolMs: t.toolMs, violations: t.violations, benign: t.benign, leaks: t.leaks } : null,
+            outputRecorded: t.outputRecorded, firstEditTurn: t.firstEditTurn, modelMs: t.modelMs, toolMs: t.toolMs, violations: t.violations, benign: t.benign, leaks: t.leaks,
+            contextFirst: t.contextFirst, contextLast: t.contextLast, contextAtAnswer: t.contextAtAnswer,
+            turnsToAnswer: t.turnsToAnswer, costUnitsToAnswer: t.costUnitsToAnswer, wallMsToAnswer: t.wallMsToAnswer,
+            // what a delegating agent's context receives: the reply, at the density of a tool result
+            ...(meta.deliver === 'reply' ? { agentType: meta.agentType, replyChars: t.reply.length, replyTokens: Math.round(t.reply.length / RESULT_CHARS_PER_TOKEN) } : {}) } : null,
     };
     writeJson(path.join(runDir, 'result.json'), record);
     appendJsonl(path.join(WORK, 'results', `${label}.jsonl`), record);

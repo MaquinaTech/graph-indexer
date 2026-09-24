@@ -12,7 +12,7 @@ import fs from 'node:fs';
 
 // tokens a tool result adds to the next call's context: 2.63 characters per token, fitted on 301 calls
 // (237 runs) that follow a message without reasoning
-const RESULT_CHARS_PER_TOKEN = 2.63;
+export const RESULT_CHARS_PER_TOKEN = 2.63;
 const GREP_CMD = /(^|[|;&(\s])(grep|egrep|fgrep|rg|ag|ack|git\s+grep)(\s|$)/;
 const FIND_NAME = /(^|[|;&(\s])find\s+\S.*-(i?name|i?path|regex)\b/;
 const GI_CMD = /(^|[\s/])(gi|graph-indexer(\.mjs)?)\s+(search|symbol|read|refs|callgraph|impact|outline|grep|check|files|tests|status)\b/;
@@ -71,6 +71,9 @@ export const POLICIES = {
     'grep+gi5': { forbidTools: [], forbidBash: [], label: "built-in tools and graph-indexer, fifth card (the control's rules word for word, compact reads)" },
     'grep+gi6': { forbidTools: [], forbidBash: [], label: "built-in tools with the control's rules, graph-indexer for uses, callers, impact and the edit check" },
     'grep+gi7': { forbidTools: [], forbidBash: [{ test: (c) => SHELL_READ.test(c) }], label: 'the sixth card, reading source through the post-read hook (view)' },
+    'ask-grep': { forbidTools: [], forbidBash: [GI_CMD], label: 'a delegated question, general-purpose sub-agent with built-in tools' },
+    'ask-explore': { forbidTools: [], forbidBash: [GI_CMD], label: 'a delegated question, the built-in Explore agent' },
+    'ask-helper': { forbidTools: [], forbidBash: [], label: 'a delegated question, the structural helper with graph-indexer' },
     mcp: { forbidTools: [], forbidBash: [], label: 'built-in tools and the graph-indexer MCP server with its instructions block' },
     'mcp+hooks': { forbidTools: [], forbidBash: [], label: 'built-in tools, the graph-indexer MCP server and its Claude Code hooks' },
 };
@@ -87,6 +90,12 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     const perMessage = new Map();
     const order = [];                 // message keys in the order the model produced them
     const outChars = new Map();
+    const textOf = new Map();         // message key → its text blocks (the last message's text is the reply)
+    const tsOf = new Map();           // message key → when the model produced it
+    // Sub-agents of some harnesses hand their result back with a tool call (SubagentHandback), and the
+    // harness then nudges them once or twice more ("your report has not been delivered", "no visible
+    // output"). Those turns follow the answer and are the harness's, not the agent's work.
+    let handback = null, handbackAt = null, nudgeAt = null;
     const resultChars = new Map();    // message key → characters of the tool results that answered it
     const usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
     const tools = [];
@@ -99,6 +108,10 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         if (ts) { first ??= ts; last = ts; }
         if (ev.type === 'result') { result = ev; continue; }
         const msg = ev.message;
+        if (ev.type === 'user' && typeof msg?.content === 'string' && /^\[(handback-send-enforce|Your previous response had no visible output)/.test(msg.content)) {
+            nudgeAt ??= order.length;     // assistant messages produced before the first nudge
+            continue;
+        }
         if (ev.type === 'user' && Array.isArray(msg?.content)) {
             for (const c of msg.content) {
                 if (c.type !== 'tool_result') continue;
@@ -112,6 +125,7 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         const key = msg.id ?? ev.requestId ?? ev.uuid;
         if (!perMessage.has(key)) {
             order.push(key);
+            if (ts) tsOf.set(key, ts);
             if (ts && lastResultAt) { modelMs += ts - lastResultAt; lastResultAt = null; }
         }
         lastKey = key;
@@ -125,13 +139,23 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
             output: Math.max(prev.output, u.output_tokens ?? 0),
         });
         for (const c of msg.content ?? []) {
+            if (c.type === 'tool_use' && c.name === 'SubagentHandback') {
+                handback = String(c.input?.message ?? '');
+                handbackAt ??= order.length;  // 1-based position of the message that handed back
+                outChars.set(key, (outChars.get(key) ?? 0) + JSON.stringify(c.input ?? {}).length);
+                continue;
+            }
             if (c.type === 'tool_use') {
                 tools.push({ name: c.name, input: c.input ?? {} });
                 outChars.set(key, (outChars.get(key) ?? 0) + JSON.stringify(c.input ?? {}).length);
                 if (ts) usedAt.set(c.id, ts);
                 if (firstEditTurn == null && /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(c.name)) firstEditTurn = order.length;
             }
-            else if (c.type === 'text' && c.text) { finalText = c.text; outChars.set(key, (outChars.get(key) ?? 0) + c.text.length); }
+            else if (c.type === 'text' && c.text) {
+                finalText = c.text;
+                outChars.set(key, (outChars.get(key) ?? 0) + c.text.length);
+                (textOf.get(key) ?? textOf.set(key, []).get(key)).push(c.text);
+            }
             else if (c.type === 'thinking' && c.thinking) outChars.set(key, (outChars.get(key) ?? 0) + c.thinking.length);
         }
     }
@@ -151,6 +175,18 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     });
     for (const u of perMessage.values()) for (const k of Object.keys(usage)) usage[k] += u[k];
     const turns = perMessage.size;
+    // the context of the first and the last call: what the agent's own work added to its context
+    const contextFirst = order.length ? ctxOf(perMessage.get(order[0])) : null;
+    const contextLast = order.length ? ctxOf(perMessage.get(order[order.length - 1])) : null;
+    // the reply: what the harness handed back, or the text of the last message that has any (what a
+    // delegating agent receives)
+    const lastText = [...order].reverse().find(k => textOf.has(k));
+    const reply = handback ?? (lastText ? textOf.get(lastText).join('\n') : '');
+    // up to the answer: the messages before the harness's first nudge, or up to the hand-back
+    const answerN = Math.min(nudgeAt ?? Infinity, handbackAt ?? Infinity, order.length) || order.length;
+    const toAnswer = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+    for (const key of order.slice(0, answerN)) for (const k of Object.keys(toAnswer)) toAnswer[k] += perMessage.get(key)[k];
+    const answeredTs = tsOf.get(order[answerN - 1]) ?? null;
     // headless runs report authoritative totals in the final result event
     if (result?.usage) {
         const u = result.usage;
@@ -244,5 +280,11 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
         costUsd: result?.total_cost_usd ?? null,
         violations, benign, leaks,
         finalText: finalText.slice(0, 2000),
+        reply, contextFirst, contextLast,
+        // the same measures up to the answer, without the harness's hand-back turns
+        turnsToAnswer: answerN,
+        costUnitsToAnswer: Math.round(toAnswer.input + 1.25 * toAnswer.cacheWrite + 0.1 * toAnswer.cacheRead + 5 * toAnswer.output),
+        wallMsToAnswer: first && answeredTs ? answeredTs - first : null,
+        contextAtAnswer: answerN ? ctxOf(perMessage.get(order[answerN - 1])) : null,
     };
 }

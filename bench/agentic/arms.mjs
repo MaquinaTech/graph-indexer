@@ -24,6 +24,11 @@
  *   grep+gi7  grep+gi6 with graph-indexer's post-read hook: code is read with a \`view\` command that
  *             prints what Read prints plus what the hook adds after a Read (the indirection the lines
  *             involve, resolved; where names are defined while crawling) — hooks do not run in sub-agents
+ *   ask-grep  a delegated question: a general-purpose sub-agent gets the question as its message,
+ *             like one a main agent hands off, and its reply is the answer; built-in tools only
+ *   ask-explore the same message to the built-in Explore agent (read-only search), built-in tools
+ *   ask-helper the same message to the structural helper `init` installs (src/cli/helper.mjs): its
+ *             instructions, then the message; graph-indexer through the CLI
  *   mcp       graph-indexer as users install it: the MCP server plus the block `init` writes to
  *             CLAUDE.md/AGENTS.md; needs a harness with MCP (run-headless.mjs)
  *   mcp+hooks the same plus the Claude Code hooks (edit check, definition rescue, crawl-gated context)
@@ -32,7 +37,17 @@
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'mcp', 'mcp+hooks'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks'];
+
+/**
+ * Arms that answer a delegated question: the sub-agent type to launch, and whether the message
+ * starts with the structural helper's instructions. The reply is graded, not an answer file.
+ */
+export const ASK_ARMS = {
+    'ask-grep': { agentType: 'general-purpose', helper: false },
+    'ask-explore': { agentType: 'Explore', helper: false },
+    'ask-helper': { agentType: 'general-purpose', helper: true },
+};
 
 /** Arms that read through \`view\` (Read plus the post-read hook's context). */
 export const VIEW_ARMS = new Set(['grep+gi7']);
@@ -41,9 +56,25 @@ export const VIEW_ARMS = new Set(['grep+gi7']);
 export const HARNESS_ARMS = new Set(['mcp', 'mcp+hooks']);
 
 /** Arms whose agent gets graph-indexer (an index is built for their checkout). */
-export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules';
+export const usesIndex = (arm) => arm !== 'grep' && arm !== 'grep+rules' && !(ASK_ARMS[arm] && !ASK_ARMS[arm].helper);
 
 import { managedBlock } from '../../src/cli/init.mjs';
+import { helperInstructions } from '../../src/cli/helper.mjs';
+
+/**
+ * The message a main agent sends when it delegates a question: the repository, the question and
+ * the answer format. The helper arm's message starts with the helper's instructions, which the
+ * product installs as the sub-agent's system prompt.
+ */
+export function askMessage(arm, task, checkout, gi = null) {
+    const msg = `Repository root: \`${checkout}\`. Your working directory is a different repository: use absolute paths and pass this root to every search. Work offline (no web, no downloads) and do not modify any file.
+
+${task.statement}
+
+Answer format: ${task.answerFormat}
+Be efficient, but the answer must be complete and correct. Reply with the answer alone.`;
+    return ASK_ARMS[arm].helper ? `${helperInstructions({ cli: gi })}\n\n---\n\n${msg}` : msg;
+}
 
 /** Tool card: the same information an MCP client shows (tool descriptions + server instructions), CLI syntax. */
 function basicCard(gi, { grep = true } = {}) {

@@ -3,7 +3,7 @@
  * Aggregate graded runs into comparison tables.
  *
  *   node bench/agentic/report.mjs --gi LABEL[,LABEL…] [--baseline grep] [--integrated grep+gi+] [--nogrep gi]
- *                                 [--family qa|refactor|fresh] [--tasks ID,ID|file.json] [--json out.json] [--md out.md]
+ *                                 [--family qa|refactor|fresh] [--tasks ID,ID|file.json] [--to-answer] [--json out.json] [--md out.md]
  *
  * Per arm: runs, solve rate (Wilson 95% CI), mean score (F1 for questions, share of checks passed
  * for edits), and median/mean agent cost (input-equivalent tokens), turns, tool calls and wall
@@ -47,6 +47,12 @@ if (opt('--tasks')) {
 }
 // dry runs (rep 0, graded without an agent) are harness checks, not observations
 rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1);
+// --to-answer: cost, turns and time up to the answer, without the turns a harness adds after it
+// (sub-agents that hand their result back with a tool call and are then nudged)
+if (flag('--to-answer')) for (const r of rows) {
+    const a = r.agent;
+    r.agent = { ...a, costUnits: a.costUnitsToAnswer ?? a.costUnits, turns: a.turnsToAnswer ?? a.turns, wallMs: a.wallMsToAnswer ?? a.wallMs, contextLast: a.contextAtAnswer ?? a.contextLast };
+}
 // runs that looked the answer up outside the repository (web, upstream fetch, task files) are invalid
 const leaked = rows.filter(r => r.agent?.leaks?.length);
 rows = rows.filter(r => !r.agent?.leaks?.length);
@@ -103,6 +109,20 @@ for (const fam of groups) {
         };
         (json.arms[fam] ??= {})[a] = row;
         out.push(`| ${a} | ${row.runs} | ${pct(row.solved)} | ${pct(lo)}–${pct(hi)} | ${fmt(row.score)} | ${k(row.costMedian)} | ${k(row.costMean)} | ${fmt(row.turns, 1)} | ${fmt(row.tools, 1)} | ${fmt(row.gi, 1)} | ${fmt(row.grep, 1)} | ${fmt(row.wall, 0)} |`);
+    }
+    // delegated questions: what the delegating agent's context receives (the reply) against what the
+    // sub-agent's own work added to its context (the context a main agent would carry had it looked
+    // the answer up itself)
+    if (rs.some(r => Number.isFinite(r.agent?.replyTokens))) {
+        out.push('\n| arm | reply (tokens, mean) | context added by the work (tokens, mean) | ratio |');
+        out.push('|---|---|---|---|');
+        for (const a of arms) {
+            const x = rs.filter(r => r.arm === a && Number.isFinite(r.agent?.replyTokens) && Number.isFinite(r.agent?.contextLast));
+            if (!x.length) continue;
+            const reply = mean(x.map(r => r.agent.replyTokens)), work = mean(x.map(r => r.agent.contextLast - r.agent.contextFirst));
+            (json.context ??= {})[a] = { reply, work };
+            out.push(`| ${a} | ${fmt(reply, 0)} | ${fmt(work, 0)} | ${fmt(reply / work, 3)} |`);
+        }
     }
     const base = rs.filter(r => r.arm === baseline);
     if (!base.length) continue;

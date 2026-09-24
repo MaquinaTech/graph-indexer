@@ -7,12 +7,13 @@
  *   callers-2        functions/methods that call a method directly or through one intermediate
  *                    caller (a two-level impact question)
  *   implementations  classes implementing an interface, directly or through a base class
+ *   subclasses       classes extending a class, directly or through another subclass
  *
  * Candidates are sampled with a seed; only symbols without overriding/overridden declarations are
  * used for call questions, so "the calls of X" has one unambiguous compiler answer.
  *
  *   node bench/agentic/gen-qa-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ \
- *        [--seed 3] [--calls 8] [--callers 4] [--impls 3] [--set NAME]
+ *        [--seed 3] [--calls 8] [--callers 4] [--impls 3] [--subclasses 0] [--impl-max 15] [--set NAME]
  *
  * --set NAME writes a separate task set (tasks/qa-<name>-<set>.json, ids qa-<name>-<set>-…) whose
  * targets avoid every method and interface used by the repository's other question sets.
@@ -38,7 +39,9 @@ const taken = new Set(fs.readdirSync(tasksDir)
     .filter(f => f.startsWith(`qa-${name}`) && f.endsWith('.json') && path.join(tasksDir, f) !== out)
     .flatMap(f => JSON.parse(fs.readFileSync(path.join(tasksDir, f), 'utf8')).flatMap(t => [t.meta.target, t.meta.target.split('.').pop()])));
 const seed = Number(opt('--seed', 3));
-const want = { calls: Number(opt('--calls', 8)), callers: Number(opt('--callers', 4)), impls: Number(opt('--impls', 3)) };
+const want = { calls: Number(opt('--calls', 8)), callers: Number(opt('--callers', 4)), impls: Number(opt('--impls', 3)), subclasses: Number(opt('--subclasses', 0)) };
+// interfaces with more implementations than this are left out (long lists; the earlier sets used 15)
+const implMax = Number(opt('--impl-max', 15));
 
 const base = git(repo, 'rev-parse', 'HEAD').trim();
 const intel = new CodeIntel({ root: repo, dbPath: path.join(os.tmpdir(), 'gi-agentic-gen', `${name}.db`) });
@@ -159,7 +162,7 @@ for (const it of ifaces) {
     if (taken.has(it.qname)) continue;
     const impls = oracle.implementations(it.path, it.name_line, it.name_col).filter(c => inScope(c.path) && !isTest(c.path));
     const uniq = [...new Map(impls.map(c => [`${c.path}:${c.start}`, c])).values()];
-    if (uniq.length < 3 || uniq.length > 15) continue;
+    if (uniq.length < 3 || uniq.length > implMax) continue;
     const n = tasks.filter(t => t.kind === 'implementations').length + 1;
     tasks.push({
         id: `qa-${prefix}-impls-${String(n).padStart(2, '0')}`,
@@ -170,6 +173,30 @@ for (const it of ifaces) {
         meta: { target: it.qname, path: it.path, line: it.start_line, total: uniq.length },
     });
     console.error(`implementations: ${it.qname} total=${uniq.length}`);
+}
+
+// ── subclasses ──────────────────────────────────────────────────────────────────
+// the compiler's implementations of a class are the class itself and every class that extends it,
+// directly or through another subclass
+const classes = shuffle(intel.store.all(`SELECT s.name, s.qname, s.name_line, s.name_col, s.start_line, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+    WHERE f.lang = 'typescript' AND f.is_test = 0 AND s.kind = 'class' AND length(s.name) >= 4`).filter(s => inScope(s.path)));
+for (const c of classes) {
+    if (tasks.filter(t => t.kind === 'subclasses').length >= want.subclasses) break;
+    // a class whose method is already the target of a question in this set is left out
+    if (taken.has(c.qname) || taken.has(c.name) || tasks.some(t => t.meta.target.startsWith(`${c.qname}.`))) continue;
+    const subs = oracle.implementations(c.path, c.name_line, c.name_col).filter(x => inScope(x.path) && !isTest(x.path) && !(x.path === c.path && x.name === c.name));
+    const uniq = [...new Map(subs.map(x => [`${x.path}:${x.start}`, x])).values()];
+    if (uniq.length < 3 || uniq.length > implMax) continue;
+    const n = tasks.filter(t => t.kind === 'subclasses').length + 1;
+    tasks.push({
+        id: `qa-${prefix}-subclasses-${String(n).padStart(2, '0')}`,
+        family: 'qa', kind: 'subclasses', repo: name, base,
+        statement: `List every class under \`${scope}\` (excluding test/spec files) that extends the class \`${c.qname}\` declared in \`${c.path}\`, line ${c.start_line} — directly or through another class that extends it.`,
+        answerFormat: 'One class per line as `path:LINE`, where LINE is the line of the class declaration. Nothing else.',
+        gold: { type: 'spans', items: uniq.map(x => ({ path: x.path, start: x.start, end: x.end, name: x.name })) },
+        meta: { target: c.qname, path: c.path, line: c.start_line, total: uniq.length },
+    });
+    console.error(`subclasses: ${c.qname} total=${uniq.length}`);
 }
 
 writeJson(out, tasks);

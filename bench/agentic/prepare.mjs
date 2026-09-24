@@ -14,12 +14,17 @@
  * Read-only tasks (family "qa") share one checkout per repository/commit and variant ("plain" for
  * the grep arm, "indexed" for graph-indexer arms, so the grep arm never sees an index). Edit tasks
  * get a fresh worktree per run.
+ *
+ * Delegated-question arms (ask-*) get, in their instructions file, the message a main agent sends
+ * when it hands a question off (the helper arm's starts with the helper's instructions); they are
+ * launched as the sub-agent type the run's meta names (agentType), and their reply is the answer
+ * (deliver: "reply"). Every arm reads its file first, so that read costs all of them the same.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { argv, git, sh, readJson, writeJson, loadTasks, runId, WORK, GI_ROOT, HERE } from './lib.mjs';
-import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS } from './arms.mjs';
+import { toolSection, ARM_NAMES, usesIndex, VIEW_ARMS, ASK_ARMS, askMessage } from './arms.mjs';
 import { REPOS } from './repos.mjs';
 
 const { opt, list, args } = argv();
@@ -169,11 +174,17 @@ export function prepareRun(task, arm, rep, label) {
         view = path.join(runDir, 'view');
         fs.writeFileSync(view, `#!/bin/sh\nexec node ${JSON.stringify(path.join(HERE, 'view.mjs'))} --gi ${JSON.stringify(giBin(label))} --repo ${JSON.stringify(checkout)} --session ${JSON.stringify(`${label}__${id}`)} "$@"\n`, { mode: 0o755 });
     }
-    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), instructions(task, arm, runDir, checkout, gi, caps, view));
+    const ask = ASK_ARMS[arm];
+    if (ask && task.family !== 'qa') throw new Error(`${arm} answers questions; ${task.id} is an edit task`);
+    const message = ask ? askMessage(arm, task, checkout, gi) : null;
+    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), message ?? instructions(task, arm, runDir, checkout, gi, caps, view));
     const baseHead = git(checkout, 'rev-parse', 'HEAD').trim();
-    const meta = { runId: id, taskId: task.id, family: task.family, arm, rep, giLabel: label, checkout, runDir, baseHead, indexMs, caps, preparedAt: new Date().toISOString() };
+    const meta = { runId: id, taskId: task.id, family: task.family, arm, rep, giLabel: label, checkout, runDir, baseHead, indexMs, caps, preparedAt: new Date().toISOString(),
+        ...(ask ? { deliver: 'reply', agentType: ask.agentType } : {}) };
     writeJson(path.join(runDir, 'meta.json'), meta);
-    const prompt = `Your task instructions are in ${path.join(runDir, 'INSTRUCTIONS.md')} — read that file first and follow it exactly. The repository is at ${checkout}. When you have finished, reply with the single word DONE.`;
+    const prompt = ask
+        ? `Your request is in ${path.join(runDir, 'INSTRUCTIONS.md')} — read that file first and do what it asks. Reply with the answer alone.`
+        : `Your task instructions are in ${path.join(runDir, 'INSTRUCTIONS.md')} — read that file first and follow it exactly. The repository is at ${checkout}. When you have finished, reply with the single word DONE.`;
     return { ...meta, prompt };
 }
 
