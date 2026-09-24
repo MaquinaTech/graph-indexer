@@ -8,6 +8,9 @@
  *   post-tool       after an edit: the edit checker on the edited file (syntax errors introduced,
  *                   calls that no longer fit a changed signature, removed names still in use);
  *                   after a search for a definition that did not find it: where it is defined;
+ *                   after a read: the indirection the lines involve, resolved (which override runs,
+ *                   which table entry handles a key, what reaches a method by a built name, what a
+ *                   decorator is — silent when there is none, never repeated in a session);
  *                   while the agent is crawling (three or more searches and reads since its last
  *                   edit): after a read, where the names used in the lines it read are defined, and
  *                   after a grep for a name several definitions share, which definition is which
@@ -216,8 +219,12 @@ async function afterGrep(root, input, crawling, acquire) {
     } finally { ix.release(); }
 }
 
-/** After a read while the agent is crawling: where the names used in the lines it read are defined. */
-async function afterRead(root, input, state, acquire) {
+/**
+ * After a read: the indirection the lines involve, resolved (which override runs, which table entry
+ * handles a key, what reaches a method by a built name, what a decorator is) — always, since it is
+ * silent when there is none; and while the agent is crawling, where the names the lines use are defined.
+ */
+async function afterRead(root, input, state, crawling, acquire) {
     let file = null, from = 1, to = 2000;
     if (READ_TOOLS.has(input.tool_name)) {
         file = input.tool_input?.file_path ?? input.tool_input?.path ?? input.tool_input?.absolute_path ?? null;
@@ -239,13 +246,22 @@ async function afterRead(root, input, state, acquire) {
     const { intel } = ix;
     try {
         await intel.revalidate([rel]); // a long-lived index may not have seen the file change yet
-        const { definitionsUsed } = await import('../query/read.mjs');
-        const n = Math.max(1, to - from + 1);
-        const { rows } = definitionsUsed(intel, rel, from, to, { max: Math.min(12, Math.max(4, Math.round(n / 15))), skipIds: new Set(state.st.shown) });
-        if (!rows.length) return null;
-        for (const r of rows) state.st.shown.push(r.id);
-        const lines = rows.map(r => `  ${r.qname} → ${r.path}:${r.start_line}  ${String(r.sig || r.kind).replace(/\s+/g, ' ').replace(/\s+#.*$/, '').slice(0, 100)}`);
-        return `graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n${lines.join('\n')}`;
+        const out = [];
+        const { factsForRange, renderFacts } = await import('../query/facts.mjs');
+        state.st.facts ??= [];
+        const facts = factsForRange(intel, rel, from, to, { max: 4, shown: new Set(state.st.facts) });
+        if (facts.length) {
+            for (const f of facts) state.st.facts.push(f.key);
+            out.push(`graph-indexer, resolved for these lines:\n${renderFacts(facts).map(l => `  ${l}`).join('\n')}`);
+        }
+        if (crawling) {
+            const { definitionsUsed } = await import('../query/read.mjs');
+            const n = Math.max(1, to - from + 1);
+            const { rows } = definitionsUsed(intel, rel, from, to, { max: Math.min(12, Math.max(4, Math.round(n / 15))), skipIds: new Set(state.st.shown) });
+            for (const r of rows) state.st.shown.push(r.id);
+            if (rows.length) out.push(`graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n${rows.map(r => `  ${r.qname} → ${r.path}:${r.start_line}  ${String(r.sig || r.kind).replace(/\s+/g, ' ').replace(/\s+#.*$/, '').slice(0, 100)}`).join('\n')}`);
+        }
+        return out.length ? out.join('\n') : null;
     } finally { ix.release(); }
 }
 
@@ -290,7 +306,7 @@ export async function handleHook(event, input, { root, acquire }) {
             text = await afterGrep(root, input, state.st.nav >= CRAWL, acquire);
         } else if (READ_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && shellRead(command))) {
             state.st.nav++;
-            if (state.st.nav >= CRAWL) text = await afterRead(root, input, state, acquire);
+            text = await afterRead(root, input, state, state.st.nav >= CRAWL, acquire);
             state.save();
         }
     } else if (event === 'session-start' || event === 'subagent-start') {

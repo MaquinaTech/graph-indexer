@@ -10,6 +10,7 @@ import { loc, clip, codeBlock, symHeader, confWord, matchingLines, plural } from
 import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
+import { factsForRange, renderFacts } from '../query/facts.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -397,6 +398,19 @@ function definitionsCard(intel, file, from, to, { seen = new Set(), skipAncestor
     return out;
 }
 
+/**
+ * "Resolved" block for lines [from, to]: the indirection the lines involve, as conclusions with their
+ * location — which override runs, which table entry handles a key, what reaches a method by a name
+ * built at run time, what a decorator is (src/query/facts.mjs). Nothing when there is none; facts
+ * already given in this answer (`seen`, by key) are not repeated.
+ */
+function factsBlock(intel, file, from, to, { seen = new Set(), max = 6, skip = null } = {}) {
+    const facts = factsForRange(intel, file, from, to, { max, shown: seen }).filter(f => !skip || !skip.has(f.kind));
+    if (!facts.length) return [];
+    for (const f of facts) seen.add(f.key);
+    return ['Resolved (what runs, what reaches it):', ...renderFacts(facts).map(l => `  ${l}`)];
+}
+
 /** Card rows for a read of n lines: about one per 20 lines read, between 5 and 12. */
 const cardRows = (n) => Math.min(12, Math.max(5, Math.round(n / 20)));
 
@@ -441,7 +455,7 @@ async function readFile(intel, rel, { full, seen }) {
     const cap = full ? 2000 : READ_WHOLE_MAX;
     const out = [`${rel} — ${plural(n, 'line')}`, codeBlock(lines, 1, n, { maxLines: cap })];
     if (n > cap) out.push(`(${n - cap} more lines: read ${rel}:${cap + 1}-${n})`);
-    if (indexed) out.push(...definitionsCard(intel, rel, 1, Math.min(n, cap), { seen, max: cardRows(Math.min(n, cap)) }));
+    if (indexed) out.push(...factsBlock(intel, rel, 1, Math.min(n, cap), { seen }), ...definitionsCard(intel, rel, 1, Math.min(n, cap), { seen, max: cardRows(Math.min(n, cap)) }));
     return out.join('\n');
 }
 
@@ -458,7 +472,7 @@ async function readRange(intel, rel, a, b, { maxLines, seen }) {
     const cap = Math.max(maxLines, 400);
     const out = [`${rel}:${a}-${b}${encl ? ` — in ${encl.qname} (${encl.kind}, ${encl.start_line}-${encl.end_line})` : ''}`, codeBlock(lines, a, b, { maxLines: cap })];
     if (b - a + 1 > cap) out.push(`(${b - a + 1 - cap} more lines: read ${rel}:${a + cap}-${b})`);
-    if (indexed) out.push(...definitionsCard(intel, rel, a, Math.min(b, a + cap - 1), { seen, max: cardRows(Math.min(b - a + 1, cap)) }));
+    if (indexed) out.push(...factsBlock(intel, rel, a, Math.min(b, a + cap - 1), { seen }), ...definitionsCard(intel, rel, a, Math.min(b, a + cap - 1), { seen, max: cardRows(Math.min(b - a + 1, cap)) }));
     return out.join('\n');
 }
 
@@ -497,6 +511,8 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
         fam.up.sort(order); fam.down.sort(order);
         if (fam.up.length) out.push(`overrides/implements: ${fam.up.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
         if (fam.down.length) out.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 12).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 12 ? ', …' : ''}`);
+        const inh = intel.inheritance(fresh.id, { max: 60 }).inherit.filter(x => !x.is_test);
+        if (inh.length) out.push(`inherited unchanged by (${inh.length}, they run this code): ${inh.slice(0, 10).map(x => x.qname).join(', ')}${inh.length > 10 ? ', …' : ''}`);
     }
     // what the body uses that is defined elsewhere, with signatures (read the listed targets rather
     // than searching for them); the bare callee list only when there is no card to show
@@ -524,6 +540,7 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
         out.push(codeBlock(lines, fresh.start_line, fresh.end_line, { maxLines: cap }));
         if (span > cap) out.push(`(${span - cap} more lines — read ${fresh.path}:${fresh.start_line + cap}-${fresh.end_line} or ${tn('read_code')} on a member)`);
     }
+    out.push(...factsBlock(intel, fresh.path, fresh.start_line, fresh.end_line, { seen, skip: new Set(['overrides']) }));
     if (card.length) out.push(...card);
     if (matches.length > 1) {
         out.push('');
