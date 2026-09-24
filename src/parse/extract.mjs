@@ -557,19 +557,21 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const k = scope + ':' + name;
         const prev = localTypes.get(k);
         if (!prev) localTypes.set(k, val);
-        else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true });
+        else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true, end: Math.min(prev.end, val.end) });
+        else if (val.end < prev.end) prev.end = val.end;
     };
     for (const b of binds) {
         const ctx = { ...ctxAt(b.node.startIndex), pos: b.node.startIndex };
+        const end = b.node.endIndex; // the local is in effect from here on
         const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
         const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
-        if (type) setLocal(ctx.scope, b.name, { type, ctx });
-        else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx });
-        else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx });
-        else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx });
-        else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx });
-        else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx });
-        else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx }); // shadows outer bindings
+        if (type) setLocal(ctx.scope, b.name, { type, ctx, end });
+        else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx, end });
+        else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx, end });
+        else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx, end });
+        else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx, end });
+        else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx, end });
+        else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
     }
     const lookupLocal = (ctx, name) => {
         for (let k = ctx.scope; ; k = scopes[k].parent) {
@@ -585,6 +587,11 @@ function extractFromTree(spec, query, tree, source, relPath) {
             if (localTypes.has(k + ':' + name)) return true;
             if (k < 0) break;
         }
+        return false;
+    };
+    /** Declared in a function's scope (not at the top level of the file) before `pos`. */
+    const isDeclaredLocally = (ctx, name, pos) => {
+        for (let k = ctx.scope; k >= 0; k = scopes[k].parent) if ((localTypes.get(k + ':' + name)?.end ?? Infinity) <= pos) return true;
         return false;
     };
     const fieldTypes = new Map();   // `${classIdx}:${field}` -> type string (see above)
@@ -682,6 +689,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
             // `Type.staticField…`: a capitalised root that is not a local names a type
             if (!t && !v && segs.length > 1 && !first.ops.length && /^[A-Z]/.test(first.name)) t = first.name;
+            // `b := Form`: a package-level variable, maybe of another file of the package; its type is
+            // the resolver's to find (a Go name is never both a type and a value)
+            else if (!t && !v && segs.length === 1 && !first.ops.length && spec.packageValues && !isDeclared(ctx, first.name)) t = first.name;
             // `pkg.New()` / `utils.makeFoo()`: a call through a module or import alias returns the callee's type
             else if (!t && !v && segs.length > 1 && !first.ops.length && segs[1].ops[0] === '()') {
                 t = applyOps('call:' + first.name + '.' + segs[1].name, segs[1].ops.slice(1));
@@ -781,6 +791,10 @@ function extractFromTree(spec, query, tree, source, relPath) {
         // `module.x()` is the CommonJS global only when no local `module` is in scope
         if (recv && spec.externalReceivers?.has(root) && !isDeclared(ctx, root)) continue;
         if (kind === 'value' && spec.isNoiseValue?.(name)) continue;
+        // a value or a call by the name of a local (`stack := stack(3); log(stack)`, `check := func…;
+        // check()`) is the local, in languages where no local stands for repository code (Go: no
+        // imports bind locals)
+        if ((kind === 'value' || kind === 'call') && !recv && spec.packageValues && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
         const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
@@ -868,6 +882,8 @@ export function normalizeType(t, spec, depth = 0) {
     }
     s = s.replace(/<.*$/s, '').replace(/\(.*$/s, '').replace(/\[.*$/s, '').trim();
     const segs = s.split(/::|\.|\\/).filter(Boolean);
+    // `http.Request`: the package tells a type of the repository from a library's (see Resolver)
+    if (spec?.qualifiedTypes && segs.length === 2 && /^[A-Za-z_]\w*\.[A-Za-z_]\w*$/.test(s)) return s;
     s = segs.length ? segs[segs.length - 1] : s;
     return /^[A-Za-z_$][\w$]*$/.test(s) ? s : null;
 }

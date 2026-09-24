@@ -14,6 +14,7 @@ const QUERY = `
 (type_spec name: (type_identifier) @name type: (struct_type)) @def.struct
 (type_spec name: (type_identifier) @name type: (interface_type)) @def.interface
 (type_spec name: (type_identifier) @name type: [(type_identifier) (qualified_type) (function_type) (map_type) (slice_type) (array_type) (pointer_type) (generic_type) (channel_type)]) @def.type
+(type_alias name: (type_identifier) @name type: ${TYPE_HEAD}) @def.type
 (type_alias name: (type_identifier) @name) @def.type
 (method_elem name: (field_identifier) @name) @def.method
 (field_declaration name: (field_identifier) @name type: ${TYPE_HEAD}) @def.field
@@ -26,6 +27,8 @@ const QUERY = `
 (type_identifier) @name @ref.type
 (qualified_type package: (package_identifier) @recv name: (type_identifier) @name) @ref.type
 (composite_literal type: (type_identifier) @name) @ref.new
+(call_expression function: (parenthesized_expression (unary_expression operand: (identifier) @name))) @ref.type
+(call_expression function: (parenthesized_expression (unary_expression operand: (selector_expression operand: (identifier) @recv field: (field_identifier) @name)))) @ref.type
 (composite_literal type: (qualified_type package: (package_identifier) @recv name: (type_identifier) @name)) @ref.new
 (field_declaration_list (field_declaration !name type: [(type_identifier) @name (pointer_type (type_identifier) @name)])) @ref.inherit
 (field_declaration_list (field_declaration !name type: [(qualified_type package: (package_identifier) @recv name: (type_identifier) @name) (pointer_type (qualified_type package: (package_identifier) @recv name: (type_identifier) @name))])) @ref.inherit
@@ -57,12 +60,81 @@ const PRIMITIVES = new Set(['string', 'int', 'int8', 'int16', 'int32', 'int64', 
     'uint64', 'uintptr', 'float32', 'float64', 'complex64', 'complex128', 'byte', 'rune', 'bool', 'error', 'any',
     'interface', 'map', 'chan', 'func']);
 
+function splitTop(s) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const ch of s) {
+        if ('([{'.includes(ch)) depth++;
+        else if (')]}'.includes(ch)) depth--;
+        if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += ch;
+    }
+    if (cur.trim()) out.push(cur.trim());
+    return out;
+}
+function closeParen(s, open) {
+    for (let i = open, depth = 0; i < s.length; i++) {
+        if (s[i] === '(') depth++;
+        else if (s[i] === ')' && --depth === 0) return i;
+    }
+    return -1;
+}
+const KEYWORD_TYPES = new Set(['chan', 'func', 'map', 'struct', 'interface']);
+/** The types of a parameter or result list, names dropped (`a, b string` is two strings). */
+function listTypes(text) {
+    const entries = splitTop(text);
+    const named = entries.some(e => { const m = /^([A-Za-z_]\w*)\s+\S/.exec(e); return m && !KEYWORD_TYPES.has(m[1]); });
+    if (!named) return entries;
+    const out = [];
+    let type = null;
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const m = /^[A-Za-z_]\w*\s+(.+)$/s.exec(entries[i]);
+        if (m) type = m[1];
+        out.unshift(type);
+    }
+    return out;
+}
+/** A type reduced to what tells two signatures apart without type checking: `*pkg.T` → T. */
+function typeHead(t) {
+    let s = (t ?? '').trim();
+    for (let prev; prev !== s;) { prev = s; s = s.replace(/^(?:\*|\.\.\.|\[\d*\]|<-\s*|chan\s+)/, '').trim(); }
+    if (/^map\s*\[/.test(s)) return 'map';
+    if (/^func\b/.test(s)) return 'func';
+    if (/^(struct|interface)\s*\{/.test(s)) return s.startsWith('struct') ? 'struct' : 'interface';
+    s = s.replace(/\[.*$/s, '');
+    return s.split('.').pop();
+}
+/**
+ * The shape of a method's signature, for telling whether a type's method satisfies an interface's:
+ * parameter and result types reduced to their heads (`ServeHTTP(http.ResponseWriter, *http.Request)
+ * error` → `ResponseWriter,Request->error`). Null when the signature cannot be read.
+ */
+function methodShape(sig, name) {
+    if (!sig) return null;
+    const m = new RegExp(`(?:^|[\\s)])${name}\\s*\\(`).exec(sig);
+    if (!m) return null;
+    const open = m.index + m[0].length - 1, close = closeParen(sig, open);
+    if (close < 0) return null;
+    const params = listTypes(sig.slice(open + 1, close));
+    let rest = sig.slice(close + 1).replace(/\{\s*$/, '').trim();
+    let results;
+    if (rest.startsWith('(')) {
+        const end = closeParen(rest, 0);
+        if (end < 0) return null;
+        results = listTypes(rest.slice(1, end));
+    } else results = rest ? [rest] : [];
+    return params.map(typeHead).join(',') + '->' + results.map(typeHead).join(',');
+}
+
 function parseImport(node) {
     const pathNode = node.childForFieldName('path');
     if (!pathNode) return [];
     const source = pathNode.text.replace(/^["`]|["`]$/g, '');
     const alias = node.childForFieldName('name')?.text;
-    const local = alias && alias !== '_' && alias !== '.' ? alias : (alias === '.' ? null : source.split('/').pop().replace(/^go-|-go$/g, ''));
+    // the package is named after the last path element, but not a major version: `…/caddy/v2` is
+    // package caddy, `gopkg.in/yaml.v3` package yaml
+    const parts = source.split('/');
+    const last = /^v\d+$/.test(parts[parts.length - 1]) && parts.length > 1 ? parts[parts.length - 2] : parts[parts.length - 1];
+    const local = alias && alias !== '_' && alias !== '.' ? alias : (alias === '.' ? null : last.replace(/\.v\d+$/, '').replace(/^go-|-go$/g, ''));
     return [{ source, imported: '*', local, wildcard: alias === '.' }];
 }
 
@@ -106,6 +178,9 @@ export const go = {
     isPrimitiveType: (t) => PRIMITIVES.has(t),
     // `(T, error)` results: the value is the first element
     mapIterValues: true, // `for _, v := range m` binds values
+    packageValues: true, // a bare identifier that is not local is a package-level variable
+    qualifiedTypes: true, // types keep their package (`http.Request`)
+    methodShape, // interfaces are satisfied by name and signature
     cleanType: (t) => t.replace(/^\(\s*(?:\w+\s+)?([^,()]+?)\s*,\s*(?:\w+\s+)?error\s*\)$/s, '$1'),
     refineKind(kind, d, parent) {
         if (d.node.type === 'method_elem') return 'method';

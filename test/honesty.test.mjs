@@ -37,7 +37,7 @@ const FILES = {
     // a method inherited by a subclass, called on a callback parameter of unknown type
     'src/sockets.ts': `export class TcpSocket {\n  sendMessage(m: object) { return m; }\n}\nexport class JsonSocket extends TcpSocket {}\nexport class KafkaServer {\n  sendMessage(m: object) { return m; }\n}\n`,
     'test/connection.spec.ts': `import { JsonSocket } from '../src/sockets';\nexport function withSocket(cb: any) { cb(new JsonSocket()); }\nwithSocket(socket => {\n  socket.sendMessage({ type: 'ping' });\n});\n`,
-    'binding/binding.go': `package binding\n\ntype Binding interface {\n\tName() string\n\tBind(v any) error\n}\n\ntype jsonBinding struct{}\n\nfunc (jsonBinding) Name() string { return "json" }\n\nfunc (jsonBinding) Bind(v any) error { return nil }\n\ntype half struct{}\n\nfunc (half) Name() string { return "half" }\n`,
+    'binding/binding.go': `package binding\n\ntype Binding interface {\n\tName() string\n\tBind(v any) error\n}\n\ntype jsonBinding struct{}\n\nfunc (jsonBinding) Name() string { return "json" }\n\nfunc (jsonBinding) Bind(v any) error { return nil }\n\ntype half struct{}\n\nfunc (half) Name() string { return "half" }\n\nfunc use(b Binding) error { return b.Bind(nil) }\n`,
 };
 
 let root, intel;
@@ -104,6 +104,13 @@ test('Python: a package re-export is followed even when the importer was indexed
 test('Go: a type implements an interface when its method set covers it', () => {
     const impl = refsTo('Binding').filter(r => r.kind === 'inherit');
     assert.deepEqual(impl.map(r => r.src_qname), ['jsonBinding']);
+});
+
+test('Go: once the index is reopened, calls through an interface still reach its implicit implementations', async () => {
+    intel.close();
+    intel = new CodeIntel({ root });
+    await intel.open();
+    assert.ok(refsTo('jsonBinding.Bind').some(r => r.path === 'binding/binding.go' && r.line === 18), JSON.stringify(refsTo('jsonBinding.Bind')));
 });
 
 test('the unbound footer says why unrelated same-name calls can be ignored', async () => {

@@ -62,6 +62,14 @@ export class Indexer {
         for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, is_static, start_line, end_line FROM symbols')) {
             this.table.addSym(rowToSym(r));
         }
+        // the interfaces a Go type satisfies implicitly are stored only as `~structural` edges
+        for (const r of s.all("SELECT DISTINCT src_id, name FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'")) {
+            const ty = this.table.sym(r.src_id);
+            if (!ty) continue;
+            ty.declaredBases ??= [...ty.bases];
+            ty.structural ??= new Set();
+            if (!ty.bases.includes(r.name)) { ty.bases.push(r.name); ty.structural.add(r.name); }
+        }
         const imps = new Map();
         for (const r of s.all('SELECT file_id, source, imported, local, reexport, wildcard, target_file_id, target_dir, target_path FROM imports')) {
             const list = imps.get(r.file_id) ?? imps.set(r.file_id, []).get(r.file_id);
@@ -368,32 +376,57 @@ export class Indexer {
             if (!ifaces.length || !types.length) return;
             const ifaceByName = new Map();
             for (const i of ifaces) (ifaceByName.get(i.name) ?? ifaceByName.set(i.name, []).get(i.name)).push(i);
-            // method names of an interface, following embedded interfaces declared in the same package
+            // a method's signature shape (see go.mjs methodShape); null when unreadable, which matches any
+            const shapeOf = (m) => this.resolver.specs.go?.methodShape?.(s.get('SELECT sig FROM symbols WHERE id = ?', m.id)?.sig, m.name) ?? null;
+            // methods of an interface (name → shape), following embedded interfaces declared in the same package
             const methodSet = (i, seen = new Set()) => {
-                if (seen.has(i.id)) return new Set();
+                const out = new Map();
+                if (seen.has(i.id)) return out;
                 seen.add(i.id);
-                const out = new Set([...(t.byParent.get(i.id)?.keys() ?? [])].filter(n => (t.byParent.get(i.id).get(n) ?? []).some(id => t.sym(id)?.kind === 'method')));
-                for (const b of i.declaredBases ?? i.bases ?? []) for (const e of ifaceByName.get(b) ?? []) if (dirOf(e.fileId) === dirOf(i.fileId)) for (const n of methodSet(e, seen)) out.add(n);
+                for (const [n, ids] of t.byParent.get(i.id) ?? []) {
+                    const m = ids.map(id => t.sym(id)).find(x => x?.kind === 'method');
+                    if (m) out.set(n, shapeOf(m));
+                }
+                for (const b of i.declaredBases ?? i.bases ?? []) for (const e of ifaceByName.get(b) ?? []) if (dirOf(e.fileId) === dirOf(i.fileId)) for (const [n, sh] of methodSet(e, seen)) if (!out.has(n)) out.set(n, sh);
                 return out;
             };
-            // method names per type (methods live outside the type body in Go: owner = type name)
-            const byMethod = new Map();
-            for (const ty of types) {
-                const dir = dirOf(ty.fileId);
+            // methods per type (methods live outside the type body in Go: owner = type name), plus
+            // those promoted from embedded types of the repository (`type Engine struct { RouterGroup }`)
+            const own = (ty) => {
+                if (ty.kind === 'interface') return methodSet(ty);
+                const dir = dirOf(ty.fileId), out = new Map();
                 for (const id of t.byOwner.get(ty.name) ?? []) {
                     const m = t.sym(id);
-                    if (!m || m.kind !== 'method' || dirOf(m.fileId) !== dir) continue;
-                    (byMethod.get(m.name) ?? byMethod.set(m.name, new Set()).get(m.name)).add(ty.id);
+                    if (m && m.kind === 'method' && dirOf(m.fileId) === dir && !out.has(m.name)) out.set(m.name, shapeOf(m));
                 }
+                return out;
+            };
+            const promoted = (ty, depth = 0, seen = new Set()) => {
+                const out = own(ty);
+                if (depth > 4 || seen.has(ty.id)) return out;
+                seen.add(ty.id);
+                // an alias (`type DummyLogger = testhelper.DummyLogger`) has its target's methods
+                const alias = ty.kind === 'type' && !out.size && ty.type ? this.resolver.resolveTypeName(ty.type, ty.fileId) : null;
+                if (alias && alias.id !== ty.id) for (const [n, sh] of promoted(t.sym(alias.id) ?? alias, depth + 1, seen)) if (!out.has(n)) out.set(n, sh);
+                for (const b of ty.declaredBases ?? ty.bases ?? []) {
+                    const e = this.resolver.resolveTypeName(b, ty.fileId);
+                    if (e && e.id !== ty.id) for (const [n, sh] of promoted(t.sym(e.id) ?? e, depth + 1, seen)) if (!out.has(n)) out.set(n, sh);
+                }
+                return out;
+            };
+            const byMethod = new Map(); // name → Map(type id → shape)
+            for (const ty of types) {
+                for (const [n, sh] of promoted(ty)) (byMethod.get(n) ?? byMethod.set(n, new Map()).get(n)).set(ty.id, sh);
             }
+            const fits = (a, b) => a == null || b == null || a === b;
             for (const i of ifaces) {
                 const need = [...methodSet(i)];
                 if (!need.length) continue;
-                need.sort((a, b) => (byMethod.get(a)?.size ?? 0) - (byMethod.get(b)?.size ?? 0));
-                let cands = byMethod.get(need[0]);
+                need.sort((a, b) => (byMethod.get(a[0])?.size ?? 0) - (byMethod.get(b[0])?.size ?? 0));
+                const cands = byMethod.get(need[0][0]);
                 if (!cands) continue;
-                for (const tyId of cands) {
-                    if (!need.every(n => byMethod.get(n)?.has(tyId))) continue;
+                for (const tyId of cands.keys()) {
+                    if (!need.every(([n, sh]) => byMethod.get(n)?.has(tyId) && fits(sh, byMethod.get(n).get(tyId)))) continue;
                     const ty = t.sym(tyId);
                     s.run("INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, dst_id, conf, ncand) VALUES (?, ?, ?, 'inherit', ?, 0, NULL, '~structural', ?, 0.8, 1)",
                         ty.fileId, ty.id, i.name, ty.startLine, i.id);

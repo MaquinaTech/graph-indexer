@@ -320,11 +320,29 @@ export class Resolver {
         const k = 't|' + fileId + '|' + name;
         if (this.memo.has(k)) return this.memo.get(k);
         this.memo.set(k, null); // cycle guard
-        const r = this.#resolveName(name, 'type', fileId, null);
-        const s = r && r.id != null ? this.t.sym(r.id) : null;
+        const q = this.#qualifiedType(name, fileId);
+        const r = q !== undefined ? null : this.#resolveName(name, 'type', fileId, null);
+        const s = q !== undefined ? (q === EXTERNAL ? null : q) : r && r.id != null ? this.t.sym(r.id) : null;
         const res = s && TYPE_KINDS.has(s.kind) ? s : null;
         this.memo.set(k, res);
         return res;
+    }
+
+    /**
+     * `pkg.T` in a language whose types keep their package (Go): the type in the imported package's
+     * directory, EXTERNAL when the package is not in the repository, null when the repository's
+     * package has no such type; undefined when the name is not package-qualified.
+     */
+    #qualifiedType(name, fileId) {
+        const dot = name.indexOf('.');
+        if (dot <= 0 || name.indexOf('.', dot + 1) >= 0) return undefined;
+        const lang = this.t.file(fileId)?.lang;
+        if (!this.specs[lang]?.qualifiedTypes) return undefined;
+        const imp = this.#importFor(fileId, name.slice(0, dot));
+        if (!imp) return undefined;
+        if (imp.targetFileId == null && !imp.targetDir) return EXTERNAL;
+        const ids = imp.targetDir ? this.#symbolsInDir(imp.targetDir, name.slice(dot + 1), fileId) : this.exportedFrom(imp.targetFileId, name.slice(dot + 1));
+        return ids.map(id => this.t.sym(id)).find(s => s && TYPE_KINDS.has(s.kind)) ?? null;
     }
 
     /**
@@ -347,6 +365,7 @@ export class Resolver {
         if (s === '!') return EXTERNAL;
         if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
         if (s.endsWith('{}')) return { mapOf: s.slice(0, -2), fileId };   // a map value
+        if (this.#qualifiedType(s, fileId) === EXTERNAL) return EXTERNAL;
         const t = this.resolveTypeName(s, fileId);
         if (t) return t;
         const spec = this.specs[this.t.file(fileId)?.lang];
@@ -388,7 +407,8 @@ export class Resolver {
         } else if (!head.elem) {
             // same-file qualified name first (this.x → Class#x uses the class qname)
             const q = (this.t.byQname.get(head.name) ?? []).map(id => this.t.sym(id)).find(s => s.fileId === fileId && TYPE_KINDS.has(s.kind));
-            cur = q ?? this.typeFromString(head.name.split('.').pop(), fileId);
+            const qt = q ? undefined : this.#qualifiedType(head.name, fileId);
+            cur = q ?? (qt !== undefined ? qt : this.typeFromString(head.name.split('.').pop(), fileId));
             if (!cur && !head.name.includes('.')) {
                 // a capitalised root can be a value rather than a type: `export const NestFactory =
                 // new NestFactoryStatic()` makes `NestFactory.create()` a member of NestFactoryStatic
