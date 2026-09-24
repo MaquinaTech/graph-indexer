@@ -160,6 +160,19 @@ and real commits, and end to end with coding agents
   named collection types (`type M map[string]*T`) type their elements, interface methods keep
   their result type, and a chain may start with a type assertion (`v.(Module).Info().Name()`, and
   `(x as Foo).bar()` in TypeScript).
+- **Java, measured against the Java compiler** (`bench/eval-graph-java.mjs`,
+  `bench/oracle-java/Oracle.java`) on spring-petclinic, jsoup and Commons Collections: precision
+  0.767–0.919 → 0.955–0.994, recall 0.791–0.995 → 0.861–0.989. Overloads are methods of their own:
+  calls carry their argument count and bind to the overload that takes it (fixed arity before
+  variadic, inherited overloads when the type's own do not fit), overrides match by parameter
+  count, and `find_references` no longer merges overloads in Java. A class named for a static
+  access (`StringUtil.join(…)`, `Foo::bar`) is a use of it; anonymous classes and enum constants
+  with bodies are subclasses of what they extend; nested types keep their enclosing type; fields
+  inherited from another file type their receivers; an argument is never a method. In every
+  language a member's enclosing type is its parent, not a type found by name.
+- **Go agent round** (`go2`, 57 real Claude Code sessions on caddy, tasks graded by the Go type
+  checker): questions 14/14 with graph-indexer against 13/14 without, at 0.87 of the cost;
+  refactors all solved at 0.81 of the cost and half the time.
 - **Resident process.** The MCP server, or `graph-indexer daemon` when no server runs (the hooks
   start it and it exits after 30 idle minutes), keeps the index open and in sync and answers hooks
   and CLI queries over a socket only its owner can reach, inside `.graph-indexer/` (a named pipe

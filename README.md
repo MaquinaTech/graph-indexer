@@ -155,7 +155,9 @@ own `findReferences` (import lines and declarations excluded):
 *Dispatch semantics: calls through a base class or interface count, calls to sibling overrides
 do not. Against the compiler's full rename set (sibling overrides included) recall is 0.925. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
-a lower bound.*
+a lower bound.* The same measurement against the Go type checker (gin, caddy, nats-server) gives
+precision 0.992–1.000 and recall 0.972–0.981, and against the Java compiler (spring-petclinic,
+jsoup, Commons Collections) 0.955–0.994 and 0.861–0.989; grep's precision there is 0.02–0.61.
 
 **Localization from real commits.** 169 focused commits of five repositories are replayed: the
 commit subject is the query, the files and functions it changed are the answer, and the index is
@@ -189,8 +191,10 @@ give on their own (0.86), and 1.05 (0.82–1.46) with the smaller model. In real
 sessions (252 runs) graph-indexer as `init` installs it answered all 12 code questions exactly
 against 8–9 of 12 without it — the misses were the two-level caller questions — at 0.80 of the
 cost and 0.65 of the time; refactors came out the same, and on real issues, where the agent never
-called it, it cost 1.02–1.05 once its tool definitions were trimmed to what agents use. With the usual model every
-run with graph-indexer solved its task. Details in
+called it, it cost 1.02–1.05 once its tool definitions were trimmed to what agents use. In Go (57
+real sessions on caddy, graded by the Go type checker) graph-indexer answered all 14 code
+questions against 13 without it, at 0.87 of the cost, and did the refactors at 0.81 of the cost
+and half the time. With the usual model every run with graph-indexer solved its task. Details in
 [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed

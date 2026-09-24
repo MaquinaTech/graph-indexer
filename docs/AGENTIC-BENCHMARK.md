@@ -348,6 +348,45 @@ solved (5…40), cost per solved task 0.73 (0.52–0.93).
   task; `cc` happened to need fewer turns this time).
 - **Nobody delegated in 252 sessions**, questions, refactors or issues.
 
+### Real sessions in Go (go2): 19 tasks, 57 runs
+
+**Setup.** The first round outside TypeScript and Python, in caddy v2.8.4 (Go), a repository
+graph-indexer had not been run on before its reference accuracy was measured there
+([BENCHMARKS.md](BENCHMARKS.md#the-same-measurement-for-go)). The tasks are generated and graded
+by the Go type checker (`bench/oracle-go`): 14 questions (`gen-qa-go.mjs`: 8 call-site
+questions whose method name other types share — `Upstream.String` has 5 calls among 349 grep
+hits —, 3 two-level caller questions and 3 interface-implementation questions, which Go answers
+only through method sets) and 5 refactors (`gen-refactor-go.mjs`: add a parameter or rename a
+method whose name other types share; the module must type-check, tests included, and the
+same-name methods must be untouched). Every refactor was validated first
+(`validate-refactor-go.mjs`): the base fails, a reference solution written from the type
+checker's bindings passes, a textual one (every `.Name(` call) fails. Lines in files the default
+build leaves out are optional in the answers, and interfaces whose methods are also declared there
+were not asked. The same three arms as `rt1`–`rt3`, one run per task and arm, $7.34. The CLI's
+default model had changed since `rt3` to a larger one, so all three arms ran on it: the
+comparison between arms holds, a comparison with the TypeScript rounds mixes in the model.
+
+| suite | arm | solved | cost vs `cc` (95% CI) | time vs `cc` |
+|---|---|---|---|---|
+| B1 questions (14) | `cc` | 13 / 14 | – | – |
+| | `cc+gi` | **14 / 14** | **0.87 (0.77–0.97)** | 0.72 |
+| | `cc+gi+helper` | **14 / 14** | **0.87 (0.78–0.96)** | 0.71 |
+| B2 refactors (5) | `cc` | 5 / 5 | – | – |
+| | `cc+gi` | 5 / 5 | **0.81 (0.66–0.95)** | **0.46** |
+| | `cc+gi+helper` | 5 / 5 | **0.83 (0.73–0.93)** | **0.48** |
+
+Over B1 + B2, `cc+gi+helper` against `cc`: +5 points solved (0…16), cost per solved task 0.81
+(0.67–0.93), so G2 is met and G1 is not. The graph-indexer arms called it 0.9–1.0 times per task
+(every run of `cc+gi+helper` did); nobody delegated.
+
+**What it shows.** The effect measured on TypeScript questions carries over to Go: all questions
+exact with graph-indexer, a miss without it (a `Replacer.Get` question, 13 call sites among 98
+grep hits), at 0.87 of the cost and 0.7 of the time. Refactors, which in TypeScript came out the
+same, were cheaper here, at half the time: a rename or a new parameter in Go needs every call of
+one method among many of the same name, which `find_references` lists at once and the type check
+then confirms. Making the questions surfaced four gaps in the index, fixed before the round (the
+index version the arms ran on includes them; see BENCHMARKS.md).
+
 ### Delegated questions (rc9): 24 new questions, 72 runs
 
 A smaller model with graph-indexer answered the fourth round's code questions as the usual model
@@ -793,9 +832,10 @@ grep or find despite the policy, most of them to read a configuration file.
   instantiation; see
   [BENCHMARKS.md](BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler)). The
   index flags the calls it could not bind for checking.
-- **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
-  runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
-  intervals can show.
+- **Wider and repeated measurement:** B1 and B2 ran on TypeScript and on Go (`go2`), and
+  reference accuracy is measured against the compiler for TypeScript, Go and Java; Java agent
+  rounds, other languages, and several runs per task and arm are still to do — with one run, a
+  20% difference in cost is at the edge of what the intervals can show.
 - **The hooks in real sessions:** B1, B2 and B3 ran in real sessions (`rt1`–`rt3`); the hooks
   have not. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
   launches prepared runs with `claude -p` — the `mcp` arm with the MCP server and the block

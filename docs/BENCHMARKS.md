@@ -2,8 +2,9 @@
 
 Three benchmarks, each answering a question an agent actually depends on:
 
-1. **Are the references right?** — `bench/eval-graph.mjs`, against the TypeScript compiler, and
-   `bench/eval-graph-go.mjs`, against the Go type checker.
+1. **Are the references right?** — `bench/eval-graph.mjs`, against the TypeScript compiler;
+   `bench/eval-graph-go.mjs`, against the Go type checker; `bench/eval-graph-java.mjs`, against
+   the Java compiler.
 2. **Does search find the code a real change touched?** — `bench/eval-localize.mjs`, replaying
    real commits.
 3. **Does search find the symbol a developer means?** — `bench/eval-search.mjs`, 377 authored
@@ -168,6 +169,61 @@ known to implement those interfaces, and calls through a library interface (`w.W
 `http.ResponseWriter`) are not tied to the repository's implementations. The rest is receiver
 types only a type checker knows: several values returned by one call, type switches and some
 chained calls. As in TypeScript, these lower recall and do not produce wrong answers.
+
+### The same measurement for Java
+
+```bash
+node bench/eval-graph-java.mjs --fixture spring --n 200          # needs a JDK (17+); main code only
+node bench/eval-graph-java.mjs --fixture jsoup --fixture-dir DIR --n 200
+```
+
+**Method.** `bench/oracle-java/Oracle.java` runs javac's own front end (`JavacTask`: parse and
+attribute) over every file of the source directories and binds each identifier, member access
+and method reference to the element it names. Dependencies are not on the class path, which
+turns library types into error types: what the repository declares still resolves. The
+**exact** oracle is the uses of the sampled element; **dispatch** adds the uses of the methods it
+overrides or implements and of those that override it (`Elements.overrides`), as for TypeScript.
+Tests are left out on both sides (they need their libraries to compile).
+
+Three repositories: the spring-petclinic fixture above and two that graph-indexer had not been run
+on, jsoup 1.18.1 (`19e8539`, no dependencies, enum constants with bodies) and Apache Commons
+Collections 4.4 (`cab58b3`, interfaces, generics and deep hierarchies everywhere). The seed is 7;
+up to 200 symbols per repository.
+
+| repository | build | precision | recall | exact set | grep P | name-only P |
+|---|---|---|---|---|---|---|
+| spring-petclinic (111 symbols) | before | 0.919 | 0.995 | 0.946 | 0.609 | 0.887 |
+| | after | **0.994** | 0.989 | **0.973** | | |
+| jsoup (200 · 188) | before | 0.767 | 0.862 | 0.550 | 0.090 | 0.337 |
+| | after | **0.960** | **0.916** | **0.798** | | |
+| commons-collections (200) | before | 0.878 | 0.791 | 0.725 | 0.015 | 0.097 |
+| | after | **0.955** | **0.861** | **0.805** | | |
+
+(dispatch oracle, micro averages. In jsoup twelve enum constants with bodies became classes, which
+the oracle does not sample: 188 symbols after.) Java was the weakest language measured; the
+faults were general:
+
+- **Overloads were merged**, as TypeScript's declarations of one function are: in Java each
+  overload is a method of its own. Calls now carry their argument count and bind to the overload
+  that takes it, preferring a fixed-arity one over a variadic one as javac does; a call none of a
+  type's own overloads fits reaches an inherited one (`element.attr("x")` runs `Node.attr(key)`
+  when `Element` declares only `attr(key, value)`); overrides are matched by parameter count, and
+  `clean(html, "")` inside `clean(html)` is no longer taken for recursion.
+- **A class named for a static access** (`StringUtil.join(…)`, `Token.TokenType.EOF`, `Foo::bar`)
+  was not a use of the class: in jsoup, 85 uses of `StringUtil` were missing.
+- **Anonymous classes and enum constants with bodies** (`new Transformer<>() {…}`,
+  `AfterBody { boolean process(…) }`) are subclasses of what they instantiate or of their enum,
+  so their methods take calls through the base. A method's enclosing type is its parent, not a
+  type found by the name `<anonymous>`, which repeats (this applies to every language).
+- **Nested types** keep their enclosing type (`Token.Comment` is not the top-level `Comment`); a
+  field inherited from a base class in another file types its receiver; an argument is a variable,
+  never the method of the same name.
+
+**What is still missed.** Overloads that take the same number of arguments (telling them apart
+needs the argument types), calls through a library interface, and lambdas typed only by the
+functional interface they are passed to. The dispatch oracle, like TypeScript's, also counts a
+`super.m()` call as reaching every override of `m`, while the index knows it binds statically
+to the parent's `m`; those count as missed here.
 
 ## 2. Localization from real commits
 
