@@ -1,0 +1,47 @@
+{
+  "target": {
+    "file": "modules/caddytls/automation.go",
+    "cls": "AutomationPolicy",
+    "name": "Provision",
+    "params": 2,
+    "lastType": "bool"
+  },
+  "decoys": [
+    {
+      "file": "modules/caddyevents/app.go",
+      "cls": "App",
+      "name": "Provision",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyfs/filesystem.go",
+      "cls": "Filesystems",
+      "name": "Provision",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/app.go",
+      "cls": "App",
+      "name": "Provision",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/caddyauth/basicauth.go",
+      "cls": "HTTPBasicAuth",
+      "name": "Provision",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/caddyauth/caddyauth.go",
+      "cls": "Authentication",
+      "name": "Provision",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/caddyhttp.go",
+      "cls": "ResponseHandler",
+      "name": "Provision",
+      "params": 1
+    }
+  ]
+}

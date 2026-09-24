@@ -125,12 +125,12 @@ v2.10.22 (`240e9a4`, large types with many methods). Clone them at those tags an
 | gin (146 symbols, 10 interfaces) | before | 0.992 | 0.952 | 0.911 | 1.000 / 0.936 | 0.238 | 0.373 |
 | | after | **1.000** | **0.981** | **0.986** | **1.000 / 1.000** | | |
 | caddy (196, 48) | before | 0.980 | 0.916 | 0.842 | 0.823 / 0.964 | 0.085 | 0.271 |
-| | after | **1.000** | **0.969** | **0.934** | **0.994 / 1.000** | | |
+| | after | **1.000** | **0.972** | **0.934** | **0.994 / 1.000** | | |
 | nats-server (199, 24) | before | 0.971 | 0.975 | 0.894 | 0.966 / 0.249 | 0.232 | 0.483 |
-| | after | **0.992** | **0.977** | **0.935** | **0.977 / 0.938** | | |
+| | after | **0.992** | **0.978** | **0.935** | **0.977 / 0.938** | | |
 
 (dispatch oracle, micro averages; grep's recall is 1.000 by construction.) The first run found
-seven faults, fixed in this order:
+seven faults, fixed in this order (the agent tasks on caddy, below, found four more):
 
 - **Reopening an index lost Go's implicit implementations.** They lived only in memory after
   indexing, so a server that opened an existing index (every session) no longer counted calls
@@ -153,6 +153,13 @@ seven faults, fixed in this order:
   their package, and a package outside the repository makes the type external.
 - **Locals did not shadow package functions**: `stack := stack(3); log(stack)` and a local
   closure `check := func…; check()` were bound to the package's `stack` and `check`.
+- Found while generating the agent questions on caddy, whose call sites the index missed:
+  an **embedded field named by its type** (`m.MatchRegexp.Match()` in a struct that embeds
+  `MatchRegexp`), the elements of **named collection types** (`for _, rm := range m` with
+  `type MatchHeaderRE map[string]*MatchRegexp`), chains that start with a **type assertion**
+  (`val.(Module).CaddyModule().ID.Name()`; likewise `(x as Foo).bar()` in TypeScript), and the
+  **result types of interface methods**. On one question the index went from 3 to 12 of 13 call
+  sites.
 
 **What is still missed.** Methods that a type gets from an embedded *library* type
 (`struct { net.Conn }` has `SetReadDeadline`; an interface embedding `io.Reader` needs

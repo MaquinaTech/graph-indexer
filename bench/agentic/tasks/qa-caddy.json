@@ -1,0 +1,964 @@
+[
+  {
+    "id": "qa-caddy-calls-01",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `MatchRegexp.Match` (declared in `modules/caddyhttp/matchers.go`, line 1336) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Match`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "modules/caddyhttp/matchers.go",
+          "line": 662
+        },
+        {
+          "path": "modules/caddyhttp/matchers.go",
+          "line": 1064
+        },
+        {
+          "path": "modules/caddyhttp/vars.go",
+          "line": 298
+        }
+      ]
+    },
+    "meta": {
+      "target": "MatchRegexp.Match",
+      "path": "modules/caddyhttp/matchers.go",
+      "line": 1336,
+      "grepCallLines": 45,
+      "sameNameNoise": 42,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-02",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `AutomationPolicy.Provision` (declared in `modules/caddytls/automation.go`, line 179) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Provision`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "modules/caddyhttp/autohttps.go",
+          "line": 510
+        },
+        {
+          "path": "modules/caddyhttp/autohttps.go",
+          "line": 603
+        },
+        {
+          "path": "modules/caddytls/tls.go",
+          "line": 211
+        },
+        {
+          "path": "modules/caddytls/tls.go",
+          "line": 225
+        },
+        {
+          "path": "modules/caddytls/tls.go",
+          "line": 232
+        },
+        {
+          "path": "modules/caddytls/tls.go",
+          "line": 514
+        }
+      ]
+    },
+    "meta": {
+      "target": "AutomationPolicy.Provision",
+      "path": "modules/caddytls/automation.go",
+      "line": 179,
+      "grepCallLines": 81,
+      "sameNameNoise": 75,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-03",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `Upstream.String` (declared in `modules/caddyhttp/reverseproxy/hosts.go`, line 69) is called — including calls in _test.go files. Methods of other types in the codebase share the name `String`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "modules/caddyhttp/reverseproxy/hosts.go",
+          "line": 129
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "line": 385
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "line": 476
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "line": 791
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "line": 817
+        },
+        {
+          "path": "listen.go",
+          "line": 100,
+          "optional": true
+        }
+      ]
+    },
+    "meta": {
+      "target": "Upstream.String",
+      "path": "modules/caddyhttp/reverseproxy/hosts.go",
+      "line": 69,
+      "grepCallLines": 349,
+      "sameNameNoise": 344,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-04",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `ModuleID.Name` (declared in `modules.go`, line 110) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Name`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "admin.go",
+          "line": 272
+        },
+        {
+          "path": "caddy.go",
+          "line": 564
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/directives.go",
+          "line": 310
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/httptype.go",
+          "line": 286
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/httptype.go",
+          "line": 493
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/httptype.go",
+          "line": 760
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/serveroptions.go",
+          "line": 91
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/serveroptions.go",
+          "line": 218
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/tlsapp.go",
+          "line": 158
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/tlsapp.go",
+          "line": 407
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/tlsapp.go",
+          "line": 474
+        },
+        {
+          "path": "modules.go",
+          "line": 178
+        },
+        {
+          "path": "modules_test.go",
+          "line": 113
+        }
+      ]
+    },
+    "meta": {
+      "target": "ModuleID.Name",
+      "path": "modules.go",
+      "line": 110,
+      "grepCallLines": 35,
+      "sameNameNoise": 22,
+      "testCalls": 1
+    }
+  },
+  {
+    "id": "qa-caddy-calls-05",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `Dispenser.Reset` (declared in `caddyconfig/caddyfile/dispenser.go`, line 387) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Reset`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "caddyconfig/httpcaddyfile/builtins.go",
+          "line": 792
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/directives.go",
+          "line": 284
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/fastcgi/caddyfile.go",
+          "line": 303
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/forwardauth/caddyfile.go",
+          "line": 166
+        },
+        {
+          "path": "modules/caddyhttp/rewrite/caddyfile.go",
+          "line": 264
+        }
+      ]
+    },
+    "meta": {
+      "target": "Dispenser.Reset",
+      "path": "caddyconfig/caddyfile/dispenser.go",
+      "line": 387,
+      "grepCallLines": 33,
+      "sameNameNoise": 28,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-06",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `NetworkAddress.Listen` (declared in `listeners.go`, line 135) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Listen`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "admin.go",
+          "line": 428
+        },
+        {
+          "path": "admin.go",
+          "line": 594
+        },
+        {
+          "path": "listeners.go",
+          "line": 94
+        },
+        {
+          "path": "listeners.go",
+          "line": 418
+        },
+        {
+          "path": "modules/caddyhttp/app.go",
+          "line": 435
+        },
+        {
+          "path": "listen.go",
+          "line": 50,
+          "optional": true
+        }
+      ]
+    },
+    "meta": {
+      "target": "NetworkAddress.Listen",
+      "path": "listeners.go",
+      "line": 135,
+      "grepCallLines": 14,
+      "sameNameNoise": 9,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-07",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `UsagePool.Delete` (declared in `usagepool.go`, line 169) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Delete`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "listen_unix.go",
+          "line": 224
+        },
+        {
+          "path": "listen_unix.go",
+          "line": 236
+        },
+        {
+          "path": "listeners.go",
+          "line": 604
+        },
+        {
+          "path": "logging.go",
+          "line": 198
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "line": 385
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "line": 476
+        },
+        {
+          "path": "modules/caddypki/acmeserver/acmeserver.go",
+          "line": 244
+        },
+        {
+          "path": "modules/caddytls/connpolicy.go",
+          "line": 337
+        },
+        {
+          "path": "listen.go",
+          "line": 142,
+          "optional": true
+        },
+        {
+          "path": "listen.go",
+          "line": 232,
+          "optional": true
+        }
+      ]
+    },
+    "meta": {
+      "target": "UsagePool.Delete",
+      "path": "usagepool.go",
+      "line": 169,
+      "grepCallLines": 13,
+      "sameNameNoise": 5,
+      "testCalls": 0
+    }
+  },
+  {
+    "id": "qa-caddy-calls-08",
+    "family": "qa",
+    "kind": "call-sites",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Find every place in the repository where the method `Replacer.Get` (declared in `replacer.go`, line 99) is called — including calls in _test.go files. Methods of other types in the codebase share the name `Get`; calls to those must not be listed.",
+    "answerFormat": "One call site per line as `path:LINE`, where path is relative to the repository root and LINE is the line containing the method name of the call. Nothing else.",
+    "gold": {
+      "type": "lines",
+      "tolerance": 1,
+      "items": [
+        {
+          "path": "modules/caddyhttp/celmatcher.go",
+          "line": 263
+        },
+        {
+          "path": "modules/caddyhttp/fileserver/matcher_test.go",
+          "line": 138
+        },
+        {
+          "path": "modules/caddyhttp/fileserver/matcher_test.go",
+          "line": 150
+        },
+        {
+          "path": "modules/caddyhttp/fileserver/matcher_test.go",
+          "line": 248
+        },
+        {
+          "path": "modules/caddyhttp/fileserver/matcher_test.go",
+          "line": 260
+        },
+        {
+          "path": "modules/caddyhttp/logging/logadd.go",
+          "line": 74
+        },
+        {
+          "path": "modules/caddyhttp/map/map_test.go",
+          "line": 146
+        },
+        {
+          "path": "modules/caddyhttp/vars.go",
+          "line": 177
+        },
+        {
+          "path": "modules/caddyhttp/vars.go",
+          "line": 278
+        },
+        {
+          "path": "modules/logging/appendencoder.go",
+          "line": 337
+        },
+        {
+          "path": "replacer.go",
+          "line": 111
+        },
+        {
+          "path": "replacer.go",
+          "line": 226
+        },
+        {
+          "path": "replacer_test.go",
+          "line": 462
+        }
+      ]
+    },
+    "meta": {
+      "target": "Replacer.Get",
+      "path": "replacer.go",
+      "line": 99,
+      "grepCallLines": 98,
+      "sameNameNoise": 85,
+      "testCalls": 6
+    }
+  },
+  {
+    "id": "qa-caddy-callers-01",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "I plan to change the behaviour of the method `Context.LoadModuleByID` (declared in `context.go`, line 325). List every function or method in the repository that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude _test.go files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "context.go",
+          "start": 296,
+          "end": 313,
+          "name": "Context.loadModuleMap",
+          "level": 1
+        },
+        {
+          "path": "context.go",
+          "start": 413,
+          "end": 425,
+          "name": "Context.loadModuleInline",
+          "level": 1
+        },
+        {
+          "path": "context.go",
+          "start": 440,
+          "end": 454,
+          "name": "Context.App",
+          "level": 1
+        },
+        {
+          "path": "context.go",
+          "start": 261,
+          "end": 274,
+          "name": "Context.loadModulesFromSomeMap",
+          "level": 2
+        },
+        {
+          "path": "context.go",
+          "start": 157,
+          "end": 256,
+          "name": "Context.LoadModule",
+          "level": 2
+        },
+        {
+          "path": "context.go",
+          "start": 279,
+          "end": 292,
+          "name": "Context.loadModulesFromRegularMap",
+          "level": 2
+        },
+        {
+          "path": "caddy.go",
+          "start": 399,
+          "end": 537,
+          "name": "run",
+          "level": 2
+        },
+        {
+          "path": "context.go",
+          "start": 462,
+          "end": 474,
+          "name": "Context.AppIfConfigured",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/app.go",
+          "start": 161,
+          "end": 331,
+          "name": "App.Provision",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/httptransport.go",
+          "start": 566,
+          "end": 680,
+          "name": "TLSConfig.MakeTLSClientConfig",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/reverseproxy.go",
+          "start": 224,
+          "end": 377,
+          "name": "Handler.Provision",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/staticresp.go",
+          "start": 306,
+          "end": 456,
+          "name": "cmdRespond",
+          "level": 2
+        },
+        {
+          "path": "modules/caddypki/acmeserver/acmeserver.go",
+          "start": 122,
+          "end": 214,
+          "name": "Handler.Provision",
+          "level": 2
+        },
+        {
+          "path": "modules/caddytls/connpolicy.go",
+          "start": 205,
+          "end": 350,
+          "name": "ConnectionPolicy.buildStandardTLSConfig",
+          "level": 2
+        },
+        {
+          "path": "modules/caddytls/internalissuer.go",
+          "start": 68,
+          "end": 94,
+          "name": "InternalIssuer.Provision",
+          "level": 2
+        },
+        {
+          "path": "modules/caddytls/tls.go",
+          "start": 107,
+          "end": 275,
+          "name": "TLS.Provision",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "Context.LoadModuleByID",
+      "path": "context.go",
+      "line": 325,
+      "level1": 3,
+      "total": 16
+    }
+  },
+  {
+    "id": "qa-caddy-callers-02",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "I plan to change the behaviour of the method `Upstream.Healthy` (declared in `modules/caddyhttp/reverseproxy/hosts.go`, line 83). List every function or method in the repository that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude _test.go files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "modules/caddyhttp/reverseproxy/hosts.go",
+          "start": 76,
+          "end": 78,
+          "name": "Upstream.Available",
+          "level": 1
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/metrics.go",
+          "start": 72,
+          "end": 83,
+          "name": "metricsUpstreamsHealthyUpdater.update",
+          "level": 1
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 130,
+          "end": 161,
+          "name": "WeightedRoundRobinSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 213,
+          "end": 229,
+          "name": "RandomChoiceSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 253,
+          "end": 279,
+          "name": "LeastConnSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 305,
+          "end": 318,
+          "name": "RoundRobinSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 342,
+          "end": 349,
+          "name": "FirstSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 647,
+          "end": 696,
+          "name": "CookieHashSelection.Select",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 749,
+          "end": 767,
+          "name": "selectRandomHost",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/selectionpolicies.go",
+          "start": 805,
+          "end": 824,
+          "name": "hostByHashing",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/metrics.go",
+          "start": 47,
+          "end": 70,
+          "name": "metricsUpstreamsHealthyUpdater.Init",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "Upstream.Healthy",
+      "path": "modules/caddyhttp/reverseproxy/hosts.go",
+      "line": 83,
+      "level1": 2,
+      "total": 11
+    }
+  },
+  {
+    "id": "qa-caddy-callers-03",
+    "family": "qa",
+    "kind": "callers-2",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "I plan to change the behaviour of the method `Dispenser.Line` (declared in `caddyconfig/caddyfile/dispenser.go`, line 251). List every function or method in the repository that calls it directly, plus every function or method that calls one of those direct callers (two levels up the call chain). Exclude _test.go files.",
+    "answerFormat": "One function or method per line as `path:LINE`, where LINE is the line on which that function or method is declared. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "caddyconfig/caddyfile/dispenser.go",
+          "start": 405,
+          "end": 408,
+          "name": "Dispenser.SyntaxErr",
+          "level": 1
+        },
+        {
+          "path": "caddyconfig/caddyfile/dispenser.go",
+          "start": 427,
+          "end": 432,
+          "name": "Dispenser.WrapErr",
+          "level": 1
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 351,
+          "end": 522,
+          "name": "parser.doImport",
+          "level": 1
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/directives.go",
+          "start": 289,
+          "end": 314,
+          "name": "Helper.NewRoute",
+          "level": 1
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 625,
+          "end": 630,
+          "name": "parser.openCurlyBrace",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 636,
+          "end": 641,
+          "name": "parser.closeCurlyBrace",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 662,
+          "end": 693,
+          "name": "parser.blockTokens",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/dispenser.go",
+          "start": 422,
+          "end": 424,
+          "name": "Dispenser.Errf",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/proxyprotocol/module.go",
+          "start": 41,
+          "end": 79,
+          "name": "ListenerWrapper.UnmarshalCaddyfile",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/reverseproxy/caddyfile.go",
+          "start": 138,
+          "end": 853,
+          "name": "Handler.UnmarshalCaddyfile",
+          "level": 2
+        },
+        {
+          "path": "modules/caddytls/connpolicy.go",
+          "start": 437,
+          "end": 536,
+          "name": "ClientAuthentication.UnmarshalCaddyfile",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 210,
+          "end": 286,
+          "name": "parser.addresses",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 315,
+          "end": 343,
+          "name": "parser.directives",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/caddyfile/parse.go",
+          "start": 574,
+          "end": 619,
+          "name": "parser.directive",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/builtins.go",
+          "start": 573,
+          "end": 606,
+          "name": "parseRoot",
+          "level": 2
+        },
+        {
+          "path": "caddyconfig/httpcaddyfile/directives.go",
+          "start": 129,
+          "end": 147,
+          "name": "RegisterHandlerDirective",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/fileserver/caddyfile.go",
+          "start": 232,
+          "end": 304,
+          "name": "parseTryFiles",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/headers/caddyfile.go",
+          "start": 49,
+          "end": 147,
+          "name": "parseCaddyfile",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/headers/caddyfile.go",
+          "start": 153,
+          "end": 203,
+          "name": "parseReqHdrCaddyfile",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/rewrite/caddyfile.go",
+          "start": 41,
+          "end": 70,
+          "name": "parseCaddyfileRewrite",
+          "level": 2
+        },
+        {
+          "path": "modules/caddyhttp/rewrite/caddyfile.go",
+          "start": 236,
+          "end": 296,
+          "name": "parseCaddyfileHandlePath",
+          "level": 2
+        },
+        {
+          "path": "modules/caddypki/acmeserver/caddyfile.go",
+          "start": 47,
+          "end": 160,
+          "name": "parseACMEServer",
+          "level": 2
+        }
+      ]
+    },
+    "meta": {
+      "target": "Dispenser.Line",
+      "path": "caddyconfig/caddyfile/dispenser.go",
+      "line": 251,
+      "level1": 4,
+      "total": 22
+    }
+  },
+  {
+    "id": "qa-caddy-impls-01",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "List every named type in the repository (excluding _test.go files) that implements the interface `Precompressed` declared in `modules/caddyhttp/encode/encode.go`, line 488 — with value or pointer receivers, including methods promoted from embedded types.",
+    "answerFormat": "One type per line as `path:LINE`, where LINE is the line of the type declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "modules/caddyhttp/encode/brotli/brotli_precompressed.go",
+          "start": 13,
+          "end": 13,
+          "name": "BrotliPrecompressed"
+        },
+        {
+          "path": "modules/caddyhttp/encode/gzip/gzip_precompressed.go",
+          "start": 13,
+          "end": 15,
+          "name": "GzipPrecompressed"
+        },
+        {
+          "path": "modules/caddyhttp/encode/zstd/zstd_precompressed.go",
+          "start": 13,
+          "end": 15,
+          "name": "ZstdPrecompressed"
+        }
+      ]
+    },
+    "meta": {
+      "target": "Precompressed",
+      "path": "modules/caddyhttp/encode/encode.go",
+      "line": 488,
+      "total": 3
+    }
+  },
+  {
+    "id": "qa-caddy-impls-02",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "List every named type in the repository (excluding _test.go files) that implements the interface `CertificateLoader` declared in `modules/caddytls/tls.go`, line 697 — with value or pointer receivers, including methods promoted from embedded types.",
+    "answerFormat": "One type per line as `path:LINE`, where LINE is the line of the type declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "modules/caddytls/fileloader.go",
+          "start": 30,
+          "end": 30,
+          "name": "FileLoader"
+        },
+        {
+          "path": "modules/caddytls/folderloader.go",
+          "start": 36,
+          "end": 36,
+          "name": "FolderLoader"
+        },
+        {
+          "path": "modules/caddytls/pemloader.go",
+          "start": 31,
+          "end": 31,
+          "name": "PEMLoader"
+        },
+        {
+          "path": "modules/caddytls/storageloader.go",
+          "start": 32,
+          "end": 41,
+          "name": "StorageLoader"
+        }
+      ]
+    },
+    "meta": {
+      "target": "CertificateLoader",
+      "path": "modules/caddytls/tls.go",
+      "line": 697,
+      "total": 4
+    }
+  },
+  {
+    "id": "qa-caddy-impls-03",
+    "family": "qa",
+    "kind": "implementations",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "List every named type in the repository (excluding _test.go files) that implements the interface `ListenerWrapper` declared in `listeners.go`, line 666 — with value or pointer receivers, including methods promoted from embedded types.",
+    "answerFormat": "One type per line as `path:LINE`, where LINE is the line of the type declaration. Nothing else.",
+    "gold": {
+      "type": "spans",
+      "items": [
+        {
+          "path": "modules/caddyhttp/caddyhttp.go",
+          "start": 298,
+          "end": 298,
+          "name": "tlsPlaceholderWrapper"
+        },
+        {
+          "path": "modules/caddyhttp/httpredirectlistener.go",
+          "start": 46,
+          "end": 50,
+          "name": "HTTPRedirectListenerWrapper"
+        },
+        {
+          "path": "modules/caddyhttp/proxyprotocol/listenerwrapper.go",
+          "start": 32,
+          "end": 54,
+          "name": "ListenerWrapper"
+        }
+      ]
+    },
+    "meta": {
+      "target": "ListenerWrapper",
+      "path": "listeners.go",
+      "line": 666,
+      "total": 3
+    }
+  }
+]

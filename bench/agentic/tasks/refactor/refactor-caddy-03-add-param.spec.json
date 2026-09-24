@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "modules/caddyhttp/routes.go",
+    "cls": "RouteList",
+    "name": "Compile",
+    "params": 2,
+    "lastType": "bool"
+  },
+  "decoys": [
+    {
+      "file": "modules/caddyhttp/routes.go",
+      "cls": "Route",
+      "name": "Compile",
+      "params": 1
+    }
+  ]
+}

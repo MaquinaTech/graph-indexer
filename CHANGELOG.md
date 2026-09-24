@@ -149,14 +149,17 @@ and real commits, and end to end with coding agents
   member reads, and changes no other binding in any of the seven benchmark repositories.
 - **Go, measured against the Go type checker** (`bench/eval-graph-go.mjs`, `bench/oracle-go`), on
   gin and on caddy and nats-server, which graph-indexer had not been run on before. Precision is
-  now 0.992–1.000 and recall 0.969–0.981 (the dispatch oracle), and implicit implementations
+  now 0.992–1.000 and recall 0.972–0.981 (the dispatch oracle), and implicit implementations
   0.977–1.000 / 0.938–1.000. Fixes: implicit implementations survive reopening the index (before,
   they were lost on every server start); modules at major version 2 or later (`…/v2`,
   `gopkg.in/yaml.v3`) are imported under their package name; interfaces are matched by method
   signature as well as name, and count promoted methods and type aliases; package-level variables
   of other files type the locals set from them; `(*T)(nil)` references `T`; library types keep
   their package (`http.Request`), so their members are not bound by name to the repository's; a
-  local shadows the package function of the same name.
+  local shadows the package function of the same name; embedded fields are named by their type,
+  named collection types (`type M map[string]*T`) type their elements, interface methods keep
+  their result type, and a chain may start with a type assertion (`v.(Module).Info().Name()`, and
+  `(x as Foo).bar()` in TypeScript).
 - **Resident process.** The MCP server, or `graph-indexer daemon` when no server runs (the hooks
   start it and it exits after 30 idle minutes), keeps the index open and in sync and answers hooks
   and CLI queries over a socket only its owner can reach, inside `.graph-indexer/` (a named pipe

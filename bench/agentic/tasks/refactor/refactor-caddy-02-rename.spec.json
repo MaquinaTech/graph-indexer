@@ -1,0 +1,47 @@
+{
+  "target": {
+    "file": "modules/caddyhttp/responsematchers.go",
+    "cls": "ResponseMatcher",
+    "name": "Match",
+    "newName": "MatchChecked",
+    "params": 2
+  },
+  "decoys": [
+    {
+      "file": "modules/caddyhttp/celmatcher.go",
+      "cls": "MatchExpression",
+      "name": "Match",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/encode/encode.go",
+      "cls": "Encode",
+      "name": "Match",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/fileserver/matcher.go",
+      "cls": "MatchFile",
+      "name": "Match",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/ip_matchers.go",
+      "cls": "MatchRemoteIP",
+      "name": "Match",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/ip_matchers.go",
+      "cls": "MatchClientIP",
+      "name": "Match",
+      "params": 1
+    },
+    {
+      "file": "modules/caddyhttp/matchers.go",
+      "cls": "MatchHost",
+      "name": "Match",
+      "params": 1
+    }
+  ]
+}

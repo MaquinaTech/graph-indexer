@@ -1,0 +1,322 @@
+[
+  {
+    "id": "refactor-caddy-01-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Add a parameter `strict bool` as the last parameter of the method `AutomationPolicy.Provision` (declared in `modules/caddytls/automation.go`), and update every place in the repository that calls it (including _test.go files) to pass `false` for it. The method's behaviour does not need to change. Methods of other types that happen to be called `Provision` must not be modified.",
+    "testHint": "Go is installed and the modules are downloaded: `go build ./...` compiles the module and `go vet ./...` also compiles the tests.",
+    "grade": {
+      "checks": [
+        {
+          "name": "the module type-checks, tests included",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode typecheck -dir .",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode struct -dir . -spec {GI}/bench/agentic/tasks/refactor/refactor-caddy-01-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "modules/caddyhttp/autohttps.go:510",
+        "modules/caddyhttp/autohttps.go:603",
+        "modules/caddytls/tls.go:211",
+        "modules/caddytls/tls.go:225",
+        "modules/caddytls/tls.go:232",
+        "modules/caddytls/tls.go:514"
+      ],
+      "files": [
+        "modules/caddyhttp/autohttps.go",
+        "modules/caddytls/tls.go",
+        "modules/caddytls/automation.go"
+      ]
+    },
+    "meta": {
+      "target": "AutomationPolicy.Provision",
+      "path": "modules/caddytls/automation.go",
+      "line": 179,
+      "callSites": 6,
+      "files": 2,
+      "decoys": [
+        "App.Provision (modules/caddyevents/app.go)",
+        "Filesystems.Provision (modules/caddyfs/filesystem.go)",
+        "App.Provision (modules/caddyhttp/app.go)",
+        "HTTPBasicAuth.Provision (modules/caddyhttp/caddyauth/basicauth.go)",
+        "Authentication.Provision (modules/caddyhttp/caddyauth/caddyauth.go)",
+        "ResponseHandler.Provision (modules/caddyhttp/caddyhttp.go)"
+      ]
+    },
+    "validation": {
+      "baseFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceDiff": " 3 files changed, 7 insertions(+), 7 deletions(-)",
+      "naive": [
+        "the module type-checks, tests included: admin.go:291:37: too many arguments in call to provisioner.Provision | \thave (Context, bool) | \twant (Context)"
+      ]
+    }
+  },
+  {
+    "id": "refactor-caddy-02-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Rename the method `ResponseMatcher.Match` (declared in `modules/caddyhttp/responsematchers.go`) to `MatchChecked`, and update every place in the repository that uses it (including _test.go files). Methods of other types that are also called `Match` must keep their name.",
+    "testHint": "Go is installed and the modules are downloaded: `go build ./...` compiles the module and `go vet ./...` also compiles the tests.",
+    "grade": {
+      "checks": [
+        {
+          "name": "the module type-checks, tests included",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode typecheck -dir .",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode struct -dir . -spec {GI}/bench/agentic/tasks/refactor/refactor-caddy-02-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "modules/caddyhttp/encode/encode.go:255",
+        "modules/caddyhttp/headers/headers.go:355",
+        "modules/caddyhttp/intercept/intercept.go:132",
+        "modules/caddyhttp/responsematchers_test.go:163",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go:841",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go:936"
+      ],
+      "files": [
+        "modules/caddyhttp/encode/encode.go",
+        "modules/caddyhttp/headers/headers.go",
+        "modules/caddyhttp/intercept/intercept.go",
+        "modules/caddyhttp/responsematchers_test.go",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go",
+        "modules/caddyhttp/responsematchers.go"
+      ]
+    },
+    "meta": {
+      "target": "ResponseMatcher.Match",
+      "path": "modules/caddyhttp/responsematchers.go",
+      "line": 40,
+      "callSites": 6,
+      "files": 5,
+      "decoys": [
+        "MatchExpression.Match (modules/caddyhttp/celmatcher.go)",
+        "Encode.Match (modules/caddyhttp/encode/encode.go)",
+        "MatchFile.Match (modules/caddyhttp/fileserver/matcher.go)",
+        "MatchRemoteIP.Match (modules/caddyhttp/ip_matchers.go)",
+        "MatchClientIP.Match (modules/caddyhttp/ip_matchers.go)",
+        "MatchHost.Match (modules/caddyhttp/matchers.go)"
+      ]
+    },
+    "validation": {
+      "baseFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceDiff": " 6 files changed, 7 insertions(+), 7 deletions(-)",
+      "naive": [
+        "the module type-checks, tests included: caddyconfig/caddyfile/lexer.go:167:29: heredocMarkerRegexp.MatchChecked undefined (type *regexp.Regexp has no field or method MatchChecked) | modules/caddyhttp/celmatcher.go:490:31: matcher.MatchChecked undefined (type RequestMatcher has no field or method MatchChecked) | modules/caddyhttp/celmatcher.go:505:29: matcher.MatchChecked undefined (type RequestMatcher has no field or method MatchChecked)"
+      ]
+    }
+  },
+  {
+    "id": "refactor-caddy-03-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Add a parameter `strict bool` as the last parameter of the method `RouteList.Compile` (declared in `modules/caddyhttp/routes.go`), and update every place in the repository that calls it (including _test.go files) to pass `false` for it. The method's behaviour does not need to change. Methods of other types that happen to be called `Compile` must not be modified.",
+    "testHint": "Go is installed and the modules are downloaded: `go build ./...` compiles the module and `go vet ./...` also compiles the tests.",
+    "grade": {
+      "checks": [
+        {
+          "name": "the module type-checks, tests included",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode typecheck -dir .",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode struct -dir . -spec {GI}/bench/agentic/tasks/refactor/refactor-caddy-03-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "modules/caddyhttp/app.go:295",
+        "modules/caddyhttp/app.go:305",
+        "modules/caddyhttp/intercept/intercept.go:172",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go:883",
+        "modules/caddyhttp/subroute.go:73",
+        "modules/caddyhttp/subroute.go:77"
+      ],
+      "files": [
+        "modules/caddyhttp/app.go",
+        "modules/caddyhttp/intercept/intercept.go",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go",
+        "modules/caddyhttp/subroute.go",
+        "modules/caddyhttp/routes.go"
+      ]
+    },
+    "meta": {
+      "target": "RouteList.Compile",
+      "path": "modules/caddyhttp/routes.go",
+      "line": 221,
+      "callSites": 6,
+      "files": 4,
+      "decoys": [
+        "Route.Compile (modules/caddyhttp/routes.go)"
+      ]
+    },
+    "validation": {
+      "baseFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceDiff": " 5 files changed, 7 insertions(+), 7 deletions(-)",
+      "naive": [
+        "the module type-checks, tests included: modules/caddyhttp/celmatcher.go:177:49: too many arguments in call to env.Compile | \thave (string, bool) | \twant (string)"
+      ]
+    }
+  },
+  {
+    "id": "refactor-caddy-04-rename",
+    "family": "edit",
+    "kind": "rename",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Rename the method `ModuleID.Name` (declared in `modules.go`) to `NameChecked`, and update every place in the repository that uses it (including _test.go files). Methods of other types that are also called `Name` must keep their name.",
+    "testHint": "Go is installed and the modules are downloaded: `go build ./...` compiles the module and `go vet ./...` also compiles the tests.",
+    "grade": {
+      "checks": [
+        {
+          "name": "the module type-checks, tests included",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode typecheck -dir .",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode struct -dir . -spec {GI}/bench/agentic/tasks/refactor/refactor-caddy-04-rename.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "admin.go:272",
+        "caddy.go:564",
+        "caddyconfig/httpcaddyfile/directives.go:310",
+        "caddyconfig/httpcaddyfile/httptype.go:286",
+        "caddyconfig/httpcaddyfile/httptype.go:493",
+        "caddyconfig/httpcaddyfile/httptype.go:760",
+        "caddyconfig/httpcaddyfile/serveroptions.go:91",
+        "caddyconfig/httpcaddyfile/serveroptions.go:218",
+        "caddyconfig/httpcaddyfile/tlsapp.go:158",
+        "caddyconfig/httpcaddyfile/tlsapp.go:407",
+        "caddyconfig/httpcaddyfile/tlsapp.go:474",
+        "modules.go:178",
+        "modules_test.go:113"
+      ],
+      "files": [
+        "admin.go",
+        "caddy.go",
+        "caddyconfig/httpcaddyfile/directives.go",
+        "caddyconfig/httpcaddyfile/httptype.go",
+        "caddyconfig/httpcaddyfile/serveroptions.go",
+        "caddyconfig/httpcaddyfile/tlsapp.go",
+        "modules.go",
+        "modules_test.go",
+        "modules.go"
+      ]
+    },
+    "meta": {
+      "target": "ModuleID.Name",
+      "path": "modules.go",
+      "line": 110,
+      "callSites": 13,
+      "files": 8,
+      "decoys": [
+        "Server.Name (modules/caddyhttp/server.go)"
+      ]
+    },
+    "validation": {
+      "baseFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceDiff": " 8 files changed, 14 insertions(+), 14 deletions(-)",
+      "naive": [
+        "the module type-checks, tests included: caddyconfig/caddyfile/parse_test.go:789:35: t.NameChecked undefined (type *testing.T has no field or method NameChecked) | caddyconfig/caddyfile/parse_test.go:799:14: file.NameChecked undefined (type *os.File has no field or method NameChecked) | caddytest/caddytest.go:261:16: f.NameChecked undefined (type *os.File has no field or method NameChecked)"
+      ]
+    }
+  },
+  {
+    "id": "refactor-caddy-05-add-param",
+    "family": "edit",
+    "kind": "add-param",
+    "repo": "caddy",
+    "base": "7088605cc11c52c2777ab613dfc5c2a9816006e4",
+    "statement": "Add a parameter `strict bool` as the last parameter of the method `UsagePool.Delete` (declared in `usagepool.go`), and update every place in the repository that calls it (including _test.go files) to pass `false` for it. The method's behaviour does not need to change. Methods of other types that happen to be called `Delete` must not be modified.",
+    "testHint": "Go is installed and the modules are downloaded: `go build ./...` compiles the module and `go vet ./...` also compiles the tests.",
+    "grade": {
+      "checks": [
+        {
+          "name": "the module type-checks, tests included",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode typecheck -dir .",
+          "timeoutSec": 600
+        },
+        {
+          "name": "target changed, same-name methods untouched",
+          "cmd": "\"$HOME/.gi-agentic/oracle-go\" -mode struct -dir . -spec {GI}/bench/agentic/tasks/refactor/refactor-caddy-05-add-param.spec.json",
+          "timeoutSec": 120
+        }
+      ]
+    },
+    "gold": {
+      "callSites": [
+        "listen_unix.go:224",
+        "listen_unix.go:236",
+        "listeners.go:604",
+        "logging.go:198",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go:385",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go:476",
+        "modules/caddypki/acmeserver/acmeserver.go:244",
+        "modules/caddytls/connpolicy.go:337"
+      ],
+      "files": [
+        "listen_unix.go",
+        "listeners.go",
+        "logging.go",
+        "modules/caddyhttp/reverseproxy/reverseproxy.go",
+        "modules/caddypki/acmeserver/acmeserver.go",
+        "modules/caddytls/connpolicy.go",
+        "usagepool.go"
+      ]
+    },
+    "meta": {
+      "target": "UsagePool.Delete",
+      "path": "usagepool.go",
+      "line": 169,
+      "callSites": 8,
+      "files": 6,
+      "decoys": [
+        "Dispenser.Delete (caddyconfig/caddyfile/dispenser.go)",
+        "Replacer.Delete (replacer.go)"
+      ]
+    },
+    "validation": {
+      "baseFails": true,
+      "referencePasses": true,
+      "naiveFails": true,
+      "referenceDiff": " 7 files changed, 9 insertions(+), 9 deletions(-)",
+      "naive": [
+        "the module type-checks, tests included: caddyconfig/httpcaddyfile/directives.go:282:22: too many arguments in call to h.Dispenser.Delete | \thave (bool) | \twant ()"
+      ]
+    }
+  }
+]

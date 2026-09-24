@@ -1,0 +1,17 @@
+{
+  "target": {
+    "file": "modules.go",
+    "cls": "ModuleID",
+    "name": "Name",
+    "newName": "NameChecked",
+    "params": 0
+  },
+  "decoys": [
+    {
+      "file": "modules/caddyhttp/server.go",
+      "cls": "Server",
+      "name": "Name",
+      "params": 0
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "target": {
+    "file": "usagepool.go",
+    "cls": "UsagePool",
+    "name": "Delete",
+    "params": 2,
+    "lastType": "bool"
+  },
+  "decoys": [
+    {
+      "file": "caddyconfig/caddyfile/dispenser.go",
+      "cls": "Dispenser",
+      "name": "Delete",
+      "params": 0
+    },
+    {
+      "file": "replacer.go",
+      "cls": "Replacer",
+      "name": "Delete",
+      "params": 1
+    }
+  ]
+}
