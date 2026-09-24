@@ -199,10 +199,11 @@ and real commits, and end to end with coding agents
   of its cost and 0.28 of its time; Claude Code's Explore agent came to 0.76. Each handed back
   about 170 tokens, against the 23k that looking the answer up adds to the asking agent's context.
   After the fixes that followed the round, the index alone answers all 24 exactly.
-- Real sessions: `bench/agentic/session-round.mjs` runs Claude Code as shipped, with graph-indexer
-  as `init --no-helper` installs it and as `init` installs it, on 12 new questions and 8 refactors,
-  and reports in dollars across models whether the main agent hands questions to the helper and
-  what that does to cost, time, results and its own context. It needs an authenticated `claude`.
+- Real Claude Code sessions (`bench/agentic/session-round.mjs`; 12 new questions and 8 refactors,
+  60 runs): with graph-indexer as `init` installs it every question was answered exactly, 9 of 12
+  without it (the misses were the three two-level caller questions), at 0.86 (0.81–0.92) of the
+  cost and 0.68 of the time; refactors were all solved either way at the same cost. The main agent
+  never handed a question to the structural helper or to Explore on these short tasks.
 
 ---
 

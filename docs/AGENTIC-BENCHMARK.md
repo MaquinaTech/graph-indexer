@@ -150,7 +150,7 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    question off — to a general-purpose sub-agent with grep, to Claude Code's Explore agent and to
    the structural helper `init` now installs — all on the smaller model.
 
-8. **Real sessions** (prepared, not yet run; arms `cc`, `cc+gi`, `cc+gi+helper`): 12 new code
+8. **Real sessions** (snapshot `rt1`, arms `cc`, `cc+gi`, `cc+gi+helper`): 12 new code
    questions (set `r6`) and 8 refactors — the two new targets left (set `r5`) and the six of the
    held-out round — each given to a Claude Code session with its usual model, so that the main
    agent chooses whether to hand work to a sub-agent. The report is in dollars, since the helper
@@ -163,8 +163,16 @@ same tasks, run at the same time.
 
 ## Results
 
-Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs) and a
-round of delegated questions on 24 new ones (72 runs). In short:
+Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs), a
+round of delegated questions on 24 new ones (72 runs) and a round of real Claude Code sessions on
+20 tasks (60 runs). In short:
+
+- **In real Claude Code sessions, graph-indexer as `init` installs it answered every code question
+  exactly, against 9 of 12 without it**, at 0.86–0.89 of the cost and 0.68–0.70 of the time; the
+  three it made the difference on were all two-level caller questions. Multi-site refactors came
+  out the same with and without it (all solved, cost 0.98–1.03). The main agent never handed a
+  question to the structural helper, nor to Explore: every session was short (5–8 turns), and
+  it looked the answer up itself.
 
 - **On code questions (B1), graph-indexer next to grep costs less than half of grep alone, and it
   is what makes a smaller model answer them right:** 0.44 (0.32–0.67) of grep's cost and 0.37 of
@@ -199,7 +207,8 @@ round of delegated questions on 24 new ones (72 runs). In short:
   with it the benchmark mostly measures cost; its one failure in four rounds was a run of the
   `grep` arm. The smaller model missed 2 of 7 questions and 1 of 11 issues with grep alone, one
   issue with the rules alone, and none with graph-indexer; on the 24 delegated questions every
-  arm missed 4, all of them two-level caller questions.
+  arm missed 4, all of them two-level caller questions. In real sessions the usual model without
+  graph-indexer missed 3 of 12 questions, all two-level caller questions, and with it none.
 
 ### Measurement correction and where the cost goes
 
@@ -239,6 +248,54 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### Real sessions (rt1): 20 tasks, 60 runs
+
+**Setup.** Each task went to a Claude Code session started with `claude -p` in a run directory
+that held what `init` writes for the arm, with the usual model and nothing else changed: the
+tools Claude Code ships with (Explore and general-purpose sub-agents included), the web tools
+off, a ceiling of $5 a session. `cc` had no graph-indexer; `cc+gi` had its MCP server and
+CLAUDE.md block as `init --no-helper` installs them; `cc+gi+helper` had those and the structural
+helper among its sub-agents. Before the runs, a short session per arm checked that it had the
+Agent tool, the graph-indexer server connected and the helper offered only where it belonged.
+Tasks: 12 new code questions graded by the TypeScript compiler (set `r6`: 6 call-site, 3
+two-level caller and 3 subclass questions) and 8 multi-site refactors graded by `tsc` (the 2 new
+targets left in nestjs, set `r5`, and the 6 of the held-out round). One run per task and arm, all
+at the same time. Cost in dollars as the CLI reports it, every model included.
+
+| suite | arm | solved | mean F1 | mean cost | cost ratio vs `cc` | time (mean) | time ratio | tool calls |
+|---|---|---|---|---|---|---|---|---|
+| B1 questions (12) | `cc` | 9 / 12 | 0.82 | $0.07 | — | 14 s | — | 5.4 |
+| | `cc+gi` | **12 / 12** | 1.00 | $0.07 | 0.89 (0.82–0.96) | 10 s | 0.70 | 4.8 |
+| | `cc+gi+helper` | **12 / 12** | 1.00 | $0.06 | 0.86 (0.81–0.92) | 10 s | 0.68 | 4.5 |
+| B2 refactors (8) | `cc` | 8 / 8 | 1.00 | $0.08 | — | 15 s | — | 5.8 |
+| | `cc+gi` | 8 / 8 | 1.00 | $0.09 | 1.03 (0.87–1.27) | 16 s | 1.07 | 7.1 |
+| | `cc+gi+helper` | 8 / 8 | 1.00 | $0.08 | 0.98 (0.86–1.10) | 14 s | 0.91 | 6.0 |
+
+The 60 sessions cost $4.48 in all. Over the 20 tasks, `cc+gi+helper` against `cc`: +15 points
+solved (0…30), cost 0.91 (0.85–0.98), cost per solved task 0.78 (0.60–0.93).
+
+**What it shows.**
+
+- **Without graph-indexer the agent got every two-level caller question wrong; with it, right.**
+  The three questions `cc` missed are the three caller questions. It answered them with grep and
+  wrote paths relative to `packages/` instead of the repository root, which makes them count as
+  wrong; with that repaired its F1 would be 0.95, 0.94 and 0.87 — it still left out callers
+  (`ExternalContextCreator.registerRequestProvider`, two others) and added one that is not. Both
+  graph-indexer arms called `call_graph` and answered all three exactly. On call-site and
+  subclass questions all three arms were exact.
+- **The saving is smaller than with sub-agents, because real sessions are much shorter.** A
+  Claude Code session answered a question in 5–6 turns and about 20–45k input-equivalent tokens;
+  the sub-agents of the earlier rounds, following long instructions, spent ten times that. With so
+  little lookup to save, graph-indexer lowers cost by 11–14% and time by 30%, and its gain is
+  mostly in the answers being right.
+- **Refactors: no difference.** The targets had 4–26 call sites; every arm found them all.
+- **Nobody delegated.** In none of the 60 sessions did the main agent start a sub-agent — not the
+  helper, not Explore. For a task that fits in a handful of turns, looking it up takes less than
+  describing it to someone else; the helper's saving (`rc9`) is there when an agent chooses to
+  hand a question off, which on these tasks it never did. The helper costs nothing when unused
+  (the helper arm cost no more than `cc+gi`), so `init` keeps installing it; whether a main agent
+  delegates during a long task is still unmeasured.
 
 ### Delegated questions (rc9): 24 new questions, 72 runs
 
@@ -673,13 +730,11 @@ grep or find despite the policy, most of them to read a configuration file.
   reasoning and the prefix it re-reads at every call, which a code index does not reach, so this
   line of work is closed ([PLAN-AGENTES.md](PLAN-AGENTES.md)); only the real integration (below)
   is left to measure there.
-- **Delegation inside a session.** The delegated part is measured (`rc9`): the structural
+- **Delegation inside a long session.** The delegated part is measured (`rc9`): the structural
   helper answers as exactly as the main agent's own tools, at a quarter of the cost and time, and
-  hands back about 170 tokens. What is left is the rest of the session: whether a main model hands
-  structural questions to the helper at the right moments, and what a clean context saves over a
-  long task. The sessions that ran the rounds could not start sub-agents from sub-agents, so this
-  runs in real sessions: the round is prepared (protocol item 8, `session-round.mjs`) and needs a
-  machine with an authenticated `claude`.
+  hands back about 170 tokens. In real sessions on single questions and refactors (`rt1`) the
+  main agent never delegated — to the helper or to Explore. Whether it delegates during a long
+  task, where a clean context would pay, needs long tasks (issues, features) in real sessions.
 - **Impact through supertypes.** `impact` counts a call bound to a base-class or interface method
   as reaching every override, even when the receiver's static type cannot reach it; recording
   that type at indexing time would remove these false positives.
@@ -690,8 +745,8 @@ grep or find despite the policy, most of them to read a configuration file.
 - **Wider and repeated measurement:** B1 and B2 on more repositories and languages, and several
   runs per task and arm — with one run, a 20% difference in cost is at the edge of what the
   intervals can show.
-- **The real integration:** the MCP server and hooks inside the agent harness instead of
-  sub-agents following instructions. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
+- **The real integration on issues:** B1 and B2 now ran in real sessions (`rt1`); B3 has not, nor
+  have the hooks. [`run-headless.mjs`](../bench/agentic/run-headless.mjs)
   launches prepared runs with `claude -p` — the `mcp` arm with the MCP server and the block
   `init` writes, `mcp+hooks` with the Claude Code hooks as well — and registers the stream-json
   transcripts for grading; it needs an authenticated `claude` CLI, which the sessions that ran
