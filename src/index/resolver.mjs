@@ -21,6 +21,7 @@ const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'ty
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
 const CALLABLE_KINDS = new Set(['function', 'method', 'constructor', 'macro']);
 const MEMBER_HOLDERS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'object', 'impl', 'module']);
+const MEMBER_KINDS = new Set(['field', 'property', 'method', 'constructor']);
 const PACKAGE_LANGS = new Set(['java', 'kotlin', 'scala', 'csharp', 'php']);
 const DIR_PACKAGE_LANGS = new Set(['go']);
 const MAX_GLOBAL_CANDIDATES = 12;
@@ -689,12 +690,14 @@ export class Resolver {
         const spec = this.specs[file.lang];
         // 1. lexical scope: symbols nested in enclosing definitions (closures, inner functions)
         for (let s = srcId != null ? this.t.sym(srcId) : null, g = 0; s && g < 32; s = s.parentId != null ? this.t.sym(s.parentId) : null, g++) {
-            const ids = this.t.byParent.get(s.id)?.get(name);
+            // members of an object literal or a type literal are not names in scope
+            const ids = this.t.byParent.get(s.id)?.get(name)?.filter(id => !MEMBER_KINDS.has(this.t.sym(id)?.kind));
             if (ids?.length && !MEMBER_HOLDERS.has(s.kind)) {
                 const r = this.#pick(ids, kind, 0.95, fileId);
                 if (r) return r;
             }
-            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind) && this.#reaches(s)) return { id: s.id, conf: 0.9, ncand: 1 }; // recursion
+            // recursion; a method calls itself by a bare name only where members are in scope (implicit this)
+            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind) && (s.kind !== 'method' || spec?.implicitThis) && this.#reaches(s)) return { id: s.id, conf: 0.9, ncand: 1 };
         }
         // 2. implicit this: members of the enclosing type (Java/Kotlin/C#/Scala/C++/Ruby)
         if (spec?.implicitThis && srcId != null && kind !== 'type' && kind !== 'inherit') {

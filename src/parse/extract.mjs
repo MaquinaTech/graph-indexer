@@ -209,6 +209,32 @@ function receiverDescriptor(node, spec) {
     return parts.join('.');
 }
 
+/** `e.key` for a descriptor `e`, when e names a value (a variable, a chain, a cast). */
+function memberOfDescriptor(d, key) {
+    if (!d || d === '?' || d === '!' || d === 'null' || d.startsWith('new ')) return null;
+    if (d.startsWith('as ')) return `(${d.slice(3)}).${key}`;
+    return `${d}.${key}`;
+}
+
+/** The type written for member `key` in the text of an inline object type (`{ key?: T; … }`). */
+function inlineMemberType(text, key) {
+    for (const part of splitTop(text.slice(1, -1), ';').flatMap(x => splitTop(x, ','))) {
+        const m = /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:([^]*)$/.exec(part);
+        if (m && m[1] === key) return m[2].trim();
+    }
+    return null;
+}
+
+/** The type written for member `key` in an inline object type (`{ key: T; … }`), if any. */
+function memberTypeIn(typeNode, key) {
+    if (typeNode.type !== 'object_type') return null;
+    for (const m of typeNode.namedChildren) {
+        if (m.type !== 'property_signature' || m.childForFieldName('name')?.text !== key) continue;
+        return m.childForFieldName('type')?.namedChildren[0]?.text ?? null;
+    }
+    return null;
+}
+
 /** The descriptor of a collection whose elements are wanted: a copy (`Array.from(xs)`, `[...xs]`) has those of xs. */
 function elementsDescriptor(node, spec) {
     return receiverDescriptor(spec.collectionSource?.(node) ?? node, spec);
@@ -328,6 +354,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
         let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, bindEach = null, srcNode = null;
+        let bindKey = null, bindOf = null;
         let cbFn = null, cbArg = null;
         for (const c of m.captures) {
             const n = c.name;
@@ -350,6 +377,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.expr' || n === 'field.expr') bindExpr = c.node;
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
             else if (n === 'bind.each') bindEach = c.node;
+            else if (n === 'bind.key') bindKey = c.node.text;
+            else if (n === 'bind.of') bindOf = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
             else if (n === 'ret') { role = 'ret'; main = c.node; }
             else if (n === 'cb') { role = 'cb'; main = c.node; }
@@ -387,8 +416,16 @@ function extractFromTree(spec, query, tree, source, relPath) {
             // one record per binding site; an explicit type annotation beats an initialiser
             const list = role === 'bind' ? binds : fields;
             const key = role + ':' + main.id + ':' + bindName;
+            let expr = bindExpr ? receiverDescriptor(bindExpr, spec) : null;
+            // a destructured property: `const { a: x } = e` is e.a, `({ a }: T)` is T's member a
+            if (bindKey) {
+                const of = bindOf && memberTypeIn(bindOf, bindKey);
+                if (of) { bindType = of; expr = null; }
+                else if (bindOf) { const t = normalizeType(bindOf.text, spec); expr = t ? `(${t}).${bindKey}` : null; }
+                else expr = memberOfDescriptor(expr, bindKey);
+            }
             const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar,
-                expr: bindExpr ? receiverDescriptor(bindExpr, spec) : null, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
+                expr, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
                 each: bindEach ? elementsDescriptor(bindEach, spec) : null };
             const prev = bindSites.get(key);
             if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
@@ -560,7 +597,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         return best?.type ?? null;
     };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
-    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.each === b.each && a.cb === b.cb;
+    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.each === b.each && a.cb === b.cb && a.inline === b.inline;
     // `helper((err, socket) => socket.send())`: an untyped parameter of a function passed to a call
     // takes its type from the callee's signature, resolved across files (the `cb:` types above)
     for (const { call, fn, arg } of cbSites) {
@@ -590,6 +627,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
         const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
         if (type) setLocal(ctx.scope, b.name, { type, ctx, end });
+        else if (b.type && /^\{[^]*\}$/.test(b.type.trim())) setLocal(ctx.scope, b.name, { inline: b.type.trim(), ctx, end }); // `x: { a: A; … }`
         else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx, end });
         else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx, end });
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx, end });
@@ -718,7 +756,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const isCall = first.ops[0] === '()';
             const nt = !isCall && ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, first.name) : null;
             const v = isCall ? null : nt ? { type: nt } : lookupLocal(ctx, first.name);
-            if (v) t = applyOps(bindingType(v, depth), first.ops);
+            // a value of an inline object type: its member's written type
+            if (v?.inline && !first.ops.length && segs.length > 1) { t = applyOps(typeText(inlineMemberType(v.inline, segs[1].name)), segs[1].ops); i = 2; }
+            else if (v) t = applyOps(bindingType(v, depth), first.ops);
             else if (isCall) t = applyOps('call:' + first.name, first.ops.slice(1));
             else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) {
                 t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);

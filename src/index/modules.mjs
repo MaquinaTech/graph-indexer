@@ -56,17 +56,19 @@ export class ModuleResolver {
             const j = readJson(path.join(this.root, rel));
             if (j?.name) this.packages.set(j.name, { dir: path.posix.dirname(rel), json: j });
         }
-        // tsconfig paths (root only; good enough for most repos)
-        this.tsPaths = [];
-        const ts = readJson(path.join(this.root, 'tsconfig.json')) ?? readJson(path.join(this.root, 'tsconfig.base.json'));
-        const co = ts?.compilerOptions;
-        if (co?.paths) {
-            const base = co.baseUrl ?? '.';
-            for (const [pat, targets] of Object.entries(co.paths)) {
-                this.tsPaths.push({ pat, targets: targets.map(t => path.posix.normalize(path.posix.join(base, t))) });
-            }
+        // tsconfig paths and baseUrl, per project: a file resolves through the nearest tsconfig.json
+        // above it (in a monorepo each package maps its own aliases, often the same `@/*` to a
+        // different directory), then through the root's
+        this.tsScopes = new Map();
+        const rootCfg = fs.existsSync(path.join(this.root, 'tsconfig.json')) ? 'tsconfig.json' : 'tsconfig.base.json';
+        const rootScope = this.#tsScope(rootCfg);
+        if (rootScope) this.tsScopes.set('.', rootScope);
+        for (const rel of this.#findManifests('tsconfig.json')) {
+            const dir = path.posix.dirname(rel);
+            if (dir === '.') continue;
+            const scope = this.#tsScope(rel);
+            if (scope) this.tsScopes.set(dir, scope);
         }
-        this.tsBaseUrl = co?.baseUrl ? path.posix.normalize(co.baseUrl) : null;
         // Go module path
         this.goModules = [];
         for (const rel of this.#findManifests('go.mod')) {
@@ -76,6 +78,52 @@ export class ModuleResolver {
             } catch { /* unreadable */ }
         }
         this.goModules.sort((a, b) => b.module.length - a.module.length);
+    }
+
+    /** compilerOptions of a tsconfig file, following relative `extends` (a child's paths replace its parent's). */
+    #tsOptions(rel, depth = 0) {
+        const j = readJson(path.join(this.root, rel));
+        if (!j || depth > 5) return null;
+        const dir = path.posix.dirname(rel);
+        let out = { paths: null, pathsDir: null, baseUrl: null };
+        for (const ext of [j.extends ?? []].flat()) {
+            if (typeof ext !== 'string' || !ext.startsWith('.')) continue;
+            const parent = this.#tsOptions(path.posix.normalize(path.posix.join(dir, ext.endsWith('.json') ? ext : ext + '.json')), depth + 1);
+            if (parent) out = { paths: parent.paths ?? out.paths, pathsDir: parent.paths ? parent.pathsDir : out.pathsDir, baseUrl: parent.baseUrl ?? out.baseUrl };
+        }
+        const co = j.compilerOptions ?? {};
+        if (co.baseUrl != null) out.baseUrl = path.posix.normalize(path.posix.join(dir, co.baseUrl));
+        if (co.paths) { out.paths = co.paths; out.pathsDir = dir; }
+        return out;
+    }
+
+    /** The aliases a tsconfig (or, when it has none, the app/lib configs next to it) declares. */
+    #tsScope(rel) {
+        let o = this.#tsOptions(rel);
+        const dir = path.posix.dirname(rel);
+        if (o && !o.paths && !o.baseUrl) {
+            for (const alt of ['tsconfig.app.json', 'tsconfig.lib.json', 'tsconfig.build.json']) {
+                const a = this.#tsOptions(dir === '.' ? alt : `${dir}/${alt}`);
+                if (a?.paths || a?.baseUrl) { o = a; break; }
+            }
+        }
+        if (!o || (!o.paths && !o.baseUrl)) return null;
+        // targets are relative to baseUrl, or to the config that declares them when there is none
+        const base = o.baseUrl ?? o.pathsDir;
+        const paths = Object.entries(o.paths ?? {}).map(([pat, targets]) => ({ pat, targets: [targets].flat().map(t => path.posix.normalize(path.posix.join(base, t))) }));
+        return { paths, baseUrl: o.baseUrl };
+    }
+
+    #tsScopesFor(fromDir) {
+        const out = [];
+        for (let d = fromDir; ; d = path.posix.dirname(d)) {
+            const s = this.tsScopes.get(d);
+            if (s && d !== '.') { out.push(s); break; }
+            if (d === '.' || d === '/' || !d) break;
+        }
+        const root = this.tsScopes.get('.');
+        if (root) out.push(root);
+        return out;
     }
 
     #findManifests(name) {
@@ -145,7 +193,8 @@ export class ModuleResolver {
             return f ? { file: f } : null;
         }
         if (source.startsWith('/')) return null;
-        for (const { pat, targets } of this.tsPaths) {
+        const scopes = this.#tsScopesFor(fromDir);
+        for (const { pat, targets } of scopes.flatMap(s => s.paths)) {
             const star = pat.indexOf('*');
             if (star < 0 ? pat === source : (source.startsWith(pat.slice(0, star)) && source.endsWith(pat.slice(star + 1)))) {
                 const mid = star < 0 ? '' : source.slice(star, source.length - (pat.length - star - 1));
@@ -173,8 +222,8 @@ export class ModuleResolver {
                 if (f) return { file: f };
             }
         }
-        if (this.tsBaseUrl) {
-            const f = this.#ecmaFile(path.posix.normalize(path.posix.join(this.tsBaseUrl, source)));
+        for (const s of scopes) if (s.baseUrl) {
+            const f = this.#ecmaFile(path.posix.normalize(path.posix.join(s.baseUrl, source)));
             if (f) return { file: f };
         }
         return null;

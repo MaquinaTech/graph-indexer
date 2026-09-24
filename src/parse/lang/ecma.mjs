@@ -102,6 +102,12 @@ const REFS_COMMON = `
 (computed_property_name (identifier) @name) @ref.value
 (computed_property_name (member_expression object: (_) @recv property: (property_identifier) @name)) @ref.read
 (unary_expression operator: "typeof" argument: (identifier) @name) @ref.value
+(arrow_function body: (identifier) @name) @ref.value
+(ternary_expression consequence: (identifier) @name) @ref.value
+(ternary_expression alternative: (identifier) @name) @ref.value
+(return_statement (identifier) @name) @ref.value
+(variable_declarator value: (identifier) @name) @ref.value
+(assignment_expression right: (identifier) @name) @ref.value
 `;
 
 const REFS_JSX = `
@@ -125,7 +131,7 @@ const REFS_TS = `
 (extends_type_clause type: (generic_type name: (type_identifier) @name)) @ref.inherit
 (type_identifier) @name @ref.type
 (nested_type_identifier module: (_) @recv name: (type_identifier) @name) @ref.type
-(type_query (identifier) @name) @ref.type
+(type_query (identifier) @name) @ref.value
 (type_query (member_expression object: (_) @recv property: (property_identifier) @name)) @ref.type
 `;
 
@@ -159,6 +165,10 @@ ${callbackParam('parameters: (formal_parameters . (required_parameter pattern: (
 (variable_declarator name: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
 (required_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
 (optional_parameter pattern: (identifier) @bind.name type: (type_annotation (_) @bind.type)) @bind
+(variable_declarator name: (object_pattern (pair_pattern key: (property_identifier) @bind.key value: (identifier) @bind.name)) value: (_) @bind.expr) @bind
+(variable_declarator name: (object_pattern (shorthand_property_identifier_pattern) @bind.name @bind.key) value: (_) @bind.expr) @bind
+(required_parameter pattern: (object_pattern (pair_pattern key: (property_identifier) @bind.key value: (identifier) @bind.name)) type: (type_annotation (_) @bind.of)) @bind
+(required_parameter pattern: (object_pattern (shorthand_property_identifier_pattern) @bind.name @bind.key) type: (type_annotation (_) @bind.of)) @bind
 (public_field_definition name: (property_identifier) @field.name type: (type_annotation (_) @field.type)) @field
 (public_field_definition name: (property_identifier) @field.name value: (_) @field.expr) @field
 (required_parameter (accessibility_modifier) pattern: (identifier) @field.name type: (type_annotation (_) @field.type)) @field
@@ -172,7 +182,31 @@ ${callbackParam('parameters: (formal_parameters . (identifier) @bind.name)')}
 `;
 
 // Wrappers whose members are reached through the wrapped type (after await / by convention).
-const TRANSPARENT_TYPES = new Set(['Promise', 'PromiseLike', 'Awaited', 'Readonly', 'Partial', 'Required', 'NonNullable', 'DeepPartial', 'DeepReadonly', 'Mutable']);
+const TRANSPARENT_TYPES = new Set(['Promise', 'PromiseLike', 'Awaited', 'Readonly', 'Partial', 'Required', 'NonNullable', 'DeepPartial', 'DeepReadonly', 'Mutable', 'Pick', 'Omit']);
+/**
+ * What a type alias has the members of: `type E = Pick<Entry, 'a'>`, `type E = Entry & { b: B }`,
+ * `type E = Readonly<Entry>` — each named type it is made of (through the wrappers above).
+ */
+function aliasBases(node) {
+    if (node.type !== 'type_alias_declaration') return [];
+    const value = node.childForFieldName('value');
+    const out = [];
+    const visit = (n, depth = 0) => {
+        if (!n || depth > 4) return;
+        if (n.type === 'intersection_type' || n.type === 'parenthesized_type') { for (const c of n.namedChildren) visit(c, depth + 1); return; }
+        if (n.type === 'type_identifier') { out.push(n.text); return; }
+        if (n.type === 'nested_type_identifier') { out.push(n.childForFieldName('name')?.text); return; }
+        if (n.type === 'generic_type') {
+            const head = n.childForFieldName('name');
+            const name = head?.type === 'nested_type_identifier' ? head.childForFieldName('name')?.text : head?.text;
+            if (TRANSPARENT_TYPES.has(name)) visit(n.childForFieldName('type_arguments')?.namedChildren[0], depth + 1);
+            else if (name) out.push(name);
+        }
+    };
+    visit(value);
+    return out.filter(Boolean);
+}
+
 // Collections: `x[i]`, `for (const e of x)` and `x.forEach(e => …)` see the element type.
 const ELEMENT_TYPES = new Set(['Array', 'ReadonlyArray', 'Set', 'ReadonlySet', 'Iterable', 'IterableIterator', 'Iterator', 'AsyncIterable', 'AsyncIterableIterator', 'Generator', 'AsyncGenerator']);
 // Types whose members never live in the repository.
@@ -358,6 +392,7 @@ function makeSpec(id, grammar, extensions, { ts, jsx }) {
             IMPORTS_COMMON, BINDINGS_COMMON, ts ? BINDINGS_TS : BINDINGS_JS,
         ].join('\n'),
         implicitThis: false,
+        implicitBases: aliasBases,
         selfNames: ['this'],
         externalReceivers: EXTERNAL_RECEIVERS,
         builtinCalls: BUILTIN_CALLS,
