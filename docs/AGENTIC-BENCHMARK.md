@@ -196,6 +196,29 @@ graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
 
+### Resolved indirection (development, rc8): 11 tasks, 22 runs
+
+After the fourth round, the transcripts showed where an issue's cost goes: 46% hidden reasoning, 26% the fixed prefix re-read every turn, 13% all code read (of which comments, indentation, docstrings and imports are about 4%). About 71% of the reasoning comes before the first edit, and it stayed near 22k tokens in every arm, whatever form the code came in. The agents spent it working out indirection: which override a subclass runs, which `TRANSFORMS` entry handles an expression, what a name built at run time (`getattr(self, f"{key}_sql")`, `dir(cls)` plus `endswith("_sql")`) reaches, what a decorator does. graph-indexer now resolves these statically (`src/query/facts.mjs`) and gives them after reads, in `read_code`, `get_symbol` and the post-read hook. `bench/oracle-facts.mjs` checks them against the running program, importing the repository's modules in the benchmark only. On sqlglot (400 methods, 249 tables), overriding subclasses scored 1.000 precision, inheriting subclasses 1.000 (0.59 before the index took the C3 method resolution order into account) and table keys 0.995. On networkx, overrides scored 0.983 and inheritors 1.000.
+
+The `grep+gi7` arm is `grep+gi6` with source read through `view`: Read's output plus exactly what the post-read hook adds, because hooks do not run in sub-agents. It ran on the fourth round's 11 B3 tasks, with a concurrent `grep` control:
+
+| | `grep` | `grep+gi7` | ratio |
+|---|---|---|---|
+| cost (mean) | 337k | 320k | **0.95** (CI 0.82–1.10) |
+| turns | 27.9 | 27.3 | 0.98 |
+| hidden reasoning up to the first edit | 11.8k | 10.3k | 0.87 |
+| hidden reasoning after it | 2.9k | 3.3k | 1.14 |
+| context precision | 16.6% | 26.6% | ×1.6 |
+
+All 22 runs solved their task. The facts made reading more precise and trimmed some pre-edit thought, but they did not move cost or turns. The mechanism gate (pre-edit reasoning ≤ 0.80 of `grep`) was not met. Agents also read with `sed` or Read in 7 of the 11 `gi7` runs; those runs are counted (intention to treat). The product keeps the facts, since they are cheap, silent when there is nothing to resolve and precise, but they are not the lever for B3.
+
+Two measurement lessons came out of this round:
+
+- **The model had changed since round 4.** The same alias (`claude-sonnet-5`) solved these tasks for 337k mean cost with `grep` alone, against 751k in round 4, and reasoned 11.8k tokens before editing instead of 22k. Comparing a new arm with an earlier round's runs measures the model, not the arm. Every comparison needs a concurrent control, and `report.mjs` now warns when the arms ran on different models.
+- **Sub-agents take the session's model unless told otherwise.** The benchmark's sub-agents are launched with `model: sonnet` so that every round runs on the same model. Five runs launched by mistake on the session's model were discarded (`runs/rc8/discarded.tsv`).
+
+With today's model the fixed prefix is 38–39% of an issue's cost. Each turn re-reads it, so the remaining levers are fewer turns and a smaller prefix, including graph-indexer's own share of it (tool definitions and instructions).
+
 ### Fourth round: 19 tasks, 122 runs
 
 **What changed.** The reading layer of [PLAN-AGENTES.md](PLAN-AGENTES.md): a read by name or
