@@ -42,7 +42,7 @@ const ENTRY = /^\s*(\[?[A-Za-z_][\w.]*\]?|"[^"\n]*"|'[^'\n]*')\s*(?::(?!:)|=>)/;
 const SPREAD = /^\s*(?:\*\*|\.\.\.)([A-Za-z_][\w.]*)\s*,?\s*$/;
 const OPENS = /(?:=|:|=>)\s*(?:\{|\[|array\()\s*(?:#.*|\/\/.*)?$/;
 
-function tablesOf(intel) {
+export function tablesFor(intel) {
     const version = intel.ix?.version ?? 0;
     if (intel._tables?.version === version) return intel._tables;
     const tables = new Map(), byHandler = new Map(), byKey = new Map();
@@ -192,7 +192,7 @@ export function factsForRange(intel, file, from, to, { max = 6, shown = new Set(
     const out = [];
     const push = (fact, score) => { if (!shown.has(fact.key) && !out.some(o => o.key === fact.key)) out.push({ ...fact, score }); };
 
-    const T = tablesOf(intel);
+    const T = tablesFor(intel);
     for (const s of defs) {
         if (MEMBER.has(s.kind)) {
             // handler registered in tables
@@ -313,7 +313,7 @@ export function factsForSymbol(intel, id, opts = {}) {
 
 /** Every table entry keyed by a class, constant or string, and the handler each table maps it to. */
 export function handlersOfKey(intel, keyIdOrText) {
-    const T = tablesOf(intel);
+    const T = tablesFor(intel);
     return (T.byKey.get(keyIdOrText) ?? []).map(({ table, entry }) => ({ table: table.qname, path: table.path, line: entry.line, handlers: entry.handlers.map(h => intel.sym(h)).filter(Boolean) }));
 }
 

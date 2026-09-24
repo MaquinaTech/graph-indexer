@@ -242,22 +242,38 @@ export class CodeIntel {
         if (!sym) return out;
         const type = this.ix.resolver.enclosingType(sym.id);
         if (!type || type.id == null || type.id === sym.id) return out;
+        // every subtype, then which version each one runs: the first type of its method resolution
+        // order that declares the member (so `class C(B, A)` runs B's override even when reached via A)
+        const subs = [];
         const seen = new Set([type.id]);
         let frontier = [type.id];
-        for (let depth = 0; depth < 4 && frontier.length; depth++) {
+        for (let depth = 0; depth < 8 && frontier.length && subs.length < 3000; depth++) {
             const next = [];
             for (const tid of frontier) {
                 for (const { src_id } of this.store.all("SELECT DISTINCT src_id FROM refs WHERE dst_id = ? AND kind = 'inherit' AND src_id IS NOT NULL", tid)) {
                     if (seen.has(src_id)) continue;
                     seen.add(src_id);
-                    const st = this.sym(src_id);
-                    if (!st) continue;
-                    if (this.#membersNamed(src_id, sym.name).length) out.override.push(st);
-                    else { out.inherit.push(st); next.push(src_id); }
-                    if (out.inherit.length + out.override.length >= max) return out;
+                    subs.push(src_id);
+                    next.push(src_id);
                 }
             }
             frontier = next;
+        }
+        const declares = new Map();
+        const declared = (tid) => { if (!declares.has(tid)) declares.set(tid, this.#membersNamed(tid, sym.name).length > 0); return declares.get(tid); };
+        for (const sid of subs) {
+            const order = this.ix.resolver.mro(sid);
+            if (!order.includes(type.id)) continue;
+            const owner = order.find(declared);
+            let bucket = null;
+            if (owner === type.id) bucket = out.inherit;
+            // its own version, where it would otherwise run this one
+            else if (owner === sid && order.slice(1).find(declared) === type.id) bucket = out.override;
+            if (!bucket) continue;
+            const st = this.sym(sid);
+            if (!st) continue;
+            bucket.push(st);
+            if (out.inherit.length + out.override.length >= max) return out;
         }
         return out;
     }

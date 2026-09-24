@@ -285,6 +285,35 @@ export class Resolver {
         return out;
     }
 
+    /**
+     * Method resolution order of a type: C3 linearization over its resolved bases (Python's MRO; for
+     * single inheritance it is the chain of supertypes). Unresolved bases are left out; an inconsistent
+     * hierarchy falls back to depth-first order. Ids, the type first.
+     */
+    mro(typeId) {
+        const k = 'mro|' + typeId;
+        if (this.memo.has(k)) return this.memo.get(k);
+        this.memo.set(k, [typeId]); // cycle guard
+        const ts = this.t.sym(typeId);
+        const bases = [];
+        for (const b of ts?.bases ?? []) {
+            const bt = this.resolveTypeName(b, ts.fileId);
+            if (bt && bt.id !== typeId && !bases.includes(bt.id)) bases.push(bt.id);
+        }
+        const seqs = [...bases.map(b => [...this.mro(b)]), [...bases]];
+        const out = [typeId];
+        for (;;) {
+            const rest = seqs.filter(s => s.length);
+            if (!rest.length) break;
+            const head = rest.map(s => s[0]).find(h => !rest.some(s => s.indexOf(h) > 0));
+            if (head === undefined) { for (const s of rest) for (const x of s) if (!out.includes(x)) out.push(x); break; }
+            out.push(head);
+            for (const s of rest) if (s[0] === head) s.shift();
+        }
+        this.memo.set(k, out);
+        return out;
+    }
+
     /** Resolve a type name visible from a file to a type symbol. */
     resolveTypeName(name, fileId) {
         if (!name || name.endsWith('[]') || name === '!') return null;
