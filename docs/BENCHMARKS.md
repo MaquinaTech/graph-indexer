@@ -4,11 +4,13 @@ Three benchmarks, each answering a question an agent actually depends on:
 
 1. **Are the references right?** — `bench/eval-graph.mjs`, against the TypeScript compiler;
    `bench/eval-graph-go.mjs`, against the Go type checker; `bench/eval-graph-java.mjs`, against
-   the Java compiler.
+   the Java compiler. Libraries and frameworks, and one product monorepo (Twenty).
 2. **Does search find the code a real change touched?** — `bench/eval-localize.mjs`, replaying
    real commits.
 3. **Does search find the symbol a developer means?** — `bench/eval-search.mjs`, 377 authored
-   queries, compared with graph-indexer 2.x.
+   queries.
+
+Each of them also runs graph-indexer 2.x on the same sample ([section 5](#5-against-graph-indexer-2x)).
 
 Everything runs offline on public repositories pinned to exact commits (`bench/fixtures.mjs`).
 Numbers below were produced with graph-indexer 3.0.0 on Node.js 22.
@@ -61,11 +63,11 @@ lines excluded) and **name-only** (every syntactic reference with that name, unr
 
 | oracle | system | micro-P | micro-R | micro-F1 | macro-P | macro-R | exact set |
 |---|---|---|---|---|---|---|---|
-| dispatch | graph-indexer | 0.996 (0.999) | 0.961 (0.887) | 0.978 (0.940) | 0.969 | 0.962 | 0.907 |
-| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.961 (0.887) | 0.979 (0.940) | 0.971 | 0.962 | 0.912 |
+| dispatch | graph-indexer | 0.997 (0.999) | 0.962 (0.887) | 0.979 (0.940) | 0.972 | 0.966 | 0.915 |
+| dispatch | graph-indexer, confidence ≥ likely | 0.997 (1.000) | 0.962 (0.887) | 0.979 (0.940) | 0.974 | 0.966 | 0.920 |
 | dispatch | name-only | 0.252 | 0.975 | 0.400 | 0.735 | 0.976 | 0.591 |
 | dispatch | grep | 0.128 | 0.993 | 0.227 | 0.515 | 0.994 | 0.226 |
-| rename | graph-indexer | 0.996 (0.999) | 0.925 (0.767) | 0.959 (0.868) | 0.969 | 0.946 | 0.877 |
+| rename | graph-indexer | 0.997 (0.999) | 0.925 (0.767) | 0.960 (0.868) | 0.972 | 0.950 | 0.885 |
 | rename | name-only | 0.262 | 0.976 | 0.413 | 0.752 | 0.977 | 0.607 |
 | rename | grep | 0.133 | 0.993 | 0.235 | 0.521 | 0.994 | 0.226 |
 
@@ -74,7 +76,9 @@ same seed: dispatch precision 0.979, recall 0.895, exact sets 0.835. Constructor
 language and the type arguments of a constructed map kept moved recall from 0.960 to 0.961 and
 exact sets from 0.902 to 0.905; anonymous classes and the values of maps (below) moved exact sets
 to 0.907 and per-symbol recall and precision up by 0.002 each. The sample leaves out anonymous
-classes, which nobody looks up by name, so it is the same symbols as before.
+classes, which nobody looks up by name, so it is the same symbols as before. The fixes found on
+Twenty (below) moved precision from 0.996 to 0.997, recall from 0.961 to 0.962 and exact sets
+to 0.915.
 
 Micro averages pool all reference lines (dominated by heavily used symbols); macro averages
 weigh each symbol equally; "exact set" is the share of symbols whose reference set matches the
@@ -225,6 +229,58 @@ functional interface they are passed to. The dispatch oracle, like TypeScript's,
 `super.m()` call as reaching every override of `m`, while the index knows it binds statically
 to the parent's `m`; those count as missed here.
 
+### A product monorepo: Twenty
+
+```bash
+GI_TSCONFIG=bench/agentic/tsconfig/twenty.json node bench/eval-graph.mjs --fixture twenty \
+  --fixture-dir DIR --scope packages/twenty-server/src/ --n 400 --seed 11
+```
+
+The fixtures above are libraries and frameworks, written with care and read by many. Most code
+agents work in is not: it is a company's product, with a server, a front end and shared packages
+in one repository, dependency injection, generated GraphQL types, upgrade commands by the hundred
+and tests next to the code. Twenty (`twentyhq/twenty` at `4c28e34`, September 2026), an open-source
+CRM, is one: 28,512 indexed files, 2.3 million lines, a NestJS server, a React front end and a
+shared package. The sample is 400 symbols of the server (`packages/twenty-server/src`); the
+oracle's program is the server, its integration tests and the shared package, with the path aliases
+each package declares for itself (`bench/agentic/tsconfig/twenty.json`, which `GI_TSCONFIG` passes
+to the oracle and to the task graders); third-party packages are not installed, as for nestjs.
+
+| build | precision | recall | exact set | file-level P / R | grep P |
+|---|---|---|---|---|---|
+| before | 0.990 | **0.182** | 0.495 | 0.990 / 0.199 | 0.009 |
+| after | **0.999** | **0.924** | **0.945** | 0.998 / 0.956 | |
+
+(dispatch oracle, micro averages.) On the libraries graph-indexer found 96% of the uses; here it
+found 18%, because of one assumption that holds in a library and fails in a product:
+
+- **Path aliases were read from the root tsconfig only.** In a monorepo each package declares its
+  own (`src/*` in the server, `@/*` in the shared package and again, for another directory, in
+  the front end), so nearly every import of the server (`from 'src/engine/…'`) was unresolved.
+  Each file now resolves through the nearest `tsconfig.json` above it (following `extends`, with
+  targets relative to its `baseUrl` or to the config that declares them), then the root's.
+
+The remaining misses led to five more general fixes, in every JavaScript/TypeScript repository:
+
+- **A bare call inside a method is never the method**: `sweepLocalCache(…)` inside the method
+  `sweepLocalCache()` calls the imported function; a method calls itself only with `this.`
+  (languages with implicit `this`, like Java, keep the old rule).
+- **Members of object and type literals are not names in scope**: in
+  `const fillers: { fill: typeof fill } = { fill }` both `fill`s are the function, not the
+  literal's property.
+- **A function or class used as a value** in more positions: an arrow's body (`@Field(() =>
+  EventDTO)`, `forwardRef(() => X)`, the NestJS and TypeORM decorators), both branches of a
+  conditional, `return fn`, `const f = fn`, assignments and `typeof fn` in a type.
+- **Destructuring keeps types**: `const { command: cmd } = entry` is `entry.command`, and
+  `({ a }: Deps)` or `({ a }: { a: A })` is the member's written type.
+- **`Pick<T, …>`, `Omit<T, …>` and type aliases** (`type Entry = Pick<Registered, 'command'>`,
+  `type X = A & { … }`) have the members of the types they are made of.
+
+**What is still missed** here: calls through a union or an interface declared in a registry
+object (`workspaceCommand.runOnWorkspace` for each of the upgrade commands), methods of object
+literals that implement an interface, fluent query builders whose chain returns `this` through a
+generic, and `factory['privateMethod']()` in tests.
+
 ## 2. Localization from real commits
 
 ```bash
@@ -338,6 +394,79 @@ tokens, paired by task (bootstrap 95% CI):
 - Fixing real issues costs the same with or without it (cost ratios between 0.96 and 1.10):
   reading the code around the fault and running tests are most of the work.
 
+## 5. Against graph-indexer 2.x
+
+```bash
+git worktree add --detach ~/.gi-agentic/v2 v2.1.1 && (cd ~/.gi-agentic/v2 && npm ci)
+node bench/eval-graph.mjs --n 400 --seed 11 --v2 ~/.gi-agentic/v2          # likewise eval-graph-go/-java
+node bench/eval-localize.mjs --n 40 --v2 ~/.gi-agentic/v2
+node bench/eval-search.mjs                                                  # 2.x results are in bench/baseline-v2.json
+```
+
+**Method.** 2.x (the 2.1.1 release) runs as users installed it: its own index, built with its
+defaults, queried through its own MCP server. For references it gets the tool call an agent would
+make: `find_references` with the symbol's name, and the owning class for a method. 2.x answers
+with the functions, methods or whole classes that reference the name, not with lines; its lines
+are those of each chunk it names that contain the name as a word (what an agent finds by reading
+those chunks), and the table also scores both versions at file level, where 2.x needs no such
+step. Answer size is the default text answer of each version's tool, in tokens. For localization
+2.x's `search_code` returns its top 20 with no score floor; a chunk counts as the functions it
+spans.
+
+**References** (dispatch oracle, micro averages, the samples of section 1; 3.0 is the build these
+docs describe):
+
+| repository | 3.0 P / R | 2.x P / R | 3.0 files P / R | 2.x files P / R | answer, tokens 3.0 / 2.x |
+|---|---|---|---|---|---|
+| nestjs (TS, 399) | **0.997 / 0.962** | 0.176 / 0.886 | 0.999 / 0.972 | 0.371 / 0.886 | 587 / 1,084 |
+| Twenty (TS, 400) | **0.999 / 0.924** | 0.052 / 0.739 | 0.998 / 0.956 | 0.083 / 0.774 | 394 / 2,787 |
+| gin (Go, 146) | **1.000 / 0.981** | 0.642 / 0.264 | 1.000 / 0.971 | 0.648 / 0.239 | 387 / 117 |
+| caddy (Go, 196) | **1.000 / 0.972** | 0.641 / 0.378 | 1.000 / 0.958 | 0.693 / 0.292 | 374 / 106 |
+| nats-server (Go, 199) | **0.992 / 0.978** | 0.300 / 0.167 | 0.968 / 0.984 | 0.438 / 0.251 | 426 / 502 |
+| spring-petclinic (Java, 111) | **0.994 / 0.989** | 0.699 / 0.984 | 1.000 / 0.978 | 0.909 / 0.968 | 343 / 159 |
+| jsoup (Java, 188) | **0.960 / 0.916** | 0.117 / 0.790 | 0.961 / 0.915 | 0.309 / 0.837 | 599 / 2,791 |
+| commons-collections (Java, 200) | **0.955 / 0.861** | 0.020 / 0.982 | 0.938 / 0.848 | 0.081 / 0.977 | 996 / 11,968 |
+
+- **In TypeScript and Java 2.x finds most uses but buries them**: it matches callers by name and
+  lists every chunk that mentions it, so in Twenty 95% of the lines it points to are not uses of
+  the symbol (in Commons Collections, 98%), and its answers run to thousands of tokens (a mean of
+  12,000 in Commons Collections). 3.0's answers are exact and a few hundred tokens.
+- **In Go 2.x misses most uses**: calls through a receiver (`c.JSON(…)`) are not tied to the
+  method, so for `Context.JSON` in gin it reports no caller at all. Its short answers in Go are
+  short because they are empty.
+- Leaving out what 2.x marks unverified raises its precision (Twenty 0.215, nestjs 0.343) and
+  halves its recall; no setting of 2.x comes close to 3.0 on both.
+
+**Localization** (169 real commits, section 2):
+
+| | file Acc@1 | file Acc@5 | function Acc@5 | function Acc@10 | function MRR@10 |
+|---|---|---|---|---|---|
+| 3.0 `search_code` | **0.544** | **0.805** | 0.528 | **0.634** | **0.432** |
+| 2.x `search_code` | 0.473 | 0.775 | **0.535** | 0.627 | 0.414 |
+
+A draw on functions, with 2.x credited with every method of a class it returns whole; 3.0 puts
+the changed file first 15% more often.
+
+**Symbol search** (377 queries, section 3): rank-1 0.703 against 0.552, MRR 0.760 against 0.646;
+on the held-out queries MRR 0.773 against 0.632; on behaviour descriptions rank-1 0.478 against
+0.283.
+
+**What a session carries and what indexing costs.**
+
+| | 3.0 | 2.x |
+|---|---|---|
+| context added to every Claude Code session (tools, instructions, CLAUDE.md) | **1,200 tokens** | 10,600 tokens |
+| full index, nestjs / Twenty | **2.3 s / 51 s** | 9.3 s / about 180 s |
+| update with nothing changed, nestjs / Twenty | **0.2 s / 1.8 s** | 9.0 s / about 180 s (it rebuilds) |
+| index on disk, nestjs / Twenty | **13 MB / 304 MB** | 48 MB / 561 MB |
+
+The added context is measured in real sessions (the first request of each session, against a
+session without graph-indexer: 15,900 tokens); 2.x's is its 16 tools and the prompt suite its
+`init` imports into CLAUDE.md. Index times are those the agent harness measured when it prepared
+the runs, both versions on the same machine and checkouts (the speed table below was measured
+separately). The agent rounds against 2.x are in the
+[agentic benchmark](AGENTIC-BENCHMARK.md#against-2x-in-real-sessions-vs-nest-vs-twenty-120-runs).
+
 ## Speed and size
 
 | fixture | files | lines | symbols | references | bound | full index | DB |
@@ -351,6 +480,7 @@ tokens, paired by task (bootstrap 95% CI):
 | express-js | 157 | 23,326 | 424 | 10,165 | 70% | 0.7 s | 2.0 MB |
 | fastapi | 1,215 | 100,435 | 7,795 | 13,315 | 72% | 2.3 s | 7.0 MB |
 | nestjs | 1,641 | 95,963 | 7,958 | 33,360 | 82% | 3.7 s | 12.3 MB |
+| Twenty | 28,512 | 2,327,185 | 170,126 | 554,975 | 79% | 51 s | 304 MB |
 
 "Bound" is the share of stored references resolved to a definition in the repository (calls into
 libraries stay unbound; value, member-read and type references that cannot be bound are dropped

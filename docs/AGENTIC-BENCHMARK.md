@@ -172,6 +172,13 @@ Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks 
 round of delegated questions on 24 new ones (72 runs) and a round of real Claude Code sessions on
 20 tasks (60 runs). In short:
 
+- **Against graph-indexer 2.x, in real Claude Code sessions (nestjs and Twenty, a product
+  monorepo; 40 tasks, 120 runs), 3.0 costs 0.43 of 2.x on code questions and 0.46 on refactors,
+  with a quarter to a third of the lookup tokens**; 2.x costs about twice as much as no index
+  (1.86–1.97), because its tools and prompt add 11,300 tokens to every call and its answers make
+  the agent read more. Against no index, 3.0 halves the tokens spent looking code up (0.49 on
+  questions, 0.53 on refactors) at 0.84–0.86 of the cost and 0.69–0.82 of the time.
+
 - **In real Claude Code sessions, graph-indexer as `init` installs it answered every code question
   exactly, against 9 of 12 without it**, at 0.86–0.89 of the cost and 0.68–0.70 of the time; the
   three it made the difference on were all two-level caller questions. Multi-site refactors came
@@ -347,6 +354,47 @@ solved (5…40), cost per solved task 0.73 (0.52–0.93).
 - **Refactors: still no difference** (1.07 with an interval from 0.91 to 1.24, one run per
   task; `cc` happened to need fewer turns this time).
 - **Nobody delegated in 252 sessions**, questions, refactors or issues.
+
+### Against 2.x in real sessions (vs-nest, vs-twenty): 120 runs
+
+**Setup.** Two rounds with a fourth arm, `cc+v2`: the same Claude Code session with graph-indexer
+2.1.1 installed as its `init` left a repository — its index, its MCP server (16 tools) and
+CLAUDE.md importing its prompt suite (the core prompt and the playbooks for the repository's
+stack). `vs-nest` repeats the 20 nestjs tasks of `rt1` (12 questions, 8 refactors); `vs-twenty`
+has 20 new ones in Twenty, a product monorepo (a CRM with a NestJS server, a React front end and a
+shared package, 28,512 files; see [BENCHMARKS.md](BENCHMARKS.md#a-product-monorepo-twenty)):
+6 call-site, 3 two-level caller and 3 implementation questions and 8 refactors, generated and
+graded by the TypeScript compiler over the server's own program (`GI_TSCONFIG`) and validated
+first (the base fails, the reference solution passes; a textual rename or parameter change fails
+5 of the 8). The index 3.0 ran on includes the fixes Twenty's reference measurement led to. All
+arms on one pinned model (the one of `rt1`–`rt3`), one run per task and arm, $13.49.
+
+| suite | arm | solved | cost (95% CI) | time | code-lookup tokens per run |
+|---|---|---|---|---|---|
+| B1 questions (24) | `cc` | 22 / 24 | 1 | 1 | 2,083 |
+| | `cc+gi` (3.0) | **23 / 24** | **0.84 (0.79–0.89)** | **0.69** | **1,025 (0.49)** |
+| | `cc+v2` (2.x) | 22 / 24 | 1.97 (1.84–2.10) | 1.15 | 3,947 (1.89) |
+| B2 refactors (16) | `cc` | 16 / 16 | 1 | 1 | 3,976 |
+| | `cc+gi` (3.0) | 16 / 16 | **0.86 (0.79–0.96)** | **0.82** | **2,106 (0.53)** |
+| | `cc+v2` (2.x) | 16 / 16 | 1.86 (1.70–2.08) | 1.18 | 5,963 (1.50) |
+
+(ratios to `cc` on the same tasks, paired bootstrap. Code-lookup tokens: what the main agent's
+reads, searches and graph-indexer answers put into its context, `lookup-tokens.mjs`.)
+
+- **3.0 against 2.x:** questions at 0.43 (0.40–0.45) of 2.x's cost and 0.60 of its time,
+  refactors at 0.46 (0.43–0.51) and 0.70, with a quarter to a third of the lookup tokens (0.26
+  and 0.35) and as many or more tasks solved.
+- **2.x costs about twice as much as no index at all.** Its tools and prompt suite add 11,300
+  tokens to the context every call re-reads (3.0: 1,200; a session without graph-indexer starts
+  at 16,500), and its answers list every chunk that mentions a name, so the agent reads more, not
+  less: 1.5–1.9 times the lookup tokens of a session without it.
+- **The effect holds in the product repository.** In Twenty, 3.0 cost 0.84 of `cc` on questions
+  and 0.79 (0.72–0.90) on refactors, at 0.67 and 0.75 of the time; in nestjs 0.84 and 0.97.
+  Every refactor passed in every arm, as in the earlier rounds.
+- The misses: `cc` left out a caller in each repository (two-level caller questions); 3.0's
+  answer to one Twenty question listed two real calls in `packages/twenty-server/test/`, outside
+  the directory the question asked about (the index had them right); 2.x missed a caller and
+  listed a wrong call.
 
 ### Real sessions in Go (go2): 19 tasks, 57 runs
 

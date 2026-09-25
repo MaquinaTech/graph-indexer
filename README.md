@@ -148,7 +148,8 @@ own `findReferences` (import lines and declarations excluded):
 
 | | precision | recall | F1 |
 |---|---|---|---|
-| graph-indexer `find_references` | **0.996** | **0.961** | **0.978** |
+| graph-indexer `find_references` | **0.997** | **0.962** | **0.979** |
+| graph-indexer 2.x `find_references` | 0.176 | 0.886 | 0.294 |
 | same-name references (no binding) | 0.252 | 0.975 | 0.400 |
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
@@ -158,6 +159,8 @@ fixture has no `node_modules`, so library-typed values are invisible to the comp
 a lower bound.* The same measurement against the Go type checker (gin, caddy, nats-server) gives
 precision 0.992–1.000 and recall 0.972–0.981, and against the Java compiler (spring-petclinic,
 jsoup, Commons Collections) 0.955–0.994 and 0.861–0.989; grep's precision there is 0.02–0.61.
+In the server of Twenty, an open-source CRM monorepo (28,512 files), precision is 0.999 and
+recall 0.924; grep's precision is 0.009 and 2.x's 0.052.
 
 **Localization from real commits.** 169 focused commits of five repositories are replayed: the
 commit subject is the query, the files and functions it changed are the answer, and the index is
@@ -170,8 +173,15 @@ rolled back to the parent commit first.
 | BM25 over the same index | 0.373 | 0.722 | 0.401 | 0.290 |
 
 **Symbol search.** 377 hand-written queries over nine repositories in eight languages, scored
-strictly at symbol level: rank-1 0.700 and MRR 0.759, against 0.552 and 0.646 for graph-indexer
+strictly at symbol level: rank-1 0.703 and MRR 0.760, against 0.552 and 0.646 for graph-indexer
 2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
+
+**Against 2.x.** In real Claude Code sessions on nestjs and Twenty (40 tasks, 120 runs), 3.0
+cost 0.43 of 2.x on code questions and 0.46 on refactors, with a quarter to a third of the
+tokens spent looking code up; 2.x cost about twice as much as no index, as its tools and prompt
+add 11,300 tokens to every call (3.0: 1,200). Against no index, 3.0 halves those lookup tokens at
+0.84–0.86 of the cost. Every benchmark against 2.x is in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md#5-against-graph-indexer-2x).
 
 **Agents.** The same model gets the same task with built-in tools only, with graph-indexer added,
 or with graph-indexer instead of grep, and an oracle it never sees grades the result: the

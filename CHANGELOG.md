@@ -170,6 +170,18 @@ and real commits, and end to end with coding agents
   with bodies are subclasses of what they extend; nested types keep their enclosing type; fields
   inherited from another file type their receivers; an argument is never a method. In every
   language a member's enclosing type is its parent, not a type found by name.
+- **A product monorepo, measured against the TypeScript compiler** (Twenty, an open-source CRM:
+  28,512 files, a NestJS server, a React front end and a shared package). graph-indexer found 18%
+  of the server's references there, against 96% on the libraries: path aliases were read from the
+  root tsconfig only, and each package of a monorepo declares its own. Each file now resolves
+  through the nearest `tsconfig.json` above it (with `extends`), then the root's: recall 0.182 →
+  0.924, precision 0.999. With it, in every JavaScript/TypeScript repository: a bare call inside a
+  method is not the method itself (it needs `this.`); members of object and type literals are not
+  names in scope; a function or class used as a value is a use in an arrow's body
+  (`@Field(() => Dto)`, `forwardRef(() => X)`), a conditional, `return`, an initialiser, an
+  assignment and `typeof` in a type; destructured values keep their types (`const { a: x } = e`,
+  `({ a }: Deps)`, `({ a }: { a: A })`); `Pick<T, …>`, `Omit<T, …>` and type aliases have the
+  members of the types they are made of.
 - **Go agent round** (`go2`, 57 real Claude Code sessions on caddy, tasks graded by the Go type
   checker): questions 14/14 with graph-indexer against 13/14 without, at 0.87 of the cost;
   refactors all solved at 0.81 of the cost and half the time.
@@ -208,8 +220,9 @@ and real commits, and end to end with coding agents
 
 ### Results (see docs/BENCHMARKS.md)
 
-- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.996, recall 0.961
-  (grep: 0.128 / 0.993; name-only: 0.252 / 0.975).
+- References vs the TypeScript compiler (nestjs, 400 symbols): precision 0.997, recall 0.962
+  (grep: 0.128 / 0.993; name-only: 0.252 / 0.975); on Twenty's server 0.999 / 0.924 (grep
+  0.009).
 - Localization over 169 real commits: file Acc@1 0.544, function MRR@10 0.432 (grep-style
   ranking 0.485 / 0.374; BM25 0.373 / 0.290).
 - Symbol search (377 queries): rank-1 0.700, MRR 0.759 (2.x on the same queries: 0.552 / 0.646).
@@ -234,6 +247,15 @@ and real commits, and end to end with coding agents
   without it (the misses were the three two-level caller questions), at 0.86 (0.81–0.92) of the
   cost and 0.68 of the time; refactors were all solved either way at the same cost. The main agent
   never handed a question to the structural helper or to Explore on these short tasks.
+- Against graph-indexer 2.x (docs/BENCHMARKS.md section 5): references on 8 repositories in
+  TypeScript, Go and Java at precision 0.955–1.000, where 2.x is at 0.02–0.70 (it lists every chunk
+  that mentions a name; in Go it misses most method calls), with answers of a few hundred tokens
+  (2.x: up to 12,000 on average); symbol search MRR 0.760 against 0.646; localization file Acc@1
+  0.544 against 0.473; 1,200 tokens added to each session against 10,600–11,300; an unchanged
+  repository re-synced in 0.2–1.8 s where 2.x rebuilds (9–180 s). In real Claude Code sessions
+  (nestjs and Twenty, 40 tasks, 120 runs), 3.0 cost 0.43 of 2.x on code questions and 0.46 on
+  refactors, and 0.84–0.86 of no index with half the tokens spent looking code up; 2.x cost
+  1.86–1.97 of no index.
 - Real sessions on the fourth round's 11 issues (66 runs): every run fixed its issue with or without
   graph-indexer, and no agent called it; its tool definitions, instructions and CLAUDE.md block
   alone made those sessions cost 1.07–1.10. With the lean surface (below) that fell to 1.02–1.05,
