@@ -1,5 +1,6 @@
 {
   "name": "graph-indexer",
+  "description": "Live code graph and search for AI coding agents, served locally over MCP.",
   "owner": { "name": "MaquinaTech", "url": "https://github.com/MaquinaTech" },
   "plugins": [
     {
