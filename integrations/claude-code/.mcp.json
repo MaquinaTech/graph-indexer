@@ -2,7 +2,7 @@
   "mcpServers": {
     "graph-indexer": {
       "command": "npx",
-      "args": ["-y", "graph-indexer@3", "serve"]
+      "args": ["-y", "graph-indexer@3.0.0", "serve"]
     }
   }
 }
