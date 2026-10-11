@@ -1,5 +1,11 @@
 /** Python extraction spec. See ../extract.mjs for the capture convention. */
 
+// PEP 604 unions in annotations (`A | B.C | None`) nest left to right: one pattern per depth
+const UNION_TYPES = [1, 2, 3, 4].flatMap(d => [
+    `(type ${'(binary_operator '.repeat(d)}(identifier) @name${')'.repeat(d)}) @ref.type`,
+    `(type ${'(binary_operator '.repeat(d)}(attribute object: (_) @recv attribute: (identifier) @name)${')'.repeat(d)}) @ref.type`,
+]).join('\n');
+
 const QUERY = `
 (function_definition name: (identifier) @name return_type: (type) @type) @def.function
 (function_definition name: (identifier) @name) @def.function
@@ -22,11 +28,28 @@ const QUERY = `
 (type (generic_type (identifier) @name)) @ref.type
 (type (generic_type (type_parameter (type (identifier) @name)))) @ref.type
 (type (string (string_content) @name)) @ref.type
+${UNION_TYPES}
+(call function: [(identifier) (attribute)] @_tv arguments: (argument_list (keyword_argument name: (identifier) @_bound value: (string (string_content) @name))) (#match? @_tv "TypeVar$") (#eq? @_bound "bound")) @ref.type
+(expression_statement (assignment left: (identifier) @_all right: [(list (string (string_content) @name)) (tuple (string (string_content) @name))] (#eq? @_all "__all__"))) @ref.value
+(attribute object: (identifier) @name (#match? @name "^[A-Z]")) @ref.value
 (argument_list (identifier) @name) @ref.value
 (keyword_argument value: (identifier) @name) @ref.value
 (list (identifier) @name) @ref.value
 (pair value: (identifier) @name) @ref.value
 (assignment right: (identifier) @name) @ref.value
+(return_statement (identifier) @name) @ref.value
+(pair key: (identifier) @name) @ref.value
+(subscript value: (identifier) @_generic subscript: (identifier) @name (#match? @_generic "^[A-Z]")) @ref.type
+(subscript value: (identifier) @_generic subscript: (attribute object: (_) @recv attribute: (identifier) @name) (#match? @_generic "^[A-Z]")) @ref.type
+(except_clause value: (identifier) @name) @ref.type
+(except_clause value: (attribute object: (_) @recv attribute: (identifier) @name)) @ref.type
+(except_clause value: (tuple (identifier) @name)) @ref.type
+(except_clause value: (tuple (attribute object: (_) @recv attribute: (identifier) @name))) @ref.type
+(except_clause value: (as_pattern (identifier) @name)) @ref.type
+(except_clause value: (as_pattern (attribute object: (_) @recv attribute: (identifier) @name))) @ref.type
+(except_clause value: (as_pattern (tuple (identifier) @name))) @ref.type
+(except_clause value: (as_pattern (tuple (attribute object: (_) @recv attribute: (identifier) @name)))) @ref.type
+(return_statement (expression_list (identifier) @name)) @ref.value
 (attribute object: (_) @recv attribute: (identifier) @name) @ref.read
 
 [(lambda) (list_comprehension) (set_comprehension) (dictionary_comprehension) (generator_expression)] @scope
@@ -37,6 +60,11 @@ const QUERY = `
 (assignment left: (identifier) @bind.name right: (_) @bind.expr) @bind
 (assignment left: (identifier) @bind.name type: (type) @bind.type) @bind
 (typed_parameter (identifier) @bind.name type: (type) @bind.type) @bind
+(parameters (identifier) @bind.name @bind.local) @bind
+(default_parameter name: (identifier) @bind.name @bind.local) @bind
+(parameters (list_splat_pattern (identifier) @bind.name @bind.local)) @bind
+(parameters (dictionary_splat_pattern (identifier) @bind.name @bind.local)) @bind
+(lambda_parameters (identifier) @bind.name @bind.local) @bind
 (typed_default_parameter name: (identifier) @bind.name type: (type) @bind.type) @bind
 (for_statement left: (identifier) @bind.name right: (_) @bind.elem) @bind
 (for_in_clause left: (identifier) @bind.name right: (_) @bind.elem) @bind
@@ -118,6 +146,8 @@ export const python = {
     id: 'python',
     // `self.x = …` inside a method declares an instance attribute of the class (first assignment wins)
     hoistMemberFields: true,
+    // a bare name bound in the function (parameter, assignment, loop variable) is that local
+    localNames: true,
     grammar: 'python',
     extensions: ['.py', '.pyi'],
     family: 'python',

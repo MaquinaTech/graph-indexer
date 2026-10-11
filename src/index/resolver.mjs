@@ -275,8 +275,19 @@ export class Resolver {
                 if (a && b && a.lang === b.lang && (a.dir === b.dir || a.package === b.package || a.lang === 'cpp' || a.lang === 'c' || a.lang === 'rust' || a.lang === 'javascript' || a.lang === 'typescript')) out.push(id);
             } else out.push(id);
         }
-        if (out.length) return out;
         const typeSym = type.id != null ? this.t.sym(type.id) : null;
+        if (out.length) {
+            // Python: `self.x = …` hoisted as a field of a class whose base declares `x` as a property
+            // runs the base's setter — the attribute is the base's property, not a new field
+            if (typeSym && out.every(id => this.t.sym(id)?.kind === 'field') && this.t.file(typeSym.fileId)?.lang === 'python') {
+                for (const base of typeSym.bases ?? []) {
+                    const bt = this.resolveTypeName(base, typeSym.fileId);
+                    const inherited = bt ? this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name, depth + 1, new Set(seen)) : [];
+                    if (inherited.some(id => this.t.sym(id)?.kind === 'method')) return inherited;
+                }
+            }
+            return out;
+        }
         for (const base of typeSym?.bases ?? []) {
             const bt = this.resolveTypeName(base, typeSym.fileId);
             if (bt) {
@@ -573,6 +584,29 @@ export class Resolver {
         return out;
     }
 
+    /** The module a Python package or module file exposes as `seg`: a submodule file, or a module it imports. */
+    #submodule(fileId, seg) {
+        const f = this.t.file(fileId);
+        if (f?.path.endsWith('/__init__.py')) {
+            const dir = f.path.slice(0, -'/__init__.py'.length);
+            const sub = this.t.fileByPath.get(`${dir}/${seg}.py`) ?? this.t.fileByPath.get(`${dir}/${seg}/__init__.py`);
+            if (sub) return sub.id;
+        }
+        return this.#moduleFileOf(fileId, seg);
+    }
+
+    /** Whether a module binds `name` through an import of a module outside the repository, following re-exports. */
+    #reexportsExternal(targetFileId, name, depth = 0) {
+        if (targetFileId == null || depth > 6) return false;
+        for (const imp of this.t.imports.get(targetFileId) ?? []) {
+            if (imp.wildcard || !(imp.local === name || imp.reexport === name)) continue;
+            if (imp.targetFileId == null && !imp.targetDir) return true;
+            const inner = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
+            if (imp.targetFileId != null && !this.exportedFrom(imp.targetFileId, inner).length) return this.#reexportsExternal(imp.targetFileId, inner, depth + 1);
+        }
+        return false;
+    }
+
     #symbolsInDir(dir, name, fileId) {
         const out = [];
         for (const fid of this.t.dirFiles.get(dir) ?? []) {
@@ -729,6 +763,9 @@ export class Resolver {
                 if (r) return r;
             }
             if (imp.targetFileId == null && !imp.targetDir && !PACKAGE_LANGS.has(file.lang)) return { id: null, conf: 0, ncand: 0, external: true };
+            // the module re-exports the name from a package outside the repository (`fastapi/__init__.py`:
+            // `from starlette.responses import Response`): not a same-name definition found globally
+            if (!ids.length && imp.targetFileId != null && this.#reexportsExternal(imp.targetFileId, target)) return { id: null, conf: 0, ncand: 0, external: true };
         }
         // 5. same package / directory
         if (PACKAGE_LANGS.has(file.lang) && file.package) {
@@ -780,7 +817,10 @@ export class Resolver {
     #global(name, kind, fileId) {
         const all = (this.t.byName.get(name) ?? []).filter(id => {
             const s = this.t.sym(id);
-            return s && this.#compatible(s, kind) && (s.parentId == null || TYPE_KINDS.has(s.kind) || kind === 'call');
+            if (!s || !this.#compatible(s, kind) || !(s.parentId == null || TYPE_KINDS.has(s.kind) || kind === 'call')) return false;
+            // a function nested in a function is visible only inside it (found in step 1 there)
+            const parent = s.parentId != null ? this.t.sym(s.parentId) : null;
+            return !(parent && CALLABLE_KINDS.has(parent.kind) && CALLABLE_KINDS.has(s.kind));
         });
         const file = this.t.file(fileId);
         // never bind across unrelated languages (a TS call never resolves to a Python def)
@@ -855,8 +895,11 @@ export class Resolver {
                 if (!owners.length && PACKAGE_LANGS.has(file.lang)) owners = this.#symbolsInPackage(imp.source, importedName);
                 for (const oid of owners) ids.push(...this.#membersVia(this.t.sym(oid), name));
                 if (!ids.length && imp.targetFileId != null && owners.length === 0) {
-                    // `from pkg import submodule` then submodule.fn()
-                    ids = this.exportedFrom(imp.targetFileId, name);
+                    // `from pkg import submodule` then submodule.fn(): the submodule's own name first —
+                    // pkg/__init__.py may re-export something else under it (`from fastapi import
+                    // params; params.File` is the class in params.py, not the File function __init__ exports)
+                    const mod = file.lang === 'python' ? this.#moduleFileOf(fileId, imp.local) : null;
+                    ids = this.exportedFrom(mod ?? imp.targetFileId, name);
                 }
             } else if (rest.length === 0) {
                 if (imp.targetFileId != null) ids = this.exportedFrom(imp.targetFileId, name);
@@ -871,6 +914,12 @@ export class Resolver {
                 const mod = this.#moduleFileOf(fileId, imp.local);
                 if (mod != null && rest.length === 0) ids = this.exportedFrom(mod, name);
                 else if (mod != null && rest.length === 1) for (const oid of this.exportedFrom(mod, rest[0])) ids.push(...this.#membersVia(this.t.sym(oid), name));
+                // `import flask; flask.json.dumps(…)`: the rest of the receiver names submodules
+                if (!ids.length && mod != null && rest.length) {
+                    let cur = mod;
+                    for (const seg of rest) { cur = cur != null ? this.#submodule(cur, seg) : null; }
+                    if (cur != null) ids = this.exportedFrom(cur, name);
+                }
             }
             if (ids.length) {
                 const r = this.#pick(ids, kind, 0.95, fileId);

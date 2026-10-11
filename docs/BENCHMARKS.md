@@ -229,6 +229,62 @@ functional interface they are passed to. The dispatch oracle, like TypeScript's,
 `super.m()` call as reaching every override of `m`, while the index knows it binds statically
 to the parent's `m`; those count as missed here.
 
+### The same measurement for Python
+
+```bash
+pip install pyright                                   # or npm i -g pyright; needs pyright-langserver on PATH
+node bench/eval-graph-python.mjs --n 150              # fastapi; --fixture/--fixture-dir/--scope for another repository
+```
+
+**Method.** Python has no compiler; the oracle is pyright (1.1.414), the type checker behind
+Pylance, through its language server's Find All References (`bench/eval-graph-python.mjs`).
+Third-party packages are not installed, so what the repository declares still resolves and
+library types do not, as for the other oracles. pyright binds `obj.m()` to the method of obj's
+declared type only, so its answer is an **exact** oracle; graph-indexer is scored on its exact
+answer (`family: false`). Import statements and declaration lines — the sampled one and
+redeclarations such as `if PYDANTIC_V2: def f … else: def f` — are excluded on both sides. The
+seed is 7; up to 150 functions, methods and classes per repository.
+
+Six repositories. fastapi, flask, requests and httpx were used while fixing what the oracle found;
+rich and click were measured only once, after the fixes. "Before" is graph-indexer 3.0.0.
+
+| repository | build | precision | recall | exact set | grep P | name-only P |
+|---|---|---|---|---|---|---|
+| fastapi 0.103.0 (`415eb14`, 150 symbols) | before | 0.984 | 0.986 | 0.793 | 0.273 | 0.571 |
+| | after | **0.997** | **0.998** | **0.940** | | |
+| flask 3.0.3 (`c12a5d8`, 150) | before | 0.869 | 0.851 | 0.667 | 0.110 | 0.358 |
+| | after | 0.868 | **0.909** | **0.713** | | |
+| requests 2.32.3 (`0e322af`, 149) | before | 0.927 | 0.936 | 0.826 | 0.251 | 0.477 |
+| | after | **0.952** | **0.964** | **0.846** | | |
+| httpx 0.27.2 (`609df7e`, 150) | before | 0.910 | 0.832 | 0.620 | 0.158 | 0.432 |
+| | after | **0.998** | **0.946** | **0.760** | | |
+| rich 13.9.4 (`43d3b04`, 144) *(held out)* | before | 0.991 | 0.867 | 0.785 | 0.214 | 0.543 |
+| | after | **0.992** | **0.971** | **0.854** | | |
+| click 8.1.7 (`874ca2b`, 144) *(held out)* | before | 0.962 | 0.882 | 0.785 | 0.266 | 0.493 |
+| | after | **0.967** | **0.888** | **0.826** | | |
+
+What changed:
+- `from pkg import submodule` then `submodule.X` was looked up in `pkg/__init__.py` first, which
+  may re-export something else under that name: fastapi's `params.File(…)` (the class) was bound
+  to the `File` function that `fastapi/__init__.py` exports.
+- A name imported from a module that re-exports it from an uninstalled package (`from fastapi
+  import Response`, Starlette's) fell back to a same-name definition anywhere in the repository; it
+  is now external.
+- An untyped parameter (`def send(self, request): … request`) was bound by name to a function
+  `request` elsewhere; parameters and other locals now shadow repository names, as in pyright.
+- A function nested in another is visible only inside it, so a call elsewhere no longer binds to it.
+- Missing uses: `return name`, PEP 604 unions (`A | B | None`), `except (A, B) as e`, dictionary
+  keys, generic arguments (`Union[A, B]`), `__all__` entries, `TypeVar(bound="A")`, `Class.attr`,
+  submodule chains (`import flask; flask.json.dumps`), and `self.x` under a property `x` of a base
+  class, which was taken for a new field.
+
+What remains: flask's precision is lower because of test code whose receivers pyright cannot type
+either (`app` fixtures without annotations), which graph-indexer binds by name as `likely` — counted
+as false positives here; with `likely` and better only, flask is 0.929. Other differences: pyright
+does not count uses through an import alias (`from m import A as B; B()`), graph-indexer does; an
+assignment `self.x = …` that runs a base class's property setter is not counted as a use of it;
+and attribute chains through untyped values (`proxy.url.raw_host`) stay unbound.
+
 ### A product monorepo: Twenty
 
 ```bash

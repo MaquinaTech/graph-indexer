@@ -36,6 +36,16 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **Python references, measured against pyright** on six repositories
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md), `bench/eval-graph-python.mjs`): recall rises on all six
+  (httpx 0.832 → 0.946, rich 0.867 → 0.971, fastapi 0.986 → 0.998) and precision on five (httpx
+  0.910 → 0.998). `from pkg import submodule; submodule.X` no longer finds what `pkg/__init__.py`
+  re-exports as X; names re-exported from an uninstalled package are external instead of bound to a
+  same-name definition; untyped parameters and other locals shadow repository names; functions
+  nested in a function are no longer reached from outside it; `return name`, `A | B` unions,
+  `except` clauses, dictionary keys, generic arguments, `__all__`, `TypeVar(bound=…)`, `Class.attr`
+  and submodule chains are uses; `self.x` under a base class's property `x` is that property.
+  TypeScript (nestjs) and Java (spring-petclinic) are unchanged or better.
 - **References in JavaScript/TypeScript modules**: a value read the extractor left unscoped (a
   lambda parameter, a block-scoped `const`) was bound by name, at 0.6 confidence, to a top-level
   name of another module (`cases.filter(c => …)` → `export const c` elsewhere). An ES module sees
