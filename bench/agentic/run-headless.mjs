@@ -168,7 +168,9 @@ async function preflightArms() {
         if (session?.helper) checks.push(['helper sub-agent offered', offered, init?.agents ? `agents: ${agents.join(', ')}` : '']);
         else if (session) checks.push(['no helper sub-agent', !offered, '']);
         const limit = events.find(e => e.type === 'rate_limit_event')?.rate_limit_info;
-        if (limit?.utilization != null) checks.push(['usage limit has room', limit.utilization < 0.9, `${limit.rateLimitType ?? ''} at ${Math.round(limit.utilization * 100)} %`]);
+        const windows = Object.entries(limit?.unifiedWindows ?? {}).map(([k, w]) => [k, w.utilization]);
+        if (!windows.length && limit?.utilization != null) windows.push([limit.rateLimitType ?? '', limit.utilization]);
+        if (windows.length) { const [k, u] = windows.sort((a, b) => b[1] - a[1])[0]; checks.push(['usage limit has room', u < 0.9, `${k} at ${Math.round(u * 100)} %`]); }
         const bad = checks.filter(([, ok]) => !ok);
         failed += bad.length ? 1 : 0;
         console.log(`${arm}: ${bad.length ? 'NOT READY' : 'ready'}`);
