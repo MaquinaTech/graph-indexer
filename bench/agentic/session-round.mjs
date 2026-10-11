@@ -28,7 +28,9 @@ import { argv, WORK, GI_ROOT, HERE, readJson } from './lib.mjs';
 
 const { opt, list, flag } = argv();
 const label = opt('--label', 'rt1');
-const model = opt('--model', null);
+// every measured session runs on one model, pinned rather than the CLI's default (which has
+// changed between rounds); --model overrides it
+const model = opt('--model', 'claude-sonnet-5-5');
 const concurrency = opt('--concurrency', '3');
 const claude = opt('--claude-bin', 'claude');
 const arms = list('--arms', ['cc', 'cc+gi', 'cc+gi+helper']);

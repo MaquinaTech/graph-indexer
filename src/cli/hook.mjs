@@ -341,7 +341,9 @@ export async function runHook(event, { repo = null, version = null } = {}) {
     const timer = setTimeout(() => process.exit(0), deadlineMs); // fail open: never hold the agent up
     try {
         const input = await readStdin();
-        const root = findRepoRoot(input.cwd || repo || process.cwd());
+        // an explicit --repo wins over the session's directory (a session started elsewhere, with
+        // the repository added to it)
+        const root = findRepoRoot(repo || input.cwd || process.cwd());
         const { askResident, residentRequired } = await import('./resident.mjs');
         const reply = await askResident(root, { op: 'hook', event, input }, { version, totalMs: 2000 });
         let out = null;

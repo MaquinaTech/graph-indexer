@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
@@ -98,6 +99,14 @@ test('hook subagent-start: the index line and the lookup rules', () => {
     assert.match(text, /live index of this repository/);
     assert.match(text, /several tool calls in one message/);
     assert.match(text, /find_references/);
+});
+
+test('hook: --repo names the repository even when the session runs in another directory', () => {
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'gi-session-'));
+    try {
+        const r = spawnSync(process.execPath, [BIN, 'hook', 'subagent-start', '--repo', root], { input: JSON.stringify({ cwd: elsewhere, hook_event_name: 'SubagentStart' }), encoding: 'utf8', env: LOCAL });
+        assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /live index of this repository/);
+    } finally { fs.rmSync(elsewhere, { recursive: true, force: true }); }
 });
 
 test('grep patterns are read from shell commands', () => {

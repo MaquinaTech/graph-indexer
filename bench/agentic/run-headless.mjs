@@ -50,7 +50,9 @@ const label = opt('--gi');
 if (!label) throw new Error('--gi LABEL is required');
 const dir = path.resolve(opt('--transcripts', path.join(WORK, 'transcripts', label)));
 const claude = opt('--claude-bin', 'claude');
-const model = opt('--model', null);
+// every measured session runs on one model, pinned rather than the CLI's default (which has
+// changed between rounds); --model overrides it
+const model = opt('--model', 'claude-sonnet-5-5');
 const concurrency = Math.max(1, Number(opt('--concurrency', 3)));
 const dry = flag('--dry-run');
 const preflight = flag('--preflight');

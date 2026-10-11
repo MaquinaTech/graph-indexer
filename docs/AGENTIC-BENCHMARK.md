@@ -936,7 +936,7 @@ node bench/agentic/prepare.mjs snapshot --label local
 for t in qa-nestjs-r4 refactor-nestjs-r4 fresh-sqlglot-r4 fresh-networkx-r4; do
   node bench/agentic/prepare.mjs batch --tasks $t.json --arms grep,grep+rules,mcp,mcp+hooks --reps 1 --gi local >/dev/null
 done
-node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # add --model M to pin one
+node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # Sonnet 5.5 unless --model M
 node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts /tmp/gi-agentic/transcripts/local
 node bench/agentic/report.mjs --gi local --integrated mcp+hooks --nogrep grep+rules
 ```
