@@ -71,6 +71,14 @@ test('stateless 2026-07-28 discovery and per-request version checks', async () =
     assert.equal(typeof d.result.ttlMs, 'number');
     const l = await srv.request('tools/list', { _meta: meta });
     assert.equal(l.result.cacheScope, 'private');
+    // results of that version say they are complete; Claude Code ignores tools listed without it
+    assert.equal(d.result.resultType, 'complete');
+    assert.equal(l.result.resultType, 'complete');
+    const c = await srv.request('tools/call', { _meta: meta, name: 'find_references', arguments: { symbol: 'add' } });
+    assert.equal(c.result.resultType, 'complete');
+    // the handshake generation is unchanged
+    const h = await srv.request('tools/list', {});
+    assert.equal(h.result.resultType, undefined);
     const bad = await srv.request('tools/list', { _meta: { 'io.modelcontextprotocol/protocolVersion': '2030-01-01' } });
     assert.equal(bad.error.code, -32022);
     assert.deepEqual(bad.error.data.requested, '2030-01-01');

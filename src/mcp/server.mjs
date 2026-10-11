@@ -64,13 +64,17 @@ export class McpServer {
             this.#error(id, -32022, `Unsupported protocol version: ${reqVersion}`, { supported: SUPPORTED_VERSIONS, requested: reqVersion });
             return;
         }
+        // 2026-07-28 results say whether they are complete (or need more input from the client);
+        // a client of that version ignores a result without it
+        const stateless = this.#requestVersion(params) === '2026-07-28' || method === 'server/discover';
+        const done = (res) => this.#result(id, stateless ? { resultType: 'complete', ...res } : res);
         try {
             switch (method) {
                 case 'initialize': {
                     const requested = params?.protocolVersion;
                     const version = SUPPORTED_VERSIONS.includes(requested) && requested !== '2026-07-28' ? requested : LATEST_HANDSHAKE;
                     this.negotiated = version;
-                    this.#result(id, {
+                    done({
                         protocolVersion: version,
                         capabilities: { tools: { listChanged: false } },
                         serverInfo: { ...this.info, title: 'graph-indexer — code graph & search' },
@@ -79,7 +83,7 @@ export class McpServer {
                     return;
                 }
                 case 'server/discover':
-                    this.#result(id, {
+                    done({
                         supportedVersions: SUPPORTED_VERSIONS,
                         capabilities: { tools: { listChanged: false } },
                         instructions: SERVER_INSTRUCTIONS,
@@ -89,12 +93,12 @@ export class McpServer {
                     });
                     return;
                 case 'ping':
-                    this.#result(id, {});
+                    done({});
                     return;
                 case 'tools/list': {
                     const res = { tools: TOOLS.map(({ name, title, description, inputSchema, annotations, _meta }) => ({ name, title, description, inputSchema, annotations, ...(_meta ? { _meta } : {}) })) };
                     if (this.#requestVersion(params) === '2026-07-28') Object.assign(res, { ttlMs: 3_600_000, cacheScope: 'private' });
-                    this.#result(id, res);
+                    done(res);
                     return;
                 }
                 case 'tools/call': {
@@ -104,7 +108,7 @@ export class McpServer {
                     const args = params?.arguments ?? {};
                     const missing = (tool.inputSchema.required ?? []).filter(k => args[k] === undefined || args[k] === null || args[k] === '');
                     if (missing.length) {
-                        this.#result(id, { content: [{ type: 'text', text: `Missing required argument(s): ${missing.join(', ')}.` }], isError: true });
+                        done({ content: [{ type: 'text', text: `Missing required argument(s): ${missing.join(', ')}.` }], isError: true });
                         return;
                     }
                     this.inflight++;
@@ -112,18 +116,18 @@ export class McpServer {
                         const note = await this.#awaitReady();
                         await this.intel.ensureFresh();
                         const text = await callTool(this.intel, name, args);
-                        this.#result(id, { content: [{ type: 'text', text: note ? `${note}\n${text}` : text }] });
+                        done({ content: [{ type: 'text', text: note ? `${note}\n${text}` : text }] });
                     } catch (err) {
                         this.log(`tool ${name} failed: ${err.stack || err.message}`);
-                        this.#result(id, { content: [{ type: 'text', text: `graph-indexer error in ${name}: ${err.message}` }], isError: true });
+                        done({ content: [{ type: 'text', text: `graph-indexer error in ${name}: ${err.message}` }], isError: true });
                     } finally { this.inflight--; }
                     return;
                 }
-                case 'resources/list': this.#result(id, { resources: [] }); return;
-                case 'resources/templates/list': this.#result(id, { resourceTemplates: [] }); return;
-                case 'prompts/list': this.#result(id, { prompts: [] }); return;
-                case 'logging/setLevel': this.#result(id, {}); return;
-                case 'completion/complete': this.#result(id, { completion: { values: [], hasMore: false } }); return;
+                case 'resources/list': done({ resources: [] }); return;
+                case 'resources/templates/list': done({ resourceTemplates: [] }); return;
+                case 'prompts/list': done({ prompts: [] }); return;
+                case 'logging/setLevel': done({}); return;
+                case 'completion/complete': done({ completion: { values: [], hasMore: false } }); return;
                 default:
                     this.#error(id, -32601, `Method not found: ${method}`);
             }

@@ -70,6 +70,14 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **Claude Code 2.1.296 saw no graph-indexer tools.** It speaks MCP 2026-07-28, where every result
+  states `resultType: "complete"`; graph-indexer's results did not, so the server connected, its
+  instructions arrived, and `tools/list` was ignored — no tool, not even a deferred one. Results of
+  that protocol version now carry it (checked in a real session: the nine tools are listed and
+  `explore` answers). With it, the per-tool `anthropic/alwaysLoad` mark works again: `explore` and
+  `find_references` load up front (about 1,100 tokens with the instructions, against 3,000 for
+  marking the whole server).
+
 - **Python references, measured against pyright** on six repositories
   ([docs/BENCHMARKS.md](docs/BENCHMARKS.md), `bench/eval-graph-python.mjs`): recall rises on all six
   (httpx 0.832 → 0.946, rich 0.867 → 0.971, fastapi 0.986 → 0.998) and precision on five (httpx
