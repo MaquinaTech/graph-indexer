@@ -278,7 +278,7 @@ async function sessionLine(root, { rules = false, acquire }) {
     const { intel } = ix;
     try {
         const st = intel.stats();
-        const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: find_references (exact uses, even when other code shares the name), change_impact (what a change affects and which tests to run), check_changes (what an edit broke, and the closest tests), call_graph, read_code (symbols or ranges by name, with where each name they use is defined), search_text, search_code and outline.`;
+        const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: explore (the code relevant to a task, its callers, the definitions it uses and its tests, in one call), find_references (exact uses, even when other code shares the name), change_impact (what a change affects and which tests to run), check_changes (what an edit broke, and the closest tests), call_graph, read_code (symbols or ranges by name, with where each name they use is defined), search_text, search_code and outline.`;
         // the managed block of `init` already carries the rules; otherwise add them
         const carried = ['CLAUDE.md', 'AGENTS.md'].some(f => { try { return fs.readFileSync(path.join(root, f), 'utf8').includes('<!-- graph-indexer:start -->'); } catch { return false; } });
         return rules || !carried ? `${line}\n${RULES}` : line;

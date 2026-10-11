@@ -53,7 +53,9 @@ test('handshake negotiates a supported version and carries instructions', async 
 test('tools/list exposes the read-only tools with short descriptions', async () => {
     const r = await srv.request('tools/list', {});
     const names = r.result.tools.map(t => t.name);
-    assert.deepEqual(names, ['search_code', 'search_text', 'read_code', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
+    assert.deepEqual(names, ['explore', 'search_code', 'search_text', 'read_code', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
+    // loaded up front by clients that defer MCP tools: the call that opens a task, and exact uses
+    assert.deepEqual(r.result.tools.filter(t => t._meta?.['anthropic/alwaysLoad']).map(t => t.name), ['explore', 'find_references']);
     for (const t of r.result.tools) {
         assert.equal(t.annotations.readOnlyHint, true);
         assert.ok(t.description.length <= 2048, t.name);

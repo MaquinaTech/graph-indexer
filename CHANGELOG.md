@@ -4,6 +4,30 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`explore`**: one call that opens a task. For a question, bug or feature in words and/or named
+  symbols it returns the most relevant definitions with their code (line numbers kept for
+  editing), their direct callers, overrides and subclasses, one shared card of where the names
+  that code uses are defined, and the tests that reach it with the command to run them — inside
+  `max_tokens` (default 2,000), naming what it left out. It composes the existing engine (search,
+  references, method families, tests) and loads up front alongside `find_references`. CLI:
+  `graph-indexer explore <task in words> [--symbols a,b] [--path P] [--max-tokens N]`. Not yet
+  measured in agent sessions ([docs/PLAN-REFERENCIA.md](docs/PLAN-REFERENCIA.md) §1.1–1.2).
+
+### Fixed
+
+- **References in JavaScript/TypeScript modules**: a value read the extractor left unscoped (a
+  lambda parameter, a block-scoped `const`) was bound by name, at 0.6 confidence, to a top-level
+  name of another module (`cases.filter(c => …)` → `export const c` elsewhere). An ES module sees
+  another module's names only through an import, so such reads no longer bind across modules.
+  Reference accuracy on nestjs against the TypeScript compiler is unchanged (dispatch oracle,
+  399 symbols: precision 0.998, recall 0.937).
+- **"Defined elsewhere" card**: an unbound call no longer matches a constant or variable by name
+  (`Math.max(…)` listed a `const max` from another file).
+
 ## [3.0.0] — 2026-09-23
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.

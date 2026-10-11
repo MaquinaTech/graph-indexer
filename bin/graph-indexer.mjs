@@ -6,6 +6,7 @@
  *   graph-indexer index   [--repo DIR]                build / update the index and print stats
  *   graph-indexer init    [--repo DIR] [--agents …]   wire the MCP server into your coding agents
  *   graph-indexer status  [--repo DIR]
+ *   graph-indexer explore  <task in words> [--symbols a,b] [--path P] [--max-tokens N]
  *   graph-indexer search   <query>  [--path P] [--kind K] [--limit N]
  *   graph-indexer read     <target>… [--full]           symbols, file:START-END ranges or files, with the
  *                                                        definitions each one uses
@@ -124,6 +125,8 @@ Usage:
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
+  graph-indexer explore <task in words> [--symbols a,b] [--path P] [--max-tokens N]
+                                                   relevant code, callers, definitions used and tests
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
@@ -190,6 +193,10 @@ async function main() {
             const { runInit } = await import('../src/cli/init.mjs');
             await runInit({ argv, opt, flag, log, version: pkg.version, repo: repoArg });
             return;
+        }
+        case 'explore': {
+            const symbols = (opt('--symbols') ?? '').split(',').filter(Boolean); const pathF = opt('--path'); const maxTokens = Number(opt('--max-tokens', 2000));
+            return runTool('explore', { query: argv.join(' '), symbols, path: pathF, max_tokens: maxTokens });
         }
         case 'search': {
             const pathF = opt('--path'); const kind = opt('--kind'); const limit = Number(opt('--limit', 8));

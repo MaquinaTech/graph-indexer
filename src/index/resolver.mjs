@@ -788,16 +788,27 @@ export class Resolver {
             const f = this.t.file(this.t.sym(id).fileId);
             return f && (f.lang === file.lang || familyOf(f.lang) === familyOf(file.lang));
         });
+        // an ES module sees another module's top-level names only through an import (resolved
+        // above): a value read that reached here is a local the extractor did not scope (a lambda
+        // parameter, a block-scoped const), not that name. Calls are left alone (CommonJS patterns).
+        const isolated = (kind === 'value' || kind === 'read') && familyOf(file.lang) === 'ecma' && this.#isModule(fileId);
         // unqualified calls cannot target methods of unrelated classes in most languages
         const cands = sameFamily.filter(id => {
             const s = this.t.sym(id);
             if (s.kind === 'method' || s.kind === 'field' || s.kind === 'property') return false;
+            if (isolated && s.fileId !== fileId && s.parentId == null && this.#isModule(s.fileId)) return false;
             return true;
         });
         if (!cands.length) return null;
         if (cands.length > MAX_GLOBAL_CANDIDATES) return { id: null, conf: 0, ncand: cands.length };
         const base = cands.length === 1 ? 0.6 : 0.35;
         return this.#pick(cands, kind, base, fileId);
+    }
+
+    /** A JS/TS file that imports or exports something: its top-level names are its own. */
+    #isModule(fileId) {
+        if ((this.t.imports.get(fileId) ?? []).length) return true;
+        return (this.t.fileSyms.get(fileId) ?? []).some(id => { const s = this.t.sym(id); return s?.parentId == null && s?.exported; });
     }
 
     #resolveMember(name, kind, recv, recvType, fileId, srcId) {

@@ -26,6 +26,7 @@ const SNIPPET = `${BLOCK_START}
 - Check once: run the tests that cover your change when you are done; do not re-run a check nothing has changed.
 
 The \`graph-indexer\` MCP server answers what a text search cannot answer exactly:
+- Starting on a task or bug in code you have not read: \`explore\` with the task in words — the relevant code, its callers, the definitions it uses and its tests in one call.
 - Uses of a function, method or class that other code shares a name with: \`find_references\` (exact call sites, says when the list is complete; kind \`inherit\` for subclasses and implementations). Callers of callers: \`call_graph\`.
 - Before changing a signature other code relies on: \`change_impact\`; after: \`check_changes\`.
 ${BLOCK_END}`;

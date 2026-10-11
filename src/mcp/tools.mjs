@@ -1,5 +1,5 @@
 /**
- * The MCP tool surface: eight read-only tools, each answering one kind of question an agent has
+ * The MCP tool surface: nine read-only tools, each answering one kind of question an agent has
  * while changing code; descriptions are short because clients re-read them on every turn (`get_symbol`, which `read_code` replaced, stays callable for older clients).
  * Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
@@ -11,6 +11,7 @@ import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
+import { testCommands } from '../query/testcmd.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -21,6 +22,20 @@ const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials
 const pathRank = (p) => (EXAMPLE_PATH.test(p) ? 1 : 0);
 
 export const TOOLS = [
+    {
+        name: 'explore',
+        title: 'Explore',
+        description: 'Start a task in one call: for a question, bug or feature in words ("why are expired tokens accepted") and/or named symbols, the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined, and the tests to run with the command. Fits `max_tokens` and says what it left out.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'The task, question or bug in words; identifiers in it are looked up exactly.' },
+                symbols: { type: 'array', items: { type: 'string' }, description: 'Symbols to centre on (name, Class.method, path:Name).' },
+                path: { type: 'string', description: 'Only search under this path prefix, e.g. "src/auth/".' },
+                max_tokens: { type: 'integer', minimum: 500, maximum: 6000, default: 2000, description: 'Answer budget (default 2000).' },
+            },
+        },
+    },
     {
         name: 'search_code',
         title: 'Search code',
@@ -160,13 +175,14 @@ export const LEGACY_TOOLS = [
 // loaded up front even when the client defers MCP tools behind a tool search: the one tool agents
 // called in real sessions (docs/AGENTIC-BENCHMARK.md, rt1–rt2); every loaded definition is re-read
 // on every turn, so the others wait behind the client's tool search.
-const ALWAYS_LOAD = new Set(['find_references']);
+// `explore` joins it as the one call that opens a task (docs/PLAN-REFERENCIA.md §1.1; unmeasured).
+const ALWAYS_LOAD = new Set(['find_references', 'explore']);
 for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
-export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
+export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. To start on a task in unfamiliar code, explore gives the relevant code, its callers, the definitions it uses and its tests in one call. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 
@@ -239,7 +255,7 @@ function refSummary(intel, id) {
  * Hints inside tool output name the next tool to call; through the CLI they must name the
  * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
  */
-const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
+const CLI_NAMES = { explore: 'explore', search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
 let surface = 'mcp';
 const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
 
@@ -270,6 +286,7 @@ export async function callTool(intel, name, args = {}, { cli = false } = {}) {
 
 async function dispatchTool(intel, name, args) {
     switch (name) {
+        case 'explore': return toolExplore(intel, args);
         case 'search_code': return toolSearch(intel, args);
         case 'search_text': return toolText(intel, args);
         case 'read_code': return toolRead(intel, args);
@@ -905,6 +922,177 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         for (const c of r.commands) out.push(`    run: ${clip(c, 400)}`);
     } else out.push('tests: none found that exercise the changed code.');
     out.push(problems ? `${plural(problems, 'problem')} found.` : 'No problems found in the changed code (this check does not replace running the tests).');
+    return out.join('\n');
+}
+
+// explore: code is denser than prose, so the budget counts fewer characters per token than outline's 4
+const EXPLORE_CHARS_PER_TOKEN = 3.5;
+const EXPLORE_PRIMARY = 3;
+const EXPLORE_SECONDARY = 5;
+const CALLER_KINDS = ['call', 'new', 'value', 'decorator'];
+
+/**
+ * Definitions to centre an exploration on, most relevant first: the symbols named, identifiers in the
+ * query that name a definition, then the search results for the query (library code before tests and
+ * examples, callables and types before plain values). Each comes with why it was picked.
+ */
+function exploreSeeds(intel, { query, symbols, path: p }) {
+    const seeds = [], ids = new Set(), missing = [];
+    const add = (s, why) => { if (s && !ids.has(s.id)) { ids.add(s.id); seeds.push({ s, why }); } };
+    for (const t of symbols) {
+        const m = pickSymbol(intel, t);
+        if (m.length) add(m[0], 'named'); else missing.push(t);
+    }
+    if (query) {
+        const a = analyzeQuery(query);
+        for (const id of a.identifiers) {
+            if (id.length < 3) continue;
+            // a bare word that happens to name something (`user`, `config`) is not a lookup
+            if (a.natural && /^[a-z]+$/.test(id)) continue;
+            // the definition must carry the name as written: `CLAUDE.md` is a file, not a variable `md`
+            const norm = id.replace(/::|#|->/g, '.');
+            const m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
+            if (m.length) add(m[0], 'named in the query');
+        }
+        const { results } = intel.search.search(String(query), { limit: 16, path: p || null });
+        const wantTests = /\btests?\b|\bspec\b/i.test(query);
+        const found = results.map(r => intel.sym(r.id)).filter(Boolean)
+            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test));
+        // stable re-order: rank keeps search order within each tier
+        const tier = (s) => pathRank(s.path) * 2 + (VALUE_KINDS.has(s.kind) ? 1 : 0);
+        found.map((s, i) => ({ s, i })).sort((x, y) => tier(x.s) - tier(y.s) || x.i - y.i).forEach(({ s }) => add(s, 'search'));
+    }
+    // a member whose class is already a seed is shown inside it; a class whose member is a seed
+    // ranked higher only repeats it
+    const kept = seeds.filter(({ s }) => !(s.parent_id != null && ids.has(s.parent_id) && seeds.findIndex(x => x.s.id === s.parent_id) < seeds.findIndex(x => x.s.id === s.id)));
+    return { seeds: kept, missing };
+}
+
+/** Direct callers of a definition outside tests, and the tests that call it. */
+function exploreCallers(intel, s) {
+    const { nodes, fileLevel, truncated, overflow } = intel.dependents([s.id], { depth: 1, maxNodes: 80, kinds: CALLER_KINDS });
+    const code = [], tests = [];
+    for (const [id, info] of nodes) {
+        const c = intel.sym(id);
+        if (!c) continue;
+        const site = info.sites?.[0] ?? { path: c.path, line: c.start_line };
+        (c.is_test ? tests : code).push({ c, info, site });
+    }
+    code.sort((a, b) => pathRank(a.c.path) - pathRank(b.c.path) || b.info.conf - a.info.conf || a.c.path.localeCompare(b.c.path) || a.site.line - b.site.line);
+    const modules = [], testModules = [];
+    for (const [file, m] of fileLevel) (isTestPath(intel, file) ? testModules : modules).push({ file, line: m.sites[0], conf: m.conf });
+    return { code, tests, modules, testModules, more: truncated ? overflow : 0 };
+}
+
+const isTestPath = (intel, file) => Boolean(intel.store.get('SELECT is_test FROM files WHERE path = ?', file)?.is_test);
+
+async function toolExplore(intel, { query = '', symbols = [], path: p = null, max_tokens = 2000 }) {
+    const q = String(query ?? '').trim();
+    const named = (Array.isArray(symbols) ? symbols : String(symbols).split(/[\s,]+/)).map(t => String(t).trim()).filter(Boolean);
+    if (!q && !named.length) return 'Provide a query (the task, question or bug in words) and/or symbols to centre on.';
+    const budget = Math.round(Math.min(Math.max(500, Number(max_tokens) || 2000), 6000) * EXPLORE_CHARS_PER_TOKEN);
+    const { seeds, missing } = exploreSeeds(intel, { query: q, symbols: named, path: p });
+    if (!seeds.length) {
+        const what = q ? `"${clip(q, 80)}"${p ? ` under ${p}` : ''}` : named.map(t => `"${t}"`).join(', ');
+        return `Nothing in the index matches ${what}. Try other words for the behaviour, an identifier, or ${tn('outline')} for a map of the repository.`;
+    }
+    await intel.revalidate([...new Set(seeds.slice(0, EXPLORE_PRIMARY + EXPLORE_SECONDARY).map(x => x.s.path))]);
+    const fresh = seeds.map(x => ({ ...x, s: intel.sym(x.s.id) ?? x.s }));
+    // fewer definitions shown whole when the budget is small: each needs room for its code
+    const nPrimary = Math.max(1, Math.min(EXPLORE_PRIMARY, Math.floor(budget / 1200)));
+    const primary = fresh.slice(0, nPrimary), secondary = fresh.slice(nPrimary, nPrimary + EXPLORE_SECONDARY);
+    const seen = new Set(fresh.slice(0, nPrimary + EXPLORE_SECONDARY).map(x => x.s.id));
+
+    // 1. everything but the code, per definition: compact lines, so their cost is known up front
+    const testFiles = new Set(), testCases = [];
+    const sections = primary.map(({ s, why }, i) => {
+        const head = `## ${i + 1}. ${s.qname} — ${s.kind}${s.exported ? ', exported' : ''}${s.is_test ? ', test' : ''} · ${loc(s)}${why === 'search' ? '' : `  (${why})`}`;
+        const facts = [];
+        if (s.parent_id) { const par = intel.sym(s.parent_id); if (par) facts.push(`member of ${par.qname} (${par.kind}) ${loc(par)}`); }
+        if (CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind)) {
+            const { code, tests, modules, testModules, more } = exploreCallers(intel, s);
+            const total = code.length + modules.length + more;
+            if (total) {
+                const shown = code.slice(0, 6).map(x => `${x.c.qname} ${x.site.path}:${x.site.line}${x.info.conf < 0.9 ? ` [${confWord(x.info.conf)}]` : ''}`);
+                for (const m of modules.slice(0, Math.max(0, 6 - shown.length))) shown.push(`module level ${m.file}:${m.line}`);
+                facts.push(`called by (${total}): ${shown.join(', ')}${total > shown.length ? `, … (${tn('call_graph')} / ${tn('find_references')} for all)` : ''}`);
+            } else if (!s.is_test) facts.push('called by: no bound callers (entry point, framework-invoked, or dynamic dispatch)');
+            const u = intel.unboundFor(s.id);
+            if (u.plausible.length) facts.push(`possibly also called at: ${u.plausible.slice(0, 3).map(r => `${r.path}:${r.line}`).join(', ')}${u.plausible.length > 3 ? ', …' : ''} (receiver type unknown)`);
+            for (const t of tests) { testFiles.add(t.c.path); testCases.push(`${t.c.qname} (${t.site.path}:${t.site.line})`); }
+            for (const m of testModules) { testFiles.add(m.file); testCases.push(`${m.file}:${m.line}`); }
+        }
+        if (s.kind === 'method' && !s.is_static) {
+            const fam = intel.methodFamily(s);
+            if (fam.up.length) facts.push(`overrides/implements: ${fam.up.slice(0, 4).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
+            if (fam.down.length) facts.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 6 ? ', …' : ''}`);
+        }
+        if (TYPE_KINDS.has(s.kind)) {
+            const { direct, indirect } = subtypeTree(intel, s.id);
+            if (direct.length) facts.push(`subtypes/implementations (${direct.length + indirect.length}): ${[...direct, ...indirect].slice(0, 8).map(x => `${x.qname} (${x.path}:${x.start_line})`).join(', ')}${direct.length + indirect.length > 8 ? ', …' : ''}`);
+        }
+        if (!s.is_test) for (const t of testsUsing(intel, s.id)) {
+            testFiles.add(t.path);
+            const label = t.qname === '(module)' ? `${t.path}:${t.line}` : `${t.qname} (${t.path}:${t.line})`;
+            if (!testCases.includes(label)) testCases.push(label);
+        }
+        return { s, head, facts };
+    });
+    for (const t of intel.conventionTests([...new Set(primary.filter(x => !x.s.is_test).map(x => x.s.path))])) testFiles.add(t);
+
+    // 2. what the shown code uses, defined elsewhere: one shared card, seeds and repeats left out
+    const card = [], moreNames = [];
+    for (const { s } of primary) {
+        const { rows, more } = definitionsUsed(intel, s.path, s.start_line, s.end_line, { max: Math.max(3, Math.floor(10 / primary.length) + 1), skipIds: seen, skipAncestorsOf: s.id });
+        for (const d of rows) {
+            seen.add(d.id);
+            card.push(`  ${d.qname}  ${d.path}:${d.start_line}${d.byName ? ' (by name)' : ''}  ${clip(String(d.sig || `${d.kind} ${d.name}`).replace(/\s+/g, ' '), 90)}`);
+        }
+        for (const d of more) if (!seen.has(d.id)) { seen.add(d.id); moreNames.push(d.qname); }
+    }
+    const tail = [];
+    if (card.length) tail.push('Defined elsewhere (used by the code above):', ...card);
+    if (moreNames.length) tail.push(`  … ${moreNames.length} more: ${moreNames.slice(0, 10).join(', ')}${moreNames.length > 10 ? ', …' : ''}`);
+    if (testFiles.size || testCases.length) {
+        tail.push(`Tests (${plural(testFiles.size, 'file')}): ${testCases.length ? testCases.slice(0, 5).join(', ') + (testCases.length > 5 ? ', …' : '') : [...testFiles].slice(0, 5).join(', ')}`);
+        for (const c of testCommands(intel.root, [...testFiles].slice(0, 12))) tail.push(`  run: ${clip(c, 300)}`);
+    } else if (primary.some(x => !x.s.is_test)) tail.push('Tests: none found that call this code (consider adding one).');
+    if (secondary.length) {
+        tail.push('Also relevant (not shown):');
+        for (const { s } of secondary) tail.push(`  ${s.qname} — ${s.kind} · ${loc(s)}${s.sig ? `  ${clip(String(s.sig).replace(/\s+/g, ' '), 90)}` : ''}`);
+    }
+    if (missing.length) tail.push(`Not found: ${missing.map(t => `"${t}"`).join(', ')}.`);
+
+    // 3. the code, in the budget that is left, in order of relevance; what does not fit is named
+    const fixed = [...sections.flatMap(x => [x.head, ...x.facts]), ...tail].join('\n').length + 200;
+    let left = budget - fixed;
+    const out = [`Exploring ${q ? `"${clip(q, 80)}"` : named.join(', ')}${p ? ` under ${p}` : ''}: ${plural(primary.length, 'definition')} shown${secondary.length ? `, ${secondary.length} more listed` : ''}.`];
+    const cut = [];
+    sections.forEach(({ s, head, facts }, i) => {
+        out.push('', head, ...facts);
+        const lines = intel.fileLines(s.path);
+        const span = s.end_line - s.start_line + 1;
+        // the rest of the budget is shared among the definitions not yet shown
+        const share = Math.floor(left / (sections.length - i));
+        let n = 0, used = 0;
+        for (let ln = s.start_line; ln <= s.end_line && lines; ln++) {
+            const w = Math.min(lines[ln - 1]?.length ?? 0, 220) + 8;
+            if (used + w > share) break;
+            used += w; n++;
+        }
+        if (n >= Math.min(span, 3)) {
+            out.push(codeBlock(lines, s.start_line, s.end_line, { maxLines: n }));
+            if (n < span) cut.push(`${s.path}:${s.start_line + n}-${s.end_line}`);
+            left -= used;
+        } else {
+            if (s.sig) out.push(`  ${clip(String(s.sig).replace(/\s+/g, ' '), 200)}`);
+            cut.push(s.qname);
+        }
+    });
+    if (tail.length) out.push('', ...tail);
+    out.push(cut.length
+        ? `Left out to fit the budget: ${cut.join(', ')} — ${surface === 'cli' ? `\`read ${cut.slice(0, 3).join(' ')}\`` : `read_code with ${cut.length === 1 ? 'it' : 'them'}`}, or raise max_tokens.`
+        : `Next: ${surface === 'cli' ? '`read <name>…`' : 'read_code'} for the names above; ${tn('change_impact')} before changing a signature others rely on.`);
     return out.join('\n');
 }
 
