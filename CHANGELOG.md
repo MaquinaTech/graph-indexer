@@ -16,6 +16,14 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   references, method families, tests) and loads up front alongside `find_references`. CLI:
   `graph-indexer explore <task in words> [--symbols a,b] [--path P] [--max-tokens N]`. Not yet
   measured in agent sessions ([docs/PLAN-REFERENCIA.md](docs/PLAN-REFERENCIA.md) §1.1–1.2).
+- **`init` ends with an answer about your repository** (`graph-indexer demo`): it builds the index
+  and picks a method that shares its name with other definitions, then shows what `grep -w` returns
+  for that name next to the calls the index binds to that one definition — on nestjs,
+  `NestApplicationContext.get`: 4,238 grep lines in 300 files against 129 calls in 67 files.
+  `--no-demo` skips it.
+- **`graph-indexer report`**: a summary to paste into an issue — versions, index size, the share of
+  calls bound and exact per language, warm latencies — with no paths, names or code. A "wrong
+  answer" issue template asks for it and for the command that reproduces the problem.
 
 ### Fixed
 

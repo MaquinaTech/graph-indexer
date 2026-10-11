@@ -192,6 +192,7 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
     const hooks = flag('--hooks');
     const noInstructions = flag('--no-instructions');
     const noHelper = flag('--no-helper');
+    const noDemo = flag('--no-demo');
     const all = flag('--all');
     const agentList = opt('--agents');
     let chosen;
@@ -251,6 +252,18 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
     }
     process.stdout.write(`graph-indexer init ${dryRun ? '(dry run) ' : ''}in ${repo}\n  ${report.join('\n  ')}\n\n` +
         `Other agents (Claude Desktop, JetBrains AI Assistant, Cline): add an MCP server with command "npx" and args ["-y","graph-indexer@3","serve","--repo","${repo}"].\n` +
-        `Build the index now with: npx graph-indexer index   (the server also builds it on first start)\n` +
+        (dryRun || noDemo ? `Build the index now with: npx graph-indexer index   (the server also builds it on first start)\n` : '') +
         (hooks ? '' : `Optional: graph-indexer init --hooks adds Claude Code hooks (edit check after each edit, grep disambiguation).\n`));
+    if (dryRun || noDemo) return;
+    // build the index now (the server would on first start) and show what it answers here
+    const { CodeIntel } = await import('../query/intel.mjs');
+    const { showcaseText } = await import('../query/showcase.mjs');
+    const intel = new CodeIntel({ root: repo });
+    try {
+        let last = 0;
+        await intel.open({ onProgress: (d, n) => { const now = Date.now(); if (now - last > 1000 || d === n) { last = now; process.stderr.write(`\r[graph-indexer] indexing ${d}/${n} files`); if (d === n) process.stderr.write('\n'); } } });
+        process.stdout.write(`\n${await showcaseText(intel)}\n`);
+    } catch (e) {
+        process.stdout.write(`\nThe index could not be built now (${e.message}); the server builds it on first start.\n`);
+    } finally { intel.close(); }
 }

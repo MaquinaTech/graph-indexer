@@ -90,6 +90,10 @@ Without `--repo` the server indexes the git repository containing its working di
 
 ## The tools
 
+`npx graph-indexer init` ends with an example from your own repository: a method that shares its
+name with other definitions, what grep returns for that name, and the calls the index binds to
+that one definition (`npx graph-indexer demo` shows it again).
+
 | Tool | Use it to | Typical reply |
 |---|---|---|
 | `explore` | start a task or bug in code you have not read, in one call | the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined and the tests to run with the command — inside a token budget, naming what it left out |

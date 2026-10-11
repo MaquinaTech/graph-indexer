@@ -16,6 +16,7 @@
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
  *   graph-indexer outline  [path]   [--focus TEXT] [--max-tokens N]
  *   graph-indexer files    <text|glob> [--path P]
+ *   graph-indexer demo                             grep versus exact uses, on this repository
  *
  * The query commands print exactly what the MCP tools return, so humans (and agents limited to a
  * shell) get the same answers.
@@ -121,7 +122,7 @@ async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
 
 Usage:
-  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper]
+  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper] [--no-demo]
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
@@ -130,6 +131,8 @@ Usage:
   graph-indexer search <query> [--path P] [--kind K] [--limit N]
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
+  graph-indexer demo                               a method that shares its name: grep versus its exact uses
+  graph-indexer report                             summary to paste into an issue (no paths, names or code)
   graph-indexer read <target>… [--full] [--max-lines N]   symbols (Class.method), ranges (file:10-80) or files,
                                                    with where each name they use is defined
   graph-indexer symbol <name>… [--no-code]         one or several definitions
@@ -240,6 +243,15 @@ async function main() {
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');
             return runTool('check_changes', { files, base });
+        }
+        case 'demo': return runTool('demo', {});
+        case 'report': {
+            // for bug reports: sizes, languages, binding rates and latencies — no paths, names or code
+            const intel = await openIntel({ quiet: true });
+            const { reportText } = await import('../src/query/report.mjs');
+            process.stdout.write(await reportText(intel, { version: pkg.version }) + '\n');
+            intel.close();
+            return;
         }
         case 'files': {
             const pathF = opt('--path'); const limit = Number(opt('--limit', 100));

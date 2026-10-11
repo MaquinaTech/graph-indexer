@@ -12,6 +12,7 @@ import { checkChanges } from '../query/check.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
 import { testCommands } from '../query/testcmd.mjs';
+import { showcaseText } from '../query/showcase.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -297,6 +298,7 @@ async function dispatchTool(intel, name, args) {
         case 'outline': return toolOutline(intel, args);
         case 'check_changes': return toolCheck(intel, args);
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
+        case 'demo': return showcaseText(intel); // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
 }
