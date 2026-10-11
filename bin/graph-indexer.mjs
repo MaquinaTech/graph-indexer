@@ -134,6 +134,7 @@ Usage:
   graph-indexer demo                               a method that shares its name: grep versus its exact uses
   graph-indexer report                             summary to paste into an issue (no paths, names or code)
   graph-indexer routes [path | METHOD /path]       HTTP routes and their handlers
+  graph-indexer inject [token | class]             dependency injection: tokens, providers, injection points
   graph-indexer read <target>… [--full] [--max-lines N]   symbols (Class.method), ranges (file:10-80) or files,
                                                    with where each name they use is defined
   graph-indexer symbol <name>… [--no-code]         one or several definitions
@@ -247,6 +248,7 @@ async function main() {
         }
         case 'demo': return runTool('demo', {});
         case 'routes': return runTool('routes', { filter: argv.join(' ') });
+        case 'inject': return runTool('inject', { filter: argv.join(' ') });
         case 'report': {
             // for bug reports: sizes, languages, binding rates and latencies — no paths, names or code
             const intel = await openIntel({ quiet: true });

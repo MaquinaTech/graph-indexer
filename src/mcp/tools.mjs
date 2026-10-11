@@ -14,6 +14,7 @@ import { factsForRange, renderFacts } from '../query/facts.mjs';
 import { testCommands } from '../query/testcmd.mjs';
 import { showcaseText } from '../query/showcase.mjs';
 import { collectRoutes, routesInQuery, matchRoutes } from '../query/routes.mjs';
+import { collectInjection, providedBy, tokenUses, injectedInto } from '../query/injection.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -300,6 +301,7 @@ async function dispatchTool(intel, name, args) {
         case 'check_changes': return toolCheck(intel, args);
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
         case 'demo': return showcaseText(intel);
+        case 'inject': return toolInject(intel, args); // CLI helper (`inject`): dependency-injection tokens, their providers and where they are injected
         case 'routes': return toolRoutes(intel, args); // CLI helper (`routes`); explore finds the handler of a route named in its query // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
@@ -607,7 +609,47 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         out.push(`Complete: every "${s.name}(…)" call in the indexed files is bound${res.elsewhere?.length ? ', here or to the definitions named above' : ' to this definition'}; none is left unresolved.`);
     }
     out.push(...stringMentionNote(intel, s));
+    out.push(...injectionNote(intel, s));
     return out.join('\n');
+}
+
+/** Dependency injection around a definition: what it provides and to whom, or, for a token, its providers. */
+function injectionNote(intel, s, max = 8) {
+    const out = [];
+    for (const p of providedBy(intel, s.id)) {
+        const into = p.into.map(j => `${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''} ${j.file}:${j.line}`);
+        out.push(`Dependency injection: provided as ${p.token} (${p.how}, ${p.file}:${p.line})${into.length ? ` and injected into ${into.slice(0, max).join(', ')}${into.length > max ? ', …' : ''}` : ', injected nowhere in the indexed code'}${p.exact ? '' : ' [token matched by its text]'}.`);
+    }
+    const t = tokenUses(intel, s.id);
+    if (t.providers.length) out.push(`Dependency injection: ${s.name} is a token, provided by ${t.providers.slice(0, max).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 40)} (${p.file}:${p.line})`).join(', ')}; ${plural(t.injections.length, 'injection point')}.`);
+    return out;
+}
+
+function toolInject(intel, { filter = '' }) {
+    const { providers, injections } = collectInjection(intel);
+    const f = String(filter ?? '').trim().toLowerCase();
+    const keys = [...new Set([...providers, ...injections].map(x => x.key))];
+    const rows = keys.map(key => ({ key, token: (providers.find(p => p.key === key) ?? injections.find(j => j.key === key)).token, ps: providers.filter(p => p.key === key), js: injections.filter(j => j.key === key) }))
+        .filter(r => !f || r.token.toLowerCase().includes(f) || r.ps.some(p => (p.target?.qname ?? p.targetText).toLowerCase().includes(f)) || r.js.some(j => (j.owner?.qname ?? '').toLowerCase().includes(f)));
+    if (!keys.length) return 'No dependency-injection providers or @Inject(…) points recognised (NestJS, TypeScript).';
+    if (!rows.length) return `Nothing matches "${filter}" (${plural(keys.length, 'token')} in the repository; \`inject\` lists them all).`;
+    const out = [`${plural(rows.length, 'token')}${f ? ` matching "${filter}"` : ''} (NestJS: provide/use… and @Inject):`];
+    for (const r of rows.slice(0, 100)) {
+        out.push(`  ${r.token}${r.ps.some(p => !p.exact) || r.js.some(j => !j.exact) ? '  [matched by its text]' : ''}`);
+        for (const p of r.ps) out.push(`    provided  ${p.how.padEnd(11)} ${p.target ? `${p.target.qname}  ${p.target.path}:${p.target.start_line}` : clip(p.targetText, 60)}   (${p.file}:${p.line})`);
+        if (!r.ps.length) out.push(`    provided  ${injectionSource(intel, r.key)}`);
+        for (const j of r.js) out.push(`    injected  ${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''}${j.type ? `: ${clip(j.type, 40)}` : ''}   (${j.file}:${j.line})`);
+    }
+    if (rows.length > 100) out.push(`  … ${rows.length - 100} more (pass part of a name to narrow)`);
+    return out.join('\n');
+}
+
+/** Where a token with no `provide:` comes from: a class provides itself; otherwise a library or dynamic module. */
+function injectionSource(intel, key) {
+    const id = key.startsWith('id:') ? Number(key.slice(3)) : null;
+    const s = id != null ? intel.sym(id) : null;
+    if (s && TYPE_KINDS.has(s.kind)) return `the class itself (a class is its own token when a module lists it)  ${loc(s)}`;
+    return 'not in the indexed code (a library token such as REQUEST or CACHE_MANAGER, or a dynamic module)';
 }
 
 /** `path` argument → predicate on repository-relative paths (a directory prefix or one file). */
@@ -1059,6 +1101,14 @@ async function toolExplore(intel, { query = '', symbols = [], path: p = null, ma
             const { direct, indirect } = subtypeTree(intel, s.id);
             if (direct.length) facts.push(`subtypes/implementations (${direct.length + indirect.length}): ${[...direct, ...indirect].slice(0, 8).map(x => `${x.qname} (${x.path}:${x.start_line})`).join(', ')}${direct.length + indirect.length > 8 ? ', …' : ''}`);
         }
+        // dependency injection: what this class receives through @Inject(TOKEN), and what it provides
+        const cls = s.kind === 'class' ? s : (s.parent_id ? intel.sym(s.parent_id) : null);
+        if (cls?.kind === 'class') {
+            const recv = injectedInto(intel, cls.id).filter(j => s.kind === 'class' || (j.line >= s.start_line && j.line <= s.end_line));
+            if (recv.length) facts.push(`receives by injection: ${recv.slice(0, 4).map(j => `${j.param ?? '?'} ← ${j.token}, ${j.from.length ? j.from.slice(0, 2).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 30)} (${p.file}:${p.line})`).join(' / ') : injectionSource(intel, j.key)}`).join('; ')}`);
+        }
+        const gives = providedBy(intel, s.id);
+        if (gives.length) facts.push(`provided by injection as ${gives.slice(0, 3).map(p => `${p.token} to ${p.into.length ? p.into.slice(0, 3).map(j => `${j.owner?.qname ?? '?'} (${j.file}:${j.line})`).join(', ') : 'no injection point'}`).join('; ')}`);
         if (!s.is_test) for (const t of testsUsing(intel, s.id)) {
             testFiles.add(t.path);
             const label = t.qname === '(module)' ? `${t.path}:${t.line}` : `${t.qname} (${t.path}:${t.line})`;

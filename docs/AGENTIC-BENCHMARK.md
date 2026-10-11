@@ -261,6 +261,24 @@ graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
 
+### Issues with the hooks installed, on Sonnet 5.5 (b3h2, pilot): 11 tasks, 22 runs
+
+The fourth round's 11 B3 issues (networkx 3, sqlglot 8), one run per task and arm, in real Claude
+Code sessions on Sonnet 5.5 (`claude-sonnet-5-5`, pinned): `cc` against `cc+gi+hooks` (graph-indexer
+as `init --hooks` installs it: MCP server, CLAUDE.md block and the Claude Code hooks).
+
+- **Both arms solved all 22.** Cost 1.00 (0.88–1.15) of `cc`; on the six one-file fixes 1.14
+  (1.03–1.30).
+- **The agent never called graph-indexer.** Sonnet 5.5 fixed each issue in 3–13 tool calls and
+  22–95k input-equivalent tokens (the fourth round's model spent about 950k per issue), reading
+  with `Read` and searching with grep in the shell: there was nothing left for an index to save.
+  These issues no longer separate the arms; the B3 target (≤ 0.70 of the cost) needs harder ones.
+- One pilot, one run each: no interval on the solved rate, and the cost interval is wide.
+
+Two faults in the harness, found while setting it up and fixed before these runs: Claude Code
+2.1.296 listed none of graph-indexer's tools (MCP 2026-07-28 results lacked `resultType`), and
+the hooks answered for the session's directory instead of the repository named with `--repo`.
+
 ### Real sessions (rt1): 20 tasks, 60 runs
 
 **Setup.** Each task went to a Claude Code session started with `claude -p` in a run directory

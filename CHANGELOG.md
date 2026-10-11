@@ -59,6 +59,13 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   (`t.Optional[Command]`, `t.Callable[[Ctx], "Group"]`) are type references. click's recall
   against pyright goes from 0.888 to 0.980, flask's from 0.909 to 0.929; no repository loses.
 
+- **Dependency injection (NestJS)**: what an `@Inject(TOKEN)` receives — the `provide: TOKEN,
+  useClass | useExisting | useFactory | useValue` or `ClientsModule` registration — is shown by
+  `find_references` (on the provider: where it is injected; on the token: who provides it) and
+  `explore` ("receives by injection"), and `graph-indexer inject [name]` lists every token. Checked
+  by hand on Twenty and nestjs: 45 provider claims for 40 injection points, none wrong; one
+  provider computed at run time is not found.
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)

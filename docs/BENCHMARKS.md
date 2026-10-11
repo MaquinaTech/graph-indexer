@@ -531,6 +531,32 @@ caller and callee, with the line of the first call (`isUndefined` called on line
 are missed; its precision on fastapi (0.929) is the closest to graph-indexer's.
 The session axis (cost and turns of real agent runs with each tool) is not measured yet.
 
+## Dependency injection (NestJS)
+
+`@Inject(TOKEN)` hands a class whatever a module registered as `{ provide: TOKEN, useClass |
+useExisting | useFactory | useValue }` (or `ClientsModule.register([{ name: TOKEN }])`); its declared
+type is often an interface, so no compiler answers "what does this receive". There is no oracle,
+so the edges were checked by hand: every injection point in Twenty's server and in the nestjs
+repository (its packages and samples), 40 in all, was read together with each provider claimed
+for it and searched for providers not claimed (an independent reading of the code, by an agent
+told to be strict and to quote every line it marked wrong).
+
+| | count |
+|---|---|
+| injection points | 40 |
+| provider claims (injection → provider) | 45 |
+| claims wrong | **0** |
+| injection points whose provider is in the repository but not found | 1 |
+| injection points with no provider in the repository (library tokens such as `REQUEST`, `CACHE_MANAGER`) | 4 — reported as such |
+| class tokens (a class is its own provider) | 7 — reported as such |
+
+The first reading found four providers missed; all four are now found (`ClientsModule` clients, a
+token written `provider.provide`, and a string token given once as a constant and once as
+`Reflector.name`). The one still missed is computed at run time:
+`Object.values(CacheStorageNamespace).map(ns => ({ provide: ns, … }))`. Test files are left out
+(their providers are mocks). Where a token has several providers (`forRoot` and `forRootAsync`,
+or one per module) all are listed: which one a given module receives depends on what it imports.
+
 ## 2. Localization from real commits
 
 ```bash

@@ -7,11 +7,11 @@ Fecha: 2026-10-11 · Propuesta. Complementa [PLAN-AGENTES.md](PLAN-AGENTES.md) (
 | Punto | Estado | Medido |
 |---|---|---|
 | 1.1 `explore` | hecho | 4–50 ms por llamada; sin medir aún en sesiones de agente |
-| 1.2 B3 con hooks reales | brazo `cc+gi+hooks` hecho y piloto preparado (11 tareas × 2 brazos, `b3h1`); sin lanzar | el preflight encontró la cuenta al 99 % del límite semanal y las herramientas MCP diferidas tras `ToolSearch` (`explore` no se carga de entrada pese a `_meta.alwaysLoad`; CodeGraph usa `"alwaysLoad": true` en la entrada del servidor) |
+| 1.2 B3 con hooks reales | piloto hecho (`b3h2`: 11 tareas × 2 brazos × 1, Sonnet 5.5) | 22/22 resueltas en ambos brazos; coste 1,00 (IC 0,88–1,15) de `cc`; el agente no llamó a graph-indexer ninguna vez: con Sonnet 5.5 estas tareas se resuelven en ~6 llamadas y ~40k tokens-equivalentes (frente a ~950k en la ronda 4), sin margen para el índice. B3 ≤ 0,70 necesita tareas más difíciles |
 | 1.3 arena | ejes de exactitud e indexado medidos con CodeGraph 1.6.2 y codebase-memory-mcp 0.11.0 | nestjs P/R 0,993/0,886 frente a 0,743/0,755 y 0,559/0,263; fastapi 0,997/0,826 frente a 0,652/0,363 y 0,929/0,571; frío nestjs 1,9 s frente a 3,0 s y 11,8 s; perdemos en tamaño de respuesta (310 tokens frente a 80 y 96). Falta el eje de sesiones |
 | 1.4 velocidad de indexado | parseo en hilos | nestjs completo: 3,3–3,8 s frente a 4,5–4,7 s, índice idéntico |
 | 2.1 niveles de lenguaje | hechos en el README; Python con oráculo (pyright) en 6 repos | precisión 0,871–0,998, recall 0,929–0,998 (click 0,888→0,980 de recall); Go re-ejecutado (gin, caddy, nats-server): cifras idénticas a las publicadas; Rust con oráculo (rust-analyzer) en serde_json, ripgrep y tokio: precisión 0,930–0,955, recall 0,582–0,841 (antes 0,887–0,914 / 0,389–0,555); pasa a nivel verificado |
-| 2.2 frameworks | rutas HTTP → manejador (FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi, net/http) | — |
+| 2.2 frameworks | rutas HTTP → manejador; inyección de dependencias de NestJS (`@Inject(TOKEN)` → proveedor) | inyección auditada a mano en Twenty y nestjs: 45 aristas, 0 erróneas, 1 proveedor no encontrado (calculado en ejecución) |
 | 3.1 nombre | decisión pendiente | — |
 | 3.2 primer minuto | `init` termina con `demo` (grep frente a usos exactos en el repo del usuario) | nestjs: 4.238 líneas de grep frente a 129 llamadas exactas |
 | 3.3 feedback | `graph-indexer report` y plantilla de issue | — |

@@ -25,7 +25,7 @@
           "symbol": "{path}:{qname}",
           "limit": 500
         },
-        "stopAt": "^(Possibly missed|Unbound:|Also named as a string|Other references named|Indirect subtypes|No references of kind)",
+        "stopAt": "^(Possibly missed|Unbound:|Also named as a string|Other references named|Indirect subtypes|No references of kind|Dependency injection)",
         "ignoreLines": "^(note:|References to )"
       }
     },
