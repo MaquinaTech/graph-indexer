@@ -2,6 +2,21 @@
 
 Fecha: 2026-10-11 · Propuesta. Complementa [PLAN-AGENTES.md](PLAN-AGENTES.md) (motor y benchmarks internos) con producto, competencia y adopción.
 
+## Estado (2026-10-11, rama `roadmap/plan-referencia`)
+
+| Punto | Estado | Medido |
+|---|---|---|
+| 1.1 `explore` | hecho | 4–50 ms por llamada; sin medir aún en sesiones de agente |
+| 1.2 B3 con hooks reales | pendiente | necesita `claude` autenticado y presupuesto para las ejecuciones |
+| 1.3 arena | arnés hecho (`bench/arena/`) | graph-indexer por MCP reproduce su fila nativa (±0,007); faltan las entradas de CodeGraph y codebase-memory-mcp, que no se pueden instalar sin acceso a npm/GitHub |
+| 1.4 velocidad de indexado | parseo en hilos | nestjs completo: 3,3–3,8 s frente a 4,5–4,7 s, índice idéntico |
+| 2.1 niveles de lenguaje | hechos en el README; Python con oráculo (pyright) en 6 repos | precisión 0,868–0,998, recall 0,888–0,998; Go no se pudo re-ejecutar aquí (proxy.golang.org bloqueado); Rust: siguiente oráculo (rust-analyzer disponible, dependencias no) |
+| 2.2 frameworks | rutas HTTP → manejador (FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi, net/http) | — |
+| 3.1 nombre | decisión pendiente | — |
+| 3.2 primer minuto | `init` termina con `demo` (grep frente a usos exactos en el repo del usuario) | nestjs: 4.238 líneas de grep frente a 129 llamadas exactas |
+| 3.3 feedback | `graph-indexer report` y plantilla de issue | — |
+| 4 promoción | no empieza hasta tener el arena con competidores (puerta P2) | — |
+
 ## 0. Tesis
 
 graph-indexer ya gana en lo difícil de copiar: referencias exactas verificadas contra compiladores (TS 0,996 / 0,961; Go y Java con oráculo), índice siempre fresco y cero dependencias. Pierde en lo que sí se puede construir en semanas: eficiencia en sesiones de issues reales (B3 a 0,85 del coste de grep, objetivo 0,70), una herramienta de "dame todo el contexto", cobertura de lenguajes y frameworks, y visibilidad.
