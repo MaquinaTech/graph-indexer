@@ -25,6 +25,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   calls bound and exact per language, warm latencies — with no paths, names or code. A "wrong
   answer" issue template asks for it and for the command that reproduces the problem.
 
+### Changed
+
+- **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
+  runs in a pool of worker threads while the main thread writes earlier batches to SQLite; a file
+  the pool fails on is parsed again inline. The index written is identical (checked on nestjs:
+  symbols, references and imports). A full nestjs index on 4 CPUs: 3.3–3.8 s instead of 4.5–4.7 s.
+  Updates of fewer than 48 files parse inline as before; `GRAPH_INDEXER_WORKERS` sets the number of
+  threads (0 turns the pool off).
+
 ### Fixed
 
 - **References in JavaScript/TypeScript modules**: a value read the extractor left unscoped (a

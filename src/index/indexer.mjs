@@ -19,6 +19,7 @@ import { extractFile } from '../parse/extract.mjs';
 import { specForPath, LANGUAGES } from '../parse/languages.mjs';
 import { tokenString, codeTokens } from '../search/tokenize.mjs';
 import { indexFingerprint } from './fingerprint.mjs';
+import { ParsePool, poolSize } from './parsepool.mjs';
 
 const SPECS = Object.fromEntries(LANGUAGES.map(l => [l.id, l]));
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -162,17 +163,19 @@ export class Indexer {
             });
         }
 
-        // parse changed/new files (async extraction), write in batches
+        // parse changed/new files, write in batches; with many files a pool of threads parses the
+        // next batch while this one is written
         if (toParse.length || removed.length) s.setMeta('resolve_pending', '1');
         const BATCH = 200;
-        let done = 0;
-        for (let i = 0; i < toParse.length; i += BATCH) {
-            const batch = toParse.slice(i, i + BATCH);
-            const parsed = [];
+        const threads = poolSize(toParse.length);
+        const pool = threads ? new ParsePool(threads) : null;
+        const failed = (e, rel) => { this.log(`parse failed for ${rel}: ${e.message}`); return { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1 }; };
+        // read and hash a batch now; its extraction starts now with the pool, or when awaited without
+        const start = (batch) => {
+            const items = [];
             for (const item of batch) {
-                const abs = path.join(this.root, item.rel);
                 let source;
-                try { source = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+                try { source = fs.readFileSync(path.join(this.root, item.rel), 'utf8'); } catch { continue; }
                 const hash = sha1(source);
                 if (item.prev && item.prev.hash === hash) {
                     s.run('UPDATE files SET size = ?, mtime_ms = ? WHERE id = ?', item.st.size, Math.floor(item.st.mtimeMs), item.prev.id);
@@ -181,26 +184,48 @@ export class Indexer {
                 }
                 const spec = specForPath(item.rel);
                 if (!spec) continue;
-                let extraction;
-                if (looksMinified(source)) extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 0 };
-                else {
-                    try { extraction = await extractFile(spec, source, item.rel); }
-                    catch (e) { this.log(`parse failed for ${item.rel}: ${e.message}`); extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1 }; }
-                }
-                parsed.push({ ...item, source, hash, spec, extraction });
+                const minified = looksMinified(source);
+                const inline = () => extractFile(spec, source, item.rel).catch(e => failed(e, item.rel));
+                const job = minified ? null : pool ? pool.extract(item.rel, source).catch(inline) : null;
+                items.push({ ...item, source, hash, spec, minified, job });
             }
-            s.tx(() => {
-                for (const p of parsed) {
-                    const r = this.#writeFile(p);
-                    touchedFileIds.push(r.fileId);
-                    removedSymIds.push(...r.removedIds);
-                    for (const n of r.addedNames) addedNames.add(n);
-                    if (p.prev) changed++; else added++;
+            return items;
+        };
+        let done = 0;
+        try {
+            // with the pool, a few batches are in flight so no thread waits; sources held stay bounded
+            const ahead = pool ? 4 : 0;
+            const queued = [];
+            let started = 0;
+            const fill = () => { while (started < toParse.length && queued.length <= ahead) { queued.push(start(toParse.slice(started, started + BATCH))); started += BATCH; } };
+            for (let i = 0; i < toParse.length; i += BATCH) {
+                fill();
+                const items = queued.shift();
+                fill();
+                const parsed = [];
+                for (const it of items) {
+                    let extraction;
+                    if (it.minified) extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 0 };
+                    else if (it.job) extraction = await it.job;
+                    else {
+                        try { extraction = await extractFile(it.spec, it.source, it.rel); }
+                        catch (e) { extraction = failed(e, it.rel); }
+                    }
+                    parsed.push({ rel: it.rel, st: it.st, prev: it.prev, source: it.source, hash: it.hash, spec: it.spec, extraction });
                 }
-            });
-            done += batch.length;
-            onProgress?.(done, toParse.length);
-        }
+                s.tx(() => {
+                    for (const p of parsed) {
+                        const r = this.#writeFile(p);
+                        touchedFileIds.push(r.fileId);
+                        removedSymIds.push(...r.removedIds);
+                        for (const n of r.addedNames) addedNames.add(n);
+                        if (p.prev) changed++; else added++;
+                    }
+                });
+                done += Math.min(BATCH, toParse.length - i);
+                onProgress?.(done, toParse.length);
+            }
+        } finally { await pool?.close(); }
 
         // resolve: refs of touched files + refs that pointed at removed symbols + refs that may bind to new names
         this.resolver.resetMemo();
