@@ -190,6 +190,17 @@ export function prepareRun(task, arm, rep, label) {
     const session = SESSION_ARMS[arm];
     if (session?.v2) for (const [name, text] of Object.entries(projectFilesV2(task.repo))) fs.writeFileSync(path.join(runDir, name), text);
     else if (session?.index) fs.writeFileSync(path.join(runDir, 'CLAUDE.md'), managedBlock() + '\n');
+    if (session?.hooks) {
+        // the hooks `init --hooks` writes to .claude/settings.json; the session runs in the run
+        // directory with the repository added, so each hook names the repository with --repo
+        const hook = (event) => ({ type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(giBin(label))} hook ${event} --repo ${JSON.stringify(checkout)}`, timeout: 10 });
+        fs.mkdirSync(path.join(runDir, '.claude'), { recursive: true });
+        writeJson(path.join(runDir, '.claude', 'settings.json'), { hooks: {
+            PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|Grep|Bash|Read', hooks: [hook('post-tool')] }],
+            SessionStart: [{ hooks: [hook('session-start')] }],
+            SubagentStart: [{ hooks: [hook('subagent-start')] }],
+        } });
+    }
     if (session?.helper) {
         fs.mkdirSync(path.join(runDir, '.claude', 'agents'), { recursive: true });
         fs.writeFileSync(path.join(runDir, '.claude', 'agents', `${HELPER_NAME}.md`), claudeAgentFile());

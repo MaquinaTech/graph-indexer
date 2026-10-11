@@ -162,8 +162,13 @@ async function preflightArms() {
         }
         // the helper is there when the session lists it (init event) or the model names it (its Agent tool lists it)
         const offered = agents.includes(HELPER_NAME) || reply.includes(HELPER_NAME);
+        // the SessionStart hook ran when its output (the index line) is in the stream
+        // the project's hooks ran: Claude Code reports each one (hook_response) with its exit code
+        if (session?.hooks) { const h = events.find(e => e.subtype === 'hook_response' && e.hook_event === 'SessionStart'); checks.push(['hooks ran (SessionStart)', h?.exit_code === 0, h ? `exit ${h.exit_code}` : 'no hook_response']); }
         if (session?.helper) checks.push(['helper sub-agent offered', offered, init?.agents ? `agents: ${agents.join(', ')}` : '']);
         else if (session) checks.push(['no helper sub-agent', !offered, '']);
+        const limit = events.find(e => e.type === 'rate_limit_event')?.rate_limit_info;
+        if (limit?.utilization != null) checks.push(['usage limit has room', limit.utilization < 0.9, `${limit.rateLimitType ?? ''} at ${Math.round(limit.utilization * 100)} %`]);
         const bad = checks.filter(([, ok]) => !ok);
         failed += bad.length ? 1 : 0;
         console.log(`${arm}: ${bad.length ? 'NOT READY' : 'ready'}`);
