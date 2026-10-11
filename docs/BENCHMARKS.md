@@ -257,14 +257,19 @@ rich and click were measured only once, after the fixes. "Before" is graph-index
 | | after | **0.997** | **0.998** | **0.940** | | |
 | flask 3.0.3 (`c12a5d8`, 150) | before | 0.869 | 0.851 | 0.667 | 0.110 | 0.358 |
 | | after | 0.868 | **0.909** | **0.713** | | |
+| | now | 0.871 | 0.929 | 0.720 | | |
 | requests 2.32.3 (`0e322af`, 149) | before | 0.927 | 0.936 | 0.826 | 0.251 | 0.477 |
 | | after | **0.952** | **0.964** | **0.846** | | |
+| | now | 0.952 | 0.967 | 0.852 | | |
 | httpx 0.27.2 (`609df7e`, 150) | before | 0.910 | 0.832 | 0.620 | 0.158 | 0.432 |
 | | after | **0.998** | **0.946** | **0.760** | | |
+| | now | 0.998 | 0.950 | 0.800 | | |
 | rich 13.9.4 (`43d3b04`, 144) *(held out)* | before | 0.991 | 0.867 | 0.785 | 0.214 | 0.543 |
 | | after | **0.992** | **0.971** | **0.854** | | |
+| | now | 0.992 | 0.972 | 0.854 | | |
 | click 8.1.7 (`874ca2b`, 144) *(held out)* | before | 0.962 | 0.882 | 0.785 | 0.266 | 0.493 |
 | | after | **0.967** | **0.888** | **0.826** | | |
+| | now | 0.970 | 0.980 | 0.910 | | |
 
 What changed:
 - `from pkg import submodule` then `submodule.X` was looked up in `pkg/__init__.py` first, which
@@ -280,6 +285,15 @@ What changed:
   keys, generic arguments (`Union[A, B]`), `__all__` entries, `TypeVar(bound="A")`, `Class.attr`,
   submodule chains (`import flask; flask.json.dumps`), and `self.x` under a property `x` of a base
   class, which was taken for a new field.
+
+"Now" is 2026-10-11, after three more fixes found on flask and click: an absolute import resolves
+only from an import root (`import json as _json` inside `flask/json/` had been bound to that
+package rather than the standard library); `import click.utils` also binds `click`, the package
+(click's tests that write `click.open_file(…)` after it had none of those uses bound); and names
+inside the subscripts of qualified generics (`t.Optional[Command]`, `t.Callable[[Ctx], "Group"]`)
+are type references. (On this machine the "after" build reproduces every row except flask's exact
+set, 0.707 instead of 0.713; "now" is measured against that.) fastapi is unchanged (0.997 / 0.998 / 0.940); no Python repository lost
+precision or recall.
 
 What remains: flask's precision is lower because of test code whose receivers pyright cannot type
 either (`app` fixtures without annotations), which graph-indexer binds by name as `likely` — counted

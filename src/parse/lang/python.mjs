@@ -41,6 +41,10 @@ ${UNION_TYPES}
 (pair key: (identifier) @name) @ref.value
 (subscript value: (identifier) @_generic subscript: (identifier) @name (#match? @_generic "^[A-Z]")) @ref.type
 (subscript value: (identifier) @_generic subscript: (attribute object: (_) @recv attribute: (identifier) @name) (#match? @_generic "^[A-Z]")) @ref.type
+(subscript value: (attribute) subscript: (identifier) @name (#match? @name "^[A-Z]")) @ref.type
+(subscript value: (attribute) subscript: (attribute object: (_) @recv attribute: (identifier) @name) (#match? @name "^[A-Z]")) @ref.type
+(subscript value: [(identifier) (attribute)] subscript: (list (identifier) @name) (#match? @name "^[A-Z]")) @ref.type
+(subscript value: [(identifier) (attribute)] subscript: (string (string_content) @name) (#match? @name "^[A-Z][A-Za-z0-9_]*$")) @ref.type
 (except_clause value: (identifier) @name) @ref.type
 (except_clause value: (attribute object: (_) @recv attribute: (identifier) @name)) @ref.type
 (except_clause value: (tuple (identifier) @name)) @ref.type
@@ -115,6 +119,9 @@ function parseImport(node) {
             if (c.type === 'dotted_name') {
                 const mod = dotted(c);
                 out.push({ source: mod, imported: '*', local: mod });
+                // `import a.b` also binds `a`, to the package a
+                const top = mod.split('.')[0];
+                if (top !== mod && !out.some(o => o.local === top)) out.push({ source: top, imported: '*', local: top });
             } else if (c.type === 'aliased_import') {
                 const mod = dotted(c.childForFieldName('name'));
                 out.push({ source: mod, imported: '*', local: c.childForFieldName('alias')?.text || mod });

@@ -272,7 +272,10 @@ export class ModuleResolver {
         const rel = mod.replace(/\./g, '/');
         const idx = this.#suffixIndex();
         const cands = [...(idx.get(rel + '.py') ?? []), ...(idx.get(rel + '/__init__.py') ?? [])]
-            .filter(f => f === rel + '.py' || f === rel + '/__init__.py' || f.endsWith('/' + rel + '.py') || f.endsWith('/' + rel + '/__init__.py'));
+            .filter(f => f === rel + '.py' || f === rel + '/__init__.py' || f.endsWith('/' + rel + '.py') || f.endsWith('/' + rel + '/__init__.py'))
+            // an absolute import starts at an import root: `import json` is not `flask/json/`, since
+            // `flask/` is a package (it has an __init__.py) and only reaches it as `flask.json`
+            .filter(f => { const root = f.slice(0, f.length - (f.endsWith('/__init__.py') ? rel.length + 12 : rel.length + 3)).replace(/\/$/, ''); return !root || !this.files.has(root + '/__init__.py'); });
         if (cands.length) {
             cands.sort((a, b) => a.length - b.length);
             const f = cands[0];

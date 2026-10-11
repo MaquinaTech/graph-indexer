@@ -53,6 +53,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   0.887 / 0.389 to 0.930 / 0.582 (tokio). Rust moves to the verified level. Every other oracle
   (TypeScript, six Python, three Go, three Java repositories) gives the same scores as before.
 
+- **Python: three fixes found on flask and click.** An absolute import resolves only from an
+  import root (`import json` inside `flask/json/` is the standard library, not that package);
+  `import a.b` also binds `a`; names inside the subscripts of qualified generics
+  (`t.Optional[Command]`, `t.Callable[[Ctx], "Group"]`) are type references. click's recall
+  against pyright goes from 0.888 to 0.980, flask's from 0.909 to 0.929; no repository loses.
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
