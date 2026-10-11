@@ -38,7 +38,7 @@ import { CodeIntel } from '../src/query/intel.mjs';
 import { tsSetup } from './agentic/tsconfig.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { v2Comparison, answerSizes } from './v2-client.mjs';
-import { loadSystems, answersOf } from './arena/mcp-system.mjs';
+import { loadSystems, answersOf, sourceOf } from './arena/mcp-system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -219,7 +219,7 @@ const v2 = v2Root ? await v2Comparison({ v2Root, root, sample, intel, fileRe: TS
 
 // other tools through their MCP servers (bench/arena/systems.json): import/export lines left out, as for grep
 const IMPORT_EXPORT = /^\s*(import|export)\b.*\bfrom\b|^\s*import\s/;
-const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(intel.store.all('SELECT path FROM files').map(r => r.path)), fileRe: TS_FILE }) : {};
+const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(intel.store.all('SELECT path FROM files').map(r => r.path)), fileRe: TS_FILE, ...sourceOf(intel, root) }) : {};
 for (const [name, a] of Object.entries(ext)) console.log(`${name}: median answer ${a.medianTokens} tokens`);
 const extSystems = Object.fromEntries(Object.entries(ext).map(([name, a]) => [name, (s) => new Set([...(a.per.get(s.id) ?? [])].filter(x => { const i = x.lastIndexOf(':'); return !IMPORT_EXPORT.test(fileLines(x.slice(0, i))[Number(x.slice(i + 1)) - 1] ?? ''); }))]));
 const systems = { 'graph-indexer': oursRefs, ...extSystems, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs,

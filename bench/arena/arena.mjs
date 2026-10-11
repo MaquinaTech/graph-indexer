@@ -19,7 +19,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSystems, startSystem, indexWith } from './mcp-system.mjs';
+import { loadSystems, startSystem, indexWith, fill } from './mcp-system.mjs';
+
+const fillPath = (p, repo) => fill(p, { repo });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');
@@ -62,7 +64,10 @@ if (cmd === 'tools') {
             if (fs.existsSync(aside)) fs.renameSync(aside, dir);
         }
         for (const sys of loadSystems(systemsFile).filter(s => s.index && !s.name.startsWith('graph-indexer'))) {
-            try { rows.push({ system: sys.name, repo: path.basename(repo), ms: indexWith(sys, repo), note: sys.indexDir ? `${(dirSize(path.join(repo, sys.indexDir)) / 1e6).toFixed(1)} MB` : '' }); }
+            // cold: the system's index (`indexDir`) is removed first, and rebuilt by the run
+            const idx = sys.indexDir ? path.resolve(repo, fillPath(sys.indexDir, repo)) : null;
+            if (idx) fs.rmSync(idx, { recursive: true, force: true });
+            try { rows.push({ system: sys.name, repo: path.basename(repo), ms: indexWith(sys, repo), note: idx ? `${(dirSize(idx) / 1e6).toFixed(1)} MB` : '' }); }
             catch (e) { rows.push({ system: sys.name, repo: path.basename(repo), ms: null, note: e.message.slice(0, 80) }); }
         }
     }

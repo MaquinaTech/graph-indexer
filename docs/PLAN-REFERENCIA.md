@@ -8,9 +8,9 @@ Fecha: 2026-10-11 · Propuesta. Complementa [PLAN-AGENTES.md](PLAN-AGENTES.md) (
 |---|---|---|
 | 1.1 `explore` | hecho | 4–50 ms por llamada; sin medir aún en sesiones de agente |
 | 1.2 B3 con hooks reales | pendiente | necesita `claude` autenticado y presupuesto para las ejecuciones |
-| 1.3 arena | arnés hecho (`bench/arena/`) | graph-indexer por MCP reproduce su fila nativa (±0,007); faltan las entradas de CodeGraph y codebase-memory-mcp, que no se pueden instalar sin acceso a npm/GitHub |
+| 1.3 arena | ejes de exactitud e indexado medidos con CodeGraph 1.6.2 y codebase-memory-mcp 0.11.0 | nestjs P/R 0,993/0,886 frente a 0,743/0,755 y 0,559/0,263; fastapi 0,997/0,826 frente a 0,652/0,363 y 0,929/0,571; frío nestjs 1,9 s frente a 3,0 s y 11,8 s; perdemos en tamaño de respuesta (310 tokens frente a 80 y 96). Falta el eje de sesiones |
 | 1.4 velocidad de indexado | parseo en hilos | nestjs completo: 3,3–3,8 s frente a 4,5–4,7 s, índice idéntico |
-| 2.1 niveles de lenguaje | hechos en el README; Python con oráculo (pyright) en 6 repos | precisión 0,868–0,998, recall 0,888–0,998; Go no se pudo re-ejecutar aquí (proxy.golang.org bloqueado); Rust: siguiente oráculo (rust-analyzer disponible, dependencias no) |
+| 2.1 niveles de lenguaje | hechos en el README; Python con oráculo (pyright) en 6 repos | precisión 0,868–0,998, recall 0,888–0,998; Go re-ejecutado (gin, caddy, nats-server): cifras idénticas a las publicadas; Rust: oráculo con rust-analyzer en curso |
 | 2.2 frameworks | rutas HTTP → manejador (FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi, net/http) | — |
 | 3.1 nombre | decisión pendiente | — |
 | 3.2 primer minuto | `init` termina con `demo` (grep frente a usos exactos en el repo del usuario) | nestjs: 4.238 líneas de grep frente a 129 llamadas exactas |

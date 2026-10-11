@@ -23,7 +23,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
-import { loadSystems, answersOf } from './arena/mcp-system.mjs';
+import { loadSystems, answersOf, sourceOf } from './arena/mcp-system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -159,7 +159,7 @@ while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand
 if (sample.length) await oracleRefs(sample[0]);
 
 // other tools through their MCP servers (bench/arena/systems.json), import lines left out
-const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(pyFiles), fileRe: /\.py$/ }) : {};
+const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(pyFiles), fileRe: /\.py$/, ...sourceOf(intel, root) }) : {};
 for (const [name, a] of Object.entries(ext)) console.log(`${name}: median answer ${a.medianTokens} tokens`);
 const extSystems = Object.fromEntries(Object.entries(ext).map(([name, a]) => [name, (s) => new Set([...(a.per.get(s.id) ?? [])].filter(x => { const i = x.lastIndexOf(':'); return !inImport(x.slice(0, i), Number(x.slice(i + 1))); }))]));
 const systems = { ...extSystems, 'gi (exact)': (s) => oursRefs(s, { family: false }), 'gi (>=likely)': (s) => oursRefs(s, { family: false, minConf: 0.4 }), 'graph-indexer': oursRefs, 'name-only': nameOnlyRefs, grep: grepRefs };

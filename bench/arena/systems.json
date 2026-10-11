@@ -1,0 +1,97 @@
+{
+  "_comment": "Arena entries, written from each server's own tool list (`node bench/arena/arena.mjs tools --system NAME --repo DIR`). Tools live under bench/arena/.tools (git-ignored); docs/BENCHMARKS.md says how to install the pinned versions.",
+  "systems": [
+    {
+      "name": "graph-indexer (MCP)",
+      "command": "node",
+      "args": [
+        "{gi}/bin/graph-indexer.mjs",
+        "serve",
+        "--repo",
+        "{repo}"
+      ],
+      "index": {
+        "command": "node",
+        "args": [
+          "{gi}/bin/graph-indexer.mjs",
+          "index",
+          "--repo",
+          "{repo}"
+        ]
+      },
+      "references": {
+        "tool": "find_references",
+        "arguments": {
+          "symbol": "{path}:{qname}",
+          "limit": 500
+        },
+        "stopAt": "^(Possibly missed|Unbound:|Also named as a string|Other references named|Indirect subtypes|No references of kind)",
+        "ignoreLines": "^(note:|References to )"
+      }
+    },
+    {
+      "name": "CodeGraph 1.6.2",
+      "command": "{gi}/bench/arena/.tools/codegraph/node_modules/.bin/codegraph",
+      "args": [
+        "serve",
+        "--mcp",
+        "--path",
+        "{repo}"
+      ],
+      "env": {
+        "CODEGRAPH_TELEMETRY": "0",
+        "CODEGRAPH_MCP_TOOLS": "explore,node,search,callers,callees,impact,files,status",
+        "CODEGRAPH_NO_DAEMON": "1"
+      },
+      "index": {
+        "command": "{gi}/bench/arena/.tools/codegraph/node_modules/.bin/codegraph",
+        "args": [
+          "init",
+          "--yes",
+          "{repo}"
+        ]
+      },
+      "indexDir": "{repo}/.codegraph",
+      "references": {
+        "tool": "codegraph_callers",
+        "arguments": {
+          "symbol": "{name}",
+          "file": "{path}",
+          "limit": 500
+        },
+        "enclosing": true
+      }
+    },
+    {
+      "name": "codebase-memory-mcp 0.11.0",
+      "command": "{gi}/bench/arena/.tools/cbm/x/codebase-memory-mcp",
+      "args": [],
+      "env": {
+        "CBM_CACHE_DIR": "{gi}/bench/arena/.tools/cbm/cache"
+      },
+      "index": {
+        "command": "{gi}/bench/arena/.tools/cbm/x/codebase-memory-mcp",
+        "args": [
+          "cli",
+          "--quiet",
+          "index_repository",
+          "--repo-path",
+          "{repo}",
+          "--name",
+          "{repoName}"
+        ]
+      },
+      "indexDir": "{gi}/bench/arena/.tools/cbm/cache",
+      "references": {
+        "tool": "query_graph",
+        "arguments": {
+          "project": "{repoName}",
+          "format": "json",
+          "max_rows": 5000,
+          "max_output_tokens": 1000000,
+          "query": "MATCH (c)-[r:CALLS|USAGE|CALL_REFERENCE|INHERITS|IMPLEMENTS]->(n) WHERE n.file_path = '{path}' AND n.name = '{name}' AND n.qualified_name ENDS WITH '.{qname}' RETURN c.file_path, r.line, c.start_line, c.end_line"
+        }
+      }
+    }
+  ]
+}

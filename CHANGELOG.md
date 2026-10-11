@@ -37,6 +37,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   `eval-graph-python.mjs` take `--systems`), with its answer size, plus cold index time and size
   (`arena.mjs speed`). Tools are declared in a JSON file written from what their servers expose;
   graph-indexer's own server entered that way matches its native scores within 0.007.
+  First results with CodeGraph 1.6.2 and codebase-memory-mcp 0.11.0 (`bench/arena/systems.json`):
+  on nestjs (TypeScript oracle) precision / recall 0.993 / 0.886 against 0.743 / 0.755 and
+  0.559 / 0.263; on fastapi (pyright) 0.997 / 0.826 against 0.652 / 0.363 and 0.929 / 0.571; cold
+  index 1.9 s against 3.0 s and 11.8 s on nestjs. graph-indexer's answers are the largest (310
+  tokens median against 80 and 96). Answers that name declarations instead of lines are read
+  as an agent reads them (the declaration's lines that contain the name as code).
 
 ### Changed
 

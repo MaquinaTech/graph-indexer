@@ -134,7 +134,10 @@ v2.10.22 (`240e9a4`, large types with many methods). Clone them at those tags an
 | nats-server (199, 24) | before | 0.971 | 0.975 | 0.894 | 0.966 / 0.249 | 0.232 | 0.483 |
 | | after | **0.992** | **0.978** | **0.935** | **0.977 / 0.938** | | |
 
-(dispatch oracle, micro averages; grep's recall is 1.000 by construction.) The first run found
+(dispatch oracle, micro averages; grep's recall is 1.000 by construction.) Re-run on 2026-10-11
+(Go 1.27.1) after the general resolver changes for TypeScript and Python (nested functions kept out
+of global binding, external re-exports): all three "after" rows and implementation scores are
+reproduced exactly. The first run found
 seven faults, fixed in this order (the agent tasks on caddy, below, found four more):
 
 - **Reopening an index lost Go's implicit implementations.** They lived only in memory after
@@ -346,11 +349,13 @@ X used" and with which arguments. Nothing about a tool is assumed: `arena.mjs to
 lists what its server offers, and the entry is written from that.
 
 ```bash
-cp bench/arena/systems.example.json bench/arena/systems.json      # add one entry per tool
 node bench/arena/arena.mjs tools --system "NAME" --repo test/fixtures/nestjs
 node bench/arena/arena.mjs exactness -- --n 150                   # TypeScript and Python oracles
 node bench/arena/arena.mjs speed --repos test/fixtures/nestjs,test/fixtures/fastapi
 ```
+
+`bench/arena/systems.json` holds the entries used below; `systems.example.json` is the template
+for a new one.
 
 A tool is scored on the `path:line` locations its answer names, in any of three shapes (`file:line`
 inline, JSON objects with a file and a line, or a file heading followed by indented line numbers),
@@ -366,6 +371,87 @@ not an answer.
 because `find_references` returns at most 500 uses and `FastAPI` has 743: per-symbol recall agrees
 (0.990 vs 0.996). Results for other tools are published only from runs with their own maintainers'
 recommended installation; entries that a tool's maintainers correct are welcome.
+
+### CodeGraph and codebase-memory-mcp (2026-10-11)
+
+Versions and installation, each as its README recommends, into `bench/arena/.tools` (git-ignored)
+rather than globally, and without running either tool's agent installer, which rewrites agent
+configuration:
+
+```bash
+npm i --prefix bench/arena/.tools/codegraph @colbymchenry/codegraph@1.6.2      # "Already have Node? Use npm"
+mkdir -p bench/arena/.tools/cbm/x && cd bench/arena/.tools/cbm                  # pre-built binary, checksum from the release
+curl -LO https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.11.0/codebase-memory-mcp-darwin-arm64.tar.gz
+curl -LO https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.11.0/checksums.txt
+shasum -a 256 -c --ignore-missing checksums.txt && tar xzf codebase-memory-mcp-darwin-arm64.tar.gz -C x
+```
+
+How each one is asked "where is X used", from what its server lists (`arena.mjs tools`):
+
+- **CodeGraph 1.6.2** exposes only `codegraph_explore` by default; its README documents
+  `CODEGRAPH_MCP_TOOLS` to list the others, and the entry enables them to call
+  `codegraph_callers` (symbol, `file` to pick the definition, `limit` 500). Telemetry is off
+  (`CODEGRAPH_TELEMETRY=0`) and the background daemon too (`CODEGRAPH_NO_DAEMON=1`, documented):
+  the daemon left by one session watched the fixtures and re-indexed them while the next
+  measurement deleted and rebuilt its index. The answer lists the referencing declarations, each at
+  its first line (a whole file at line 1 for module scope and imports), not the lines of the uses.
+- **codebase-memory-mcp 0.11.0** stores its graph under `CBM_CACHE_DIR` (set to
+  `bench/arena/.tools/cbm/cache`). Its `trace_path` answers with qualified names only, without
+  files or lines, so the entry uses its read-only Cypher tool, `query_graph`, over the incoming
+  `CALLS`, `USAGE`, `CALL_REFERENCE`, `INHERITS` and `IMPLEMENTS` edges of the sampled
+  definition. A `CALLS` edge carries the line of a call; the other edges carry none, and their
+  answer is the referencing declaration's range. This is the most exact answer its graph holds;
+  an agent following its instructions would more often call `trace_path`.
+
+An answer that names declarations rather than lines is read as for graph-indexer 2.x: a
+declaration's lines are those inside it that contain the name as a word, outside comments and
+string literals. For CodeGraph a declaration's extent is taken from the parsed source (syntax,
+the same for any parser); codebase-memory-mcp returns its own ranges. The file-level rows need no
+such reading.
+
+nestjs, TypeScript dispatch oracle, 149 symbols (seed 7):
+
+| system | precision | recall | exact set | file P / R | median answer |
+|---|---|---|---|---|---|
+| graph-indexer (MCP) | **0.993** | **0.886** | **0.913** | **0.991 / 0.879** | 310 tokens |
+| CodeGraph 1.6.2 | 0.743 | 0.755 | 0.510 | 0.719 / 0.699 | **80 tokens** |
+| codebase-memory-mcp 0.11.0 | 0.559 | 0.263 | 0.322 | 0.765 / 0.418 | 96 tokens |
+| grep | 0.140 | 1.000 | 0.255 | 0.209 / 1.000 | |
+
+fastapi, pyright oracle, 150 symbols (seed 7):
+
+| system | precision | recall | exact set | file P / R | median answer |
+|---|---|---|---|---|---|
+| graph-indexer (MCP) | **0.997** | **0.826** | **0.927** | **0.997 / 0.848** | 189 tokens |
+| CodeGraph 1.6.2 | 0.652 | 0.363 | 0.480 | 0.911 / 0.333 | **70 tokens** |
+| codebase-memory-mcp 0.11.0 | 0.929 | 0.571 | 0.493 | 0.964 / 0.645 | 96 tokens |
+| grep | 0.273 | 1.000 | 0.380 | 0.434 / 1.000 | |
+
+(micro averages; per-symbol macro recall is 0.961 / 0.824 / 0.503 on nestjs and 0.987 / 0.798 /
+0.654 on fastapi, in the same order.) Raw output: `bench/results/arena-exactness.txt` after a run.
+
+Cold index (`arena.mjs speed`, three runs each, all three identical to ±0.3 s; Apple Silicon,
+nothing else running). Each tool's index is deleted before its run:
+
+| system | nestjs (1,641 files) | fastapi (1,215 files) | index size nestjs / fastapi |
+|---|---|---|---|
+| graph-indexer | **1.9 s** | **1.2 s** | **13.2 / 7.8 MB** |
+| CodeGraph 1.6.2 | 3.0–3.3 s | 3.1–3.2 s | 47.8 / 25.3 MB |
+| codebase-memory-mcp 0.11.0 (default `full` mode) | 11.8–12.1 s | 12.6 s | 27.8 / 76 MB (cache directory) |
+
+**Where graph-indexer loses.** Its answers are the largest: 310 tokens median on nestjs against 80
+and 96, because it lists every use with its line while the others list fewer, coarser entries:
+for a question whose answer is "the five callers" an agent reads more text. Its MCP `find_references` stops at 500 uses (fastapi's `FastAPI` has 743),
+which is why its micro recall through MCP (0.826) is below its native one (0.998).
+
+**Notes on the others, from these runs.** CodeGraph's `codegraph_callers` returns at most 100
+callers whatever `limit` asks for, and says "100 found" (its CLI returned 133 for nestjs'
+`Module`); calls only, so a class or interface used as a type is not a caller. Its low recall on
+fastapi has not been broken down yet. codebase-memory-mcp keeps at most one `CALLS` edge per
+caller and callee, with the line of the first call (`isUndefined` called on lines 17 and 18 of
+`get-injection-providers.util.ts`: one edge, line 17), so further calls from the same function
+are missed; its precision on fastapi (0.929) is the closest to graph-indexer's.
+The session axis (cost and turns of real agent runs with each tool) is not measured yet.
 
 ## 2. Localization from real commits
 
