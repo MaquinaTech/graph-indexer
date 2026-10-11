@@ -21,6 +21,13 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   for that name next to the calls the index binds to that one definition — on nestjs,
   `NestApplicationContext.get`: 4,238 grep lines in 300 files against 129 calls in 67 files.
   `--no-demo` skips it.
+- **HTTP routes and their handlers** (`graph-indexer routes [path | METHOD /path]`), the edge no
+  compiler sees: FastAPI and Flask decorators (with `APIRouter(prefix=…)` / `Blueprint(url_prefix=…)`
+  prefixes), NestJS controllers, Spring mappings (with the class's `@RequestMapping`), Express /
+  Fastify / Koa / Hono and Gin / Echo / chi / net/http registrations, whose handler argument is
+  bound through the index. Route parameters match in any syntax (`{id}`, `:id`, `<int:id>`).
+  `explore` follows a route in its question — "what happens on POST /owners/42/edit" — to the handler
+  and says the framework calls it.
 - **`graph-indexer report`**: a summary to paste into an issue — versions, index size, the share of
   calls bound and exact per language, warm latencies — with no paths, names or code. A "wrong
   answer" issue template asks for it and for the command that reproduces the problem.

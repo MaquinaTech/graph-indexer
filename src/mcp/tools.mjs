@@ -13,6 +13,7 @@ import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
 import { testCommands } from '../query/testcmd.mjs';
 import { showcaseText } from '../query/showcase.mjs';
+import { collectRoutes, routesInQuery, matchRoutes } from '../query/routes.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -298,7 +299,8 @@ async function dispatchTool(intel, name, args) {
         case 'outline': return toolOutline(intel, args);
         case 'check_changes': return toolCheck(intel, args);
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
-        case 'demo': return showcaseText(intel); // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
+        case 'demo': return showcaseText(intel);
+        case 'routes': return toolRoutes(intel, args); // CLI helper (`routes`); explore finds the handler of a route named in its query // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
 }
@@ -946,6 +948,12 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
         if (m.length) add(m[0], 'named'); else missing.push(t);
     }
     if (query) {
+        // a route in the query (`POST /api/login`): its handler, found through the framework's registration
+        const routes = routesInQuery(query);
+        if (routes.length) {
+            const all = collectRoutes(intel);
+            for (const q of routes) for (const r of matchRoutes(all, q).slice(0, 3)) if (r.handler) add(intel.sym(r.handler.id), `handles ${r.method} ${r.path}`);
+        }
         const a = analyzeQuery(query);
         for (const id of a.identifiers) {
             if (id.length < 3) continue;
@@ -958,8 +966,9 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
         }
         const { results } = intel.search.search(String(query), { limit: 16, path: p || null });
         const wantTests = /\btests?\b|\bspec\b/i.test(query);
+        const wantStyles = /\b(css|scss|less|styles?|stylesheet|selector)\b/i.test(query);
         const found = results.map(r => intel.sym(r.id)).filter(Boolean)
-            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test));
+            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test) && (wantStyles || s.lang !== 'css'));
         // stable re-order: rank keeps search order within each tier
         const tier = (s) => pathRank(s.path) * 2 + (VALUE_KINDS.has(s.kind) ? 1 : 0);
         found.map((s, i) => ({ s, i })).sort((x, y) => tier(x.s) - tier(y.s) || x.i - y.i).forEach(({ s }) => add(s, 'search'));
@@ -968,6 +977,22 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
     // ranked higher only repeats it
     const kept = seeds.filter(({ s }) => !(s.parent_id != null && ids.has(s.parent_id) && seeds.findIndex(x => x.s.id === s.parent_id) < seeds.findIndex(x => x.s.id === s.id)));
     return { seeds: kept, missing };
+}
+
+function toolRoutes(intel, { filter = '' }) {
+    const all = collectRoutes(intel);
+    const f = String(filter ?? '').trim();
+    const q = f ? routesInQuery(f.startsWith('/') || /^[A-Z]+\s+\//.test(f) ? f : '/' + f) : [];
+    const rows = f ? (q.length ? q.flatMap(x => matchRoutes(all, x)) : all.filter(r => r.path.includes(f))) : all;
+    if (!all.length) return 'No HTTP routes recognised (FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi, net/http).';
+    if (!rows.length) return `No route matches "${f}" (${plural(all.length, 'route')} in the repository; \`routes\` lists them all).`;
+    const out = [`${plural(rows.length, 'route')}${f ? ` matching "${f}"` : ''}:`];
+    for (const r of rows.slice(0, 200)) {
+        const h = r.handler ? `${r.handler.qname}  ${r.handler.path}:${r.handler.start_line}` : `inline handler at ${r.file}:${r.line}`;
+        out.push(`  ${r.method.padEnd(7)} ${r.path.padEnd(40)} → ${h}`);
+    }
+    if (rows.length > 200) out.push(`  … ${rows.length - 200} more (pass part of a path to narrow)`);
+    return out.join('\n');
 }
 
 /** Direct callers of a definition outside tests, and the tests that call it. */
@@ -1018,7 +1043,8 @@ async function toolExplore(intel, { query = '', symbols = [], path: p = null, ma
                 const shown = code.slice(0, 6).map(x => `${x.c.qname} ${x.site.path}:${x.site.line}${x.info.conf < 0.9 ? ` [${confWord(x.info.conf)}]` : ''}`);
                 for (const m of modules.slice(0, Math.max(0, 6 - shown.length))) shown.push(`module level ${m.file}:${m.line}`);
                 facts.push(`called by (${total}): ${shown.join(', ')}${total > shown.length ? `, … (${tn('call_graph')} / ${tn('find_references')} for all)` : ''}`);
-            } else if (!s.is_test) facts.push('called by: no bound callers (entry point, framework-invoked, or dynamic dispatch)');
+            } else if (why.startsWith('handles ')) facts.push(`called by: the web framework, for ${why.slice(8)}`);
+            else if (!s.is_test) facts.push('called by: no bound callers (entry point, framework-invoked, or dynamic dispatch)');
             const u = intel.unboundFor(s.id);
             if (u.plausible.length) facts.push(`possibly also called at: ${u.plausible.slice(0, 3).map(r => `${r.path}:${r.line}`).join(', ')}${u.plausible.length > 3 ? ', …' : ''} (receiver type unknown)`);
             for (const t of tests) { testFiles.add(t.c.path); testCases.push(`${t.c.qname} (${t.site.path}:${t.site.line})`); }

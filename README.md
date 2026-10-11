@@ -97,6 +97,7 @@ that one definition (`npx graph-indexer demo` shows it again).
 | Tool | Use it to | Typical reply |
 |---|---|---|
 | `explore` | start a task or bug in code you have not read, in one call | the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined and the tests to run with the command — inside a token budget, naming what it left out |
+| `explore` + routes | ask about an endpoint ("what happens on POST /owners/42/edit") | the handler the framework registers for it — FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi; `npx graph-indexer routes` lists them all |
 | `read_code` | read symbols, line ranges or files — several per call — without searching for what they use | code with line numbers, then where each name it uses is defined (file:line and signature); who uses a symbol and which tests reference it; a long file's outline |
 | `search_text` | grep any text across the repository (code, config, docs) | grep lines with the enclosing definition and, for identifiers, the definition each match refers to; where the definition is when the search missed it |
 | `search_code` | find where a behaviour or identifier lives (natural language or names) | ranked symbols with location, signature, doc line and matching lines |
