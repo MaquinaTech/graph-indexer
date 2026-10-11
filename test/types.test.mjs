@@ -369,3 +369,43 @@ test('rust: macro arguments, workspace crates by name, module paths and 2018 mod
     assert.deepEqual(at('core/src/lib.rs:channel', 'core/tests/it.rs'), [4], 'a crate-qualified call');
     assert.deepEqual(at('core/src/lib.rs:Parser.run', 'core/tests/it.rs'), [5], 'a method on a value typed through the crate');
 });
+
+test('python: import roots, packages bound by dotted imports, names inside qualified generics', async (t) => {
+    const root = makeRepo({
+        'src/pkg/__init__.py': 'from .core import Command as Command\nfrom .utils import open_file as open_file\n',
+        'src/pkg/core.py': [
+            'import typing as t',                                           // 1
+            'class Command:',                                               // 2
+            '    pass',                                                     // 3
+            'def find(name) -> t.Optional[Command]:',                       // 4
+            '    return None',                                              // 5
+            'def make(f: t.Callable[[str], "Command"]) -> None:',           // 6
+            '    pass',                                                     // 7
+            '',
+        ].join('\n'),
+        'src/pkg/utils.py': 'def open_file(name):\n    return name\n',
+        'src/pkg/json/__init__.py': [
+            'import json as _json',                                         // 1
+            'def dumps(obj):',                                              // 2
+            '    return _json.dumps(obj)',                                  // 3
+            '',
+        ].join('\n'),
+        'tests/test_utils.py': [
+            'import pkg.utils',                                             // 1
+            'def test_open():',                                             // 2
+            '    pkg.open_file("x")',                                       // 3
+            '',
+        ].join('\n'),
+    });
+    const intel = new CodeIntel({ root });
+    await intel.open();
+    t.after(() => { intel.close(); rmrf(root); });
+    const at = (target, file) => {
+        const s = intel.findSymbols(target).matches.find(m => m.path === target.split(':')[0]);
+        assert.ok(s, `symbol ${target} not found`);
+        return [...intel.references(s.id).groups.values()].flat().filter(r => r.path === file && r.kind !== 'import').map(r => r.line).sort((a, b) => a - b);
+    };
+    assert.deepEqual(at('src/pkg/core.py:Command', 'src/pkg/core.py'), [4, 6], 'names inside t.Optional[...] and t.Callable[[...], "..."]');
+    assert.deepEqual(at('src/pkg/json/__init__.py:dumps', 'src/pkg/json/__init__.py'), [], 'import json is the standard library');
+    assert.deepEqual(at('src/pkg/utils.py:open_file', 'tests/test_utils.py'), [3], 'import pkg.utils binds pkg');
+});
