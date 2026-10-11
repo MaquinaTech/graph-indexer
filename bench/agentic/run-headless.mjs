@@ -38,7 +38,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { argv, WORK } from './lib.mjs';
 import { giBin } from './prepare.mjs';
 import { usesIndex, SESSION_ARMS } from './arms.mjs';
@@ -68,6 +68,16 @@ const runs = fs.readdirSync(runsDir).filter(r => fs.existsSync(path.join(runsDir
     .filter(r => !registered.has(r) && !/__r0$/.test(r))
     .map(r => JSON.parse(fs.readFileSync(path.join(runsDir, r, 'meta.json'), 'utf8')));
 fs.mkdirSync(dir, { recursive: true });
+
+// agents run the tests with the Python that grades them: GI_PYTHON's directory (a virtualenv's
+// bin/, with pytest and the repositories' test dependencies) comes first on the sessions' PATH
+const pyBin = process.env.GI_PYTHON ? path.dirname(process.env.GI_PYTHON) : null;
+const childEnv = pyBin ? { ...process.env, PATH: `${pyBin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(pyBin) } : process.env;
+if (runs.some(m => /^fresh-/.test(m.taskId)) && !dry) {
+    if (!pyBin) throw new Error('mined Python tasks need GI_PYTHON (the virtualenv python that grades them), so agents and grading share one environment');
+    const r = spawnSync('python3', ['-c', 'import pytest'], { env: childEnv, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`python3 on the sessions' PATH cannot import pytest: ${r.stderr.trim().split('\n').pop()}`);
+}
 
 /** The command line for one run, and the config files it needs (written next to the run). */
 function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } = {}) {
@@ -109,7 +119,7 @@ function launch(meta, args, files, file) {
     for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(meta.runDir, name), JSON.stringify(content, null, 2) + '\n');
     const out = fs.createWriteStream(file);
     return new Promise((resolve) => {
-        const child = spawn(claude, args, { cwd: meta.runDir, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(claude, args, { cwd: meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv });
         child.stdout.pipe(out);
         let err = '';
         child.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
@@ -140,8 +150,11 @@ async function preflightArms() {
     for (const [arm, meta] of firstOf) {
         const session = SESSION_ARMS[arm];
         // the sub-agents a session can start are listed in its Agent tool, which the model reads
+        // a mined Python task: the session's own shell must find the grading Python first
+        const python = /^fresh-/.test(meta.taskId) && pyBin;
         const { args, files } = commandFor(meta, { bin: usesIndex(arm) ? giBin(label) : null, budget: 0.5,
-            prompt: 'Without using any tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.' });
+            prompt: python ? 'Run this Bash command once: python3 -c "import pytest, sys; print(sys.executable)" — then, without using any other tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.'
+                : 'Without using any tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.' });
         const file = path.join(dir, `preflight-${arm.replace(/[^\w.+-]/g, '_')}-${Date.now().toString(36)}.jsonl`);
         const code = await launch(meta, args, files, file);
         const events = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
@@ -157,6 +170,11 @@ async function preflightArms() {
             ['web tools off', !tools.some(t => t === 'WebSearch' || t === 'WebFetch'), ''],
         ];
         if (session) checks.push(['sub-agents (Agent tool)', tools.includes('Agent') || tools.includes('Task'), '']);
+        if (python) {
+            const out = events.filter(e => e.type === 'user').flatMap(e => e.message?.content ?? []).filter(c => c.type === 'tool_result')
+                .map(c => (Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? ''))).join('\n');
+            checks.push(['tests run with the grading Python', out.includes(pyBin) || out.includes(path.dirname(pyBin)), out.trim().split('\n').pop()?.slice(0, 160) ?? 'no command output']);
+        }
         if (usesIndex(arm)) {
             const gi = servers.find(s => s.name === 'graph-indexer');
             checks.push(['graph-indexer server', gi?.status === 'connected', gi ? gi.status : 'absent'],

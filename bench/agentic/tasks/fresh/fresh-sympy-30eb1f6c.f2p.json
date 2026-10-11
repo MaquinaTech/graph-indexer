@@ -1,0 +1,4 @@
+[
+  "sympy/simplify/tests/test_trigsimp.py::::test_hyperbolic_simp",
+  "sympy/simplify/tests/test_trigsimp.py::::test_trigsimp_add_split"
+]

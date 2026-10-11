@@ -20,7 +20,12 @@ export const REPOS = {
         runner: 'unittest',
         srcPrefix: 'sqlglot/',
         testRe: '^tests/',
-        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).',
+        // SQL fixtures and the test modules that read them
+        fixtureTests: {
+            '^tests/fixtures/optimizer/': 'tests/test_optimizer.py',
+            '^tests/fixtures/(identity|pretty|partial)\\.sql$': 'tests/test_transpile.py',
+        },
+        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.',
     },
     caddy: {
         source: path.join(WORK, 'go', 'caddy'),
@@ -42,6 +47,16 @@ export const REPOS = {
         runner: 'pytest',
         srcPrefix: 'networkx/',
         testRe: '/tests/',
-        testHint: 'from the repository root, `pytest networkx/algorithms/tests/test_cycles.py` runs one test file (pytest is installed; numpy/scipy are not, so tests that need them are skipped).',
+        testHint: 'from the repository root, `pytest networkx/algorithms/tests/test_cycles.py` runs one test file (pytest and numpy are installed; scipy is not, so tests that need it are skipped).',
+    },
+    // a large pure-Python library (mpmath, plus hypothesis for its test suite, are installed in the test environment)
+    sympy: {
+        source: path.join(WORK, 'repos', 'sympy'),
+        fetch: `git clone --filter=blob:none https://github.com/sympy/sympy.git ${path.join(WORK, 'repos', 'sympy')}`,
+        language: 'python',
+        runner: 'pytest',
+        srcPrefix: 'sympy/',
+        testRe: '/tests/',
+        testHint: 'from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).',
     },
 };

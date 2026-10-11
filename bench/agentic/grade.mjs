@@ -72,7 +72,7 @@ function gradeQa(task, meta) {
     return { solved: s.f1 === 1, score: s.f1, ...s, unparsed: bad.length };
 }
 
-function gradeEdit(task, meta) {
+export function gradeEdit(task, meta) {
     const g = task.grade ?? {};
     const cwd = meta.checkout;
     const out = { checks: [] };

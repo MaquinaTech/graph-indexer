@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_dialect.py::TestDialect::test_count_if",
+  "tests/dialects/test_dialect.py::TestDialect::test_filter"
+]

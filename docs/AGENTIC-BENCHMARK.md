@@ -69,6 +69,37 @@ agent gets an issue-style statement, never the commit message or the diff. It wo
 checkout made of the base snapshot alone — one commit, no remote, none of the later history — so
 `git log` cannot reveal the fix, and it is told to work offline.
 
+How a B3 task is made, from the fifth round on:
+
+- **Mined.** A commit after the model's training cutoff (June 2026 for Sonnet 5.5) that changes
+  source files and tests: the hidden test patch holds every file it changes under the test tree,
+  SQL fixtures included, and the test modules that read those fixtures run with it. Each state
+  (base with the hidden tests, then with the real fix) runs twice, and a test whose outcome
+  differs between the two runs is left out as flaky. FAIL_TO_PASS: fails at base, passes with the
+  fix; PASS_TO_PASS: passes in both.
+- **Validated through the grader** (`validate-fresh.mjs`), in the isolated checkout an agent gets:
+  at base every FAIL_TO_PASS test fails and PASS_TO_PASS passes; with the real fix the task is
+  solved, three times out of three.
+- **Selected by hand.** Out: refactors and API redesigns with no behaviour a user could report,
+  tests that pin details of one implementation (the exact partitions of a randomised community
+  detection), and more than two tasks of one feature family.
+- **Stated** as a user's issue (`statements.mjs`): written by a model from the tests and the fix,
+  then reviewed. Every assertion of the FAIL_TO_PASS tests follows from the statement — exact
+  output text where a test compares text, an `Interface:` paragraph where a test reads a field of
+  the result the fix introduces — and it names none of the files or functions the fix changes.
+  The reproduction is run at base and the expected behaviour with the fix.
+- **Same Python for the agent and the grader.** Sessions get the grading virtualenv first on
+  their `PATH` (`GI_PYTHON`), with each repository's test dependencies (pytest, hypothesis, mpmath,
+  duckdb, pandas, numpy); the preflight checks it from inside a session.
+
+The fifth round asks for harder fixes: 2–6 source files and at least 40 changed source lines
+(`--min-src 2 --max-src 6 --min-lines 40`), from commits of July–October 2026. Mining gave 40 valid
+sqlglot tasks, 15 SymPy and none in networkx; 19 were selected, and 4 of them were withdrawn at
+statement review because a FAIL_TO_PASS test calls a private name the fix introduces or changes
+(`executor._subquery_plans`, `_array_add`, `MathematicaParser._literal`): stating them would point
+at the code to change. The round holds 15: 11 sqlglot (5 in the optimizer, 6 in dialect parsing
+and generation) and 4 SymPy (logic, simplification, integration, pickling).
+
 ## Validity rules
 
 - **Hidden answers stay hidden.** Grading applies the hidden tests to the checkout, so a run is
@@ -274,6 +305,11 @@ as `init --hooks` installs it: MCP server, CLAUDE.md block and the Claude Code h
   with `Read` and searching with grep in the shell: there was nothing left for an index to save.
   These issues no longer separate the arms; the B3 target (≤ 0.70 of the cost) needs harder ones.
 - One pilot, one run each: no interval on the solved rate, and the cost interval is wide.
+- Found afterwards: these sessions ran Python from the system, which had no pytest, while the
+  grader used its own virtualenv, so the agents could run sqlglot's tests (`unittest`) but not
+  networkx's — alike in both arms. And the grader read `unittest`'s verbose text, which misses a
+  test whose subtests fail; that can only count a solved task as unsolved, and all 22 were
+  solved. Both are fixed (see [Tasks](#tasks)); the 11 tasks pass the new validation unchanged.
 
 Two faults in the harness, found while setting it up and fixed before these runs: Claude Code
 2.1.296 listed none of graph-indexer's tools (MCP 2026-07-28 results lacked `resultType`), and

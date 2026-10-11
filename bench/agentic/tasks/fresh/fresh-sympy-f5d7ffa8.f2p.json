@@ -1,0 +1,8 @@
+[
+  "sympy/utilities/tests/test_pickling.py::::test_core_basic",
+  "sympy/utilities/tests/test_pickling.py::::test_core_multidimensional",
+  "sympy/utilities/tests/test_pickling.py::::test_ntheory",
+  "sympy/utilities/tests/test_pickling.py::::test_pickling_polys_errors",
+  "sympy/utilities/tests/test_pickling.py::::test_printing",
+  "sympy/utilities/tests/test_pickling.py::::test_printing3"
+]

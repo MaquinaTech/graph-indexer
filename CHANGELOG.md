@@ -101,6 +101,13 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   another module's names only through an import, so such reads no longer bind across modules.
   Reference accuracy on nestjs against the TypeScript compiler is unchanged (dispatch oracle,
   399 symbols: precision 0.998, recall 0.937).
+- **Agent benchmark, mined Python issues (B3).** Sessions ran tests with the system Python
+  (no pytest) while grading used a virtualenv: they now get the grading virtualenv first on their
+  `PATH`, and the preflight checks it inside a session. `unittest` outcomes are recorded by a result
+  object instead of read from verbose text, which missed tests whose subtests fail. Mining puts SQL
+  fixtures in the hidden tests (and runs the modules that read them), runs each state twice to drop
+  flaky tests, and `validate-fresh.mjs` checks every task through the grader (base fails, the real
+  fix solves it three times). The fourth round's 11 tasks pass it unchanged.
 - **"Defined elsewhere" card**: an unbound call no longer matches a constant or variable by name
   (`Math.max(…)` listed a `const max` from another file).
 

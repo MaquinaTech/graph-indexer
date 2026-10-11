@@ -120,7 +120,7 @@ function checkoutFor(task, arm, id, label) {
  * source clone's later history (a worktree shares the clone's objects, so `git log --all` or
  * `git show <fix>` would reveal the real fix of a mined task).
  */
-function isolatedCheckout(src, dir, base) {
+export function isolatedCheckout(src, dir, base) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     const index = path.join(WORK, `index-${process.pid}-${Date.now()}`);
