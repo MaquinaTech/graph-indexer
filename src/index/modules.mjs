@@ -78,6 +78,32 @@ export class ModuleResolver {
             } catch { /* unreadable */ }
         }
         this.goModules.sort((a, b) => b.module.length - a.module.length);
+        // Rust crates of the repository (a workspace's members, or one package): the name other
+        // crates, tests and examples use for each library (`serde_json::Value`, `tokio::sync`)
+        this.rustCrates = new Map();
+        for (const rel of this.#findManifests('Cargo.toml')) {
+            let text;
+            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { continue; }
+            const dir = path.posix.dirname(rel), at = (p) => (dir === '.' ? p : `${dir}/${p}`);
+            const table = (name) => { const m = new RegExp(`^\\[${name}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, 'm').exec(text); return m?.[1] ?? ''; };
+            const key = (body, k) => new RegExp(`^\\s*${k}\\s*=\\s*"([^"]+)"`, 'm').exec(body)?.[1];
+            const pkg = key(table('package'), 'name'), lib = table('lib');
+            const libFile = path.posix.normalize(at(key(lib, 'path') ?? 'src/lib.rs'));
+            if (!pkg || !this.files.has(libFile)) continue;
+            this.rustCrates.set((key(lib, 'name') ?? pkg).replace(/-/g, '_'), libFile);
+        }
+    }
+
+    /**
+     * Resolve one import (`imp.source`, `imp.imported`). In Rust, `use a::b::c` resolves to the
+     * module `c` when c is a module (a file `c.rs` or `c/mod.rs`), not to the module that declares it.
+     */
+    resolveImport(lang, fromFile, imp) {
+        if (lang === 'rust' && imp.imported && !['self', '*', 'super', 'crate'].includes(imp.imported) && /^[a-z_][a-z0-9_]*$/.test(imp.imported)) {
+            const sub = this.resolve(lang, fromFile, imp.source ? `${imp.source}::${imp.imported}` : imp.imported);
+            if (sub?.file && new RegExp(`(^|/)${imp.imported}(\\.rs|/mod\\.rs)$`).test(sub.file)) return sub;
+        }
+        return this.resolve(lang, fromFile, imp.source);
     }
 
     /** compilerOptions of a tsconfig file, following relative `extends` (a child's paths replace its parent's). */
@@ -304,12 +330,20 @@ export class ModuleResolver {
         if (segs[0] === 'crate') { baseDir = crateRoot; segs.shift(); }
         else if (segs[0] === 'self') { baseDir = this.#rustModDir(fromFile); segs.shift(); }
         else if (segs[0] === 'super') { baseDir = path.posix.dirname(this.#rustModDir(fromFile)); segs.shift(); while (segs[0] === 'super') { baseDir = path.posix.dirname(baseDir); segs.shift(); } }
+        else if (this.rustCrates?.has(segs[0])) {
+            // another crate of the repository, by name; its root module is its lib.rs
+            const lib = this.rustCrates.get(segs.shift());
+            if (!segs.length) return { file: lib };
+            baseDir = path.posix.dirname(lib);
+        }
         else return null; // external crate
         for (let n = segs.length; n > 0; n--) {
             const p = path.posix.join(baseDir, ...segs.slice(0, n));
             if (this.files.has(p + '.rs')) return { file: p + '.rs' };
             if (this.files.has(p + '/mod.rs')) return { file: p + '/mod.rs' };
         }
+        // the module itself: `dir/mod.rs`, or `dir.rs` next to its directory (2018 layout)
+        if (this.files.has(baseDir + '.rs') && !['lib.rs', 'main.rs', 'mod.rs'].some(f => this.files.has(path.posix.join(baseDir, f)))) return { file: baseDir + '.rs' };
         const lib = ['lib.rs', 'main.rs', 'mod.rs'].map(f => path.posix.join(baseDir, f)).find(f => this.files.has(f));
         return lib ? { file: lib } : null;
     }

@@ -326,6 +326,8 @@ function typeNarrowings(root, source) {
  */
 export async function extractFile(spec, source, relPath) {
     const { query, parser } = await prepareLanguage(spec);
+    // a language may rewrite its source first, keeping every position (Rust macro arguments)
+    if (spec.rewriteSource) source = spec.rewriteSource(source, (s) => parser.parse(s));
     const tree = parser.parse(source);
     try {
         return extractFromTree(spec, query, tree, source, relPath);
@@ -406,6 +408,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const prev = seenRef.get(nameNode.id);
             if (prev !== undefined) {
                 if ((REF_PRIORITY[kind] ?? 0) > (REF_PRIORITY[rawRefs[prev].kind] ?? 0)) rawRefs[prev] = { node: main, nameNode, kind, recvNode: recvNode ?? rawRefs[prev].recvNode };
+                // the same reference seen with its qualifier (`de::Deserializer` after `Deserializer`)
+                else if (kind === rawRefs[prev].kind && recvNode && !rawRefs[prev].recvNode) rawRefs[prev] = { ...rawRefs[prev], node: main, recvNode };
                 continue;
             }
             seenRef.set(nameNode.id, rawRefs.length);

@@ -247,8 +247,8 @@ differs, and is stated rather than implied:
 
 | Level | Languages | What it means |
 |---|---|---|
-| **Verified** | TypeScript/TSX, Go, Java, Python | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.955–0.994 / 0.861–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.868–0.998 / 0.888–0.998 against pyright (fastapi, flask, requests, httpx, rich, click) |
-| **Resolved** | JavaScript, C#, Rust | scopes, imports and receiver types inferred from declarations, annotations and constructors; no compiler oracle yet |
+| **Verified** | TypeScript/TSX, Go, Java, Python, Rust | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.955–0.994 / 0.861–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.868–0.998 / 0.888–0.998 against pyright (fastapi, flask, requests, httpx, rich, click), Rust 0.930–0.955 / 0.582–0.841 against rust-analyzer (serde_json, ripgrep, tokio) |
+| **Resolved** | JavaScript, C# | scopes, imports and receiver types inferred from declarations, annotations and constructors; no compiler oracle yet |
 | **Scoped** | Kotlin, Scala, C, C++, Ruby, PHP | scopes, imports/includes and packages; less type inference, so more calls stay unbound or by name |
 | **Symbols** | Bash, CSS/SCSS/Less | definitions, outlines and search; references by name |
 

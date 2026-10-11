@@ -44,6 +44,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   tokens median against 80 and 96). Answers that name declarations instead of lines are read
   as an agent reads them (the declaration's lines that contain the name as code).
 
+- **Rust checked against rust-analyzer** (`bench/eval-graph-rust.mjs`) on serde_json, ripgrep and
+  tokio, and fixed where it disagreed: calls inside macro arguments and items inside item macros
+  (`tri!(…)`, `assert_eq!(…)`, `cfg_rt! { … }`), the crates of a workspace used by name, modules in
+  the 2018 layout, `use a::b::module`, and paths walked module by module (`crate::T::new()`,
+  `super::f()`, `Enum::Variant`, `de::Trait`). On the same samples precision / recall went from
+  0.895 / 0.523 to 0.955 / 0.841 (serde_json), 0.914 / 0.555 to 0.941 / 0.768 (ripgrep) and
+  0.887 / 0.389 to 0.930 / 0.582 (tokio). Rust moves to the verified level. Every other oracle
+  (TypeScript, six Python, three Go, three Java repositories) gives the same scores as before.
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)

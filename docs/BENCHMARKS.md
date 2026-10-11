@@ -288,6 +288,70 @@ does not count uses through an import alias (`from m import A as B; B()`), graph
 assignment `self.x = …` that runs a base class's property setter is not counted as a use of it;
 and attribute chains through untyped values (`proxy.url.raw_host`) stay unbound.
 
+### The same measurement for Rust
+
+```bash
+rustup component add rust-analyzer
+(cd test/fixtures/rust && cargo fetch)               # serde_json; resolves dependencies as rust-analyzer does
+node bench/eval-graph-rust.mjs --n 150 --sample bench/rust-samples/rust.txt
+node bench/eval-graph-rust.mjs --fixture ripgrep --fixture-dir DIR --n 150 --sample bench/rust-samples/ripgrep.txt
+```
+
+**Method.** The oracle is rust-analyzer (1.96.0), the Rust language server: its Find All
+References comes from its own name resolution, trait solving and macro expansion over the cargo
+workspace. As for Python, it binds `x.m()` to the method of x's type and a call through a trait
+bound to the trait's method, so its answer is the **exact** oracle. `use` declarations and
+declaration lines are excluded on both sides, and so are two kinds of reference it reports that do
+not name the symbol: `Self` standing for a type, and the `fn` of each implementation of a trait
+method. Code the build leaves out is excluded on both sides, since the oracle has no answer there:
+`#[cfg]` code rust-analyzer reports as inactive with the default features, and whole files outside
+the module tree (serde_json's `lexical/` and `raw.rs` sit behind `#[cfg(feature = …)] mod`). The
+sample is frozen (`--sample`, one `path:line:qname` per line), so that two builds are scored on the
+same symbols even when one of them finds more definitions.
+
+Three repositories: serde_json 1.0.150 (the fixture, `a1ae73a`), ripgrep 14.1.1 (`4649aa9`, a
+workspace of nine crates that use each other by name) and tokio 1.41.1 (`bb7ca75`, seven crates,
+items declared inside `cfg_*! { … }` macros). Seed 7, 150 symbols each.
+
+| repository | build | precision | recall | exact set | grep P | name-only P |
+|---|---|---|---|---|---|---|
+| serde_json (150 symbols) | before | 0.895 | 0.523 | 0.667 | 0.129 | 0.296 |
+| | after | **0.955** | **0.841** | **0.807** | | |
+| ripgrep (150) | before | 0.914 | 0.555 | 0.773 | 0.024 | 0.049 |
+| | after | **0.941** | **0.768** | **0.880** | | |
+| tokio (150) | before | 0.887 | 0.389 | 0.520 | 0.015 | 0.041 |
+| | after | **0.930** | **0.582** | **0.600** | | |
+
+(micro averages, graph-indexer's `exact` answer.) What the first run found, fixed in this order:
+
+- **Macro arguments were opaque.** tree-sitter leaves a macro's arguments as a token tree, so
+  `tri!(self.parse_integer(false))`, `assert_eq!(x.len(), 2)` and `format!("{}", v.name())` held
+  no calls, and the items inside `cfg_rt! { pub struct Runtime … }` were not definitions. Before
+  extraction, invocations whose arguments are plain Rust are now rewritten in place to text of the
+  same length (`m!(a)` → `m (a)`, `m![a]` → an array, an item-position `m! { items }` → the items),
+  each kept only if it parses cleanly on its own; macro definitions are left alone.
+- **The crates of a workspace were external to each other.** `use tokio::sync::mpsc` in tokio's own
+  tests, or `grep::cli::CommandReaderBuilder` in ripgrep, did not resolve, and those calls were
+  dropped as library calls (110 of the 114 uses of tokio's `mpsc::channel`). Crate names now come
+  from each `Cargo.toml` (`[package]`/`[lib]` name, `-` read as `_`).
+- **Modules in the 2018 layout** (`util/rand.rs` next to `util/rand/`) were not found from their
+  children (`use super::RngSeed` in `util/rand/rt.rs`), and **`use a::b::chan`** resolved to the
+  module that declares `chan` rather than to `chan.rs`: `chan::channel()` was then bound, at 0.95,
+  to the `channel` that `a::b` re-exports from elsewhere.
+- **Paths were read by their last name only.** `crate::Parser::new()`, `super::f()`,
+  `other_crate::m::T` and `alias::sub::f()` are now walked module by module; the type in
+  `Type::new()` and `Enum::Variant` counts as a use of the type; `de::Deserializer` (serde's
+  trait) is no longer the repository's `Deserializer`; a unit struct used as a value (`&Mmap`)
+  is a use.
+
+**What is still missed** (from the debug output): receivers whose type only inference knows —
+builder chains (`builder.line_terminator(…).dot_matches_new_line(…)`), values returned by a chain
+of calls, calls on generic parameters (`T::when(item)`) and through trait bounds — and macros whose
+arguments are not plain Rust (`select!`, `matches!` with patterns). As elsewhere, these lower recall
+and do not produce wrong answers. The extras that remain are mostly calls through a primitive or a
+generic parameter (`f64::to_bits(self)`, `R::byte_offset(self)`) bound by name to a repository
+method with that name.
+
 ### A product monorepo: Twenty
 
 ```bash

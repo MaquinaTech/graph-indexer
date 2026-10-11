@@ -308,3 +308,64 @@ test('multi-language receiver typing', async (t) => {
     assert.deepEqual(at('jv/Item.java:Item.total', 'jv/Cart.java'), [8, 9], 'java');
     assert.deepEqual(at('jv/Cart.java:Cart.run', 'jv/Cart.java'), [11], 'java var');
 });
+
+test('rust: macro arguments, workspace crates by name, module paths and 2018 modules', async (t) => {
+    const root = makeRepo({
+        'Cargo.toml': '[workspace]\nmembers = ["core"]\n',
+        'core/Cargo.toml': '[package]\nname = "my-core"\nversion = "0.1.0"\n',
+        'core/src/lib.rs': [
+            'pub mod util;',                                          // 1
+            'pub mod chan;',                                          // 2
+            'pub struct Parser { n: u32 }',                           // 3
+            'impl Parser {',                                          // 4
+            '    pub fn new() -> Parser { Parser { n: 0 } }',         // 5
+            '    pub fn step(&self) -> Result<u32, ()> { Ok(self.n) }', // 6
+            '    pub fn run(&self) -> Result<u32, ()> {',             // 7
+            '        let v = tri!(self.step());',                     // 8
+            '        assert_eq!(self.step(), Ok(v));',                // 9
+            '        Ok(v)',                                          // 10
+            '    }',                                                  // 11
+            '}',                                                      // 12
+            'pub enum Mode { Fast, Slow }',                           // 13
+            'pub fn pick() -> Mode { Mode::Fast }',                   // 14
+            'pub fn channel() -> u32 { chan::channel() }',            // 15
+            'macro_rules! tri { ($e:expr) => { $e? } }',              // 16
+            'use tri;',                                               // 17
+            '',
+        ].join('\n'),
+        'core/src/chan.rs': 'pub fn channel() -> u32 { 1 }\n',
+        'core/src/util.rs': 'pub mod seed;\npub struct Seed(u64);\n',
+        'core/src/util/seed.rs': [
+            'use super::Seed;',                                       // 1
+            'pub fn make(s: Seed) -> Seed { s }',                     // 2
+            'pub fn parser() -> crate::Parser { crate::Parser::new() }', // 3
+            '',
+        ].join('\n'),
+        'core/tests/it.rs': [
+            'use my_core::Parser;',                                   // 1
+            'fn main() {',                                            // 2
+            '    let p = Parser::new();',                             // 3
+            '    let _ = my_core::channel();',                        // 4
+            '    let _ = p.run();',                                   // 5
+            '}',                                                      // 6
+            '',
+        ].join('\n'),
+    });
+    const intel = new CodeIntel({ root });
+    await intel.open();
+    t.after(() => { intel.close(); rmrf(root); });
+    const at = (target, file) => {
+        const s = intel.findSymbols(target).matches.find(m => m.path === target.split(':')[0]);
+        assert.ok(s, `symbol ${target} not found`);
+        return [...intel.references(s.id).groups.values()].flat().filter(r => r.path === file && r.kind !== 'import').map(r => r.line).sort((a, b) => a - b);
+    };
+    assert.deepEqual(at('core/src/lib.rs:Parser.step', 'core/src/lib.rs'), [8, 9], 'calls inside macro arguments');
+    assert.deepEqual(at('core/src/lib.rs:Mode', 'core/src/lib.rs'), [14, 14], 'the return type and the type in Enum::Variant');
+    assert.deepEqual(at('core/src/chan.rs:channel', 'core/src/lib.rs'), [15], 'a module-qualified call');
+    assert.deepEqual(at('core/src/lib.rs:channel', 'core/src/lib.rs'), [], 'not the same-named function of another module');
+    assert.deepEqual(at('core/src/util.rs:Seed', 'core/src/util/seed.rs'), [2, 2], 'use super:: from a 2018-layout module');
+    assert.deepEqual(at('core/src/lib.rs:Parser.new', 'core/src/util/seed.rs'), [3], 'crate:: paths');
+    assert.deepEqual(at('core/src/lib.rs:Parser.new', 'core/tests/it.rs'), [3], 'the crate by its name from its tests');
+    assert.deepEqual(at('core/src/lib.rs:channel', 'core/tests/it.rs'), [4], 'a crate-qualified call');
+    assert.deepEqual(at('core/src/lib.rs:Parser.run', 'core/tests/it.rs'), [5], 'a method on a value typed through the crate');
+});

@@ -81,6 +81,7 @@ export class Indexer {
         for (const r of s.all('SELECT file_id, owner_qname, name, type FROM fields')) (fields.get(r.file_id) ?? fields.set(r.file_id, []).get(r.file_id)).push(r);
         for (const [fid, rows] of fields) this.table.setFieldTypes(fid, rows);
         this.modules = new ModuleResolver(this.root, files.map(f => f.path));
+        this.resolver.modules = this.modules;
         this.loaded = true;
     }
 
@@ -339,7 +340,7 @@ export class Indexer {
         // imports (module resolution needs only the file list)
         const impRows = [];
         for (const imp of imports) {
-            const target = this.modules.resolve(spec.id, rel, imp.source);
+            const target = this.modules.resolveImport(spec.id, rel, imp);
             let targetFileId = null;
             if (target?.file) targetFileId = s.get('SELECT id FROM files WHERE path = ?', target.file)?.id ?? null;
             const row = { source: imp.source ?? null, imported: imp.imported ?? null, local: imp.local ?? null, reexport: imp.reexport ?? null, wildcard: imp.wildcard ? 1 : 0, line: imp.line ?? null, target_file_id: targetFileId, target_dir: target?.dir ?? null };

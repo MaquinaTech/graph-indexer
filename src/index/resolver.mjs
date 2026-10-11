@@ -217,10 +217,11 @@ export class SymbolTable {
 }
 
 export class Resolver {
-    constructor(table, specsById, { sigOf = null } = {}) {
+    constructor(table, specsById, { sigOf = null, modules = null } = {}) {
         this.t = table;
         this.specs = specsById; // lang id -> spec (implicitThis etc.)
         this.sigOf = sigOf;     // symbol id -> signature text (read on demand: callback parameter types)
+        this.modules = modules; // module resolver (Rust paths: `crate::a::B`, `super::f`, `other_crate::x`)
         this.memo = new Map();
     }
 
@@ -871,6 +872,11 @@ export class Resolver {
                 }
             }
         }
+        // a Rust path: `crate::a::f`, `super::B::new`, `other_crate::m::T`, `alias::sub::f`
+        if (file.lang === 'rust' && this.modules) {
+            const r = this.#rustPath(name, kind, recv, fileId);
+            if (r) return r;
+        }
         // inferred receiver type (locals, params, fields, factories; chains across files)
         if (recvType) {
             const type = this.resolveRecvType(recvType, fileId, srcId);
@@ -953,6 +959,50 @@ export class Resolver {
         // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
         if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
         return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
+    }
+
+    /**
+     * A Rust path receiver, walked module by module from where it starts — `crate`, `self`,
+     * `super`, a crate of the repository, or an imported module — to the module (and at most one
+     * type in it) that declares `name`. Null when the path does not start at a module the index
+     * knows; then the other rules apply.
+     */
+    #rustPath(name, kind, recv, fileId) {
+        const segs = recv.split('.');
+        const from = this.t.file(fileId)?.path;
+        const isModule = (p, seg) => p && (seg === 'crate' || seg === 'self' || seg === 'super' || this.modules.rustCrates?.get(seg) === p || new RegExp(`(^|/)${seg}(\\.rs|/mod\\.rs)$`).test(p));
+        let cur = null, rest = segs;
+        if (segs[0] === 'crate' || segs[0] === 'self' || segs[0] === 'super' || this.modules.rustCrates?.has(segs[0])) {
+            let k = 1;
+            while (segs[k] === 'super') k++;
+            const t = this.modules.resolve('rust', from, segs.slice(0, k).join('::'));
+            if (!t?.file || !isModule(t.file, segs[k - 1])) return null;
+            cur = t.file; rest = segs.slice(k);
+        } else {
+            const imp = this.#importFor(fileId, segs[0]);
+            const mod = imp?.imported === 'self' ? imp.source?.split('::').pop() : imp?.imported;
+            let target = imp && (imp.targetPath ?? this.t.file(imp.targetFileId)?.path);
+            if (!imp) {
+                // a child module of this one (`mod chan;` then `chan::channel()`)
+                target = this.modules.resolve('rust', from, `self::${segs[0]}`)?.file;
+                if (target === from) target = null;
+            }
+            else if (!isModule(target, mod)) return null;
+            if (!target || !isModule(target, imp ? mod : segs[0])) return null;
+            cur = target; rest = segs.slice(1);
+        }
+        // submodules, while a segment names one
+        while (rest.length) {
+            const t = this.modules.resolve('rust', cur, `self::${rest[0]}`);
+            if (!t?.file || t.file === cur || !isModule(t.file, rest[0])) break;
+            cur = t.file; rest = rest.slice(1);
+        }
+        const fid = this.t.fileByPath.get(cur)?.id;
+        if (fid == null || rest.length > 1) return null;
+        let ids = [];
+        if (!rest.length) ids = this.exportedFrom(fid, name);
+        else for (const oid of this.exportedFrom(fid, rest[0])) ids.push(...this.#membersVia(this.t.sym(oid), name));
+        return this.#pick(ids, kind, 0.95, fileId);
     }
 
     /**
