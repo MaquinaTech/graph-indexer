@@ -15,7 +15,7 @@
  * what the oracle answers) and its default answer, which adds calls through a base type that may
  * dispatch to the method — a superset the oracle counts as false positives.
  *
- *   node bench/eval-graph-python.mjs [--fixture fastapi] [--scope fastapi/] [--n 150] [--seed 7] [--pyright pyright-langserver] [--debug]
+ *   node bench/eval-graph-python.mjs [--fixture fastapi] [--scope fastapi/] [--n 150] [--seed 7] [--pyright pyright-langserver] [--debug] [--systems bench/arena/systems.json]
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,6 +23,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
+import { loadSystems, answersOf } from './arena/mcp-system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -157,7 +158,11 @@ while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand
 // pyright analyses lazily: one warm-up query lets it build the program before timing starts
 if (sample.length) await oracleRefs(sample[0]);
 
-const systems = { 'gi (exact)': (s) => oursRefs(s, { family: false }), 'gi (>=likely)': (s) => oursRefs(s, { family: false, minConf: 0.4 }), 'graph-indexer': oursRefs, 'name-only': nameOnlyRefs, grep: grepRefs };
+// other tools through their MCP servers (bench/arena/systems.json), import lines left out
+const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(pyFiles), fileRe: /\.py$/ }) : {};
+for (const [name, a] of Object.entries(ext)) console.log(`${name}: median answer ${a.medianTokens} tokens`);
+const extSystems = Object.fromEntries(Object.entries(ext).map(([name, a]) => [name, (s) => new Set([...(a.per.get(s.id) ?? [])].filter(x => { const i = x.lastIndexOf(':'); return !inImport(x.slice(0, i), Number(x.slice(i + 1))); }))]));
+const systems = { ...extSystems, 'gi (exact)': (s) => oursRefs(s, { family: false }), 'gi (>=likely)': (s) => oursRefs(s, { family: false, minConf: 0.4 }), 'graph-indexer': oursRefs, 'name-only': nameOnlyRefs, grep: grepRefs };
 const filesOf = (set) => new Set([...set].map(x => x.slice(0, x.lastIndexOf(':'))));
 const ORACLES = ['exact', 'exact/files'];
 const aggs = Object.fromEntries(ORACLES.map(o => [o, Object.fromEntries(Object.keys(systems).map(k => [k, { tp: 0, fp: 0, fn: 0, pSum: 0, rSum: 0, n: 0, perfect: 0 }]))]));

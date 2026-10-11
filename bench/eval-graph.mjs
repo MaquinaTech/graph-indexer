@@ -25,7 +25,9 @@
  * A monorepo whose packages carry their own path aliases sets its program with GI_TSCONFIG
  * (bench/agentic/tsconfig.mjs).
  *
- *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7] [--v2 ~/.gi-agentic/v2]
+ * With --systems <file>, other tools are scored too, through their MCP servers (bench/arena/mcp-system.mjs).
+ *
+ *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7] [--v2 ~/.gi-agentic/v2] [--systems bench/arena/systems.json]
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,6 +38,7 @@ import { CodeIntel } from '../src/query/intel.mjs';
 import { tsSetup } from './agentic/tsconfig.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { v2Comparison, answerSizes } from './v2-client.mjs';
+import { loadSystems, answersOf } from './arena/mcp-system.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -214,7 +217,12 @@ const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.ho
 const fileLines = (f) => { let l = grepCache.get(f); if (!l) { l = fs.readFileSync(path.join(root, f), 'utf8').split('\n'); grepCache.set(f, l); } return l; };
 const v2 = v2Root ? await v2Comparison({ v2Root, root, sample, intel, fileRe: TS_FILE, linesOf: fileLines, reindex: args.includes('--v2-reindex'), callTool }) : null;
 
-const systems = { 'graph-indexer': oursRefs, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs,
+// other tools through their MCP servers (bench/arena/systems.json): import/export lines left out, as for grep
+const IMPORT_EXPORT = /^\s*(import|export)\b.*\bfrom\b|^\s*import\s/;
+const ext = opt('--systems', null) ? await answersOf(loadSystems(opt('--systems')), { root, sample, files: new Set(intel.store.all('SELECT path FROM files').map(r => r.path)), fileRe: TS_FILE }) : {};
+for (const [name, a] of Object.entries(ext)) console.log(`${name}: median answer ${a.medianTokens} tokens`);
+const extSystems = Object.fromEntries(Object.entries(ext).map(([name, a]) => [name, (s) => new Set([...(a.per.get(s.id) ?? [])].filter(x => { const i = x.lastIndexOf(':'); return !IMPORT_EXPORT.test(fileLines(x.slice(0, i))[Number(x.slice(i + 1)) - 1] ?? ''); }))]));
+const systems = { 'graph-indexer': oursRefs, ...extSystems, 'gi (>=likely)': (s) => oursRefs(s, { minConf: 0.4 }), 'name-only': nameOnlyRefs, grep: grepRefs,
     ...(v2 ? { v2: v2.refs, 'v2 (high)': (s) => v2.refs(s, { highOnly: true }) } : {}) };
 const ORACLES = ['dispatch', 'rename', 'dispatch/files'];
 const filesOf = (set) => new Set([...set].map(x => x.slice(0, x.lastIndexOf(':'))));
@@ -237,6 +245,13 @@ for (const sym of sample) {
             console.log(`\n${sym.qname} (${sym.kind}) ${sym.path}:${sym.name_line}  gold=${gold.size} ours=${got.size}`);
             for (const m of miss.slice(0, 6)) { const [f, l] = m.split(':'); console.log(`   MISS ${m}  ${(grepCache.get(f) ?? fs.readFileSync(path.join(root, f), 'utf8').split('\n'))[l - 1]?.trim().slice(0, 110)}`); }
             for (const m of extra.slice(0, 3)) { const [f, l] = m.split(':'); console.log(`   EXTRA ${m}  ${fs.readFileSync(path.join(root, f), 'utf8').split('\n')[l - 1]?.trim().slice(0, 110)}`); }
+        }
+    }
+    if (args.includes('--debug-systems')) {
+        const mine = oursRefs(sym);
+        for (const name of Object.keys(extSystems)) {
+            const extra = [...systems[name](sym)].filter(x => !gold.has(x) && !mine.has(x));
+            if (extra.length) console.log(`${name} ${sym.qname}: ${extra.slice(0, 4).map(x => { const i = x.lastIndexOf(':'); return `${x} │ ${(fileLines(x.slice(0, i))[Number(x.slice(i + 1)) - 1] ?? '').trim().slice(0, 90)}`; }).join(' ¦ ')}`);
         }
     }
     for (const [name, fn] of Object.entries(systems)) {

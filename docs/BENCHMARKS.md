@@ -337,6 +337,36 @@ object (`workspaceCommand.runOnWorkspace` for each of the upgrade commands), met
 literals that implement an interface, fluent query builders whose chain returns `this` through a
 generic, and `factory['privateMethod']()` in tests.
 
+## The arena: other tools, measured the same way
+
+`bench/arena/` scores any code-intelligence tool that has an MCP server against the same oracles
+and samples as graph-indexer. Each tool is an entry in `bench/arena/systems.json` (start from
+`systems.example.json`): how to start its server and build its index, which tool answers "where is
+X used" and with which arguments. Nothing about a tool is assumed: `arena.mjs tools --system NAME`
+lists what its server offers, and the entry is written from that.
+
+```bash
+cp bench/arena/systems.example.json bench/arena/systems.json      # add one entry per tool
+node bench/arena/arena.mjs tools --system "NAME" --repo test/fixtures/nestjs
+node bench/arena/arena.mjs exactness -- --n 150                   # TypeScript and Python oracles
+node bench/arena/arena.mjs speed --repos test/fixtures/nestjs,test/fixtures/fastapi
+```
+
+A tool is scored on the `path:line` locations its answer names, in any of three shapes (`file:line`
+inline, JSON objects with a file and a line, or a file heading followed by indented line numbers),
+with import lines left out as for every system. An entry may declare `stopAt` (where the answer's
+own list ends and notes about candidates begin) and `ignoreLines` (single lines such as a header
+naming the definition itself); both are in the entry, in the open. The answer's median size in
+tokens is reported next to its accuracy: an exact list that does not fit in an agent's context is
+not an answer.
+
+**Check of the harness.** graph-indexer's own MCP server, entered as an external tool, scores within
+0.007 of its native row on nestjs (dispatch oracle, 150 symbols: precision 0.993 vs 1.000, recall
+0.889 vs 0.889, exact sets 0.913 vs 0.919). On fastapi its micro recall is lower (0.806) only
+because `find_references` returns at most 500 uses and `FastAPI` has 743: per-symbol recall agrees
+(0.990 vs 0.996). Results for other tools are published only from runs with their own maintainers'
+recommended installation; entries that a tool's maintainers correct are welcome.
+
 ## 2. Localization from real commits
 
 ```bash

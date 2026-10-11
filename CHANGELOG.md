@@ -32,6 +32,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   calls bound and exact per language, warm latencies — with no paths, names or code. A "wrong
   answer" issue template asks for it and for the command that reproduces the problem.
 
+- **The arena** (`bench/arena/`): any code-intelligence tool with an MCP server is scored against
+  the same compiler and type-checker oracles and samples as graph-indexer (`eval-graph.mjs` and
+  `eval-graph-python.mjs` take `--systems`), with its answer size, plus cold index time and size
+  (`arena.mjs speed`). Tools are declared in a JSON file written from what their servers expose;
+  graph-indexer's own server entered that way matches its native scores within 0.007.
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
