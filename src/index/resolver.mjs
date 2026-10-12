@@ -579,7 +579,8 @@ export class Resolver {
             const passes = imp.reexport === name || imp.reexport === '*' || imp.local === name || (imp.wildcard && imp.imported === '*');
             if (!passes || imp.targetFileId == null) continue;
             const inner = imp.reexport === name && imp.imported && imp.imported !== '*' ? imp.imported : (imp.local === name && imp.imported && imp.imported !== '*' ? imp.imported : name);
-            const r = this.exportedFrom(imp.targetFileId, inner, depth + 1, seen);
+            // `export { default as X } from './x'`: x's default export, whatever it is called there
+            const r = inner === 'default' && name !== 'default' ? this.#defaultExport(imp.targetFileId, name) : this.exportedFrom(imp.targetFileId, inner, depth + 1, seen);
             if (r.length) return r;
         }
         return out;
@@ -600,6 +601,11 @@ export class Resolver {
     #reexportsExternal(targetFileId, name, depth = 0) {
         if (targetFileId == null || depth > 6) return false;
         for (const imp of this.t.imports.get(targetFileId) ?? []) {
+            // `export * from './icons'` where ./icons re-exports `name` from a package
+            if (imp.reexport === '*' && imp.targetFileId != null && imp.local == null) {
+                if (this.#reexportsExternal(imp.targetFileId, name, depth + 1)) return true;
+                continue;
+            }
             if (imp.wildcard || !(imp.local === name || imp.reexport === name)) continue;
             if (imp.targetFileId == null && !imp.targetDir) return true;
             const inner = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
@@ -754,8 +760,14 @@ export class Resolver {
             const target = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
             let ids = [];
             if (imp.targetFileId != null) {
-                ids = this.exportedFrom(imp.targetFileId, target);
-                if (!ids.length && imp.imported === 'default') ids = this.#defaultExport(imp.targetFileId, name);
+                if (imp.imported === 'default') {
+                    // a default import names the module's default export, whatever the importer calls it:
+                    // a definition of that name in the module itself, else its default export; only then
+                    // what the module imports under that name (it may import another `name` of its own)
+                    ids = (this.t.fileSyms.get(imp.targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.name === name && s.parentId == null; });
+                    if (!ids.length) ids = this.#defaultExport(imp.targetFileId, name);
+                    if (!ids.length) ids = this.exportedFrom(imp.targetFileId, target);
+                } else ids = this.exportedFrom(imp.targetFileId, target);
             }
             if (!ids.length && imp.targetDir) ids = this.#symbolsInDir(imp.targetDir, target, fileId);
             if (!ids.length && imp.source && PACKAGE_LANGS.has(file.lang)) ids = this.#symbolsInPackage(imp.source, target);
@@ -812,6 +824,14 @@ export class Resolver {
         const ids = (this.t.fileSyms.get(targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.parentId == null && s.exported; });
         const same = ids.filter(id => this.t.sym(id).name.toLowerCase() === localName.toLowerCase());
         if (same.length) return same;
+        // a Vue or Svelte file's default export is the component, named after the file whatever the importer calls it
+        const file = this.t.file(targetFileId);
+        if (file && (file.lang === 'vue' || file.lang === 'svelte')) {
+            const base = file.path.split('/').pop().replace(/\.[^.]+$/, '');
+            const stem = (base === 'index' ? file.path.split('/').slice(-2, -1)[0] ?? base : base).replace(/(^|[-_.])(\w)/g, (_, __, c) => c.toUpperCase());
+            const comp = ids.filter(id => this.t.sym(id).name === stem || this.t.sym(id).name === `${stem}Component`);
+            if (comp.length) return comp;
+        }
         return ids.length === 1 ? ids : [];
     }
 
@@ -1050,7 +1070,7 @@ export class Resolver {
 }
 
 export function familyOf(lang) {
-    if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx') return 'ecma';
+    if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx' || lang === 'vue' || lang === 'svelte') return 'ecma';
     if (lang === 'c' || lang === 'cpp') return 'c';
     if (lang === 'java' || lang === 'kotlin' || lang === 'scala') return 'jvm';
     return lang;

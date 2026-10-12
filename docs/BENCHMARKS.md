@@ -592,6 +592,35 @@ the non-test code of mall (223) and piggymetrics (24) is found. Not modelled: cu
 annotations, XML configuration, profiles and conditions beyond naming them, and generics as
 qualifiers.
 
+## Components in Vue and Svelte templates
+
+A `.vue` or `.svelte` file's `<script>` is indexed as TypeScript, and each tag in its template of
+a component the script imports (`<UserCard>`, `<user-card>`) is a use of that component, bound
+through the import like a call. There is no compiler oracle here either (vue-tsc and svelte-check
+need each project's dependencies installed), so the check is two-fold: for a tag whose import
+names a `.vue`/`.svelte` file directly, the bound definition must be that file (checked by
+script, every tag); for a tag imported through barrels and workspace packages, a sample was
+followed by hand by an independent reader (an agent with its own resolver, quoting each chain).
+
+| | open-webui (`f8ae8a6`, Svelte) | vue-vben-admin (`4634655`, Vue) |
+|---|---|---|
+| component files | 701 | 693 |
+| template tags of components imported from the repository | 3,604 | 1,179 |
+| … found and bound | 3,602 | 1,178 |
+| … imported from the file directly: bound to that file | 3,602 / 3,602 | 207 / 207 |
+| … through barrels or workspace packages: checked by hand (sample of 80) | — | 80 / 80 correct |
+| tags of library components (left out, as for any library) | 31 | 959 |
+
+Found while measuring, and fixed: SvelteKit's `$lib` and `kit.alias` (defined in a generated
+tsconfig the repository does not carry), `package.json` `imports` (`#/*`), `export { default as X }
+from './x'`, anonymous `export default function () {}` not counted as exported, and a default
+import resolved by the importer's name to whatever the module itself imported under that name.
+The last three touch TypeScript too; the compiler oracles of every language give the same scores
+as before. Library components re-exported through a workspace package (lucide icons through
+`@vben/icons`) are recognised as library ones: 125 of vben's tags. Not modelled: components
+registered globally (`app.component(…)`, Nuxt's auto-imports) and dynamic ones
+(`<component :is>`, `<svelte:component>`).
+
 ## 2. Localization from real commits
 
 ```bash

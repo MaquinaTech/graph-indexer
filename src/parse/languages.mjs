@@ -12,8 +12,9 @@ import { rust } from './lang/rust.mjs';
 import { c, cpp } from './lang/native.mjs';
 import { ruby, php, bash } from './lang/scripting.mjs';
 import { scala, css } from './lang/misc.mjs';
+import { vue, svelte } from './lang/sfc.mjs';
 
-export const LANGUAGES = [javascript, typescript, tsx, python, go, java, kotlin, scala, csharp, rust, c, cpp, ruby, php, bash, css];
+export const LANGUAGES = [javascript, typescript, tsx, vue, svelte, python, go, java, kotlin, scala, csharp, rust, c, cpp, ruby, php, bash, css];
 
 const byExt = new Map();
 for (const spec of LANGUAGES) for (const ext of spec.extensions) byExt.set(ext, spec);
@@ -33,7 +34,7 @@ export function languageById(id) { return LANGUAGES.find(l => l.id === id) ?? nu
 // constructors named by the language rather than declared as such: a method called `initialize` is
 // Ruby's constructor (`Foo.new`) but an ordinary method in TypeScript or Python
 const CONSTRUCTOR_NAMES = {
-    javascript: ['constructor'], typescript: ['constructor'], tsx: ['constructor'],
+    javascript: ['constructor'], typescript: ['constructor'], tsx: ['constructor'], vue: ['constructor'], svelte: ['constructor'],
     python: ['__init__', '__new__'], ruby: ['initialize'], php: ['__construct'],
 };
 

@@ -77,6 +77,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   mall: 312 injection points; the first reading found 3 wrong claims and 1 missed point, all fixed
   ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#dependency-injection-spring)).
 
+- **Vue and Svelte components.** `.vue` and `.svelte` files are indexed: the `<script>` as
+  TypeScript, and each template tag of a component the script imports (`<UserCard>`,
+  `<user-card>`) as a use of that component, so `find_references` on a component lists where it is
+  rendered. SvelteKit's `$lib` / `kit.alias` and `package.json` `imports` (`#/*`) resolve. On
+  open-webui 3,602 of 3,604 such tags are bound, every one to the file imported; on vue-vben-admin
+  1,178 of 1,179, the 207 direct imports all to the file imported and 80 of 80 sampled through
+  barrels and workspace packages correct
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#components-in-vue-and-svelte-templates)).
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
@@ -87,6 +96,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   threads (0 turns the pool off).
 
 ### Fixed
+
+- **TypeScript default exports.** `export { default as X } from './x'` now follows to x's default
+  export; an anonymous `export default function () {}` counts as exported; a default import binds
+  to the module's own definition or default export before anything the module itself imports
+  under the importer's name. Found on vue-vben-admin; the TypeScript, Python, Go and Java oracles
+  give the same scores as before.
 
 - **Claude Code 2.1.296 saw no graph-indexer tools.** It speaks MCP 2026-07-28, where every result
   states `resultType: "complete"`; graph-indexer's results did not, so the server connected, its

@@ -69,6 +69,32 @@ export class ModuleResolver {
             const scope = this.#tsScope(rel);
             if (scope) this.tsScopes.set(dir, scope);
         }
+        // package.json "imports" (subpath imports, `#/*` → `./src/*`): aliases of that package's files
+        for (const [, { dir, json }] of this.packages) {
+            const imp = json.imports;
+            if (!imp || typeof imp !== 'object') continue;
+            const at = (p) => path.posix.normalize(dir === '.' ? p : `${dir}/${p}`);
+            const target = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? (v.types ?? v.import ?? v.default ?? v.node ?? null) : null);
+            const paths = Object.entries(imp).map(([pat, v]) => [pat, target(v)]).filter(([pat, t]) => typeof t === 'string' && t.startsWith('.') && pat.startsWith('#'))
+                .map(([pat, t]) => ({ pat, targets: [at(t)] }));
+            if (!paths.length) continue;
+            const scope = this.tsScopes.get(dir);
+            this.tsScopes.set(dir, scope ? { ...scope, paths: [...scope.paths, ...paths] } : { paths, baseUrl: null });
+        }
+        // SvelteKit: `$lib` (and `kit.alias`) map into the project; they live in a generated
+        // .svelte-kit/tsconfig.json that a repository does not carry, so read svelte.config itself
+        for (const rel of [...this.#findManifests('svelte.config.js'), ...this.#findManifests('svelte.config.ts')]) {
+            const dir = path.posix.dirname(rel), at = (p) => path.posix.normalize(dir === '.' ? p : `${dir}/${p}`);
+            let text = '';
+            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { /* unreadable */ }
+            const lib = /\bfiles\s*:\s*\{[^}]*\blib\s*:\s*['"]([^'"]+)['"]/.exec(text)?.[1] ?? 'src/lib';
+            const aliases = [['$lib', lib]];
+            const block = /\balias\s*:\s*\{([^}]*)\}/.exec(text)?.[1] ?? '';
+            for (const m of block.matchAll(/['"]?([$@#~\w/-]+?)(?:\/\*)?['"]?\s*:\s*['"]([^'"]+?)(?:\/\*)?['"]/g)) aliases.push([m[1], m[2]]);
+            const paths = aliases.flatMap(([a, t]) => [{ pat: a, targets: [at(t)] }, { pat: `${a}/*`, targets: [`${at(t)}/*`] }]);
+            const scope = this.tsScopes.get(dir);
+            this.tsScopes.set(dir, scope ? { ...scope, paths: [...scope.paths, ...paths] } : { paths, baseUrl: null });
+        }
         // Go module path
         this.goModules = [];
         for (const rel of this.#findManifests('go.mod')) {
@@ -203,7 +229,7 @@ export class ModuleResolver {
         if (!source) return null;
         const fromDir = path.posix.dirname(fromFile);
         switch (lang) {
-            case 'javascript': case 'typescript': case 'tsx': return this.#resolveEcma(fromDir, source);
+            case 'javascript': case 'typescript': case 'tsx': case 'vue': case 'svelte': return this.#resolveEcma(fromDir, source);
             case 'python': return this.#resolvePython(fromDir, source);
             case 'go': return this.#resolveGo(source);
             case 'c': case 'cpp': return this.#resolveInclude(fromDir, source);
