@@ -115,7 +115,9 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   heredoc bodies, paths resolved against a `cd`) and resolves every read in it, and after any
   other shell command runs the edit checker on the source files that command changed (working-tree
   files whose modification time moved). Replaying the b3h3 pilot's `cc+gi+hooks` runs: context on
-  50 of 191 calls instead of 33. Not yet measured in sessions.
+  50 of 191 calls instead of 33. Measured in sessions (b3h4, 15 issues, Sonnet 5.5): the hooks
+  named 256 definitions and followed shell edits in 14 of 15 sessions, the agent still never
+  called graph-indexer, and the arm cost 1.07 (1.01–1.12) of working without it — a loss.
 
 - **TypeScript default exports.** `export { default as X } from './x'` now follows to x's default
   export; an anonymous `export default function () {}` counts as exported; a default import binds

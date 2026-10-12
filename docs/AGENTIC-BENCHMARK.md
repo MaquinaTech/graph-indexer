@@ -292,6 +292,32 @@ graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
 
+### The shell-aware hooks, on Sonnet 5.5 (b3h4, pilot): 15 tasks, 30 runs
+
+The same 15 issues and arms as b3h3, with the hook that follows the shell (graph-indexer at
+`3b92896`): every read in a chained shell line resolved, and the edit checker run on the files any
+shell command changed.
+
+| arm | solved | mean cost | median cost | tool calls | graph-indexer calls | wall |
+|---|---|---|---|---|---|---|
+| `cc` | 15 / 15 | 126k | 124k | 12.7 | 0 | 145 s |
+| `cc+gi+hooks` | 15 / 15 | 134k | 134k | 12.9 | 0 | 130 s |
+
+- **Both arms solved all 30; graph-indexer costs more.** Cost 1.07 (1.01–1.12) of `cc`, paired by
+  task: the interval no longer reaches 1. Time 0.90.
+- **The hooks now act, and the agent still never calls the tools.** From the hooks' own state
+  (one file per session; stream-json transcripts do not record hook context): across the 15
+  `cc+gi+hooks` sessions they named 256 definitions for lines the agent read, resolved 23
+  indirections (dispatch tables, overrides), and followed edits made through the shell in 14 of
+  them. The agent took none of it as a reason to change how it worked: same tool calls (12.9
+  against 12.7), same solved rate, more context to carry.
+- What this says: on these issues Sonnet 5.5 finds its way with grep and `sed` at least as cheaply
+  as with the facts the hooks add, so adding them only adds tokens. The B3 target (≤ 0.70 of the
+  cost) is not reachable by adding context to this agent's loop; it needs tasks where the agent
+  fails or wanders without the index, or a smaller footprint (the hooks quiet unless a fact
+  changes what the agent would do).
+- One pilot, one run each; b3h3 and b3h4 agree in direction (1.05, 1.07).
+
 ### Harder issues with the hooks installed, on Sonnet 5.5 (b3h3, pilot): 15 tasks, 30 runs
 
 The fifth round's 15 issues (sqlglot 11, SymPy 4; fixes of 2–6 files), one run per task and arm,
