@@ -39,7 +39,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { argv, WORK } from './lib.mjs';
+import { argv, loadTasks, WORK } from './lib.mjs';
+import { REPOS } from './repos.mjs';
 import { giBin } from './prepare.mjs';
 import { usesIndex, SESSION_ARMS } from './arms.mjs';
 import { HELPER_NAME } from '../../src/cli/helper.mjs';
@@ -70,13 +71,19 @@ const runs = fs.readdirSync(runsDir).filter(r => fs.existsSync(path.join(runsDir
     .map(r => JSON.parse(fs.readFileSync(path.join(runsDir, r, 'meta.json'), 'utf8')));
 fs.mkdirSync(dir, { recursive: true });
 
-// agents run the tests with the Python that grades them: GI_PYTHON's directory (a virtualenv's
-// bin/, with pytest and the repositories' test dependencies) comes first on the sessions' PATH
-const pyBin = process.env.GI_PYTHON ? path.dirname(process.env.GI_PYTHON) : null;
-const childEnv = pyBin ? { ...process.env, PATH: `${pyBin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(pyBin) } : process.env;
-if (runs.some(m => /^fresh-/.test(m.taskId)) && !dry) {
-    if (!pyBin) throw new Error('mined Python tasks need GI_PYTHON (the virtualenv python that grades them), so agents and grading share one environment');
-    const r = spawnSync('python3', ['-c', 'import pytest'], { env: childEnv, encoding: 'utf8' });
+// agents run the tests with the Python that grades them: the virtualenv of the task's repository
+// (REPOS[repo].python) or else GI_PYTHON's; its bin/ comes first on the sessions' PATH
+const taskRepo = new Map(loadTasks().map(t => [t.id, t.repo]));
+const pythonOf = (meta) => REPOS[taskRepo.get(meta.taskId)]?.python ?? process.env.GI_PYTHON ?? null;
+const envFor = (meta) => {
+    const py = pythonOf(meta);
+    if (!py) return process.env;
+    const bin = path.dirname(py);
+    return { ...process.env, GI_PYTHON: py, GI_PYTEST: `${py} -m pytest`, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(bin) };
+};
+if (!dry) for (const m of runs.filter(m => /^(fresh|b5)-/.test(m.taskId))) {
+    if (!pythonOf(m)) throw new Error('mined Python tasks need GI_PYTHON (the virtualenv python that grades them), so agents and grading share one environment');
+    const r = spawnSync('python3', ['-c', 'import pytest'], { env: envFor(m), encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`python3 on the sessions' PATH cannot import pytest: ${r.stderr.trim().split('\n').pop()}`);
 }
 
@@ -126,7 +133,7 @@ function launch(meta, args, files, file) {
     const out = fs.createWriteStream(file);
     return new Promise((resolve) => {
         const competitor = SESSION_ARMS[meta.arm]?.competitor;
-        const child = spawn(claude, args, { cwd: meta.inRepo ? meta.checkout : meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: competitor ? sessionEnv(competitor, childEnv) : childEnv });
+        const child = spawn(claude, args, { cwd: meta.inRepo ? meta.checkout : meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: competitor ? sessionEnv(competitor, envFor(meta)) : envFor(meta) });
         child.stdout.pipe(out);
         let err = '';
         child.stderr.on('data', (d) => { err = (err + d).slice(-4000); });

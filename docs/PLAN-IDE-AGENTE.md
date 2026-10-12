@@ -126,6 +126,7 @@ Se publican todos los candidatos y la regla que descartó cada uno.
 Cambios sobre el texto fijado, todos del 2026-10-12, y su motivo:
 - **Antes de ver resultados**, la exclusión de commits que crean o borran otros ficheros Python.
 - **Después del primer minado de sqlglot**, se alinea el texto con lo que el minero ya hacía desde el principio: ficheros modificados, nada de métodos especiales, B distinto de A y el tope de 40 FAIL_TO_PASS. El límite de tiempo pasó de tiempo de reloj a tiempo de CPU porque la máquina se comparte con otros trabajos: dos candidatos de sympy se descartaron por lentitud con la máquina cargada, y se vuelven a juzgar con la regla nueva. Las tareas ya minadas se vuelven a validar dentro del sandbox.
+- **xarray, mypy y pylint usan su propio entorno virtual** (`venv-b5`, con dask y los requisitos de test de mypy y pylint; solo wheels, instalados sin red dentro del sandbox). Los 6 candidatos de xarray se vuelven a juzgar en él: con el entorno compartido, sin dask, sus tests no podían ejecutarse, y eso decidía el veredicto. El cambio afecta a todos los candidatos por igual, no a los que se descartaron.
 - **Lo que no se cambia aunque se haya visto:** la regla 3 deja entrar tareas cuyo arreglo parcial rompe cientos de tests (213 y 363 en dos de sqlglot), que en la práctica no son silenciosas. No se excluyen a posteriori. S4 se informa por tamaño de R (1–10, 11–100, >100) para que se vea.
 
 Reglas de siempre:

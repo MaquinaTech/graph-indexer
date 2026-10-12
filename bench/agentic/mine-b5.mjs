@@ -37,6 +37,9 @@ import { REPOS } from './repos.mjs';
 const { opt } = argv();
 const name = opt('--name');
 const R = REPOS[name];
+// a repository with its own virtualenv: the miner's runs, and later the task's checks, use it
+if (R?.python) Object.assign(process.env, { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` });
+const pyEnv = R?.python ? { env: { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` } } : {};
 const repo = path.resolve(opt('--repo', R?.source ?? path.join(WORK, 'repos', name)));
 const runner = opt('--runner', R?.runner ?? 'pytest');
 const srcPrefix = opt('--src', R?.srcPrefix ?? '');
@@ -52,7 +55,9 @@ const idsDir = path.join(HERE, 'tasks', 'fresh');
 const used = new Set(fs.readdirSync(path.join(HERE, 'tasks')).filter(f => /^fresh-.*\.json$/.test(f))
     .flatMap(f => readJson(path.join(HERE, 'tasks', f), []).map(t => t.meta?.sha)).filter(Boolean));
 const log = (...a) => console.error(...a);
-const isTestFile = (f) => testRe.test(f) && /(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(f);
+// the test modules (a repository can name them its own way: REPOS[repo].testFileRe)
+const testFileRe = new RegExp(R?.testFileRe ?? '(^|/)(test_[^/]*|[^/]*_test)\\.py$');
+const isTestFile = (f) => testRe.test(f) && testFileRe.test(f);
 
 /** Rules 1 and 2 from git alone: the commits, with their A → B ripples. */
 function candidates() {
@@ -189,7 +194,7 @@ for (const c of cands) {
     writeJson(path.join(idsDir, `${id}.p2p.json`), p2p);
     writeJson(path.join(idsDir, `${id}.ripple.json`), ripple);
     const body = git(repo, 'log', '-1', '--format=%b', c.sha).trim();
-    const check = (n, k, extra = {}) => ({ name: n, cmd: `node {GI}/bench/agentic/pytests.mjs --runner ${runner} --expect-pass {GI}/bench/agentic/tasks/fresh/${id}.${k}.json`, timeoutSec: 900, ...extra });
+    const check = (n, k, extra = {}) => ({ name: n, cmd: `node {GI}/bench/agentic/pytests.mjs --runner ${runner} --expect-pass {GI}/bench/agentic/tasks/fresh/${id}.${k}.json`, timeoutSec: 900, ...pyEnv, ...extra });
     tasks.push({
         id, family: 'edit', kind: 'fresh', bench: 'b5', repo: name, base: c.parent,
         statement: `${c.subject}${body ? `\n\n${body}` : ''}`,

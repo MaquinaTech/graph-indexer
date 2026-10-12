@@ -15,8 +15,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { argv, sh, sandboxed, fairJobs } from './lib.mjs';
 
-const PYTEST = process.env.GI_PYTEST ?? (fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
-const PYTHON = process.env.GI_PYTHON ?? 'python3';
+// read when a run starts: a repository can bring its own virtualenv (REPOS[repo].python, passed as
+// GI_PYTHON / GI_PYTEST by the miner and by the task's checks)
+const pytestCmd = () => process.env.GI_PYTEST ?? (fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
+const pythonCmd = () => process.env.GI_PYTHON ?? 'python3';
 
 const modOf = (f) => f.replace(/\.py$/, '').replace(/\//g, '.');
 
@@ -53,10 +55,14 @@ if __name__ == '__main__':
 
 function runUnittest(cwd, targets, timeoutSec) {
     const json = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.json`);
-    const driver = path.join(os.tmpdir(), `gi-unittest-${process.pid}.py`);
+    const driver = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.py`);
     fs.writeFileSync(driver, UNITTEST_DRIVER);
-    // the driver runs as a file outside the checkout, with the checkout first on the path
-    const r = sh(sandboxed(`/usr/bin/time -p env PYTHONPATH=. ${PYTHON} ${driver} ${json} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
+    // the driver runs as a file outside the checkout, with the checkout first on the path; it and
+    // the result file are removed whatever happens (a crash or timeout must not leave them behind)
+    let r;
+    try {
+        r = sh(sandboxed(`/usr/bin/time -p env PYTHONPATH=. ${pythonCmd()} ${driver} ${json} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
+    } finally { fs.rmSync(driver, { force: true }); }
     const out = new Map();
     try { for (const [id, s] of Object.entries(JSON.parse(fs.readFileSync(json, 'utf8')))) out.set(id, s); } catch { /* timed out or crashed: no outcomes */ }
     fs.rmSync(json, { force: true });
@@ -66,10 +72,11 @@ function runUnittest(cwd, targets, timeoutSec) {
 /** pytest: junit XML per test case. */
 function runPytest(cwd, targets, timeoutSec) {
     const xml = path.join(os.tmpdir(), `gi-pytest-${process.pid}-${Date.now()}.xml`);
-    const r = sh(sandboxed(`/usr/bin/time -p ${PYTEST} -q -p no:cacheprovider -o addopts= --junitxml=${xml} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
+    const r = sh(sandboxed(`/usr/bin/time -p ${pytestCmd()} -q -p no:cacheprovider -o addopts= --junitxml=${xml} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
     const out = new Map();
     let text = '';
-    try { text = fs.readFileSync(xml, 'utf8'); fs.rmSync(xml, { force: true }); } catch { /* no report */ }
+    try { text = fs.readFileSync(xml, 'utf8'); } catch { /* no report */ }
+    fs.rmSync(xml, { force: true });
     for (const m of text.matchAll(/<testcase ([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
         const attrs = Object.fromEntries([...m[1].matchAll(/(\w+)="([^"]*)"/g)].map(a => [a[1], a[2]]));
         const body = m[3] ?? '';
