@@ -48,8 +48,8 @@ const minLines = Number(opt('--min-lines', 0)), maxFiles = Number(opt('--max-fil
 const skipSubject = new RegExp(opt('--skip-subject', '^(Merge|Revert|Sync|Update CHANGELOG|Cleanup|chore|docs?|ci|build|style|test|tests|bump|release)\\b'), 'i');
 const skipSha = opt('--skip-sha', '').split(',').filter(Boolean);
 const out = path.join(HERE, 'tasks', `${opt('--out', `fresh-${name}`)}.json`);
-// commits that already back a task in another file (earlier rounds) stay out of a new set
-const usedElsewhere = new Set(fs.readdirSync(path.join(HERE, 'tasks')).filter(f => /^fresh-.*\.json$/.test(f) && path.join(HERE, 'tasks', f) !== out)
+// commits that already back a task in another file (earlier rounds, B5) stay out of a new set
+const usedElsewhere = new Set(fs.readdirSync(path.join(HERE, 'tasks')).filter(f => /^(fresh|b5)-.*\.json$/.test(f) && path.join(HERE, 'tasks', f) !== out)
     .flatMap(f => readJson(path.join(HERE, 'tasks', f), []).map(t => t.meta?.sha)).filter(Boolean));
 const idsDir = path.join(HERE, 'tasks', 'fresh');
 

@@ -8,6 +8,9 @@
  *   node bench/agentic/localize.mjs prepare [--jobs 4]              worktrees + indexes (WORK/loc/<task>)
  *   node bench/agentic/localize.mjs run --label L [--split dev|held|all] [--max-tokens N] [--queries agent-queries.json]
  *   node bench/agentic/localize.mjs breaks [--split S]               existing tests the gold fix breaks, and whether check names them
+ *   node bench/agentic/localize.mjs select [--split S] [--jobs 6]    check's test selection against the whole suite run with and without the gold fix
+ *        [--recheck]                                               only check's selection again, on the truth already measured
+ *   node bench/agentic/localize.mjs select-report [--split S]       its detection and avoidance figures
  *   node bench/agentic/localize.mjs clean                           remove the worktrees
  *
  * Splits: `held` is the tasks of the rounds the agent benchmark still uses (fresh-*-r5, networkx r4),
@@ -32,11 +35,12 @@ const CLI = opt('--cli') ? path.resolve(opt('--cli')) : path.join(GI_ROOT, 'bin'
 const HELD = /-r5\.json$|^fresh-networkx-r4\.json$/;
 const MAX_SPAN = 400;
 
-const tasks = loadTasks().filter(t => t.kind === 'fresh' && t.gold?.patch);
+const tasks = loadTasks().filter(t => t.kind === 'fresh' && t.bench !== 'b5' && t.gold?.patch);
 const split = opt('--split', 'all');
 // --queries q.json: [{ task, input: { query, max_tokens } }] — the explore calls agents made, replayed
 const agentQueries = opt('--queries') ? JSON.parse(fs.readFileSync(opt('--queries'), 'utf8')) : null;
-const pick = tasks.filter(t => (split === 'all' || (split === 'held') === HELD.test(t._file)) && (!agentQueries || agentQueries.some(q => q.task === t.id)));
+const pick = tasks.filter(t => (split === 'all' || (split === 'held') === HELD.test(t._file)) && (!agentQueries || agentQueries.some(q => q.task === t.id))
+    && (!opt('--only') || opt('--only').split(',').includes(t.id)));
 
 function run(argvs, cwd) {
     return new Promise((resolve) => {
@@ -183,6 +187,102 @@ if (cmd === 'prepare') {
         console.log(`${s}: ${a.length} tasks · ${a.filter(r => r.broken.length).length} with broken tests · broken ${sum(r => r.broken.length)} · in a named file ${sum(r => r.fileNamed ?? 0)} · named as a case ${sum(r => r.caseNamed ?? 0)}`);
     }
     writeJson(path.join(WORK, 'loc-results', 'breaks.json'), rows);
+} else if (cmd === 'select') {
+    // check's test selection against the whole suite (measured as NameRTS does: the share of
+    // affected test files it selects, the share of all test files it avoids). Truth: every test file
+    // runs at the base and with the gold src patch; a file is affected when one of its tests changes
+    // outcome both times it is run (a second run of the differing files filters flaky tests).
+    // Targets: the existing test files the developer's own test patch changed — the tests written
+    // for this change. Per task the result lands in WORK/loc-results/select/<task>.json (resumable).
+    const { CodeIntel } = await import(path.join(GI_ROOT, 'src/query/intel.mjs'));
+    const { checkChanges } = await import(path.join(GI_ROOT, 'src/query/check.mjs'));
+    const outDir = path.join(WORK, 'loc-results', 'select');
+    fs.mkdirSync(outDir, { recursive: true });
+    const { runFiles } = await import(path.join(GI_ROOT, 'bench/agentic/pytests.mjs'));
+    const jobs = Number(opt('--jobs', 6));
+    const apply = (wt, patch, reverse) => new Promise((resolve, reject) => { const p = spawn('git', ['apply', ...(reverse ? ['-R'] : []), '-'], { cwd: wt }); p.stdin.end(patch); p.on('close', c => c ? reject(new Error(`git apply ${c}`)) : resolve()); });
+    const suite = (wt, runner, files) => runFiles(wt, runner, files, { jobs });
+    const changed = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(id => (a[id] ?? 'missing') !== (b[id] ?? 'missing'));
+    const fileOf = (id) => id.split('::')[0];
+    for (const t of pick) {
+        const wt = path.join(LOC, t.id);
+        const dest = path.join(outDir, `${t.id}.json`);
+        if (!fs.existsSync(path.join(wt, '.graph-indexer'))) continue;
+        if (flag('--recheck')) {
+            // the truth stays; only check's selection is computed again (after a change to check)
+            if (!fs.existsSync(dest)) continue;
+            const row = JSON.parse(fs.readFileSync(dest, 'utf8'));
+            try {
+                await apply(wt, t.gold.patch);
+                const intel = new CodeIntel({ root: wt });
+                await intel.open();
+                let report;
+                try { report = await checkChanges(intel); } finally { intel.close(); }
+                const was = row.selected.length;
+                Object.assign(row, { selected: report.tests, byName: report.byName, cases: report.cases.map(c => `${c.path}::${c.cls ?? ''}::${c.name}`), casesTotal: report.casesTotal });
+                writeJson(dest, row);
+                console.log(`${t.id.padEnd(26)} selected ${was} → ${row.selected.length}`);
+            } finally { git(wt, 'checkout', '-q', '.'); git(wt, 'clean', '-fdq', '-e', '.graph-indexer'); }
+            continue;
+        }
+        if (fs.existsSync(dest) && !flag('--force')) continue;
+        const repo = REPOS[t.repo];
+        const testRe = new RegExp(repo.testRe ?? '(^|/)tests?/');
+        const all = git(wt, 'ls-files').split('\n').filter(f => testRe.test(f) && /(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(f)).sort();
+        const t0 = Date.now();
+        try {
+            const before = await suite(wt, repo.runner, all);
+            await apply(wt, t.gold.patch);
+            const intel = new CodeIntel({ root: wt });
+            await intel.open();
+            let report;
+            try { report = await checkChanges(intel); } finally { intel.close(); }
+            const after = await suite(wt, repo.runner, all);
+            // confirm: the differing files once more on each side
+            const diffFiles = [...new Set(changed(before, after).map(fileOf))];
+            let confirmed = [];
+            if (diffFiles.length) {
+                const after2 = await suite(wt, repo.runner, diffFiles);
+                await apply(wt, t.gold.patch, true);
+                const before2 = await suite(wt, repo.runner, diffFiles);
+                const twice = new Set(changed(before2, after2));
+                confirmed = changed(before, after).filter(id => twice.has(id));
+            }
+            const touched = [...new Set([...(t.grade?.testPatch ?? '').matchAll(/^--- a\/(.+)$/gm)].map(m => m[1]))];
+            const row = {
+                id: t.id, split: HELD.test(t._file) ? 'held' : 'dev', all: all.length, ms: Date.now() - t0,
+                selected: report.tests, byName: report.byName, cases: report.cases.map(c => `${c.path}::${c.cls ?? ''}::${c.name}`), casesTotal: report.casesTotal,
+                changed: confirmed.map(id => ({ id, before: before[id] ?? 'missing', after: after[id] ?? 'missing' })),
+                flaky: changed(before, after).filter(id => !confirmed.includes(id)),
+                affected: [...new Set(confirmed.map(fileOf))].sort(),
+                targets: [...new Set([...touched.filter(f => all.includes(f)), ...touched.flatMap(f => Object.entries(repo.fixtureTests ?? {}).filter(([re]) => new RegExp(re).test(f)).map(([, mod]) => mod))])].sort(),
+            };
+            writeJson(dest, row);
+            console.log(`${t.id.padEnd(26)} ${String(all.length).padStart(4)} files · selected ${String(row.selected.length).padStart(3)} · affected ${row.affected.length} (selected ${row.affected.filter(f => row.selected.includes(f)).length}) · targets ${row.targets.length} (selected ${row.targets.filter(f => row.selected.includes(f)).length}) · ${(row.ms / 60000).toFixed(1)} min`);
+        } finally { git(wt, 'checkout', '-q', '.'); git(wt, 'clean', '-fdq', '-e', '.graph-indexer'); }
+    }
+} else if (cmd === 'select-report') {
+    const dir = path.join(WORK, 'loc-results', 'select');
+    const rows = fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))).filter(r => split === 'all' || r.split === split).sort((a, b) => a.id.localeCompare(b.id));
+    const sum = (a, f) => a.reduce((x, r) => x + f(r), 0);
+    const pct = (a, b) => b ? `${(100 * a / b).toFixed(1)} %` : '—';
+    for (const repo of [...new Set(rows.map(r => r.id.split('-')[1])), 'all']) {
+        const a = rows.filter(r => repo === 'all' || r.id.split('-')[1] === repo);
+        const aff = sum(a, r => r.affected.length), affSel = sum(a, r => r.affected.filter(f => r.selected.includes(f)).length);
+        const tg = sum(a, r => r.targets.length), tgSel = sum(a, r => r.targets.filter(f => r.selected.includes(f)).length);
+        const avoided = sum(a, r => 1 - r.selected.length / r.all) / a.length;
+        const both = (r) => new Set([...r.selected, ...(r.byName ?? [])]);
+        const aff2 = sum(a, r => r.affected.filter(f => both(r).has(f)).length), tg2 = sum(a, r => r.targets.filter(f => both(r).has(f)).length);
+        const avoided2 = sum(a, r => 1 - both(r).size / r.all) / a.length;
+        const either = a.filter(r => r.affected.length || r.targets.length);
+        const anyHit = either.filter(r => [...r.affected, ...r.targets].some(f => r.selected.includes(f))).length;
+        console.log(`${repo.padEnd(9)} ${String(a.length).padStart(2)} tasks · affected files ${aff}, selected ${affSel} (${pct(affSel, aff)}) · target files ${tg}, selected ${tg ? pct(tgSel, tg) : '—'} · tasks with a selected affected/target file ${anyHit}/${either.length} · avoided ${(100 * avoided).toFixed(1)} % of test files (mean per task) · none selected ${a.filter(r => !r.selected.length).length}`);
+        console.log(`${''.padEnd(9)} with the files that name a changed module: affected ${aff2}/${aff} (${pct(aff2, aff)}) · target ${tg ? pct(tg2, tg) : '—'} · avoided ${(100 * avoided2).toFixed(1)} %`);
+    }
+    for (const r of rows) {
+        const miss = [...new Set([...r.affected, ...r.targets])].filter(f => !r.selected.includes(f));
+        if (miss.length) console.log(`  missed ${r.id}: ${miss.join(', ')}  (selected ${r.selected.length})`);
+    }
 } else if (cmd === 'clean') {
     if (fs.existsSync(LOC)) for (const id of fs.readdirSync(LOC)) {
         const t = tasks.find(x => x.id === id);

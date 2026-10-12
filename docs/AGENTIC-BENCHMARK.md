@@ -94,7 +94,14 @@ How a B3 task is made, from the fifth round on:
   The reproduction is run at base and the expected behaviour with the fix.
 - **Same Python for the agent and the grader.** Sessions get the grading virtualenv first on
   their `PATH` (`GI_PYTHON`), with each repository's test dependencies (pytest, hypothesis, mpmath,
-  duckdb, pandas, numpy); the preflight checks it from inside a session.
+  duckdb, pandas, numpy); the preflight checks it from inside a session. On 2026-10-12
+  `typing_extensions` and `greenlet` were added for SQLAlchemy (B5). In sqlglot and SymPy every import
+  of them is under `TYPE_CHECKING`, so nothing they run changed; networkx does not import them.
+- **Sandboxed** (since 2026-10-12): the repositories' code (tests at mining, measuring and grading)
+  runs inside the macOS sandbox `bench/agentic/sandbox.sb`, which allows no network beyond
+  localhost, no writes outside the checkout and temporary directories, and no reads of
+  credentials. It fails closed. Tasks validated before that date are validated again inside it.
+  Agent sessions and competitor binaries are not sandboxed yet.
 
 The fifth round asks for harder fixes: 2–6 source files and at least 40 changed source lines
 (`--min-src 2 --max-src 6 --min-lines 40`), from commits of July–October 2026. Mining gave 40 valid

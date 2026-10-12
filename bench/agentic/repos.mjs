@@ -59,4 +59,24 @@ export const REPOS = {
         testRe: '/tests/',
         testHint: 'from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).',
     },
+    // labelled N-D arrays over numpy and pandas (B5); dask, zarr, netCDF and plotting libraries are not installed
+    xarray: {
+        source: path.join(WORK, 'repos', 'xarray'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/pydata/xarray.git ${path.join(WORK, 'repos', 'xarray')}`,
+        language: 'python',
+        runner: 'pytest',
+        srcPrefix: 'xarray/',
+        testRe: '/tests/',
+        testHint: 'from the repository root, `pytest xarray/tests/test_coarsen.py` runs one test file (pytest, numpy and pandas are installed; tests that need dask, zarr, netCDF or matplotlib are skipped).',
+    },
+    // the SQL toolkit and ORM (B5); its tests run on SQLite
+    sqlalchemy: {
+        source: path.join(WORK, 'repos', 'sqlalchemy'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/sqlalchemy/sqlalchemy.git ${path.join(WORK, 'repos', 'sqlalchemy')}`,
+        language: 'python',
+        runner: 'pytest',
+        srcPrefix: 'lib/sqlalchemy/',
+        testRe: '^test/',
+        testHint: 'from the repository root, `pytest test/orm/test_session.py` runs one test file against SQLite (pytest, greenlet and typing_extensions are installed).',
+    },
 };

@@ -104,6 +104,30 @@ El banco define qué mejoramos, así que se reordena con la tesis.
 | B4 arreglos sencillos | un fichero | las actuales | no empeorar (S5) |
 | Oráculos | precisión y cobertura frente al compilador | TS, Python, Go, Java y Rust, ≥ 3 repos cada uno | S1 |
 
+### Criterio de B5 (fijado el 2026-10-12, antes de minar)
+
+Un commit real entra en B5 si cumple todo esto. Ninguna regla usa graph-indexer: solo el diff, el texto y los tests.
+
+1. **Fresco y enfocado.** Posterior al 2026-06-15, sin merges, con los filtros de asunto de `mine-fresh`. Modifica (sin crear ni borrar) entre 2 y 8 ficheros fuente y como mucho 16 ficheros en total, y trae tests. No crea ni borra otros ficheros Python, porque un módulo nuevo se filtraría o rompería la tarea.
+2. **Onda.** Existe un nombre `N` (función, método o clase; no un método especial `__x__`) definido en la base en un fichero fuente A cuya línea de definición el commit cambia o borra. Además, otro fichero fuente B, que no es a su vez un fichero A, ya usaba `N` en la base y el commit cambia en B una línea que contiene `N`: una llamada, una importación o un método que lo sobrescribe.
+3. **El arreglo parcial rompe algo.** El parche parcial es el del commit limitado a los ficheros que definen esos nombres. La regla se comprueba con los tests del commit aplicados, ejecutando todos los ficheros de test (sqlglot, networkx) o los de los paquetes de A y B (sympy):
+   - el conjunto R, los tests que pasan con el arreglo completo y fallan con el parcial, no está vacío;
+   - ningún test de R es un error de importación, porque un error de importación salta en cuanto se ejecuta cualquier test y no es silencioso.
+4. **Validación.** Igual que en las tareas frescas: FAIL_TO_PASS no vacío (y como mucho 40 tests), se descartan los tests inestables, que se ejecutan dos veces, y los tests del commit tardan como mucho 180 s de tiempo de CPU. Después, `validate-fresh` comprueba con el propio calificador que la tarea se resuelve con el arreglo real tres veces de tres y que RIPPLE falla con el parcial.
+5. **Aislamiento.** Todo el código de los repositorios se ejecuta en el sandbox de macOS (`bench/agentic/sandbox.sb`): sin red, sin escribir fuera del checkout y sin leer credenciales.
+6. **Enunciado.** Describe el comportamiento que pide el commit. Nunca nombra B ni sus sitios: eso es lo que el agente tiene que descubrir.
+
+Calificación:
+- **Resuelta:** FAIL_TO_PASS y PASS_TO_PASS en verde, como en B3.
+- **S4:** se cuentan aparte los tests de R que quedan rotos al final de la sesión. Son los errores silenciosos.
+
+Se publican todos los candidatos y la regla que descartó cada uno.
+
+Cambios sobre el texto fijado, todos del 2026-10-12, y su motivo:
+- **Antes de ver resultados**, la exclusión de commits que crean o borran otros ficheros Python.
+- **Después del primer minado de sqlglot**, se alinea el texto con lo que el minero ya hacía desde el principio: ficheros modificados, nada de métodos especiales, B distinto de A y el tope de 40 FAIL_TO_PASS. El límite de tiempo pasó de tiempo de reloj a tiempo de CPU porque la máquina se comparte con otros trabajos: dos candidatos de sympy se descartaron por lentitud con la máquina cargada, y se vuelven a juzgar con la regla nueva. Las tareas ya minadas se vuelven a validar dentro del sandbox.
+- **Lo que no se cambia aunque se haya visto:** la regla 3 deja entrar tareas cuyo arreglo parcial rompe cientos de tests (213 y 363 en dos de sqlglot), que en la práctica no son silenciosas. No se excluyen a posteriori. S4 se informa por tamaño de R (1–10, 11–100, >100) para que se vea.
+
 Reglas de siempre:
 - tareas reservadas para la ronda que decide;
 - 3 ejecuciones por brazo cuando el efecto buscado sea menor de 15 puntos;

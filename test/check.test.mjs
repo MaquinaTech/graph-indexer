@@ -102,9 +102,58 @@ test('check_changes and change_impact name the subclasses that inherit a changed
         assert.match(text, /overridden, so not reached by the change: TSQLParser\.parse_unique \(dialects\/tsql\.py\)/, text);
         assert.match(text, /test files that exercise the change \(3\): tests\/test_doris\.py, tests\/test_mysql\.py, tests\/test_starrocks\.py/, text);
         const impact = await callTool(intel, 'change_impact', { symbols: ['MySQLParser.parse_unique'] });
-        assert.match(impact, /inherited by \(these subclasses run the changed code too\): 2\n\s+DorisParser\s+dialects\/doris\.py:4-5\n\s+StarRocksParser\s+dialects\/starrocks\.py:4-5/, impact);
+        assert.match(impact, /inherited or extended by \(these subclasses run the changed code too\): 2\n\s+DorisParser\s+dialects\/doris\.py:4-5\n\s+StarRocksParser\s+dialects\/starrocks\.py:4-5/, impact);
         assert.match(impact, /tests\/test_doris\.py: \(tests a subclass that inherits it\)/, impact);
-        assert.doesNotMatch(impact, /inherited by[\s\S]*TSQLParser  /, impact);
+        assert.doesNotMatch(impact, /extended by[\s\S]*TSQLParser  /, impact);
+    } finally { intel.close(); rmrf(root); }
+});
+
+test('a subclass whose own version uses the changed one is reached, not overridden', async () => {
+    // TRANSFORMS = {**Base.TRANSFORMS, …} and super().m() extend the parent's member: a change to it
+    // still runs in the subclass and in the subclasses that inherit the subclass's version
+    const root = makeRepo({
+        'gens/__init__.py': '',
+        'gens/mysql.py': 'class MySQLGenerator:\n    TRANSFORMS = {"if": 1}\n\n    def cast_sql(self, e):\n        return str(e)\n',
+        'gens/singlestore.py': 'from gens.mysql import MySQLGenerator\n\n\nclass SingleStoreGenerator(MySQLGenerator):\n    TRANSFORMS = {**MySQLGenerator.TRANSFORMS, "concat": 2}\n\n    def cast_sql(self, e):\n        return super().cast_sql(e).upper()\n',
+        'gens/memsql.py': 'from gens.singlestore import SingleStoreGenerator\n\n\nclass MemSQLGenerator(SingleStoreGenerator):\n    pass\n',
+        'gens/tsql.py': 'from gens.mysql import MySQLGenerator\n\n\nclass TSQLGenerator(MySQLGenerator):\n    TRANSFORMS = {"top": 3}\n',
+        'tests/__init__.py': '',
+        'tests/test_singlestore.py': 'import unittest\n\n\nclass TestSingleStore(unittest.TestCase):\n    def test_if(self):\n        self.assertTrue(True)\n',
+        'tests/test_memsql.py': 'import unittest\n\n\nclass TestMemSQL(unittest.TestCase):\n    def test_if(self):\n        self.assertTrue(True)\n',
+        'tests/test_tsql.py': 'import unittest\n\n\nclass TestTSQL(unittest.TestCase):\n    def test_top(self):\n        self.assertTrue(True)\n',
+    });
+    const intel = new CodeIntel({ root });
+    try {
+        await intel.open();
+        writeFile(root, 'gens/mysql.py', 'class MySQLGenerator:\n    TRANSFORMS = {"if": 1, "nullif": 4}\n\n    def cast_sql(self, e):\n        return repr(e)\n');
+        const text = await callTool(intel, 'check_changes', {});
+        assert.match(text, /subclasses of MySQLGenerator whose own [\w, ]+ uses this one run the changed code too \(2\): SingleStoreGenerator \(gens\/singlestore\.py\), MemSQLGenerator \(gens\/memsql\.py\)/, text);
+        assert.match(text, /that inherit TRANSFORMS, cast_sql run the changed code too \(1\): TSQLGenerator/, text); // its cast_sql is MySQL's
+        assert.match(text, /overridden, so not reached by the change: TSQLGenerator\.TRANSFORMS \(gens\/tsql\.py\)/, text);
+        assert.doesNotMatch(text, /overridden[^\n]*SingleStoreGenerator/, text);
+        assert.match(text, /test files that exercise the change \(3\): tests\/test_memsql\.py, tests\/test_singlestore\.py, tests\/test_tsql\.py/, text);
+    } finally { intel.close(); rmrf(root); }
+});
+
+test('tests that reach a changed module by its name in a string are listed apart', async () => {
+    // transpile(sql, write="presto") picks the generator by name: no reference shows it
+    const root = makeRepo({
+        'sqlx/__init__.py': 'def transpile(sql, write=None):\n    return sql\n',
+        'sqlx/generators/__init__.py': '',
+        'sqlx/generators/presto.py': 'def date_diff_sql(e):\n    return "DATE_DIFF"\n',
+        'tests/__init__.py': '',
+        'tests/test_presto.py': 'from sqlx.generators.presto import date_diff_sql\n\n\ndef test_diff():\n    assert date_diff_sql(1)\n',
+        'tests/test_mysql.py': 'from sqlx import transpile\n\n\ndef test_to_presto():\n    assert transpile("x", write="presto")\n',
+        'tests/test_other.py': 'def test_nothing():\n    assert "prestoish"\n',
+    });
+    const intel = new CodeIntel({ root });
+    try {
+        await intel.open();
+        writeFile(root, 'sqlx/generators/presto.py', 'def date_diff_sql(e):\n    return "DATE_DIFF(x)"\n');
+        const text = await callTool(intel, 'check_changes', {});
+        assert.match(text, /test files that exercise the change \(1\): tests\/test_presto\.py/, text);
+        assert.match(text, /test files that name a changed module in a string [^\n]*\(1\): tests\/test_mysql\.py/, text);
+        assert.doesNotMatch(text, /test_other/, text);
     } finally { intel.close(); rmrf(root); }
 });
 

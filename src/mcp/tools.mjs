@@ -531,8 +531,10 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
         fam.up.sort(order); fam.down.sort(order);
         if (fam.up.length) out.push(`overrides/implements: ${fam.up.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
         if (fam.down.length) out.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 12).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 12 ? ', …' : ''}`);
-        const inh = intel.inheritance(fresh.id, { max: 60 }).inherit.filter(x => !x.is_test);
+        const all = intel.inheritance(fresh.id, { max: 60 });
+        const inh = all.inherit.filter(x => !x.is_test), ext = all.extend.filter(x => !x.is_test);
         if (inh.length) out.push(`inherited unchanged by (${inh.length}, they run this code): ${inh.slice(0, 10).map(x => x.qname).join(', ')}${inh.length > 10 ? ', …' : ''}`);
+        if (ext.length) out.push(`extended by (${ext.length}, their own version uses this one): ${ext.slice(0, 10).map(x => x.qname).join(', ')}${ext.length > 10 ? ', …' : ''}`);
     }
     // what the body uses that is defined elsewhere, with signatures (read the listed targets rather
     // than searching for them); the bare callee list only when there is no card to show
@@ -914,7 +916,7 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     overrides.sort((a, b) => pathRank(a.s.path) - pathRank(b.s.path) || a.s.path.localeCompare(b.s.path));
     // subclasses that inherit a changed member without redeclaring it run the changed code too
     const inheritors = new Map();
-    for (const id of seeds) for (const x of intel.inheritance(id).inherit) inheritors.set(x.id, x);
+    for (const id of seeds) { const h = intel.inheritance(id); for (const x of [...h.inherit, ...h.extend]) inheritors.set(x.id, x); }
     for (const t of intel.conventionTests([...seedFiles])) if (!tests.has(t)) tests.set(t, ['(by naming convention)']);
     for (const t of intel.conventionTests([...new Set([...inheritors.values()].map(x => x.path))])) if (!tests.has(t)) tests.set(t, ['(tests a subclass that inherits it)']);
     for (const x of inheritors.values()) if (x.is_test) { addTest(x.path, x.name); inheritors.delete(x.id); }
@@ -948,7 +950,7 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
         if (overrides.length > 15) out.push(`    … ${overrides.length - 15} more`);
     }
     if (inheritors.size) {
-        out.push(`inherited by (these subclasses run the changed code too): ${inheritors.size}`);
+        out.push(`inherited or extended by (these subclasses run the changed code too): ${inheritors.size}`);
         for (const x of [...inheritors.values()].slice(0, 15)) out.push(`    ${x.qname}  ${loc(x)}`);
         if (inheritors.size > 15) out.push(`    … ${inheritors.size - 15} more`);
     }
@@ -1026,6 +1028,7 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
     for (const h of r.inherited ?? []) {
         const members = h.members.join(', ');
         if (h.inherit.length) out.push(`• subclasses of ${h.type} that inherit ${members} run the changed code too (${h.inherit.length}): ${h.inherit.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.inherit.length > 8 ? `, … ${h.inherit.length - 8} more` : ''}`);
+        if (h.extend?.length) out.push(`• subclasses of ${h.type} whose own ${members} uses this one run the changed code too (${h.extend.length}): ${h.extend.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.extend.length > 8 ? `, … ${h.extend.length - 8} more` : ''}`);
         if (h.override.length) out.push(`• overridden, so not reached by the change: ${h.override.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.override.length > 8 ? `, … ${h.override.length - 8} more` : ''}`);
     }
     if (r.cases.length) {
@@ -1037,6 +1040,10 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         out.push(`test files that exercise the change (${r.tests.length}): ${r.tests.slice(0, 12).join(', ')}${r.tests.length > 12 ? ', …' : ''}`);
         for (const c of r.commands) out.push(`    run: ${clip(c, 400)}`);
     } else out.push('tests: none found that exercise the changed code.');
+    if (r.byName?.length) {
+        out.push(`test files that name a changed module in a string (they may reach it by a lookup the index does not see; run them for more certainty) (${r.byName.length}): ${r.byName.slice(0, 12).join(', ')}${r.byName.length > 12 ? ', …' : ''}`);
+        for (const c of r.byNameCommands) out.push(`    run: ${clip(c, 400)}`);
+    }
     out.push(problems ? `${plural(problems, 'problem')} found.` : 'No problems found in the changed code (this check does not replace running the tests).');
     return out.join('\n');
 }

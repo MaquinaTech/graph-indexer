@@ -22,6 +22,27 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
     (0.96–1.12) of Claude Code alone in the pilots `issue1p` and `issue2`.
   - `init`'s instructions now suggest the issue's names and terms as the query.
   - [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
+- **`check` lists, apart, the test files that name a changed module in a string**, such as
+  `transpile(sql, write="presto")` for `generators/presto.py`. They reach the change through a
+  dialect, plugin or backend lookup that no reference shows.
+  - Over 46 fresh issues, adding them takes the existing tests the gold fix breaks from 10 of 13
+    detected to 13 of 13, and the developer's test files from 88 % to 97 %.
+  - The share of test files avoided falls from 88 % to 66 %: 54 % in sqlglot and 52 % on the held
+    split.
+  - Measured with `localize.mjs select`, which runs the whole suite with and without the gold fix,
+    the way NameRTS measures test selection.
+- **B5, silent errors** (`bench/agentic/mine-b5.mjs`): tasks from real commits whose partial fix,
+  the changed definition without the updates its existing users needed, breaks tests elsewhere.
+  - The criterion was fixed before mining ([PLAN-IDE-AGENTE §4](docs/PLAN-IDE-AGENTE.md)).
+  - `validate-fresh` checks that RIPPLE passes with the real fix and fails with the partial one.
+- **Bench: the repositories' code runs sandboxed.** Tests at mining, measuring and grading run
+  under `bench/agentic/sandbox.sb` (`sandboxed()` in `lib.mjs`):
+  - no network beyond localhost;
+  - no writes outside the checkout and temporary directories;
+  - no reads of credentials;
+  - it fails closed.
+- **Bench: test runs share the machine.** Parallel runs use only idle cores (`fairJobs`), and the
+  rule that drops slow tests uses CPU time instead of the wall clock.
 - **[docs/PLAN-IDE-AGENTE.md](docs/PLAN-IDE-AGENTE.md)**, the active plan: graph-indexer as the
   agent's IDE and memory (exact references, the impact of an edit, verification), with B3 as a
   no-regression check and a new bench of silent errors (B5).
@@ -139,6 +160,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **`check` no longer says "overridden, so not reached" of a subclass whose own version uses the
+  changed one.** Examples are `TRANSFORMS = {**MySQLGenerator.TRANSFORMS, …}` and `super().m()`.
+  - Such subclasses, and their subclasses, are now listed as running the changed code, with their
+    tests.
+  - `change_impact` and the symbol facts count them too.
+  - On sqlglot-1a782c55, `check` had missed `test_singlestore.py`, which the fix breaks.
 - **`check` no longer flags calls to a Python `@classmethod`** as not fitting ("takes 2 arguments"):
   its `cls` was counted because a classmethod is marked static. On the 50 gold fixes of the fresh
   issues it now reports no problems.

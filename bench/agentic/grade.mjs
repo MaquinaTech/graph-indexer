@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
+import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, sandboxed, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
 import { parseTranscript, RESULT_CHARS_PER_TOKEN } from './transcript.mjs';
 
 /** Parse "path:LINE" answers (tolerates bullets, backticks, "./" and absolute checkout paths). */
@@ -99,7 +99,8 @@ export function gradeEdit(task, meta) {
         if (r.code !== 0) return { ...out, solved: false, score: 0 };
     }
     for (const c of g.checks ?? []) {
-        const r = sh(c.cmd.replaceAll('{GI}', GI_ROOT), { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
+        // the checks run the repository's code (tests, builds): sandboxed (lib.mjs)
+        const r = sh(sandboxed(c.cmd.replaceAll('{GI}', GI_ROOT), { checkout: cwd }), { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
         const ok = c.expect === 'fail' ? r.code !== 0 : r.code === 0;
         out.checks.push({ name: c.name, kind: c.kind ?? 'test', ok, code: r.code, ms: r.ms, tail: (r.stdout + r.stderr).slice(-600) });
     }

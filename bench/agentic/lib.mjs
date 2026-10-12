@@ -23,6 +23,32 @@ export function argv() {
     };
 }
 
+/**
+ * A shell command that runs third-party code (a mined repository's tests or build) inside the
+ * macOS sandbox of `sandbox.sb`: no network beyond localhost, writes only to `checkout`, the
+ * temporary directories and a cache in the work area (GOCACHE, npm, XDG point there), and no reads
+ * of credentials. Fails closed: without `sandbox-exec` it throws, unless GI_SANDBOX=off says to run
+ * unconfined. Inside a sandbox (GI_IN_SANDBOX) commands are not wrapped again (sandboxes cannot nest).
+ */
+export function sandboxed(cmd, { checkout }) {
+    if (process.env.GI_IN_SANDBOX === '1' || process.env.GI_SANDBOX === 'off') return cmd;
+    if (!fs.existsSync('/usr/bin/sandbox-exec')) throw new Error('no /usr/bin/sandbox-exec: third-party code runs only sandboxed (GI_SANDBOX=off to override)');
+    const cache = path.join(WORK, 'sandbox-cache');
+    fs.mkdirSync(cache, { recursive: true });
+    const q = JSON.stringify;
+    const env = `GI_IN_SANDBOX=1 GOCACHE=${q(path.join(cache, 'go-build'))} npm_config_cache=${q(path.join(cache, 'npm'))} XDG_CACHE_HOME=${q(cache)}`;
+    return `/usr/bin/sandbox-exec -D CHECKOUT=${q(fs.realpathSync(checkout))} -D HOME=${q(os.homedir())} -D CACHE=${q(fs.realpathSync(cache))} -f ${q(path.join(HERE, 'sandbox.sb'))} /usr/bin/env ${env} bash -c ${q(cmd)}`;
+}
+
+/**
+ * How many processes to run at once: at most `want`, and no more than the cores the machine has
+ * idle now (other sessions and builds share it), never below one.
+ */
+export function fairJobs(want) {
+    const idle = os.cpus().length - Math.ceil(os.loadavg()[0]);
+    return Math.max(1, Math.min(want, idle));
+}
+
 /** Run a shell command; never throws. */
 export function sh(cmd, { cwd = process.cwd(), timeout = 600_000, env = {}, input } = {}) {
     const t0 = Date.now();
