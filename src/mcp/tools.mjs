@@ -15,6 +15,7 @@ import { testCommands } from '../query/testcmd.mjs';
 import { showcaseText } from '../query/showcase.mjs';
 import { collectRoutes, routesInQuery, matchRoutes } from '../query/routes.mjs';
 import { collectInjection, providedBy, tokenUses, injectedInto } from '../query/injection.mjs';
+import { collectModels, modelOf, prismaModelsNamed } from '../query/orm.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -302,6 +303,7 @@ async function dispatchTool(intel, name, args) {
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
         case 'demo': return showcaseText(intel);
         case 'inject': return toolInject(intel, args); // CLI helper (`inject`): dependency-injection tokens, their providers and where they are injected
+        case 'models': return toolModels(intel, args); // CLI helper (`models`): ORM models, their tables, migrations and Prisma client calls
         case 'routes': return toolRoutes(intel, args); // CLI helper (`routes`); explore finds the handler of a route named in its query // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
@@ -566,6 +568,11 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
 
 async function toolReferences(intel, { symbol, kind = 'all', include_tests = true, limit = 80, path: p = null }) {
     const matches = pickSymbol(intel, symbol);
+    // a Prisma model is no indexed symbol: its uses are the client's calls (unless a definition has its exact name)
+    if (!matches.some(m => m.name === symbol)) {
+        const pm = prismaModelsNamed(intel, symbol).filter(m => m.name === symbol || !matches.length);
+        if (pm.length) return pm.map(m => modelText(m, { max: limit })).join('\n\n');
+    }
     if (!matches.length) return notFound(intel, symbol);
     const s = matches[0];
     const all = intel.references(s.id, { kinds: kind && kind !== 'all' ? [kind] : null, includeTests: include_tests });
@@ -610,6 +617,41 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
     }
     out.push(...stringMentionNote(intel, s));
     out.push(...injectionNote(intel, s));
+    const model = modelOf(intel, s.id);
+    if (model) out.push(modelText(model, { max: 12, header: false }));
+    return out.join('\n');
+}
+
+/** An ORM model: its table, the migrations that touch it and, for Prisma, the client's calls. */
+function modelText(m, { max = 30, header = true } = {}) {
+    const table = `${m.schema ? `${m.schema}.` : ''}${m.table}`;
+    const out = [header
+        ? `${m.orm} model ${m.name} (${m.file}:${m.line}) — table ${table}${m.defaultName ? ' (TypeORM\'s default name)' : ''}${m.proxyName ? ` (proxy of ${m.proxyName})` : ''}`
+        : `ORM (${m.orm}): table ${table}${m.defaultName ? ' (TypeORM\'s default name)' : ''}${m.proxyName ? ` (proxy of ${m.proxyName})` : ''}.`];
+    if (m.orm === 'Prisma') {
+        const files = new Set(m.calls.map(c => c.file));
+        out.push(`Client calls (${m.calls.length} in ${plural(files.size, 'file')}; \`<client>.${m.name[0].toLowerCase() + m.name.slice(1)}.<operation>(…)\`, typed only by the generated client):`);
+        for (const c of m.calls.slice(0, max)) out.push(`  ${c.file}:${c.line}  ${c.op}${c.owner ? `  in ${c.owner}` : ''}`);
+        if (m.calls.length > max) out.push(`  … ${m.calls.length - max} more`);
+    }
+    if (m.migrations.length) {
+        out.push(`Migrations that touch it (${m.migrations.length} statements in ${plural(new Set(m.migrations.map(x => x.file)).size, 'file')}):`);
+        for (const x of m.migrations.slice(-max)) out.push(`  ${x.file}:${x.line}  ${x.op}`);
+        if (m.migrations.length > max) out.push(`  (the last ${max}; ${m.migrations.length - max} earlier)`);
+    } else out.push('No migration in the repository names its table.');
+    return out.join('\n');
+}
+
+function toolModels(intel, { filter = '' }) {
+    const all = collectModels(intel);
+    if (!all.length) return 'No ORM models recognised (Prisma, Django, SQLAlchemy/SQLModel, TypeORM).';
+    const f = String(filter ?? '').trim().toLowerCase();
+    const ms = f ? all.filter(m => m.name.toLowerCase().includes(f) || m.table.toLowerCase().includes(f)) : all;
+    if (!ms.length) return `No model or table matches "${filter}" (${plural(all.length, 'model')}; \`models\` lists them all).`;
+    if (ms.length <= 3) return ms.map(m => modelText(m)).join('\n\n');
+    const out = [`${plural(ms.length, 'model')}${f ? ` matching "${filter}"` : ''}:`];
+    for (const m of ms.slice(0, 200)) out.push(`  ${m.orm.padEnd(10)} ${m.name.padEnd(28)} table ${(m.schema ? `${m.schema}.` : '') + m.table}   ${m.file}:${m.line}   ${plural(m.migrations.length, 'migration statement')}${m.orm === 'Prisma' ? `, ${plural(m.calls.length, 'client call')}` : ''}`);
+    if (ms.length > 200) out.push(`  … ${ms.length - 200} more (pass part of a name)`);
     return out.join('\n');
 }
 
@@ -1131,6 +1173,8 @@ async function toolExplore(intel, { query = '', symbols = [], path: p = null, ma
             const recv = injectedInto(intel, cls.id).filter(j => s.kind === 'class' || (j.line >= s.start_line && j.line <= s.end_line));
             if (recv.length) facts.push(`receives by injection: ${recv.slice(0, 4).map(j => `${j.param ?? '?'} ← ${j.token}, ${j.from.length ? j.from.slice(0, 2).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 30)} (${p.file}:${p.line})`).join(' / ') : injectionSource(intel, j.key, j)}${j.why && j.why !== 'by type' && j.from.length ? ` [${j.why}]` : ''}`).join('; ')}${recv.length > 4 ? `; … ${recv.length - 4} more` : ''}`);
         }
+        const model = modelOf(intel, s.id);
+        if (model) facts.push(`ORM model (${model.orm}): table ${(model.schema ? `${model.schema}.` : '') + model.table}; ${model.migrations.length ? `migrations touching it: ${model.migrations.slice(-3).map(x => `${x.file}:${x.line} ${x.op}`).join(', ')}${model.migrations.length > 3 ? `, … (${model.migrations.length} statements; find_references lists them)` : ''}` : 'no migration names it'}`);
         const gives = providedBy(intel, s.id);
         if (gives.length) facts.push(`provided by injection as ${gives.slice(0, 3).map(p => `${p.types ? `a Spring bean (${p.how})` : p.token} to ${p.into.length ? p.into.slice(0, 3).map(j => `${j.owner?.qname ?? '?'} (${j.file}:${j.line})`).join(', ') + (p.into.length > 3 ? `, … ${p.into.length - 3} more` : '') : 'no injection point'}`).join('; ')}`);
         if (!s.is_test) for (const t of testsUsing(intel, s.id)) {

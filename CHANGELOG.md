@@ -86,6 +86,17 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   barrels and workspace packages correct
   ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#components-in-vue-and-svelte-templates)).
 
+- **ORM models: tables, migrations, Prisma's client.** Prisma `model` blocks, Django models,
+  SQLAlchemy / SQLModel tables and TypeORM entities, each with the table its ORM gives it, the
+  migration statements that name that table (SQL, Alembic `op.*`, TypeORM `queryRunner`, Django
+  operations and data migrations) and, for Prisma, the client calls that use the model
+  (`prisma.envelope.findFirst(…)`, typed only by the generated client). `find_references` on a
+  model (or a Prisma model's name) and `explore` show them; `graph-indexer models [name]` lists
+  them. Checked by an independent reading on documenso, full-stack-fastapi-template,
+  django-oscar and twenty: of 2,671 migration statements and 1,073 client calls claimed, none
+  wrong; the models and statements it found missing were added
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#orm-models-their-migrations-and-prismas-client)).
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)

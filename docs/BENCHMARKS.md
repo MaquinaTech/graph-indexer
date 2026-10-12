@@ -621,6 +621,39 @@ as before. Library components re-exported through a workspace package (lucide ic
 registered globally (`app.component(…)`, Nuxt's auto-imports) and dynamic ones
 (`<component :is>`, `<svelte:component>`).
 
+## ORM models, their migrations and Prisma's client
+
+An ORM model's table is named in strings: migrations touch it by name, and Prisma's client is
+generated outside the repository (`prisma.envelope.findFirst(…)` is typed only by
+`node_modules/.prisma`). graph-indexer reads the models (Prisma `model` blocks, Django models,
+SQLAlchemy / SQLModel tables, TypeORM entities) with the table each ORM gives them, the migration
+statements that name that table, and Prisma's client calls. Every claim of the first version was
+checked by an independent reader with its own scripts against the source — all of them, not a
+sample:
+
+| | documenso (`38ecb21`, Prisma) | full-stack-fastapi-template (`7257e60`, SQLModel + Alembic) | django-oscar (`1635338`, Django) | twenty (`4c28e34f09`, TypeORM) |
+|---|---|---|---|---|
+| models found / in the code | 52 / 52 | 2 / 2 | 81 / 85 | 79 / 80 |
+| wrong table name | 0 | 0 | 1 | 0 |
+| migration statements claimed | 610 | 56 | 328 | 1,677 |
+| … that do not touch the table | 0 | 0 (1 mislabelled) | 0 | 0 |
+| Prisma client calls claimed | 1,073 | – | – | – |
+| … wrong | 0 | – | – | – |
+| … found of those in the code | 100% | – | – | – |
+
+What the reader found missing, all fixed since: a Django `db_table` inherited from an abstract
+base (the wrong table), Django models whose base comes from a library (treebeard's `MP_Node`,
+auth's `AbstractUser`: 4 models), an entity whose 49 lines of decorators hid its `@Entity`,
+statements that name the table only as an aliased `UPDATE "T" t`, a read (`FROM`, `JOIN`), a
+`RENAME TO` target or `create_primary_key`, Django data migrations (`apps.get_model(…)`), and
+twenty's schema changes in upgrade commands outside any `migrations` directory (code driving
+TypeORM's `queryRunner`). After the fixes: 85 / 85 and 80 / 80 models, no table name wrong, and
+1,109 more statements (documenso 84, the template 10, oscar 35, twenty 980), each of them checked
+by script to name its table; none of the first version's lines was lost. Still not modelled:
+TypeORM's data-source default schema (16 of twenty's entities show their table without `core.`),
+Kysely and raw queries through the Prisma client, materialized views, and a proxy model lists its
+base's migrations, which are its table's.
+
 ## 2. Localization from real commits
 
 ```bash
