@@ -58,8 +58,8 @@ export function paramArity(def, { method = false, lang = '', isStatic = false, d
         if (t === 'keyword_separator') { keywordOnly = true; continue; }
         if (SKIP_PARAM.test(t)) continue;
         const text = p.text;
-        // the receiver: Python self/cls (not for staticmethods), TS `this: T`
-        if (first && py && method && !isStatic && !decorators.some(d => /staticmethod/.test(d)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
+        // the receiver: Python self/cls (a classmethod's cls too, though it counts as static), TS `this: T`
+        if (first && py && method && !decorators.some(d => /staticmethod/.test(d)) && (!isStatic || /^cls\b/.test(text)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
         first = false;
         if (/^this\s*[:?]/.test(text)) continue;
         if (VARIADIC.test(t) || /^(\.\.\.|\*\*?)/.test(text) || /^params\s/.test(text) || /\bvararg\b/.test(text) || /\.\.\.\s*\w*$/.test(text) && lang === 'go') { max = Infinity; continue; }

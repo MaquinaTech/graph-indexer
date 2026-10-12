@@ -107,3 +107,22 @@ test('check_changes and change_impact name the subclasses that inherit a changed
         assert.doesNotMatch(impact, /inherited by[\s\S]*TSQLParser  /, impact);
     } finally { intel.close(); rmrf(root); }
 });
+
+test('Python: a classmethod called through its class is not short of its cls argument', async () => {
+    const files = {
+        'lit.py': 'class Literal:\n    @classmethod\n    def string(cls, value):\n        return cls()\n\n    @staticmethod\n    def number(value):\n        return value\n',
+        'use.py': 'from lit import Literal\n\n\ndef make():\n    return Literal.string("a")\n',
+    };
+    const root = makeRepo(files);
+    const intel = new CodeIntel({ root });
+    try {
+        await intel.open();
+        // a new call to each: neither is short of an argument
+        writeFile(root, 'use.py', 'from lit import Literal\n\n\ndef make():\n    return Literal.string("a"), Literal.string("b"), Literal.number(1)\n');
+        const text = await callTool(intel, 'check_changes', {});
+        assert.doesNotMatch(text, /call does not fit|no longer fit/, text);
+        // and a call that really is short still is
+        writeFile(root, 'use.py', 'from lit import Literal\n\n\ndef make():\n    return Literal.string()\n');
+        assert.match(await callTool(intel, 'check_changes', {}), /call does not fit Literal\.string/);
+    } finally { intel.close(); rmrf(root); }
+});
