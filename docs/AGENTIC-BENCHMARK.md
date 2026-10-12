@@ -292,6 +292,35 @@ graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
 
+### Harder issues with the hooks installed, on Sonnet 5.5 (b3h3, pilot): 15 tasks, 30 runs
+
+The fifth round's 15 issues (sqlglot 11, SymPy 4; fixes of 2–6 files), one run per task and arm,
+`cc` against `cc+gi+hooks` as in b3h2, the sessions' tests run with the grading Python
+(checked by the preflight from inside a session).
+
+| arm | solved | mean cost | median cost | tool calls | graph-indexer calls | wall |
+|---|---|---|---|---|---|---|
+| `cc` | 15 / 15 | 132k | 149k | 13.0 | 0 | 170 s |
+| `cc+gi+hooks` | 15 / 15 | 139k | 137k | 13.1 | 0 | 174 s |
+
+- **Both arms solved all 30.** Cost 1.05 (0.96–1.15) of `cc`, paired by task. The harder round
+  costs about three times b3h2's per issue (132k against ~40k input-equivalent tokens) and still
+  leaves no failure for an index to prevent.
+- **The agent again never called graph-indexer.** It worked through the shell: 336 Bash calls across
+  the 30 runs against 46 `Read` (30 of them the task's instructions), no `Grep` and 6 `Edit`. It
+  read files with chained commands (`cd repo; sed -n 1120,1210p a.py; sed -n 1,40p b.py`: 97 calls,
+  178 ranges) and edited them with Python heredocs and `sed -i` (about 115 calls).
+- **The hooks saw little of it.** The installed hook read a shell line only when it was a single
+  command after `cd DIR &&`, and ran its edit checker only after the edit tool. Replaying the
+  `cc+gi+hooks` runs' 191 calls through it (on the checkouts as the runs left them, so
+  approximate), it adds context to 33: 19 searches for a name several definitions share, 11
+  reads, 3 missed definition searches. The hook now splits a shell line into its commands and
+  resolves every read (the same replay: 50 calls, 26 of them reads), and checks the source files a
+  shell command changed; that version is not yet measured in sessions. Post-tool context does
+  reach the model (checked in a session whose hook logs its calls); stream-json transcripts just
+  do not record it.
+- One pilot, one run each: no interval on the solved rate.
+
 ### Issues with the hooks installed, on Sonnet 5.5 (b3h2, pilot): 11 tasks, 22 runs
 
 The fourth round's 11 B3 issues (networkx 3, sqlglot 8), one run per task and arm, in real Claude

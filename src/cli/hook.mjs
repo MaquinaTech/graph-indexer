@@ -29,7 +29,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findRepoRoot, dataDir, DATA_DIR_NAME } from '../util/paths.mjs';
 import { specForPath } from '../parse/languages.mjs';
@@ -93,15 +93,63 @@ function sessionState(input) {
     };
 }
 
+/**
+ * The commands of a shell line, split at `;`, `&&`, `||` and newlines outside quotes, with heredoc
+ * bodies dropped and `cd DIR` steps left out (agents write `cd repo; sed -n …; grep …`).
+ */
+export function shellSegments(command) {
+    return splitShell(command).filter(x => !/^cd\s+\S+$/.test(x));
+}
+
+function splitShell(command) {
+    const src = String(command ?? '');
+    const out = [];
+    let cur = '', q = null;
+    const lines = src.split('\n');
+    for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (q) { cur += ch; if (ch === q) q = null; else if (ch === '\\' && q === '"' && i + 1 < line.length) cur += line[++i]; continue; }
+            if (ch === '"' || ch === "'") { q = ch; cur += ch; continue; }
+            if (ch === '\\' && i + 1 < line.length) { cur += ch + line[++i]; continue; }
+            if (ch === ';' || (ch === '&' && line[i + 1] === '&') || (ch === '|' && line[i + 1] === '|')) {
+                out.push(cur); cur = '';
+                if (ch !== ';') i++;
+                continue;
+            }
+            cur += ch;
+        }
+        if (q) { cur += '\n'; continue; } // a quoted string spanning lines
+        // a heredoc (`<<'EOF'`): skip its body up to the delimiter
+        const hd = /<<-?\s*['"]?(\w+)['"]?/.exec(cur);
+        out.push(cur); cur = '';
+        if (hd) while (li + 1 < lines.length && lines[li + 1].trim() !== hd[1]) li++;
+        if (hd) li++;
+    }
+    if (cur) out.push(cur);
+    return out.map(x => x.trim()).filter(Boolean);
+}
+
 /** A file read through the shell: [file, from, to] for `sed -n 'a,bp' f`, `head -n N f`, `cat f`, `nl -ba f | sed -n …`. */
 export function shellRead(command) {
-    const c = String(command ?? '').replace(/^\s*cd\s+\S+\s*&&\s*/, '');
-    let m;
-    if ((m = /^(?:nl\s+-ba\s+|cat\s+-n\s+)(\S+)\s*\|\s*sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s*$/.exec(c))) return [m[1], +m[2], +m[3]];
-    if ((m = /^sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+(\S+)\s*$/.exec(c))) return [m[3], +m[1], +m[2]];
-    if ((m = /^head\s+-(?:n\s*)?(\d+)\s+(\S+)\s*$/.exec(c))) return [m[2], 1, +m[1]];
-    if ((m = /^cat\s+(?:-n\s+)?(\S+\.\w+)\s*$/.exec(c))) return [m[1], 1, 2000];
-    return null;
+    return shellReads(command)[0] ?? null;
+}
+
+/** Every file read in a shell line (`cd repo; sed -n 10,40p a.py; sed -n 5,9p b.py`), relative paths resolved against a `cd` before them. */
+export function shellReads(command) {
+    const out = [];
+    let dir = null;
+    const at = (f) => (dir && !path.isAbsolute(f) ? path.join(dir, f) : f);
+    for (const c of splitShell(command)) {
+        let m;
+        if ((m = /^cd\s+(['"]?)(\S+)\1$/.exec(c))) { dir = path.isAbsolute(m[2]) ? m[2] : path.join(dir ?? '', m[2]); continue; }
+        if ((m = /^(?:nl\s+-ba\s+|cat\s+-n\s+)(\S+)\s*\|\s*sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s*$/.exec(c))) out.push([at(m[1]), +m[2], +m[3]]);
+        else if ((m = /^sed\s+-n\s+['"]?(\d+),(\d+)p['"]?\s+(\S+)\s*$/.exec(c))) out.push([at(m[3]), +m[1], +m[2]]);
+        else if ((m = /^head\s+-(?:n\s*)?(\d+)\s+(\S+)\s*$/.exec(c))) out.push([at(m[2]), 1, +m[1]]);
+        else if ((m = /^cat\s+(?:-n\s+)?(\S+\.\w+)\s*$/.exec(c))) out.push([at(m[1]), 1, 2000]);
+    }
+    return out;
 }
 
 /** Minimal shell-words split (quotes and escapes) for extracting a grep pattern. */
@@ -148,17 +196,20 @@ function localIndex(root) {
     };
 }
 
-async function afterEdit(root, input, acquire) {
-    const file = input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? input.tool_input?.path ?? null;
-    if (!file) return null;
-    const rel = path.isAbsolute(file) ? path.relative(root, file).split(path.sep).join('/') : file;
-    if (rel.startsWith('..') || !specForPath(rel)) return null;
+async function afterEdit(root, input, acquire, files = null) {
+    if (!files) {
+        const file = input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? input.tool_input?.path ?? null;
+        if (!file) return null;
+        files = [path.isAbsolute(file) ? path.relative(root, file).split(path.sep).join('/') : file];
+    }
+    files = files.filter(rel => !rel.startsWith('..') && specForPath(rel)).slice(0, 6);
+    if (!files.length) return null;
     const ix = await acquire();
     if (!ix) return null;
     const { intel } = ix;
     try {
         const { checkChanges } = await import('../query/check.mjs');
-        const r = await checkChanges(intel, { files: [rel], tests: false });
+        const r = await checkChanges(intel, { files, tests: false });
         if (r.error) return null;
         const lines = [];
         for (const e of r.syntax.slice(0, 3)) lines.push(`${e.path}:${e.line} has a syntax error introduced since the last commit (${e.missing ? `missing ${e.missing}` : 'unexpected code'}): ${e.text.slice(0, 100)}`);
@@ -225,44 +276,66 @@ async function afterGrep(root, input, crawling, acquire) {
  * silent when there is none; and while the agent is crawling, where the names the lines use are defined.
  */
 async function afterRead(root, input, state, crawling, acquire) {
-    let file = null, from = 1, to = 2000;
+    let reads = [];
     if (READ_TOOLS.has(input.tool_name)) {
-        file = input.tool_input?.file_path ?? input.tool_input?.path ?? input.tool_input?.absolute_path ?? null;
+        const file = input.tool_input?.file_path ?? input.tool_input?.path ?? input.tool_input?.absolute_path ?? null;
+        let from = 1, to = 2000;
         const off = Number(input.tool_input?.offset ?? 0), lim = Number(input.tool_input?.limit ?? 0);
         if (off > 0) from = off;
         if (lim > 0) to = from + lim - 1;
-    } else {
-        const r = shellRead(input.tool_input?.command);
-        if (!r) return null;
-        [file, from, to] = r;
-    }
-    if (!file) return null;
+        if (file) reads = [[file, from, to]];
+    } else reads = shellReads(input.tool_input?.command);
     const cwd = input.cwd || root;
-    const abs = path.isAbsolute(file) ? file : path.join(cwd, file);
-    const rel = path.relative(root, abs).split(path.sep).join('/');
-    if (rel.startsWith('..') || !specForPath(rel)) return null;
+    const ranges = reads.map(([file, from, to]) => {
+        const abs = path.isAbsolute(file) ? file : path.join(cwd, file);
+        return { rel: path.relative(root, abs).split(path.sep).join('/'), from, to };
+    }).filter(r => !r.rel.startsWith('..') && specForPath(r.rel)).slice(0, 4);
+    if (!ranges.length) return null;
     const ix = await acquire();
     if (!ix) return null;
     const { intel } = ix;
     try {
-        await intel.revalidate([rel]); // a long-lived index may not have seen the file change yet
-        const out = [];
+        await intel.revalidate([...new Set(ranges.map(r => r.rel))]); // a long-lived index may not have seen the file change yet
+        const facts = [], defs = [];
         const { factsForRange, renderFacts } = await import('../query/facts.mjs');
+        const { definitionsUsed } = await import('../query/read.mjs');
         state.st.facts ??= [];
-        const facts = factsForRange(intel, rel, from, to, { max: 4, shown: new Set(state.st.facts) });
-        if (facts.length) {
-            for (const f of facts) state.st.facts.push(f.key);
-            out.push(`graph-indexer, resolved for these lines:\n${renderFacts(facts).map(l => `  ${l}`).join('\n')}`);
+        for (const { rel, from, to } of ranges) {
+            const fs1 = factsForRange(intel, rel, from, to, { max: Math.max(1, 4 - facts.length), shown: new Set(state.st.facts) });
+            for (const f of fs1) { state.st.facts.push(f.key); facts.push(f); }
+            if (crawling) {
+                const n = Math.max(1, to - from + 1);
+                const { rows } = definitionsUsed(intel, rel, from, to, { max: Math.min(12, Math.max(4, Math.round(n / 15))), skipIds: new Set(state.st.shown) });
+                for (const r of rows) { state.st.shown.push(r.id); if (defs.length < 12) defs.push(r); }
+            }
         }
-        if (crawling) {
-            const { definitionsUsed } = await import('../query/read.mjs');
-            const n = Math.max(1, to - from + 1);
-            const { rows } = definitionsUsed(intel, rel, from, to, { max: Math.min(12, Math.max(4, Math.round(n / 15))), skipIds: new Set(state.st.shown) });
-            for (const r of rows) state.st.shown.push(r.id);
-            if (rows.length) out.push(`graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n${rows.map(r => `  ${r.qname} → ${r.path}:${r.start_line}  ${String(r.sig || r.kind).replace(/\s+/g, ' ').replace(/\s+#.*$/, '').slice(0, 100)}`).join('\n')}`);
-        }
+        const out = [];
+        if (facts.length) out.push(`graph-indexer, resolved for these lines:\n${renderFacts(facts).map(l => `  ${l}`).join('\n')}`);
+        if (defs.length) out.push(`graph-indexer: where names used in these lines are defined (read them directly instead of searching):\n${defs.map(r => `  ${r.qname} → ${r.path}:${r.start_line}  ${String(r.sig || r.kind).replace(/\s+/g, ' ').replace(/\s+#.*$/, '').slice(0, 100)}`).join('\n')}`);
         return out.length ? out.join('\n') : null;
     } finally { ix.release(); }
+}
+
+/**
+ * Source files a shell command changed (`sed -i`, a Python heredoc that rewrites a file, a patch):
+ * the working tree's modified and new files whose modification time moved since the hook last
+ * looked, so the edit checker also follows edits made without the edit tool.
+ */
+function shellEdits(root, state) {
+    let r;
+    try { r = spawnSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all', '-z'], { encoding: 'utf8', timeout: 1500 }); } catch { return []; }
+    if (r.status !== 0 || typeof r.stdout !== 'string') return [];
+    const seen = state.st.mtimes ??= {};
+    const changed = [];
+    for (const e of r.stdout.split('\0')) {
+        if (e.length < 4 || e.startsWith('D') || e[1] === 'D') continue;
+        const rel = e.slice(3);
+        if (!specForPath(rel) || rel.startsWith(DATA_DIR_NAME + '/')) continue;
+        let m;
+        try { m = fs.statSync(path.join(root, rel)).mtimeMs; } catch { continue; }
+        if (seen[rel] !== m) { seen[rel] = m; changed.push(rel); }
+    }
+    return changed;
 }
 
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
@@ -298,6 +371,7 @@ export async function handleHook(event, input, { root, acquire }) {
         const state = sessionState(input);
         if (EDIT_TOOLS.has(tool)) {
             state.st.nav = 0;
+            shellEdits(root, state); // so a later shell command does not report this edit again
             state.save();
             text = await afterEdit(root, input, acquire);
         } else if (GREP_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && grepPattern(command))) {
@@ -308,6 +382,12 @@ export async function handleHook(event, input, { root, acquire }) {
             state.st.nav++;
             text = await afterRead(root, input, state, state.st.nav >= CRAWL, acquire);
             state.save();
+        } else if (SHELL_TOOLS.has(tool)) {
+            // any other command may have edited files (`sed -i`, a script): check what it changed
+            const changed = shellEdits(root, state);
+            if (changed.length) state.st.nav = 0;
+            state.save();
+            if (changed.length) text = await afterEdit(root, input, acquire, changed);
         }
     } else if (event === 'session-start' || event === 'subagent-start') {
         name ??= event === 'session-start' ? 'SessionStart' : 'SubagentStart';

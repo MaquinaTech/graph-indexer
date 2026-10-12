@@ -97,6 +97,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **Hooks follow work done in the shell.** On Sonnet 5.5 the B3 sessions read files with
+  chained `cd repo; sed -n a,bp f; sed -n …` commands and edited them with Python heredocs and
+  `sed -i`; the post-tool hook recognised only a single read after `cd DIR &&`, and checked edits
+  only after the edit tool. It now splits a shell line into its commands (outside quotes and
+  heredoc bodies, paths resolved against a `cd`) and resolves every read in it, and after any
+  other shell command runs the edit checker on the source files that command changed (working-tree
+  files whose modification time moved). Replaying the b3h3 pilot's `cc+gi+hooks` runs: context on
+  50 of 191 calls instead of 33. Not yet measured in sessions.
+
 - **TypeScript default exports.** `export { default as X } from './x'` now follows to x's default
   export; an anonymous `export default function () {}` counts as exported; a default import binds
   to the module's own definition or default export before anything the module itself imports

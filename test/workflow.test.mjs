@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
-import { grepPattern } from '../src/cli/hook.mjs';
+import { grepPattern, shellReads } from '../src/cli/hook.mjs';
 import { claudeAgentFile, helperInstructions } from '../src/cli/helper.mjs';
 import { makeRepo, writeFile, rmrf } from './helpers.mjs';
 
@@ -91,6 +91,32 @@ test('hook post-tool: edits get the checker; missed definition searches get the 
     assert.match(JSON.parse(cursor.stdout).additional_context, /Wishlist → src\/cart\.ts:\d+/);
     const quietEdit = run({ tool_name: 'Read', tool_input: { file_path: path.join(root, 'config/app.yaml') } });
     assert.equal(quietEdit.status, 0);
+});
+
+test('hook post-tool: shell edits get the checker; chained shell reads are all resolved', () => {
+    const session = `s-${process.pid}-${Date.now()}`;
+    const run = (payload) => spawnSync(process.execPath, [BIN, 'hook', 'post-tool'], { input: JSON.stringify({ cwd: root, session_id: session, hook_event_name: 'PostToolUse', ...payload }), encoding: 'utf8', env: LOCAL });
+    const ctxOf = (r) => (r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext : null);
+    run({ tool_name: 'Bash', tool_input: { command: 'ls src' } }); // the files changed so far are now known
+    // an edit made by a script, not the edit tool
+    writeFile(root, 'src/wish.ts', `import { Wishlist } from './cart';\nexport function wished(w: Wishlist) {\n  return w.total(1, 2);\n}\n`);
+    const script = run({ tool_name: 'Bash', tool_input: { command: `cd ${root}; python3 - <<'EOF'\nimport re\np = 'src/wish.ts'; s = open(p).read(); open(p, 'w').write(s.replace('total()', 'total(1, 2)'))\nEOF` } });
+    assert.match(ctxOf(script), /graph-indexer check after this edit:[\s\S]*src\/wish\.ts:3/);
+    assert.doesNotMatch(ctxOf(script), /src\/cart\.ts/, 'only what this command changed');
+    // nothing changed since: a test run adds nothing
+    assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'npx vitest run' } }).stdout, '');
+    // three reads chained in one command, while crawling: names from both files are resolved
+    run({ tool_name: 'Bash', tool_input: { command: 'grep -rn "Wishlist" src' }, tool_response: { stdout: 'src/wish.ts:1:x' } });
+    run({ tool_name: 'Bash', tool_input: { command: 'grep -rn "Cart" src' }, tool_response: { stdout: 'src/checkout.ts:1:x' } });
+    const reads = run({ tool_name: 'Bash', tool_input: { command: `cd ${root}; sed -n 1,4p src/checkout.ts; sed -n 1,4p src/wish.ts` } });
+    assert.match(ctxOf(reads), /Cart\.total → src\/cart\.ts:2/);
+    assert.match(ctxOf(reads), /Wishlist\.total → src\/cart\.ts:5/);
+});
+
+test('shell lines: reads after `cd DIR;`, heredoc bodies skipped', () => {
+    assert.deepEqual(shellReads('cd /r; sed -n 100,125p a/b.py; sed -n 5,9p /abs/c.py'), [['/r/a/b.py', 100, 125], ['/abs/c.py', 5, 9]]);
+    assert.deepEqual(shellReads("python3 - <<'E'\nprint('sed -n 1,2p x.py; cat y.py')\nE\nhead -20 g.py"), [['g.py', 1, 20]]);
+    assert.deepEqual(shellReads('grep -n "a;b" f.py && nl -ba f.py | sed -n 1,9p'), [['f.py', 1, 9]]);
 });
 
 test('hook subagent-start: the index line and the lookup rules', () => {
