@@ -25,7 +25,7 @@ export const REPOS = {
             '^tests/fixtures/optimizer/': 'tests/test_optimizer.py',
             '^tests/fixtures/(identity|pretty|partial)\\.sql$': 'tests/test_transpile.py',
         },
-        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.',
+        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.',
     },
     caddy: {
         source: path.join(WORK, 'go', 'caddy'),

@@ -8,6 +8,24 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Added
 
+- **`explore` reads issues.**
+  - When the query reads like an issue (a long text, code spans or blocks), definitions are ranked
+    by where the issue's names meet (`src/query/issue.mjs`).
+  - Names are matched by their words, so `DATE_DIFF`, `DateDiff` and `_date_diff_sql` are one
+    term, and title terms weigh more.
+  - A word in capitals that only names an entry of a table with 100 or more members (a token enum)
+    is no longer looked up as a definition.
+  - Offline, over 50 fresh issues ([`bench/agentic/localize.mjs`](bench/agentic/localize.mjs)):
+    explore shows the code the fix changes in 25 issues instead of 12, given either the issue or the
+    one-line keyword query agents write.
+  - In real sessions this did not make fixing issues cheaper: cost 1.12 (1.01–1.25) and 1.03
+    (0.96–1.12) of Claude Code alone in the pilots `issue1p` and `issue2`.
+  - `init`'s instructions now suggest the issue's names and terms as the query.
+  - [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
+- **[docs/PLAN-IDE-AGENTE.md](docs/PLAN-IDE-AGENTE.md)**, the active plan: graph-indexer as the
+  agent's IDE and memory (exact references, the impact of an edit, verification), with B3 as a
+  no-regression check and a new bench of silent errors (B5).
+
 - **The arena's session axis** (`bench/agentic/competitors.mjs`, arms `cc+codegraph`, `cc+cbm`,
   `cc+serena`, `cc+serena-prompt`): Claude Code sessions with CodeGraph 1.6.2,
   codebase-memory-mcp 0.11.0 or Serena 1.7.0, each installed by its own installer or guide, next
@@ -120,6 +138,12 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   threads (0 turns the pool off).
 
 ### Fixed
+
+- **`check` no longer flags calls to a Python `@classmethod`** as not fitting ("takes 2 arguments"):
+  its `cls` was counted because a classmethod is marked static. On the 50 gold fixes of the fresh
+  issues it now reports no problems.
+- **Bench:** sqlglot's test hint gave `unittest discover tests`, which fails to import the suite;
+  it now gives `discover -s tests -t .`.
 
 - **Hooks follow work done in the shell.** On Sonnet 5.5 the B3 sessions read files with
   chained `cd repo; sed -n a,bp f; sed -n …` commands and edited them with Python heredocs and

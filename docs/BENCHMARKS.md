@@ -775,6 +775,10 @@ tokens, paired by task (bootstrap 95% CI):
 - Without grep nothing is lost, at about the same cost.
 - Fixing real issues costs the same with or without it (cost ratios between 0.96 and 1.10):
   reading the code around the fault and running tests are most of the work.
+- **An `explore` that reads issues** does not change this. It shows the code the fix changes in
+  25 of 50 fresh issues instead of 12, measured offline. In two pilots of real sessions (47 tasks,
+  94 runs) it cost 1.12 (1.01–1.25) and 1.03 (0.96–1.12) of Claude Code alone
+  ([details](AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs)).
 
 ## 5. Against graph-indexer 2.x
 

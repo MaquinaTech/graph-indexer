@@ -16,10 +16,14 @@ import { showcaseText } from '../query/showcase.mjs';
 import { collectRoutes, routesInQuery, matchRoutes } from '../query/routes.mjs';
 import { collectInjection, providedBy, tokenUses, injectedInto } from '../query/injection.mjs';
 import { collectModels, modelOf, prismaModelsNamed } from '../query/orm.mjs';
+import { isIssueText, issueSeeds } from '../query/issue.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_KINDS = new Set(['field', 'property', 'variable', 'constant']);
+const LARGE_TABLE = 100;
+/** Does a definition hold so many members (a token enum, a table of keywords) that one entry says little? */
+const largeTable = (intel, id) => (intel.store.get('SELECT count(*) AS n FROM symbols WHERE parent_id = ?', id)?.n ?? 0) >= LARGE_TABLE;
 const CALLABLE_KINDS = new Set(['function', 'method']);
 // examples, docs snippets and sample apps come after the library code they exercise
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|fixtures?|playground)\//i;
@@ -29,11 +33,11 @@ export const TOOLS = [
     {
         name: 'explore',
         title: 'Explore',
-        description: 'Start a task in one call: for a question, bug or feature in words ("why are expired tokens accepted") and/or named symbols, the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined, and the tests to run with the command. Fits `max_tokens` and says what it left out.',
+        description: 'Start a task in one call: for a question, bug or feature in words ("why are expired tokens accepted"), an issue pasted as written, and/or named symbols, the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined, and the tests to run with the command. Fits `max_tokens` and says what it left out.',
         inputSchema: {
             type: 'object',
             properties: {
-                query: { type: 'string', description: 'The task, question or bug in words; identifiers in it are looked up exactly.' },
+                query: { type: 'string', description: 'The task, question or bug in words, or the issue as written (title first); identifiers in it are looked up exactly.' },
                 symbols: { type: 'array', items: { type: 'string' }, description: 'Symbols to centre on (name, Class.method, path:Name).' },
                 path: { type: 'string', description: 'Only search under this path prefix, e.g. "src/auth/".' },
                 max_tokens: { type: 'integer', minimum: 500, maximum: 6000, default: 2000, description: 'Answer budget (default 2000).' },
@@ -1062,6 +1066,8 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
             const all = collectRoutes(intel);
             for (const q of routes) for (const r of matchRoutes(all, q).slice(0, 3)) if (r.handler) add(intel.sym(r.handler.id), `handles ${r.method} ${r.path}`);
         }
+        // an issue: the definitions where the most (and rarest) of the names it uses meet
+        if (isIssueText(query)) for (const r of issueSeeds(intel, query, { path: p || null })) add(intel.sym(r.id), `issue terms: ${r.terms.slice(0, 4).join(', ')}`);
         const a = analyzeQuery(query);
         for (const id of a.identifiers) {
             if (id.length < 3) continue;
@@ -1069,7 +1075,10 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
             if (a.natural && /^[a-z]+$/.test(id)) continue;
             // the definition must carry the name as written: `CLAUDE.md` is a file, not a variable `md`
             const norm = id.replace(/::|#|->/g, '.');
-            const m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
+            let m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
+            // a keyword in capitals (`ALTER`, `PIVOT`) that names an entry of a large table of values (a
+            // token enum) is the language being talked about, not a definition to look at
+            if (/^[A-Z][A-Z0-9_]*$/.test(id)) m = m.filter(x => !(VALUE_KINDS.has(x.kind) && x.parent_id != null && largeTable(intel, x.parent_id)));
             if (m.length) add(m[0], 'named in the query');
         }
         const { results } = intel.search.search(String(query), { limit: 16, path: p || null });

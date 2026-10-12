@@ -218,7 +218,7 @@ same tasks, run at the same time.
 
 Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs), a
 round of delegated questions on 24 new ones (72 runs), rounds of real Claude Code sessions, and
-a round against three other tools (215 runs). In short:
+a round against three other tools (215 runs), and two pilots on issues (94 runs). In short:
 
 - **Against CodeGraph, codebase-memory-mcp and Serena, in real sessions with each tool installed
   as its own installer does it (34 tasks, 170 runs), graph-indexer is the only one the agent
@@ -261,6 +261,12 @@ a round against three other tools (215 runs). In short:
 - **Multi-site refactors (B2) cost a fifth to a third less:** 0.81 (0.73–0.89) pooled over three
   rounds with the usual model, 0.69 (0.56–0.87) with the smaller one; every refactor passed its
   checks in every arm.
+- **An `explore` that reads issues does not make fixing them cheaper.** Offline, it shows the code the
+  fix changes in 25 of 50 issues instead of 12. In real sessions the agent writes a keyword query
+  rather than pasting the issue; with the capitals rule, those queries find the code in 25 of 50 too.
+  Calling it still did not shorten a session: cost 1.12 (1.01–1.25) when told to call it first,
+  1.03 (0.96–1.12) when told more softly, which the agent mostly ignored. B3 is now a no-regression
+  check; see [Issues as written](#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
 - **Fixing real issues (B3) costs the same with or without graph-indexer.** In the fourth round
   graph-indexer as installed cost 0.85 (0.76–0.96) of grep and its lookup rules alone 0.86
   (0.76–0.98), so the rules carry that gain; facts that resolve the code's indirection after each
@@ -279,6 +285,69 @@ a round against three other tools (215 runs). In short:
   issue with the rules alone, and none with graph-indexer; on the 24 delegated questions every
   arm missed 4, all of them two-level caller questions. In real sessions the usual model without
   graph-indexer missed 3 of 12 questions, all two-level caller questions, and with it none.
+
+### Issues as written: `explore` offline and in real sessions (issue1p, issue2): 47 tasks, 94 runs
+
+The arena left B3 at 1.03 with no session calling graph-indexer. These pilots asked whether `explore`
+could earn the agent's first call on an issue.
+
+**Offline first.** [`localize.mjs`](../bench/agentic/localize.mjs) runs `explore` on every fresh
+issue and checks whether a definition it shows with code overlaps a line the gold fix changes, with
+no agent involved. The 50 tasks are split into `dev` (32, for working on it) and `held` (18: the r5
+rounds and networkx r4).
+
+| `explore` input | build | dev: code shown / listed | held: code shown / listed |
+|---|---|---|---|
+| the issue as written | 3.0 (`962a7f2`) | 6 / 9 | 6 / 9 |
+| the issue as written | + issue terms | **15 / 18** | **10 / 13** |
+| a one-line keyword query, as agents write it | + issue terms | 9 / 16 | 6 / 15 |
+| a one-line keyword query, as agents write it | + capitals rule | **14 / 18** | **11 / 17** |
+
+- **Issue terms.** An issue's names (code spans, fenced blocks, identifier-shaped words) are matched by
+  their words, so `DATE_DIFF`, `DateDiff` and `_date_diff_sql` are the same term. Each definition
+  scores the summed IDF of the terms it carries, with title terms weighted ×4. Before this, given
+  sqlglot issues, explore returned `TokenType` entries for the SQL keywords in backticks.
+- **Capitals rule.** A word in capitals that only names an entry of a table with 100 or more members
+  (sqlglot's `TokenType` has 444) is the language under discussion, not a definition to look up.
+- **Keyword queries.** Sonnet 5.5 wrote them from each issue alone, told to write a short query. The
+  real sessions below showed that agents write that, not the issue: given the instruction "the
+  issue's title and text as the query", 7 of 7 calls were one-line keyword lists. In an isolated
+  prompt, the same model pasted the whole issue 50 times out of 50, so that setup does not predict
+  sessions.
+- **Rejected after measuring:**
+  - skipping docstrings (dev 11 → 8);
+  - a stopword list (it drops SQL words such as `using` and `over`);
+  - stronger length normalisation;
+  - issue scoring on keyword queries (3 → 2 of 7).
+- **Breaking existing tests.** Applying each gold fix and running the test files its tests touch shows
+  only 13 of 50 correct fixes break an existing test (26 tests). In sqlglot these are SQL-string
+  expectations that no call graph links to the changed code: `check` names the file for 18 of the 26
+  and the test function for 9. Predicting them would save at most about 2% of a session.
+
+**In real sessions.** Claude Code with Sonnet 5.5, `cc` against `cc+gi+helper`, one run each.
+
+| pilot | tasks | instruction for issues | solved | cost vs `cc` (95% CI) | sessions that called graph-indexer |
+|---|---|---|---|---|---|
+| `issue1p` | 15 held (sqlglot r5, sympy r5) | first call `explore` with the issue's title and text | 14 / 15 both | **1.12 (1.01–1.25)** | 7 of 15 |
+| `issue2` | 32 dev (sqlglot, sqlglot r4, networkx) | first call `explore` with the names and terms the issue uses | 32 / 32 both | 1.03 (0.96–1.12) | 1 of 32 |
+
+- **Calling `explore` did not shorten a session.** In `issue1p` the 7 sessions that called it cost 1.22
+  of their `cc` pair, and the other 8 cost 1.01. The agent kept its own greps after the answer (13.7
+  tool calls against 12.3), so the answer only added context.
+- **With the softer instruction, the agent hardly called it,** and the cost (1.03) is that of having
+  the tools installed.
+- **Bench bug fixed along the way.** sqlglot's test hint gave `python3 -m unittest discover tests`,
+  which fails to import the suite (55 errors), and agents in both arms ran it and then looked for the
+  right command. The hint now says `discover -s tests -t .`. That is one reason `issue2` sessions are
+  shorter (8 tool calls against 13); its tasks are also easier, so the two pilots' absolute costs do
+  not compare.
+- **Bias.** The `issue1p` tasks are 15 of the 18 `held` issues, examined while the localization was
+  being diagnosed. The `issue2` tasks are the ones it was tuned on.
+- **What this says.** Sonnet 5.5 reaches the code an issue is about in about 2 calls with grep, and
+  solves 93–100% of these issues alone. Locating code better does not lower that cost, for us or, so
+  far, for anyone in the arena. B3 now serves as a no-regression check (cost ≤ 1.03), and the work
+  moves to what grep cannot compute: exact references, the impact of an edit, verification. See
+  [PLAN-IDE-AGENTE.md](PLAN-IDE-AGENTE.md).
 
 ### Against other tools in real sessions (arena1): 34 tasks, 170 runs
 

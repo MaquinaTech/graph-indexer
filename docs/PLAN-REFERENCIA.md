@@ -1,6 +1,6 @@
 # Plan: graph-indexer como referencia de code intelligence para agentes
 
-Fecha: 2026-10-11 · Propuesta. Complementa [PLAN-AGENTES.md](PLAN-AGENTES.md) (motor y benchmarks internos) con producto, competencia y adopción.
+Fecha: 2026-10-11 · Sustituido como plan activo por [PLAN-IDE-AGENTE.md](PLAN-IDE-AGENTE.md) el 2026-10-12, que conserva de este su §3 (producto) y su §4 (promoción). Complementa [PLAN-AGENTES.md](PLAN-AGENTES.md) (motor y benchmarks internos) con producto, competencia y adopción.
 
 ## Estado (2026-10-11, rama `roadmap/plan-referencia`)
 
