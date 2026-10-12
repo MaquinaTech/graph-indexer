@@ -49,17 +49,29 @@ export function fairJobs(want) {
     return Math.max(1, Math.min(want, idle));
 }
 
+// Runs $GI_CMD as a job in its own process group and, past the time limit, kills the whole group
+// (SIGTERM, then SIGKILL): killing only the shell would leave its children (a test run) orphaned.
+const WATCHDOG = `set -m
+bash -c "$GI_CMD" & p=$!
+( sleep "$GI_LIMIT"; kill -TERM -- -$p; sleep 5; kill -KILL -- -$p ) >/dev/null 2>&1 & w=$!
+set +m
+wait $p; rc=$?
+kill -- -$w 2>/dev/null
+exit $rc`;
+
 /** Run a shell command; never throws. */
 export function sh(cmd, { cwd = process.cwd(), timeout = 600_000, env = {}, input } = {}) {
     const t0 = Date.now();
-    const r = spawnSync('bash', ['-lc', cmd], {
-        cwd, encoding: 'utf8', timeout, input, maxBuffer: 1 << 28,
-        env: { ...process.env, ...env },
+    const limit = Math.max(1, Math.ceil(timeout / 1000));
+    const r = spawnSync('bash', ['-lc', WATCHDOG], {
+        cwd, encoding: 'utf8', timeout: timeout + 30_000, input, maxBuffer: 1 << 28,
+        env: { ...process.env, ...env, GI_CMD: cmd, GI_LIMIT: String(limit) },
     });
+    const elapsed = Date.now() - t0;
     return {
         code: r.status ?? (r.signal ? 124 : 1),
         signal: r.signal ?? null,
-        timedOut: r.error?.code === 'ETIMEDOUT' || r.signal === 'SIGTERM',
+        timedOut: r.error?.code === 'ETIMEDOUT' || r.signal === 'SIGTERM' || (r.status !== 0 && elapsed >= limit * 1000),
         stdout: r.stdout ?? '',
         stderr: r.stderr ?? '',
         ms: Date.now() - t0,
