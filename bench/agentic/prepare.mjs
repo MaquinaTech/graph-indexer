@@ -19,6 +19,10 @@
  * arms get there the CLAUDE.md block and the helper arm the sub-agent file, as `init` writes them
  * into a repository (run-headless.mjs adds the MCP server).
  *
+ * With --in-repo a real session runs in the repository itself, as people run Claude Code: what
+ * `init` (or another tool's installer, competitors.mjs) writes goes into the checkout and is
+ * committed there before the session starts, and the task's instructions are the prompt.
+ *
  * Delegated-question arms (ask-*) get, in their instructions file, the message a main agent sends
  * when it hands a question off (the helper arm's starts with the helper's instructions); they are
  * launched as the sub-agent type the run's meta names (agentType), and their reply is the answer
@@ -33,8 +37,9 @@ import { managedBlock } from '../../src/cli/init.mjs';
 import { HELPER_NAME, claudeAgentFile } from '../../src/cli/helper.mjs';
 import { buildIndexV2, projectFilesV2 } from './v2.mjs';
 import { REPOS } from './repos.mjs';
+import { COMPETITORS, installCompetitor } from './competitors.mjs';
 
-const { opt, list, args } = argv();
+const { opt, list, flag, args } = argv();
 
 export function snapshot(label = null) {
     const sha = git(GI_ROOT, 'rev-parse', '--short', 'HEAD').trim();
@@ -79,6 +84,15 @@ function excludeIndex(src) {
     if (!/^\.graph-indexer\/$/m.test(text)) { fs.mkdirSync(path.dirname(ex), { recursive: true }); fs.appendFileSync(ex, (text && !text.endsWith('\n') ? '\n' : '') + '.graph-indexer/\n'); }
 }
 
+/** Leave a tool's own index directory out of git status in a checkout (worktree or not). */
+function excludeIn(dir, entries) {
+    if (!entries.length) return;
+    const ex = path.resolve(dir, git(dir, 'rev-parse', '--git-path', 'info/exclude').trim());
+    const text = fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8') : '';
+    const add = entries.filter(e => !text.split('\n').includes(e));
+    if (add.length) { fs.mkdirSync(path.dirname(ex), { recursive: true }); fs.appendFileSync(ex, (text && !text.endsWith('\n') ? '\n' : '') + add.join('\n') + '\n'); }
+}
+
 function addWorktree(src, dir, base) {
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -94,13 +108,15 @@ function buildIndex(label, dir) {
 }
 
 /** Checkout for a run: shared per repo/commit/variant for read-only tasks, fresh for edit tasks. */
-function checkoutFor(task, arm, id, label) {
+function checkoutFor(task, arm, id, label, inRepo = false) {
     const src = sourceRepo(task.repo);
     excludeIndex(src);
     const indexed = usesIndex(arm);
     let dir;
     if (task.family === 'qa') {
-        dir = path.join(WORK, 'checkouts', `${task.repo}@${task.base.slice(0, 10)}`, SESSION_ARMS[arm]?.v2 ? 'indexed-v2' : indexed ? `indexed-${label}` : 'plain');
+        // in-repo sessions find their tool's files in the checkout, so each arm has its own
+        const variant = inRepo ? `inrepo-${arm.replace(/[^\w.-]/g, '_')}-${label}` : SESSION_ARMS[arm]?.v2 ? 'indexed-v2' : indexed ? `indexed-${label}` : 'plain';
+        dir = path.join(WORK, 'checkouts', `${task.repo}@${task.base.slice(0, 10)}`, variant);
         addWorktree(src, dir, task.base);
     } else {
         dir = path.join(WORK, 'wt', id);
@@ -141,7 +157,7 @@ function tryRemoveWorktree(src, dir) {
     try { git(src, 'worktree', 'remove', '--force', dir); } catch { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
-function instructions(task, arm, runDir, checkout, gi, caps, view) {
+function instructions(task, arm, runDir, checkout, gi, caps, view, inRepo = false) {
     const repo = REPOS[task.repo];
     const deliver = task.family === 'qa'
         ? `# Deliverable\nWrite your answer to the file \`${path.join(runDir, 'answer.txt')}\`.\n${task.answerFormat}`
@@ -153,7 +169,7 @@ ${deliver}
 
 # Environment
 - Repository root: \`${checkout}\`. Work only inside it${task.family === 'qa' ? ' (the answer file above is the only file you write)' : ''}; paths you report are relative to it.
-- Your current working directory is NOT the repository: use absolute paths, and always pass the repository root as the path to search tools (tools without a path search an unrelated directory).
+${inRepo ? '- Your current working directory is the repository root.' : '- Your current working directory is NOT the repository: use absolute paths, and always pass the repository root as the path to search tools (tools without a path search an unrelated directory).'}
 - Work offline: do not search the web, fetch web pages, or download code or packages (no WebSearch/WebFetch, curl, wget, git fetch/clone, pip install). Solve the task from the repository with the tools described here.
 - Nobody is available to answer questions: make reasonable assumptions and finish the task.
 - Be efficient, but the result must be complete and correct.
@@ -163,13 +179,15 @@ ${toolSection(arm, gi, caps, view)}
 `;
 }
 
-export function prepareRun(task, arm, rep, label) {
+export function prepareRun(task, arm, rep, label, { inRepo = false } = {}) {
+    if (inRepo && !SESSION_ARMS[arm]) throw new Error(`--in-repo is for real-session arms (${arm} is not one)`);
     if (!ARM_NAMES.includes(arm)) throw new Error(`unknown arm ${arm}`);
     const id = runId(task.id, arm, rep);
     const runDir = path.join(WORK, 'runs', label, id);
     fs.rmSync(runDir, { recursive: true, force: true });
     fs.mkdirSync(runDir, { recursive: true });
-    const { dir: checkout, indexMs } = checkoutFor(task, arm, `${label}__${id}`, label);
+    const { dir: checkout, indexMs: giIndexMs } = checkoutFor(task, arm, `${label}__${id}`, label, inRepo);
+    let indexMs = giIndexMs;
     let gi = null, caps = {};
     // a real session reaches graph-indexer through its MCP server alone, as users install it
     if (usesIndex(arm) && !SESSION_ARMS[arm]) {
@@ -185,28 +203,56 @@ export function prepareRun(task, arm, rep, label) {
     const ask = ASK_ARMS[arm];
     if (ask && task.family !== 'qa') throw new Error(`${arm} answers questions; ${task.id} is an edit task`);
     const message = ask ? askMessage(arm, task, checkout, gi) : null;
-    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), message ?? instructions(task, arm, runDir, checkout, gi, caps, view));
-    // a real session in the run directory finds what `init` writes into a repository for Claude Code
+    fs.writeFileSync(path.join(runDir, 'INSTRUCTIONS.md'), message ?? instructions(task, arm, runDir, checkout, gi, caps, view, inRepo));
+    // a real session finds what `init` (or another tool's installer) writes into a repository for
+    // Claude Code: in its run directory, or with --in-repo in the repository it runs in
     const session = SESSION_ARMS[arm];
-    if (session?.v2) for (const [name, text] of Object.entries(projectFilesV2(task.repo))) fs.writeFileSync(path.join(runDir, name), text);
-    else if (session?.index) fs.writeFileSync(path.join(runDir, 'CLAUDE.md'), managedBlock() + '\n');
+    const project = inRepo ? checkout : runDir;
+    let competitor = null;
+    if (session?.competitor) {
+        const marker = `${checkout}.install.json`;
+        // a question's checkout is shared by the arm's runs: installed once
+        if (inRepo && task.family === 'qa' && fs.existsSync(marker)) competitor = readJson(marker);
+        else {
+            if (!inRepo) throw new Error(`${arm} runs only with --in-repo (its installer writes into the repository)`);
+            excludeIn(checkout, COMPETITORS[session.competitor].exclude);
+            competitor = installCompetitor(session.competitor, checkout);
+            if (task.family === 'qa') writeJson(marker, competitor);
+        }
+        indexMs = competitor.indexMs;
+        if (competitor.systemPrompt) fs.writeFileSync(path.join(runDir, 'system-prompt.txt'), competitor.systemPrompt);
+    }
+    if (session?.v2) for (const [name, text] of Object.entries(projectFilesV2(task.repo))) fs.writeFileSync(path.join(project, name), text);
+    else if (session?.index) {
+        // init adds its block to an existing CLAUDE.md
+        const f = path.join(project, 'CLAUDE.md');
+        const old = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+        if (!old.includes(managedBlock().trim())) fs.writeFileSync(f, (old ? old.replace(/\n*$/, '\n\n') : '') + managedBlock() + '\n');
+    }
     if (session?.hooks) {
         // the hooks `init --hooks` writes to .claude/settings.json; the session runs in the run
         // directory with the repository added, so each hook names the repository with --repo
         const hook = (event) => ({ type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(giBin(label))} hook ${event} --repo ${JSON.stringify(checkout)}`, timeout: 10 });
-        fs.mkdirSync(path.join(runDir, '.claude'), { recursive: true });
-        writeJson(path.join(runDir, '.claude', 'settings.json'), { hooks: {
+        fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
+        writeJson(path.join(project, '.claude', 'settings.json'), { hooks: {
             PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|Grep|Bash|Read', hooks: [hook('post-tool')] }],
             SessionStart: [{ hooks: [hook('session-start')] }],
             SubagentStart: [{ hooks: [hook('subagent-start')] }],
         } });
     }
     if (session?.helper) {
-        fs.mkdirSync(path.join(runDir, '.claude', 'agents'), { recursive: true });
-        fs.writeFileSync(path.join(runDir, '.claude', 'agents', `${HELPER_NAME}.md`), claudeAgentFile());
+        fs.mkdirSync(path.join(project, '.claude', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(project, '.claude', 'agents', `${HELPER_NAME}.md`), claudeAgentFile());
+    }
+    // the installed files are part of the repository the session starts from: committed, so the
+    // graded diff holds the agent's changes alone
+    if (inRepo && git(checkout, 'status', '--porcelain').trim()) {
+        git(checkout, 'add', '-A');
+        git(checkout, '-c', 'user.name=bench', '-c', 'user.email=bench@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', `bench: ${arm} as installed`);
     }
     const baseHead = git(checkout, 'rev-parse', 'HEAD').trim();
     const meta = { runId: id, taskId: task.id, family: task.family, arm, rep, giLabel: label, checkout, runDir, baseHead, indexMs, caps, preparedAt: new Date().toISOString(),
+        ...(inRepo ? { inRepo: true } : {}), ...(competitor ? { competitor: { name: session.competitor, mcpServers: competitor.mcpServers, allowed: competitor.allowed, ...(competitor.systemPrompt ? { systemPrompt: 'system-prompt.txt' } : {}) } } : {}),
         ...(ask ? { deliver: 'reply', agentType: ask.agentType } : {}) };
     writeJson(path.join(runDir, 'meta.json'), meta);
     const prompt = ask
@@ -236,9 +282,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         // --first-rep N adds repetitions after graded ones (preparing a run wipes its directory)
         const first = Number(opt('--first-rep', 1));
         const reps = cmd === 'run' ? [Number(opt('--rep', 1))] : Array.from({ length: Number(opt('--reps', 1)) }, (_, i) => first + i);
-        for (const t of tasks) for (const a of arms) for (const r of reps) console.log(JSON.stringify(prepareRun(t, a, r, label)));
+        for (const t of tasks) for (const a of arms) for (const r of reps) console.log(JSON.stringify(prepareRun(t, a, r, label, { inRepo: flag('--in-repo') })));
     } else {
-        console.error('usage: prepare.mjs snapshot [--label L] | run --task ID --arm A [--rep N] --gi L | batch --tasks … --arms … --reps N --gi L');
+        console.error('usage: prepare.mjs snapshot [--label L] | run --task ID --arm A [--rep N] --gi L [--in-repo] | batch --tasks … --arms … --reps N --gi L [--in-repo]');
         process.exitCode = 2;
     }
 }

@@ -8,6 +8,19 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Added
 
+- **The arena's session axis** (`bench/agentic/competitors.mjs`, arms `cc+codegraph`, `cc+cbm`,
+  `cc+serena`, `cc+serena-prompt`): Claude Code sessions with CodeGraph 1.6.2,
+  codebase-memory-mcp 0.11.0 or Serena 1.7.0, each installed by its own installer or guide, next
+  to graph-indexer and to no tool. `session-round.mjs --in-repo` runs sessions in the repository
+  with the task as the prompt and the installed files committed first. `cleanup.mjs` frees a
+  graded round's worktrees and checkouts, and `session-round` runs it at the end. New
+  compiler-verified question set `qa-nestjs-r7`. Result (`arena1`, 170 runs, Sonnet 5.5): graph-indexer is the
+  only tool the agent called and the only arm that answered all 11 questions. Its cost against
+  CodeGraph was 0.65 / 0.74 / 0.87 (questions / refactors / issues), against codebase-memory-mcp
+  0.79 / 0.91 / 0.96, and against Serena 0.87 / 0.93 / 1.12. It loses to Serena on issues, where
+  Serena's system prompt, not its tools, carries the gain (control `arena1b`, 45 runs).
+  [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs).
+
 - **`explore`**: one call that opens a task. For a question, bug or feature in words and/or named
   symbols it returns the most relevant definitions with their code (line numbers kept for
   editing), their direct callers, overrides and subclasses, one shared card of where the names

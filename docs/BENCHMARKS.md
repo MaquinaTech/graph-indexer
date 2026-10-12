@@ -529,7 +529,16 @@ fastapi has not been broken down yet. codebase-memory-mcp keeps at most one `CAL
 caller and callee, with the line of the first call (`isUndefined` called on lines 17 and 18 of
 `get-injection-providers.util.ts`: one edge, line 17), so further calls from the same function
 are missed; its precision on fastapi (0.929) is the closest to graph-indexer's.
-The session axis (cost and turns of real agent runs with each tool) is not measured yet.
+### The session axis (2026-10-12)
+
+What a tool's exactness is worth in an agent's session is measured in
+[AGENTIC-BENCHMARK.md](AGENTIC-BENCHMARK.md#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs):
+Claude Code (Sonnet 5.5) with each tool installed by its own installer (there the installers do
+run, into each run's repository) and Serena 1.7.0 as a third tool, on 34 tasks. Paired by task,
+graph-indexer cost 0.65 / 0.74 / 0.87 of CodeGraph on questions, refactors and issues, 0.79 /
+0.91 / 0.96 of codebase-memory-mcp and 0.87 / 0.93 / **1.12 of Serena (it loses on issues)**,
+and answered all 11 questions exactly against 9–10. The larger answers above do not make its
+sessions dearer: on code questions its arm is the cheapest of the five.
 
 ## Dependency injection (NestJS)
 

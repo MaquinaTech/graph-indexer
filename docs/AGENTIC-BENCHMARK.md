@@ -32,6 +32,10 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `cc` | a real Claude Code session with the tools it ships with, sub-agents (Explore, general-purpose) included | none |
 | `cc+gi` | the same session with graph-indexer's MCP server | as `init --no-helper` installs it: the server and the CLAUDE.md block |
 | `cc+gi+helper` | the same, with the structural helper among the sub-agents | as `init` installs it; the main agent decides on its own whether to hand a question to the helper |
+| `cc+codegraph` | the same session with CodeGraph 1.6.2 | as `codegraph install --target=claude --location=local` writes it: MCP server (`alwaysLoad`), its tool permission, the `UserPromptSubmit` hook that adds `codegraph_explore` context to the prompt, the `.claude/CLAUDE.md` section; then `codegraph init`, with the CLI on the session's `PATH` |
+| `cc+cbm` | the same session with codebase-memory-mcp 0.11.0 | as `install -y --clients=claude` writes it (user scope, copied into the project's): MCP server, `PreToolUse`/`PostToolUse`/`SessionStart`/`SubagentStart` hooks, three sub-agents and a skill; the repository indexed with its CLI beforehand |
+| `cc+serena` | the same session with Serena 1.7.0 | as its guide for Claude Code sets it up: MCP server with `--context claude-code` for the project, the four recommended hooks, and the system prompt it "highly recommends" (`serena prompts print-cc-system-prompt-override`, in place of Claude Code's); the project indexed with `serena project index` beforehand |
+| `cc+serena-prompt` | a control: Claude Code with Serena's system prompt and no Serena | the same system prompt; no MCP server, hook or index |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
 exactly what the MCP tools return — except the `cc` arms, which are real sessions (`claude -p`,
@@ -192,6 +196,19 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    issues (`rt3i`) and `rt1`'s 20 tasks (`rt3q`) again with the tool surface trimmed, every arm
    re-run the same day so that `cc` is a concurrent control.
 
+10. **The arena in sessions** (snapshot `arena1`, arms `cc`, `cc+codegraph`, `cc+cbm`,
+   `cc+serena`, `cc+gi+helper`; then `arena1b`, arms `cc`, `cc+serena`, `cc+serena-prompt`): each
+   tool installed into the repository by its own installer or guide, and the sessions run **in
+   the repository** (`--in-repo`): the task's instructions are the prompt, the session's working
+   directory is the checkout, and what each installer wrote there is committed before it starts,
+   so the graded diff is the agent's alone. 11 new code questions (set `r7`, generated for this
+   round and seen by nobody before it), the 8 refactors of `rt1` and the 15 issues of the fifth
+   round, one run per task and arm. The refactors and issues are not new to graph-indexer: they ran
+   in `rt1`, `rt3q`, `b3h3` and `b3h4`, and the hooks of `b3h4` were written after reading `b3h3`'s
+   transcripts (the hooks are not part of the arm measured here, which is `init`'s default). The
+   other tools meet all of them for the first time. Because sessions run in the repository, with
+   the task in the prompt, costs are not comparable with earlier rounds, only within this one.
+
 Each of the four rounds and the delegation round is held out for the snapshot it tests — its tasks
 played no part in the changes. The resolved-indirection and smaller-model comparisons reuse
 earlier tasks. Every comparison is within a round, against the `grep` (or `ask-grep`) arm on the
@@ -200,8 +217,18 @@ same tasks, run at the same time.
 ## Results
 
 Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs), a
-round of delegated questions on 24 new ones (72 runs) and a round of real Claude Code sessions on
-20 tasks (60 runs). In short:
+round of delegated questions on 24 new ones (72 runs), rounds of real Claude Code sessions, and
+a round against three other tools (215 runs). In short:
+
+- **Against CodeGraph, codebase-memory-mcp and Serena, in real sessions with each tool installed
+  as its own installer does it (34 tasks, 170 runs), graph-indexer is the only one the agent
+  used, and the only arm that answered every code question.** It cost 0.65 of CodeGraph on
+  questions, 0.74 on refactors and 0.87 on issues; 0.79 / 0.91 / 0.96 of codebase-memory-mcp;
+  0.87 / 0.93 of Serena on questions and refactors — and **1.12 (1.05–1.21) of Serena on issues,
+  where it loses**. Serena's edge there does not come from its tools, which the agent called in 3
+  of 30 issue sessions, but from the system prompt its guide installs in place of Claude Code's:
+  that prompt alone, with no Serena, brought the cost to 0.91 (0.80–1.01). See
+  [Against other tools](#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs).
 
 - **Against graph-indexer 2.x, in real Claude Code sessions (nestjs and Twenty, a product
   monorepo; 40 tasks, 120 runs), 3.0 costs 0.43 of 2.x on code questions and 0.46 on refactors,
@@ -252,6 +279,59 @@ round of delegated questions on 24 new ones (72 runs) and a round of real Claude
   issue with the rules alone, and none with graph-indexer; on the 24 delegated questions every
   arm missed 4, all of them two-level caller questions. In real sessions the usual model without
   graph-indexer missed 3 of 12 questions, all two-level caller questions, and with it none.
+
+### Against other tools in real sessions (arena1): 34 tasks, 170 runs
+
+Protocol item 10: Claude Code (Sonnet 5.5) in the repository, the task as its prompt, with nothing
+(`cc`), CodeGraph 1.6.2, codebase-memory-mcp 0.11.0, Serena 1.7.0 or graph-indexer as `init`
+installs it (`cc+gi+helper`) — each tool installed by its own installer or guide. 11 new code
+questions on nestjs (B1), 8 refactors (B2), 15 issues of sqlglot and SymPy (B3); one run per task
+and arm, all arms run side by side.
+
+| | Claude Code alone | graph-indexer | CodeGraph | codebase-memory-mcp | Serena |
+|---|---|---|---|---|---|
+| B1 questions solved (of 11) | 9 | **11** | 10 | 10 | 9 |
+| B2 refactors solved (of 8) | 8 | 8 | 8 | 7 | 8 |
+| B3 issues solved (of 15) | 15 | 15 | 14 | 15 | 15 |
+| B1 cost against `cc` | 1 | **0.92** (0.85–0.99) | 1.42 (1.33–1.53) | 1.16 (1.10–1.24) | 1.05 (1.02–1.09) |
+| B2 cost against `cc` | 1 | 1.00 (0.81–1.19) | 1.34 (1.28–1.41) | 1.09 (1.02–1.18) | 1.07 (0.90–1.27) |
+| B3 cost against `cc` | 1 | 1.03 (0.97–1.08) | 1.17 (1.08–1.28) | 1.07 (1.00–1.14) | **0.91** (0.85–0.99) |
+| sessions that called the tool (B1 + B2 / B3) | – | **19 of 19** / 0 of 15 | 0 of 19 / 0 of 15 | 0 of 19 / 0 of 15 | 2 of 19 / 2 of 15 |
+| prompt prefix at the first call, B1 (tokens) | 17,300 | 19,100 | 23,700 | 18,700 | 18,100 |
+
+graph-indexer against each tool, paired by task (cost of graph-indexer ÷ cost of the tool, 95% CI):
+
+| against | B1 questions | B2 refactors | B3 issues |
+|---|---|---|---|
+| CodeGraph 1.6.2 | **0.65** (0.60–0.69) | **0.74** (0.61–0.88) | **0.87** (0.80–0.96) |
+| codebase-memory-mcp 0.11.0 | **0.79** (0.73–0.85) | 0.91 (0.75–1.08) | 0.96 (0.90–1.01) |
+| Serena 1.7.0 | **0.87** (0.79–0.95) | 0.93 (0.73–1.22) | **1.12 (1.05–1.21) — loses** |
+
+What the transcripts show:
+
+- **Only graph-indexer is used.** The agent called it in every question and refactor session
+  (2.4 calls per question) and answered every question exactly; the misses of the other arms
+  were all two-level caller questions, as in earlier rounds. CodeGraph's and
+  codebase-memory-mcp's tools were never called in 68 sessions, Serena's in 4 of 34: what those
+  arms change is what their setup adds to every session. CodeGraph's prompt hook puts
+  `codegraph_explore` output for the task into the prompt (6,400 tokens more at the first call
+  than `cc`), which is why it is the dearest arm everywhere. codebase-memory-mcp's hooks ran on
+  every search (exit 0) and added nothing: replayed by hand, with its daemon running and with its
+  default cache, they returned no context either; we did not find out why.
+- **On issues no tool helps, and Serena's setup helps without its tools.** graph-indexer was not
+  called on any issue (as in `b3h2`–`b3h4`), so its arm costs what its definitions add (1.03).
+  Serena's arm made fewer turns (12.7 against 13.3), wrote less (6,900 output tokens against
+  7,700) and re-read less context, with its tools called in 2 of 15 sessions. A second round
+  (`arena1b`: `cc`, `cc+serena` and `cc+serena-prompt`, 45 runs) repeated it — Serena 0.85
+  (0.76–0.94) of `cc` — and the control with Serena's system prompt and no Serena came to 0.91
+  (0.80–1.01), with one issue missed. Most of the edge is the instructions that replace Claude
+  Code's system prompt; the rest is within noise or comes from Serena's reminder hooks.
+- **Wall time** is reported by the harness but varies with the machine's load from four
+  concurrent sessions; it is not used here.
+
+Three `arena1b` sessions were stopped by a SIGTERM at the same minute, unfinished; they were
+discarded and re-run from scratch (`runs/arena1b/discarded.tsv`). In `arena1` no run was
+discarded.
 
 ### Measurement correction and where the cost goes
 
@@ -1079,6 +1159,26 @@ which, and the context it carried itself. With the usual model the 60 sessions s
 tens of dollars, billed to the account the `claude` CLI is logged in with (a subscription's quota,
 or `ANTHROPIC_API_KEY`); the runs are graded where they ran, since the answers and edits stay in
 the work area.
+
+**Against other tools (protocol item 10).** Install the pinned builds as
+[BENCHMARKS.md](BENCHMARKS.md#the-arena-other-tools-measured-the-same-way) says (CodeGraph and
+codebase-memory-mcp under `bench/arena/.tools`; Serena with
+`python3 -m venv $GI_AGENTIC_WORK/tools/serena-venv && $GI_AGENTIC_WORK/tools/serena-venv/bin/pip install serena-agent==1.7.0 uv`),
+then:
+
+```sh
+node bench/agentic/gen-qa-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ --seed 7 \
+     --calls 6 --callers 3 --impls 3 --subclasses 3 --impl-max 30 --set r7
+node bench/agentic/session-round.mjs --label arena1 --in-repo --arms cc,cc+codegraph,cc+cbm,cc+serena,cc+gi+helper \
+     --tasks qa-nestjs-r7.json,refactor-nestjs-r5.json,refactor-nestjs-held.json,fresh-sqlglot-r5.json,fresh-sympy-r5.json --concurrency 4 --max-budget 8
+node bench/agentic/report.mjs --gi arena1 --baseline cc+codegraph --integrated cc+gi+helper --cost usd   # graph-indexer against one tool
+```
+
+`competitors.mjs` runs each tool's installer into the run's repository (CodeGraph's and Serena's
+project-scoped; codebase-memory-mcp's, which writes user-scope files, against a scratch `HOME`,
+its files then copied into the project's scope) and builds each index before the session starts.
+Once every run is graded, `session-round` removes the round's worktrees and checkouts
+(`cleanup.mjs`; `--keep-checkouts` keeps them); patches, results and transcripts stay.
 
 ## Limitations
 

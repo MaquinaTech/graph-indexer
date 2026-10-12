@@ -44,6 +44,7 @@ import { giBin } from './prepare.mjs';
 import { usesIndex, SESSION_ARMS } from './arms.mjs';
 import { HELPER_NAME } from '../../src/cli/helper.mjs';
 import { serverV2 } from './v2.mjs';
+import { sessionEnv } from './competitors.mjs';
 
 const { opt, list, flag } = argv();
 const label = opt('--gi');
@@ -81,17 +82,22 @@ if (runs.some(m => /^fresh-/.test(m.taskId)) && !dry) {
 
 /** The command line for one run, and the config files it needs (written next to the run). */
 function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } = {}) {
+    // in the repository (prepare.mjs --in-repo) the instructions are the prompt, as a user's request is
+    if (meta.inRepo && !prompt) prompt = fs.readFileSync(path.join(meta.runDir, 'INSTRUCTIONS.md'), 'utf8');
     prompt ??= `Your task instructions are in ${path.join(meta.runDir, 'INSTRUCTIONS.md')} — read that file first and follow it exactly. The repository is at ${meta.checkout}. When you have finished, reply with the single word DONE.`;
     const session = SESSION_ARMS[meta.arm];
     if (session) {
         const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits',
-            '--allowedTools', session.index ? 'Bash,mcp__graph-indexer' : 'Bash', '--disallowedTools', 'WebSearch,WebFetch',
-            '--add-dir', meta.checkout, '--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config',
+            '--allowedTools', ['Bash', ...(session.index ? ['mcp__graph-indexer'] : []), ...(meta.competitor?.allowed ?? [])].join(','), '--disallowedTools', 'WebSearch,WebFetch',
+            '--add-dir', meta.inRepo ? meta.runDir : meta.checkout, '--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config',
             '--setting-sources', 'project,local'];
         if (model) args.push('--model', model);
+        // a tool whose setup replaces Claude Code's system prompt (Serena's recommended override)
+        if (meta.competitor?.systemPrompt) args.push('--system-prompt', fs.readFileSync(path.join(meta.runDir, meta.competitor.systemPrompt), 'utf8'));
         if (budget ?? maxBudget) args.push('--max-budget-usd', String(budget ?? maxBudget));
         const servers = session.v2 ? { 'graph-indexer': serverV2(meta.checkout) }
-            : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } : {};
+            : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } }
+            : meta.competitor ? meta.competitor.mcpServers : {};
         return { args, files: { 'mcp.json': { mcpServers: servers } } };
     }
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions',
@@ -119,7 +125,8 @@ function launch(meta, args, files, file) {
     for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(meta.runDir, name), JSON.stringify(content, null, 2) + '\n');
     const out = fs.createWriteStream(file);
     return new Promise((resolve) => {
-        const child = spawn(claude, args, { cwd: meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv });
+        const competitor = SESSION_ARMS[meta.arm]?.competitor;
+        const child = spawn(claude, args, { cwd: meta.inRepo ? meta.checkout : meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: competitor ? sessionEnv(competitor, childEnv) : childEnv });
         child.stdout.pipe(out);
         let err = '';
         child.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
@@ -174,6 +181,12 @@ async function preflightArms() {
             const out = events.filter(e => e.type === 'user').flatMap(e => e.message?.content ?? []).filter(c => c.type === 'tool_result')
                 .map(c => (Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? ''))).join('\n');
             checks.push(['tests run with the grading Python', out.includes(pyBin) || out.includes(path.dirname(pyBin)), out.trim().split('\n').pop()?.slice(0, 160) ?? 'no command output']);
+        }
+        if (meta.competitor && Object.keys(meta.competitor.mcpServers).length) {
+            const name = Object.keys(meta.competitor.mcpServers)[0];
+            const srv = servers.find(s => s.name === name);
+            checks.push([`${name} server`, srv?.status === 'connected', srv ? srv.status : 'absent'],
+                [`${name} tools`, tools.some(t => t.startsWith(`mcp__${name}__`)), `${tools.filter(t => t.startsWith(`mcp__${name}__`)).length} tools`]);
         }
         if (usesIndex(arm)) {
             const gi = servers.find(s => s.name === 'graph-indexer');

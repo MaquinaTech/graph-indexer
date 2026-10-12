@@ -2,8 +2,10 @@
 
 Status: **draft, gated.** The plan ([PLAN-REFERENCIA.md](PLAN-REFERENCIA.md) §4–5) holds the launch
 until gate P1 (agent sessions on real issues at ≤ 0.70 of the cost of working without the index)
-and P2 (cost per solved task no worse than CodeGraph's). Neither is met: on Sonnet 5.5 the agent
-solves the B3 issues alone, never calls graph-indexer, and the hooks make it 7% dearer. Every number below is
+and P2 (cost per solved task no worse than CodeGraph's). P2 is met (`arena1`: 0.65 / 0.74 / 0.87
+of CodeGraph's cost on questions, refactors and issues). P1 is not: on Sonnet 5.5 the agent
+solves the B3 issues alone and never calls graph-indexer there (1.03 of no index; with the hooks
+1.07). Every number below is
 measured, with its source; the losses are stated next to the wins. Update the numbers from the
 linked documents before publishing; do not round them up.
 
@@ -38,6 +40,12 @@ four applications); Vue and Svelte template tags to their components (3,602 / 3,
 open-webui); ORM models to the migrations that touch their tables and Prisma's client calls (none
 of 2,671 statements and 1,073 calls wrong).
 
+In real Claude Code sessions with each tool installed by its own installer (Sonnet 5.5, 34 tasks,
+170 runs) graph-indexer was the only one the agent called, and the only arm that answered all 11
+code questions exactly. Its sessions cost 0.65 of CodeGraph's on questions, 0.74 on refactors
+and 0.87 on issues; against Serena 0.87 on questions, and **1.12 on issues, where Serena is
+cheaper** — because of the system prompt its setup installs, not its tools.
+
 **What we have not shown:** that it makes an agent cheaper on real issues. With Claude Sonnet 5.5,
 on 26 issues fixed upstream after its training cutoff, the agent solved all of them with and
 without graph-indexer and never called it; with the hooks that add context to its reads it cost
@@ -54,6 +62,7 @@ The benchmark, its tasks and that result are in [docs/AGENTIC-BENCHMARK.md](AGEN
 | B1 questions, real sessions (rt1) | AGENTIC-BENCHMARK "Real sessions (rt1)" | 12/12 with graph-indexer, 9/12 without; cost 0.89 (0.82–0.96) |
 | B2 refactors, real sessions (rt1) | same | 8/8 both; cost 1.03 (0.87–1.27) |
 | B3 issues, Sonnet 5.5 (b3h2, b3h3, b3h4) | AGENTIC-BENCHMARK | 1.00 (0.88–1.15), 1.05 (0.96–1.15), 1.07 (1.01–1.12) |
+| sessions against other tools (arena1, arena1b) | AGENTIC-BENCHMARK "Against other tools" | vs CodeGraph 0.65 / 0.74 / 0.87; vs codebase-memory-mcp 0.79 / 0.91 / 0.96; vs Serena 0.87 / 0.93 / 1.12 |
 
 ## Not to say
 
