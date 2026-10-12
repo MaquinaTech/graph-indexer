@@ -557,6 +557,41 @@ token written `provider.provide`, and a string token given once as a constant an
 (their providers are mocks). Where a token has several providers (`forRoot` and `forRootAsync`,
 or one per module) all are listed: which one a given module receives depends on what it imports.
 
+## Dependency injection (Spring)
+
+A Spring injection point — an `@Autowired`, `@Inject` or `@Resource` field or setter, a
+component's constructor parameter, a `@Bean` method's parameter, a final field under Lombok's
+`@RequiredArgsConstructor` — declares a type, usually an interface; Spring gives it the bean of
+that type, choosing by `@Qualifier`, `@Primary` and then the parameter's name, among the beans of
+the application the class belongs to. graph-indexer reads the beans (component classes, `@Bean`
+methods by return type, registered `@ConfigurationProperties`, and as generated proxies Feign
+clients, Spring Data repositories and MyBatis mappers), works out which build module belongs to
+which application from `pom.xml` / `build.gradle`, and resolves each point. There is no oracle, so
+every claim was checked by an independent reading of the code (an agent told to be strict and to
+quote the lines proving each error), on four applications: spring-petclinic (`a2c2ef9`),
+piggymetrics (`6bb2cf9`, seven services), jhipster-sample-app (`6b000b5`) and mall (`dcaa93b`,
+five modules, two applications sharing a security library).
+
+| | petclinic | piggymetrics | jhipster | mall |
+|---|---|---|---|---|
+| injection points (first reading) | 6 | 24 | 48 | 234 |
+| injection points (after the fixes) | 6 | 24 | 49 | 233 |
+| claims wrong at the first reading | 0 | 0 | 0 | 3 |
+| injection points missed at the first reading | 0 | 0 | 1 | 0 |
+| points whose bean is not in the repository (library or auto-configured: `Environment`, `JavaMailSender`…) — reported as such | 0 | 5 | 29 | 7 |
+
+The first version made the four errors fixed since: it took a `@ConfigurationProperties` class
+nothing registers for a second bean (a false "ambiguous", twice), it resolved a field in a class
+whose `@Component` is commented out, and it missed the constructor of the `@SpringBootApplication`
+class. After the fixes the four outputs differ from the first in exactly those four lines (two
+corrected, one removed, one added: 312 points either way). Before that reading, a check by hand
+on the same repositories had found three faults: beans of one service offered to another (piggymetrics), an application's
+bean not offered to the shared library it includes (mall), and a module (`mall-demo`) taken as
+including a library its `pom.xml` does not list. Every `@Autowired`, `@Inject` and `@Resource` in
+the non-test code of mall (223) and piggymetrics (24) is found. Not modelled: custom stereotype
+annotations, XML configuration, profiles and conditions beyond naming them, and generics as
+qualifiers.
+
 ## 2. Localization from real commits
 
 ```bash

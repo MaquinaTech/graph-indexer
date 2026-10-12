@@ -18,6 +18,8 @@
  * providers too.
  */
 
+import { collectSpring } from './injection-spring.mjs';
+
 const PROVIDE = /\bprovide\s*:\s*([^,}\n]+?)\s*(?:,|}|$)/;
 const USE = /\buse(Class|Existing|Factory|Value)\s*:\s*([^,}\n]*)/;
 const INJECT = /@Inject\(\s*([^)]*?)\s*\)/g;
@@ -87,9 +89,10 @@ function classAt(intel, fileId, line) {
 }
 
 /**
- * Providers and injection points of the repository, keyed by token:
- * { providers: [{ key, token, exact, how, target, targetText, file, line }],
- *   injections: [{ key, token, exact, owner, param, type, file, line }] }.
+ * Providers and injection points of the repository, keyed by what is asked for (a NestJS token, a
+ * Spring type): { providers: [{ key, token, exact, how, target, targetText, file, line }],
+ *   injections: [{ key, token, exact, owner, param, type, file, line, from, why? }] }, `from`
+ * being the providers the point may receive (Spring: the beans chosen, see injection-spring.mjs).
  */
 export function collectInjection(intel) {
     if (intel._injection?.version === intel.ix?.version) return intel._injection.data;
@@ -141,7 +144,9 @@ export function collectInjection(intel) {
         const p = providers.find(x => x.holder === Number(j.key.slice(7)));
         if (p) Object.assign(j, { key: p.key, token: `${j.token} (${p.token})` });
     }
-    const data = { providers, injections };
+    for (const j of injections) j.from = providers.filter(p => p.key === j.key);
+    const spring = collectSpring(intel);
+    const data = { providers: [...providers, ...spring.providers], injections: [...injections, ...spring.injections] };
     intel._injection = { version: intel.ix?.version, data };
     return data;
 }
@@ -149,18 +154,20 @@ export function collectInjection(intel) {
 /** For a definition: the tokens it provides, each with where it is injected. */
 export function providedBy(intel, id) {
     const { providers, injections } = collectInjection(intel);
-    return providers.filter(p => p.target?.id === id).map(p => ({ ...p, into: injections.filter(j => j.key === p.key) }));
+    return providers.filter(p => p.target?.id === id).map(p => ({ ...p, into: injections.filter(j => j.from.includes(p)) }));
 }
 
-/** For a token (a definition used as one): its providers and injection points. */
+/** For a token or a type asked for by injection: what provides it and where it is injected. */
 export function tokenUses(intel, id) {
     const { providers, injections } = collectInjection(intel);
     const key = `id:${id}`;
-    return { providers: providers.filter(p => p.key === key), injections: injections.filter(j => j.key === key) };
+    const js = injections.filter(j => j.key === key);
+    // a NestJS token's providers name it; a Spring type's are the beans its injection points receive
+    const ps = [...new Set([...providers.filter(p => p.key === key && !p.types), ...js.flatMap(j => j.from)])];
+    return { providers: ps, injections: js };
 }
 
-/** What a class receives through `@Inject(TOKEN)`, each with the providers of that token. */
+/** What a class receives by injection (`@Inject(TOKEN)`, Spring's injection points), each with its providers. */
 export function injectedInto(intel, classId) {
-    const { providers, injections } = collectInjection(intel);
-    return injections.filter(j => j.owner?.id === classId).map(j => ({ ...j, from: providers.filter(p => p.key === j.key) }));
+    return collectInjection(intel).injections.filter(j => j.owner?.id === classId);
 }

@@ -66,6 +66,17 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   by hand on Twenty and nestjs: 45 provider claims for 40 injection points, none wrong; one
   provider computed at run time is not found.
 
+- **Dependency injection (Spring)**: the bean an `@Autowired` / `@Inject` / `@Resource` field,
+  a component's constructor, a `@Bean` method's parameter or a Lombok `@RequiredArgsConstructor`
+  field receives — chosen by `@Qualifier`, `@Primary` and name as Spring does, within the
+  application the class belongs to (read from `pom.xml` / `build.gradle`); Feign clients, Spring
+  Data repositories and MyBatis mappers are named as proxies generated at run time. Shown by
+  `find_references` (on a bean: where it is injected, or where another bean wins; on an interface:
+  which bean fills each point), `explore` ("receives by injection") and `graph-indexer inject`.
+  Checked by an independent reading on spring-petclinic, piggymetrics, jhipster-sample-app and
+  mall: 312 injection points; the first reading found 3 wrong claims and 1 missed point, all fixed
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#dependency-injection-spring)).
+
 ### Changed
 
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)

@@ -613,39 +613,63 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
     return out.join('\n');
 }
 
-/** Dependency injection around a definition: what it provides and to whom, or, for a token, its providers. */
+/** Dependency injection around a definition: what it provides and to whom, or, for a token or an injected type, its providers. */
 function injectionNote(intel, s, max = 8) {
     const out = [];
+    const into = (js) => js.map(j => `${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''} ${j.file}:${j.line}`);
     for (const p of providedBy(intel, s.id)) {
-        const into = p.into.map(j => `${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''} ${j.file}:${j.line}`);
-        out.push(`Dependency injection: provided as ${p.token} (${p.how}, ${p.file}:${p.line})${into.length ? ` and injected into ${into.slice(0, max).join(', ')}${into.length > max ? ', …' : ''}` : ', injected nowhere in the indexed code'}${p.exact ? '' : ' [token matched by its text]'}.`);
+        const xs = into(p.into);
+        const to = xs.length ? ` and injected into ${xs.slice(0, max).join(', ')}${xs.length > max ? ', …' : ''}` : ', injected nowhere in the indexed code';
+        if (p.types) {
+            // a bean that loses to another at some points (@Primary, a name) is said so, not "injected nowhere"
+            const lost = p.into.length ? [] : collectInjection(intel).injections.filter(j => j.others?.some(o => o.target === p.target));
+            const to2 = lost.length ? `, not chosen at ${into(lost).slice(0, max).join(', ')} (${lost[0].from[0]?.target?.name ?? '?'} is: ${lost[0].why.split(',')[0]})` : to;
+            out.push(`Dependency injection: a Spring bean (${p.how}${p.how === '@Bean' ? '' : ` ${p.name}`}, ${p.file}:${p.line})${p.primary ? ', @Primary,' : ''}${to2}${p.exact ? '' : ' [type matched by its name]'}.`);
+        }
+        else out.push(`Dependency injection: provided as ${p.token} (${p.how}, ${p.file}:${p.line})${to}${p.exact ? '' : ' [token matched by its text]'}.`);
     }
     const t = tokenUses(intel, s.id);
-    if (t.providers.length) out.push(`Dependency injection: ${s.name} is a token, provided by ${t.providers.slice(0, max).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 40)} (${p.file}:${p.line})`).join(', ')}; ${plural(t.injections.length, 'injection point')}.`);
+    const spring = t.injections.some(j => j.framework === 'spring');
+    const by = (p) => `${p.how} ${p.target?.qname ?? clip(p.targetText, 40)} (${p.file}:${p.line})`;
+    if (spring) {
+        const points = t.injections.slice(0, max).map(j => `${j.owner?.qname ?? '?'}.${j.param} ${j.file}:${j.line} ← ${j.from.length ? j.from.map(p => p.target?.name ?? p.targetText).join(' / ') : 'no bean in the indexed code'}${j.why && j.why !== 'by type' ? ` (${j.why})` : ''}`);
+        out.push(`Dependency injection (Spring): ${plural(t.injections.length, 'injection point')} of type ${s.name}${t.providers.length ? `, filled by ${t.providers.slice(0, max).map(by).join(', ')}` : ', no bean of it in the indexed code (a library or auto-configured bean)'}: ${points.join('; ')}${t.injections.length > max ? '; …' : ''}.`);
+    } else if (t.providers.length) out.push(`Dependency injection: ${s.name} is a token, provided by ${t.providers.slice(0, max).map(by).join(', ')}; ${plural(t.injections.length, 'injection point')}.`);
     return out;
 }
 
 function toolInject(intel, { filter = '' }) {
     const { providers, injections } = collectInjection(intel);
     const f = String(filter ?? '').trim().toLowerCase();
-    const keys = [...new Set([...providers, ...injections].map(x => x.key))];
-    const rows = keys.map(key => ({ key, token: (providers.find(p => p.key === key) ?? injections.find(j => j.key === key)).token, ps: providers.filter(p => p.key === key), js: injections.filter(j => j.key === key) }))
-        .filter(r => !f || r.token.toLowerCase().includes(f) || r.ps.some(p => (p.target?.qname ?? p.targetText).toLowerCase().includes(f)) || r.js.some(j => (j.owner?.qname ?? '').toLowerCase().includes(f)));
-    if (!keys.length) return 'No dependency-injection providers or @Inject(…) points recognised (NestJS, TypeScript).';
-    if (!rows.length) return `Nothing matches "${filter}" (${plural(keys.length, 'token')} in the repository; \`inject\` lists them all).`;
-    const out = [`${plural(rows.length, 'token')}${f ? ` matching "${filter}"` : ''} (NestJS: provide/use… and @Inject):`];
+    // rows: what is asked for (a NestJS token, a Spring type), with what provides it and where it is injected;
+    // a Spring bean nobody injects (a controller, a configuration class) is counted, not listed
+    const nest = providers.filter(p => !p.types);
+    const keys = [...new Set([...nest, ...injections].map(x => x.key))];
+    const named = (p) => (p.target?.qname ?? p.targetText).toLowerCase();
+    const rows = keys.map(key => {
+        const js = injections.filter(j => j.key === key);
+        return { key, token: (nest.find(p => p.key === key) ?? js[0]).token, ps: [...new Set([...nest.filter(p => p.key === key), ...js.flatMap(j => j.from)])], js };
+    }).filter(r => !f || r.token.toLowerCase().includes(f) || r.ps.some(p => named(p).includes(f)) || r.js.some(j => (j.owner?.qname ?? '').toLowerCase().includes(f)));
+    const frameworks = [nest.length || injections.some(j => !j.framework) ? 'NestJS: provide/use… and @Inject' : null, providers.some(p => p.types) ? 'Spring: beans and their injection points' : null].filter(Boolean);
+    if (!keys.length) return providers.length ? `${plural(providers.length, 'Spring bean')} and no injection point recognised.` : 'No dependency-injection providers or injection points recognised (NestJS, Spring).';
+    if (!rows.length) return `Nothing matches "${filter}" (${plural(keys.length, 'injected type or token', 'injected types or tokens')} in the repository; \`inject\` lists them all).`;
+    const out = [`${plural(rows.length, 'injected type or token', 'injected types or tokens')}${f ? ` matching "${filter}"` : ''} (${frameworks.join('; ')}):`];
+    const where = (p) => p.target ? `${p.target.qname}  ${p.target.path}:${p.target.start_line}` : clip(p.targetText, 60);
     for (const r of rows.slice(0, 100)) {
         out.push(`  ${r.token}${r.ps.some(p => !p.exact) || r.js.some(j => !j.exact) ? '  [matched by its text]' : ''}`);
-        for (const p of r.ps) out.push(`    provided  ${p.how.padEnd(11)} ${p.target ? `${p.target.qname}  ${p.target.path}:${p.target.start_line}` : clip(p.targetText, 60)}   (${p.file}:${p.line})`);
-        if (!r.ps.length) out.push(`    provided  ${injectionSource(intel, r.key)}`);
-        for (const j of r.js) out.push(`    injected  ${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''}${j.type ? `: ${clip(j.type, 40)}` : ''}   (${j.file}:${j.line})`);
+        for (const p of r.ps) out.push(`    provided  ${p.how.padEnd(11)} ${where(p)}${p.primary && p.types ? '  @Primary' : ''}${p.conditions?.length ? `  ${p.conditions.join(' ')}` : ''}${!p.types ? `   (${p.file}:${p.line})` : ''}`);
+        if (!r.ps.length) out.push(`    provided  ${injectionSource(intel, r.key, r.js[0])}`);
+        for (const j of r.js) out.push(`    injected  ${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''}${j.type ? `: ${clip(j.type, 40)}` : ''}   (${j.file}:${j.line})${j.why && (j.from.length !== 1 || j.why !== 'by type') ? `  ← ${j.from.length === 1 ? `${j.from[0].target?.name ?? j.from[0].targetText}, ` : ''}${j.why}` : ''}`);
     }
     if (rows.length > 100) out.push(`  … ${rows.length - 100} more (pass part of a name to narrow)`);
+    const idle = providers.filter(p => p.types && !injections.some(j => j.from.includes(p)));
+    if (idle.length && !f) out.push(`${plural(idle.length, 'Spring bean')} injected nowhere by type in the indexed code (controllers, configuration, beans used by the framework or a library): \`inject <name>\` shows one.`);
     return out.join('\n');
 }
 
 /** Where a token with no `provide:` comes from: a class provides itself; otherwise a library or dynamic module. */
-function injectionSource(intel, key) {
+function injectionSource(intel, key, j = null) {
+    if (j?.framework === 'spring') return j.why.startsWith('@Qualifier') ? `no bean of this type named so in the indexed code (${j.why}): a library or auto-configured bean` : 'no bean of this type in the indexed code: a library or auto-configured bean, or one declared in XML';
     const id = key.startsWith('id:') ? Number(key.slice(3)) : null;
     const s = id != null ? intel.sym(id) : null;
     if (s && TYPE_KINDS.has(s.kind)) return `the class itself (a class is its own token when a module lists it)  ${loc(s)}`;
@@ -1105,10 +1129,10 @@ async function toolExplore(intel, { query = '', symbols = [], path: p = null, ma
         const cls = s.kind === 'class' ? s : (s.parent_id ? intel.sym(s.parent_id) : null);
         if (cls?.kind === 'class') {
             const recv = injectedInto(intel, cls.id).filter(j => s.kind === 'class' || (j.line >= s.start_line && j.line <= s.end_line));
-            if (recv.length) facts.push(`receives by injection: ${recv.slice(0, 4).map(j => `${j.param ?? '?'} ← ${j.token}, ${j.from.length ? j.from.slice(0, 2).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 30)} (${p.file}:${p.line})`).join(' / ') : injectionSource(intel, j.key)}`).join('; ')}`);
+            if (recv.length) facts.push(`receives by injection: ${recv.slice(0, 4).map(j => `${j.param ?? '?'} ← ${j.token}, ${j.from.length ? j.from.slice(0, 2).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 30)} (${p.file}:${p.line})`).join(' / ') : injectionSource(intel, j.key, j)}${j.why && j.why !== 'by type' && j.from.length ? ` [${j.why}]` : ''}`).join('; ')}${recv.length > 4 ? `; … ${recv.length - 4} more` : ''}`);
         }
         const gives = providedBy(intel, s.id);
-        if (gives.length) facts.push(`provided by injection as ${gives.slice(0, 3).map(p => `${p.token} to ${p.into.length ? p.into.slice(0, 3).map(j => `${j.owner?.qname ?? '?'} (${j.file}:${j.line})`).join(', ') : 'no injection point'}`).join('; ')}`);
+        if (gives.length) facts.push(`provided by injection as ${gives.slice(0, 3).map(p => `${p.types ? `a Spring bean (${p.how})` : p.token} to ${p.into.length ? p.into.slice(0, 3).map(j => `${j.owner?.qname ?? '?'} (${j.file}:${j.line})`).join(', ') + (p.into.length > 3 ? `, … ${p.into.length - 3} more` : '') : 'no injection point'}`).join('; ')}`);
         if (!s.is_test) for (const t of testsUsing(intel, s.id)) {
             testFiles.add(t.path);
             const label = t.qname === '(module)' ? `${t.path}:${t.line}` : `${t.qname} (${t.path}:${t.line})`;
