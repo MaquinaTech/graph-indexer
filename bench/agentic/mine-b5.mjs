@@ -87,8 +87,11 @@ function candidates() {
             }
         }
         if (!ripples.length) continue;
+        // data files (a fixture, pylint's functional cases) run through the test module that reads them
+        const fixtureRes = Object.keys(R?.fixtureTests ?? {}).map(re => new RegExp(re));
+        const isData = (p) => fixtureRes.some(re => re.test(p));
         const readers = Object.entries(R?.fixtureTests ?? {}).filter(([re]) => testFiles.some(p => new RegExp(re).test(p))).map(([, t]) => t);
-        const tests = [...new Set([...testFiles.filter(p => p.endsWith('.py')), ...readers])];
+        const tests = [...new Set([...testFiles.filter(p => p.endsWith('.py') && !isData(p)), ...readers])];
         res.push({ sha, parent, date, subject, src, testFiles, tests, ripples });
     }
     return res;

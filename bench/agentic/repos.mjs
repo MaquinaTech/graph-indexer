@@ -85,6 +85,22 @@ export const REPOS = {
         srcPrefix: 'mypy/',
         testRe: '(^mypy/test/|^test-data/)',
         testFileRe: '^mypy/test/test\\w+\\.py$', // testcheck.py: test modules have no underscore
+        // the data-driven cases and the test module that reads each file (its `files` list)
+        fixtureTests: {
+            '^test-data/unit/check-': 'mypy/test/testcheck.py',
+            '^test-data/unit/semanal-': 'mypy/test/testsemanal.py',
+            '^test-data/unit/fine-grained': 'mypy/test/testfinegrained.py',
+            '^test-data/unit/parse': 'mypy/test/testparse.py',
+            '^test-data/unit/deps': 'mypy/test/testdeps.py',
+            '^test-data/unit/merge\\.test$': 'mypy/test/testmerge.py',
+            '^test-data/unit/diff\\.test$': 'mypy/test/testdiff.py',
+            '^test-data/unit/(cmdline|reports|envvars)': 'mypy/test/testcmdline.py',
+            '^test-data/unit/pythoneval': 'mypy/test/testpythoneval.py',
+            '^test-data/unit/typexport': 'mypy/test/testtypegen.py',
+            '^test-data/unit/stubgen\\.test$': 'mypy/test/teststubgen.py',
+            '^test-data/unit/daemon\\.test$': 'mypy/test/testdaemon.py',
+            '^test-data/unit/errorstream\\.test$': 'mypy/test/testerrorstream.py',
+        },
         testHint: 'from the repository root, `pytest mypy/test/testcheck.py -k <case>` runs data-driven check cases from test-data/unit (pytest and the test requirements are installed).',
     },
     // the linter (B5), on its pinned astroid
@@ -97,6 +113,8 @@ export const REPOS = {
         srcPrefix: 'pylint/',
         testRe: '^tests/',
         testFileRe: '^tests/(.*/)?(test_|unittest_)\\w*\\.py$', // unittest_classes.py as well as test_*.py
+        // the functional cases (tests/functional/<letter>/<case>.py and .txt) run through test_functional.py
+        fixtureTests: { '^tests/functional/': 'tests/test_functional.py' },
         testHint: 'from the repository root, `pytest tests/checkers/unittest_classes.py` runs one test file (pytest, astroid 4.3.4 and the test requirements are installed).',
     },
     // the SQL toolkit and ORM (B5); its tests run on SQLite

@@ -97,6 +97,14 @@ How a B3 task is made, from the fifth round on:
   duckdb, pandas, numpy); the preflight checks it from inside a session. On 2026-10-12
   `typing_extensions` and `greenlet` were added for SQLAlchemy (B5). In sqlglot and SymPy every import
   of them is under `TYPE_CHECKING`, so nothing they run changed; networkx does not import them.
+  xarray, mypy and pylint (B5) use a second virtualenv, `venv-b5`, with the same numpy, pandas,
+  pytest and hypothesis plus dask, flox (with numpy_groupies and scipy) and mypy's and pylint's
+  test requirements: wheels only, installed offline inside the sandbox. xarray's dask chunk
+  manager is registered by a metadata-only distribution (no code) instead of `pip install -e .`,
+  which would make every checkout import one tree.
+- **Data-driven tests** run through the module that reads them (`fixtureTests` in `repos.mjs`):
+  sqlglot's `.sql` fixtures, pylint's functional cases (`tests/test_functional.py`) and mypy's
+  `test-data/unit/*.test` files (the `mypy/test/` module whose `files` lists them).
 - **Sandboxed** (since 2026-10-12): the repositories' code (tests at mining, measuring and grading)
   runs inside the macOS sandbox `bench/agentic/sandbox.sb`, which allows no network beyond
   localhost, no writes outside the checkout and temporary directories, and no reads of
@@ -1195,18 +1203,18 @@ tasks:
 
 ```sh
 node bench/fixtures.mjs                                   # nestjs (B1, B2)
-git clone --filter=blob:none https://github.com/tobymao/sqlglot.git /tmp/gi-agentic/repos/sqlglot
-git clone --filter=blob:none https://github.com/networkx/networkx.git /tmp/gi-agentic/repos/networkx
+git clone --filter=blob:none https://github.com/tobymao/sqlglot.git ~/.gi-agentic/repos/sqlglot
+git clone --filter=blob:none https://github.com/networkx/networkx.git ~/.gi-agentic/repos/networkx
 node bench/agentic/prepare.mjs snapshot --label local
 for t in qa-nestjs-r4 refactor-nestjs-r4 fresh-sqlglot-r4 fresh-networkx-r4; do
   node bench/agentic/prepare.mjs batch --tasks $t.json --arms grep,grep+rules,mcp,mcp+hooks --reps 1 --gi local >/dev/null
 done
 node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # Sonnet 5.5 unless --model M
-node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts /tmp/gi-agentic/transcripts/local
+node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts ~/.gi-agentic/transcripts/local
 node bench/agentic/report.mjs --gi local --integrated mcp+hooks --nogrep grep+rules
 ```
 
-`GI_AGENTIC_WORK` moves the work area from `/tmp/gi-agentic`. The 76 runs use the account's
+`GI_AGENTIC_WORK` moves the work area from `~/.gi-agentic`. The 76 runs use the account's
 quota: in the fourth round a run cost between 0.1M and 1.9M input-equivalent tokens, and an
 issue took 1–15 minutes.
 
@@ -1229,7 +1237,7 @@ them), and starts one short session per arm that must show the Agent tool, the g
 connected and the helper offered only where it belongs — nothing else runs if one of them does
 not. The sessions run under `acceptEdits` with Bash and graph-indexer's tools allowed, the web
 tools off, no MCP server but graph-indexer's and none of the machine's own settings, with a
-ceiling of $5 each (`--max-budget`). The report (`/tmp/gi-agentic/reports/<label>.md`) compares
+ceiling of $5 each (`--max-budget`). The report (`~/.gi-agentic/reports/<label>.md`) compares
 dollars, every model included, and adds a table of what the main agent handed to sub-agents, to
 which, and the context it carried itself. With the usual model the 60 sessions should come to
 tens of dollars, billed to the account the `claude` CLI is logged in with (a subscription's quota,

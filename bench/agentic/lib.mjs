@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const GI_ROOT = path.resolve(HERE, '../..');
 
-/** Work area for checkouts, runs and results (outside the repository by default). */
-export const WORK = path.resolve(process.env.GI_AGENTIC_WORK ?? path.join(os.tmpdir(), 'gi-agentic'));
+/** Work area for checkouts, runs and results: ~/.gi-agentic unless GI_AGENTIC_WORK says otherwise (never the temporary directory, where a run without the variable would leave a second, stray work area). */
+export const WORK = path.resolve(process.env.GI_AGENTIC_WORK ?? path.join(os.homedir(), '.gi-agentic'));
 
 export function argv() {
     const args = process.argv.slice(2);
