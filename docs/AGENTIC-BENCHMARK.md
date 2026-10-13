@@ -239,7 +239,8 @@ same tasks, run at the same time.
 
 Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs), a
 round of delegated questions on 24 new ones (72 runs), rounds of real Claude Code sessions, and
-a round against three other tools (215 runs), and two pilots on issues (94 runs). In short:
+a round against three other tools (215 runs), two pilots on issues (94 runs) and a pilot of two
+models (128 runs). In short:
 
 - **Against CodeGraph, codebase-memory-mcp and Serena, in real sessions with each tool installed
   as its own installer does it (34 tasks, 170 runs), graph-indexer is the only one the agent
@@ -461,6 +462,44 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### Sonnet 5.5 against Haiku 5.5 (mp-sonnet, mp-haiku, pilot): 16 tasks, 128 runs
+
+The same 16 tasks, arms (`cc`, `cc+gi`) and two runs each, once with `--model claude-sonnet-5-5`
+and once with `--model claude-haiku-5-5` (graph-indexer at `0a9968c`): 6 code questions on nestjs
+(B1), the 4 held-out nestjs refactors (B2) and 6 B5 tasks, one per repository (sqlglot 930f1a32,
+mypy 6a6979c4, sqlalchemy 49e12e84, sympy 56bf4dbd, xarray d0366c65, haystack 90d4fda4). Every
+session used only its model. Cost is the list price Claude Code reports per session, in dollars,
+because cost units do not compare across models.
+
+| model | arm | solved B1 / B2 / B5 | RIPPLE passing (B5) | mean cost B1 / B2 / B5 | B5 turns | B5 wall |
+|---|---|---|---|---|---|---|
+| Sonnet 5.5 | `cc` | 11/12 · 8/8 · 12/12 | 12/12 | $0.082 / $0.080 / $0.197 | 11.8 | 59 s |
+| Sonnet 5.5 | `cc+gi` | 12/12 · 8/8 · 12/12 | 12/12 | $0.075 / $0.088 / $0.196 | 10.6 | 53 s |
+| Haiku 5.5 | `cc` | 12/12 · 8/8 · 12/12 | 12/12 | $0.006 / $0.006 / $0.030 | 27.8 | 158 s |
+| Haiku 5.5 | `cc+gi` | 12/12 · 8/8 · 12/12 | 12/12 | $0.006 / $0.006 / $0.037 | 30.4 | 165 s |
+
+`cc+gi` against `cc`, paired by task (cost ratio, 95% CI):
+
+| model | B1 | B2 | B5 | all 16 |
+|---|---|---|---|---|
+| Sonnet 5.5 | 0.93 (0.89–0.97) | 1.10 (1.03–1.17) | 1.00 (0.90–1.12) | 1.00 (0.93–1.07) |
+| Haiku 5.5 | 0.98 (0.89–1.06) | 1.04 (0.94–1.20) | 1.22 (1.03–1.35) | 1.17 (1.01–1.27) |
+
+- **Both models solved everything but one Sonnet answer, and left no silent error.** The one miss
+  is a `cc` caller list on Sonnet (score 0.95). On B5 the RIPPLE tests — the other sites the
+  fix must reach, never shown to the agent — passed in all 48 runs, with and without
+  graph-indexer. These 6 tasks do not separate the models or the arms on silent errors: the
+  B5 target (half of Claude Code's silent errors) cannot be shown on them.
+- **Haiku costs about an eighth of Sonnet (0.12 in `cc`, 0.14 in `cc+gi`, all tasks) and takes
+  2.7 times as long on B5**, with more than twice the turns. It also edited the task's own test
+  files in 17 of 24 B5 runs (Sonnet 8); grading resets those files, so the score is not affected.
+- **graph-indexer helps Sonnet a little on questions and costs more with Haiku on B5.** On Sonnet
+  it took the one point `cc` lost and cost 0.93 on questions, but 1.10 on refactors; on Haiku it
+  cost 1.22 on B5, where Haiku called it 1.2 times per session and ended with more context (69k
+  tokens against 61k). Adoption was 100% on B1 and B2 in both models.
+- Two runs per task and a ceiling on solved: the solved rate cannot tell the models apart, and the
+  intervals are on cost only.
 
 ### The shell-aware hooks, on Sonnet 5.5 (b3h4, pilot): 15 tasks, 30 runs
 

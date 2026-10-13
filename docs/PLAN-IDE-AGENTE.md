@@ -130,6 +130,8 @@ Estado a 2026-10-13: **17 tareas con enunciado**, de 8 repositorios y con commit
 
 Reparto por tamaño de R: 10 tareas con 1–10 tests, 6 con 11–100 y 1 con más de 100 (213, sqlglot cefce191). No se llega al objetivo de 30: faltan 13.
 
+Piloto de modelos (2026-10-14, [AGENTIC-BENCHMARK](AGENTIC-BENCHMARK.md)): 6 de estas tareas (una por repositorio: sqlglot 930f1a32, mypy 6a6979c4, sqlalchemy 49e12e84, sympy 56bf4dbd, xarray d0366c65, haystack 90d4fda4), con `cc` y `cc+gi`, dos ejecuciones, en Sonnet 5.5 y en Haiku 5.5. RIPPLE pasó en las 48 ejecuciones: ningún error silencioso en ningún modelo ni brazo, así que S4 no se puede demostrar con estas 6. Esas 6 ya no son inéditas para la ronda que decide; las otras 11 sí.
+
 Cambios sobre el texto fijado, todos del 2026-10-12, y su motivo:
 - **Antes de ver resultados**, la exclusión de commits que crean o borran otros ficheros Python.
 - **Después del primer minado de sqlglot**, se alinea el texto con lo que el minero ya hacía desde el principio: ficheros modificados, nada de métodos especiales, B distinto de A y el tope de 40 FAIL_TO_PASS. El límite de tiempo pasó de tiempo de reloj a tiempo de CPU porque la máquina se comparte con otros trabajos: dos candidatos de sympy se descartaron por lentitud con la máquina cargada, y se vuelven a juzgar con la regla nueva. Las tareas ya minadas se vuelven a validar dentro del sandbox.

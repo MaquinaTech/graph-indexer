@@ -48,6 +48,11 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
     runner takes pytest from `GI_PYTHON` when `GI_PYTEST` is unset. Without them every file
     "crashed" under the system Python and read as loud.
   - Test runs remove the result files that runs killed on their timeout left behind.
+  - A first pilot (Sonnet 5.5 against Haiku 5.5, 6 B5 tasks with 6 questions and 4 refactors,
+    128 runs; [AGENTIC-BENCHMARK](docs/AGENTIC-BENCHMARK.md)) found no silent error in either model
+    or arm: RIPPLE passed in all 48 B5 runs, so these tasks cannot show the B5 target. Haiku cost
+    about an eighth of Sonnet and solved the same; graph-indexer cost 1.22 (1.03–1.35) of no index
+    on B5 with Haiku and 1.00 with Sonnet.
 - **Bench: the repositories' code runs sandboxed.** Tests at mining, measuring and grading run
   under `bench/agentic/sandbox.sb` (`sandboxed()` in `lib.mjs`):
   - no network beyond localhost;
