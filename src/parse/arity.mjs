@@ -4,6 +4,7 @@
  * ({ n, open }, open = a spread/splat makes n a lower bound). Used by the edit checker to spot
  * call sites that no longer match a changed signature, without compiling anything.
  */
+import { escapeRegExp } from '../util/regex.mjs';
 
 const PARAM_LIST_TYPES = new Set(['formal_parameters', 'parameters', 'parameter_list', 'function_value_parameters', 'method_parameters',
     'lambda_parameters', 'block_parameters', 'parameter_clause']);
@@ -58,8 +59,8 @@ export function paramArity(def, { method = false, lang = '', isStatic = false, d
         if (t === 'keyword_separator') { keywordOnly = true; continue; }
         if (SKIP_PARAM.test(t)) continue;
         const text = p.text;
-        // the receiver: Python self/cls (not for staticmethods), TS `this: T`
-        if (first && py && method && !isStatic && !decorators.some(d => /staticmethod/.test(d)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
+        // the receiver: Python self/cls (a classmethod's cls too, though it counts as static), TS `this: T`
+        if (first && py && method && !decorators.some(d => /staticmethod/.test(d)) && (!isStatic || /^cls\b/.test(text)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
         first = false;
         if (/^this\s*[:?]/.test(text)) continue;
         if (VARIADIC.test(t) || /^(\.\.\.|\*\*?)/.test(text) || /^params\s/.test(text) || /\bvararg\b/.test(text) || /\.\.\.\s*\w*$/.test(text) && lang === 'go') { max = Infinity; continue; }
@@ -117,7 +118,7 @@ export function callArgc(call) {
  */
 export function sigArity(sig, name) {
     if (!sig) return null;
-    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
     if (!m) return null;
     let depth = 0, cur = '', min = 0, max = 0, done = false;
     const param = (p) => {

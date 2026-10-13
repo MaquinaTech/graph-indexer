@@ -7,6 +7,11 @@
 import path from 'node:path';
 import { WORK } from './lib.mjs';
 
+// the virtualenv of the B5 repositories that need packages the main grading one does not have
+// (dask, mypy's and pylint's test requirements): wheels only, installed offline in the sandbox
+const VENV_B5 = path.join(WORK, 'venv-b5', 'bin', 'python');
+const venv = (name) => path.join(WORK, `venv-${name}`, 'bin', 'python');
+
 export const REPOS = {
     nestjs: {
         source: 'test/fixtures/nestjs',
@@ -20,7 +25,12 @@ export const REPOS = {
         runner: 'unittest',
         srcPrefix: 'sqlglot/',
         testRe: '^tests/',
-        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover tests` runs everything (slow).',
+        // SQL fixtures and the test modules that read them
+        fixtureTests: {
+            '^tests/fixtures/optimizer/': 'tests/test_optimizer.py',
+            '^tests/fixtures/(identity|pretty|partial)\\.sql$': 'tests/test_transpile.py',
+        },
+        testHint: 'from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.',
     },
     caddy: {
         source: path.join(WORK, 'go', 'caddy'),
@@ -42,6 +52,104 @@ export const REPOS = {
         runner: 'pytest',
         srcPrefix: 'networkx/',
         testRe: '/tests/',
-        testHint: 'from the repository root, `pytest networkx/algorithms/tests/test_cycles.py` runs one test file (pytest is installed; numpy/scipy are not, so tests that need them are skipped).',
+        testHint: 'from the repository root, `pytest networkx/algorithms/tests/test_cycles.py` runs one test file (pytest and numpy are installed; scipy is not, so tests that need it are skipped).',
+    },
+    // a large pure-Python library (mpmath, plus hypothesis for its test suite, are installed in the test environment)
+    sympy: {
+        source: path.join(WORK, 'repos', 'sympy'),
+        fetch: `git clone --filter=blob:none https://github.com/sympy/sympy.git ${path.join(WORK, 'repos', 'sympy')}`,
+        language: 'python',
+        runner: 'pytest',
+        srcPrefix: 'sympy/',
+        testRe: '/tests/',
+        testHint: 'from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).',
+    },
+    // labelled N-D arrays over numpy and pandas (B5), in its own virtualenv with dask; zarr, netCDF
+    // and plotting libraries are not installed
+    xarray: {
+        source: path.join(WORK, 'repos', 'xarray'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/pydata/xarray.git ${path.join(WORK, 'repos', 'xarray')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: VENV_B5,
+        srcPrefix: 'xarray/',
+        testRe: '/tests/',
+        testHint: 'from the repository root, `pytest xarray/tests/test_coarsen.py` runs one test file (pytest, numpy, pandas and dask are installed; tests that need zarr, netCDF or matplotlib are skipped).',
+    },
+    // the type checker (B5); its data-driven tests (test-data/unit/*.test) run through mypy/test/*.py
+    mypy: {
+        source: path.join(WORK, 'repos', 'mypy'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/python/mypy.git ${path.join(WORK, 'repos', 'mypy')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: VENV_B5,
+        srcPrefix: 'mypy/',
+        testRe: '(^mypy/test/|^test-data/)',
+        testFileRe: '^mypy/test/test\\w+\\.py$', // testcheck.py: test modules have no underscore
+        // the data-driven cases and the test module that reads each file (its `files` list)
+        fixtureTests: {
+            '^test-data/unit/check-': 'mypy/test/testcheck.py',
+            '^test-data/unit/semanal-': 'mypy/test/testsemanal.py',
+            '^test-data/unit/fine-grained': 'mypy/test/testfinegrained.py',
+            '^test-data/unit/parse': 'mypy/test/testparse.py',
+            '^test-data/unit/deps': 'mypy/test/testdeps.py',
+            '^test-data/unit/merge\\.test$': 'mypy/test/testmerge.py',
+            '^test-data/unit/diff\\.test$': 'mypy/test/testdiff.py',
+            '^test-data/unit/(cmdline|reports|envvars)': 'mypy/test/testcmdline.py',
+            '^test-data/unit/pythoneval': 'mypy/test/testpythoneval.py',
+            '^test-data/unit/typexport': 'mypy/test/testtypegen.py',
+            '^test-data/unit/stubgen\\.test$': 'mypy/test/teststubgen.py',
+            '^test-data/unit/daemon\\.test$': 'mypy/test/testdaemon.py',
+            '^test-data/unit/errorstream\\.test$': 'mypy/test/testerrorstream.py',
+        },
+        testHint: 'from the repository root, `pytest mypy/test/testcheck.py -k <case>` runs data-driven check cases from test-data/unit (pytest and the test requirements are installed).',
+    },
+    // the linter (B5), on its pinned astroid
+    pylint: {
+        source: path.join(WORK, 'repos', 'pylint'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/pylint-dev/pylint.git ${path.join(WORK, 'repos', 'pylint')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: VENV_B5,
+        srcPrefix: 'pylint/',
+        testRe: '^tests/',
+        testFileRe: '^tests/(.*/)?(test_|unittest_)\\w*\\.py$', // unittest_classes.py as well as test_*.py
+        // the functional cases (tests/functional/<letter>/<case>.py and .txt) run through test_functional.py
+        fixtureTests: { '^tests/functional/': 'tests/test_functional.py' },
+        testHint: 'from the repository root, `pytest tests/checkers/unittest_classes.py` runs one test file (pytest, astroid 4.3.4 and the test requirements are installed).',
+    },
+    // the SQL toolkit and ORM (B5); its tests run on SQLite
+    sqlalchemy: {
+        source: path.join(WORK, 'repos', 'sqlalchemy'),
+        fetch: `git clone --shallow-since=2026-05-01 https://github.com/sqlalchemy/sqlalchemy.git ${path.join(WORK, 'repos', 'sqlalchemy')}`,
+        language: 'python',
+        runner: 'pytest',
+        srcPrefix: 'lib/sqlalchemy/',
+        testRe: '^test/',
+        testHint: 'from the repository root, `pytest test/orm/test_session.py` runs one test file against SQLite (pytest, greenlet and typing_extensions are installed).',
+    },
+    // the web-crawling framework (B5), on Twisted; its FTP tests need pyftpdlib, which has no wheel
+    scrapy: {
+        source: path.join(WORK, 'repos', 'scrapy'),
+        fetch: `git clone --filter=blob:none --shallow-since=2026-05-15 https://github.com/scrapy/scrapy.git ${path.join(WORK, 'repos', 'scrapy')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: venv('scrapy'),
+        srcPrefix: 'scrapy/',
+        testRe: '^tests/',
+        testHint: 'from the repository root, `pytest tests/test_http_response.py` runs one test file (pytest, pytest-twisted and the test requirements are installed; the FTP tests are not).',
+    },
+    // the LLM pipeline framework (B5), with its core and light test dependencies; tests that need
+    // torch, transformers or a document converter's library are not runnable
+    haystack: {
+        source: path.join(WORK, 'repos', 'haystack'),
+        fetch: `git clone --filter=blob:none --shallow-since=2026-05-15 https://github.com/deepset-ai/haystack.git ${path.join(WORK, 'repos', 'haystack')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: venv('haystack'),
+        env: { HAYSTACK_TELEMETRY_ENABLED: 'False' }, // telemetry would write ~/.haystack, outside the sandbox
+        srcPrefix: 'haystack/',
+        testRe: '^test/',
+        testHint: 'from the repository root, `pytest test/core/pipeline/test_pipeline.py` runs one test file (pytest, pytest-asyncio and the core dependencies are installed; torch, transformers and the converters\' libraries are not).',
     },
 };

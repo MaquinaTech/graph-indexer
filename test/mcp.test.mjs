@@ -53,7 +53,9 @@ test('handshake negotiates a supported version and carries instructions', async 
 test('tools/list exposes the read-only tools with short descriptions', async () => {
     const r = await srv.request('tools/list', {});
     const names = r.result.tools.map(t => t.name);
-    assert.deepEqual(names, ['search_code', 'search_text', 'read_code', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
+    assert.deepEqual(names, ['explore', 'search_code', 'search_text', 'read_code', 'find_references', 'call_graph', 'change_impact', 'check_changes', 'outline']);
+    // loaded up front by clients that defer MCP tools: the call that opens a task, and exact uses
+    assert.deepEqual(r.result.tools.filter(t => t._meta?.['anthropic/alwaysLoad']).map(t => t.name), ['explore', 'find_references']);
     for (const t of r.result.tools) {
         assert.equal(t.annotations.readOnlyHint, true);
         assert.ok(t.description.length <= 2048, t.name);
@@ -69,6 +71,14 @@ test('stateless 2026-07-28 discovery and per-request version checks', async () =
     assert.equal(typeof d.result.ttlMs, 'number');
     const l = await srv.request('tools/list', { _meta: meta });
     assert.equal(l.result.cacheScope, 'private');
+    // results of that version say they are complete; Claude Code ignores tools listed without it
+    assert.equal(d.result.resultType, 'complete');
+    assert.equal(l.result.resultType, 'complete');
+    const c = await srv.request('tools/call', { _meta: meta, name: 'find_references', arguments: { symbol: 'add' } });
+    assert.equal(c.result.resultType, 'complete');
+    // the handshake generation is unchanged
+    const h = await srv.request('tools/list', {});
+    assert.equal(h.result.resultType, undefined);
     const bad = await srv.request('tools/list', { _meta: { 'io.modelcontextprotocol/protocolVersion': '2030-01-01' } });
     assert.equal(bad.error.code, -32022);
     assert.deepEqual(bad.error.data.requested, '2030-01-01');

@@ -16,6 +16,7 @@ import { confidenceLabel } from '../index/resolver.mjs';
 import { dataDir } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
 import { sigArity } from '../parse/arity.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
@@ -162,7 +163,7 @@ export class CodeIntel {
                 ORDER BY (s.end_line - s.start_line) ASC LIMIT 1`, file.replace(/^\.\//, ''), Number(line), Number(line));
             return { matches: rows.map(r => this.sym(r.id)), how: 'location' };
         }
-        m = /^(.+?\.[A-Za-z0-9]+)[:#](.+)$/.exec(t);
+        m = /^([^:#]+?\.[A-Za-z0-9]+)[:#](.+)$/.exec(t);
         if (m) {
             const [, file, q] = m;
             const rows = this.store.all(`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? AND (s.qname = ? OR s.name = ? OR s.qname LIKE ?) ORDER BY s.qname = ? DESC, s.start_line LIMIT ?`,
@@ -233,12 +234,14 @@ export class CodeIntel {
 
     /**
      * The subtypes of a member's type, transitively, split into those that inherit the member — they
-     * run it as their own, so a change to it reaches them — and those that redeclare it (their own
-     * version runs; their subtypes are not followed).
-     * @returns {{ inherit: object[], override: object[] }} index rows of the subtypes
+     * run it as their own, so a change to it reaches them — those that extend it (they redeclare it,
+     * but their version uses this one: `TRANSFORMS = {**Base.TRANSFORMS, …}`, `super().m()`; a change
+     * still reaches them, and their subtypes that inherit their version), and those that override it
+     * (their own version runs without this one).
+     * @returns {{ inherit: object[], extend: object[], override: object[] }} index rows of the subtypes
      */
     inheritance(id, { max = 30 } = {}) {
-        const out = { inherit: [], override: [] };
+        const out = { inherit: [], extend: [], override: [] };
         const sym = this.sym(id);
         if (!sym) return out;
         const type = this.ix.resolver.enclosingType(sym.id);
@@ -261,20 +264,30 @@ export class CodeIntel {
             frontier = next;
         }
         const declares = new Map();
-        const declared = (tid) => { if (!declares.has(tid)) declares.set(tid, this.#membersNamed(tid, sym.name).length > 0); return declares.get(tid); };
+        const declared = (tid) => { if (!declares.has(tid)) declares.set(tid, this.#membersNamed(tid, sym.name)); return declares.get(tid).length > 0; };
+        // a redeclaration that reads the member of a type after it in the resolution order uses that version
+        const usesNext = (tid, rest) => {
+            const later = new Set(rest.flatMap(t => declared(t) ? declares.get(t) : []));
+            return declares.get(tid).some(id => this.store.all('SELECT dst_id FROM refs WHERE src_id = ? AND dst_id IS NOT NULL', id).some(r => later.has(r.dst_id)));
+        };
         for (const sid of subs) {
             const order = this.ix.resolver.mro(sid);
             if (!order.includes(type.id)) continue;
-            const owner = order.find(declared);
+            const declarers = order.filter(declared);
+            const owner = declarers[0];
+            // follow the redeclarations that use the next version down to this one
+            let k = 0;
+            while (declarers[k] !== type.id && k + 1 < declarers.length && usesNext(declarers[k], order.slice(order.indexOf(declarers[k]) + 1))) k++;
             let bucket = null;
             if (owner === type.id) bucket = out.inherit;
+            else if (declarers[k] === type.id) bucket = out.extend;
             // its own version, where it would otherwise run this one
-            else if (owner === sid && order.slice(1).find(declared) === type.id) bucket = out.override;
+            else if (owner === sid && declarers[1] === type.id) bucket = out.override;
             if (!bucket) continue;
             const st = this.sym(sid);
             if (!st) continue;
             bucket.push(st);
-            if (out.inherit.length + out.override.length >= max) return out;
+            if (out.inherit.length + out.extend.length + out.override.length >= max) return out;
         }
         return out;
     }
@@ -367,7 +380,7 @@ export class CodeIntel {
             const ids = [...family];
             for (const { path: p } of this.store.all(`SELECT DISTINCT f.path FROM refs r JOIN files f ON f.id = r.file_id WHERE r.dst_id IN (${ids.map(() => '?').join(',')})`, ...ids)) files.add(p);
         } else files.add(sym.path);
-        const name = sym.name.replace(/[$]/g, '\\$');
+        const name = escapeRegExp(sym.name);
         const lit = new RegExp(`(['"\`])(?:[\\w.]*\\.)?${name}\\1`);
         const title = /^\s*(?:describe|it|test|context|suite)(?:\.\w+)?\s*\(/;
         const out = [];
@@ -451,7 +464,7 @@ export class CodeIntel {
             return { total: rows.length, plausible, typeNames: [] };
         }
         const names = [...typeNames];
-        const wordRe = new RegExp(`\\b(${names.map(n => n.replace(/[$]/g, '\\$')).join('|')})\\b`);
+        const wordRe = new RegExp(`\\b(${names.map(n => escapeRegExp(n)).join('|')})\\b`);
         const lower = names.map(n => n.toLowerCase());
         const mentions = new Map();
         const plausible = rows.filter(r => {

@@ -1,6 +1,6 @@
 /** Rust extraction spec. `impl Type { fn m() }` methods are qualified as Type.m. */
 
-const TH = (cap) => `[(type_identifier) @${cap} (generic_type type: (type_identifier) @${cap}) (scoped_type_identifier name: (type_identifier) @${cap}) (reference_type type: (type_identifier) @${cap}) (reference_type type: (generic_type type: (type_identifier) @${cap}))]`;
+const TH = (cap) => `[(type_identifier) @${cap} (generic_type type: (type_identifier) @${cap}) (scoped_type_identifier path: (_) @recv name: (type_identifier) @${cap}) (reference_type type: (type_identifier) @${cap}) (reference_type type: (generic_type type: (type_identifier) @${cap}))]`;
 // a whole type (normalizeType unwraps references, Box/Rc/Arc/Option/Result, and sees Vec<T> as T[])
 const TW = (cap) => `[(type_identifier) (generic_type) (scoped_type_identifier) (reference_type) (array_type) (pointer_type)] @${cap}`;
 
@@ -32,6 +32,9 @@ const QUERY = `
 (struct_expression name: (type_identifier) @name) @ref.new
 (struct_expression name: (scoped_type_identifier path: (_) @recv name: (type_identifier) @name)) @ref.new
 (type_identifier) @name @ref.type
+(scoped_type_identifier path: (_) @recv name: (type_identifier) @name) @ref.type
+(scoped_identifier path: [(identifier) @name (scoped_identifier path: (_) @recv name: (identifier) @name)]) @ref.type
+(identifier) @name @ref.value
 (impl_item trait: ${TH('name')}) @ref.inherit
 (trait_item bounds: (trait_bounds ${TH('name')})) @ref.inherit
 (arguments (identifier) @name) @ref.value
@@ -116,6 +119,70 @@ function parseImport(node) {
     return out;
 }
 
+/**
+ * Macro arguments are a token tree to tree-sitter: `tri!(self.parse(x))` and `assert_eq!(a.f(), 1)`
+ * hold calls the index would not see, and `cfg_rt! { pub struct Runtime … }` holds whole items. Before
+ * extraction, invocations whose arguments are plain Rust are rewritten in place, to text of the same
+ * length (so every position stays where it is): `m!(args)` → `m (args)` (a call of `m`), `m![args]`
+ * → `   [args]` (an array) and, where an item may stand, `m! { items }` → the items unwrapped.
+ * A rewrite is kept only if its text parses without errors on its own; macros inside the arguments
+ * become nodes once the outer one is rewritten, so this repeats a few rounds. Macro definitions
+ * (`macro_rules!`, with `$x` fragments) are left alone.
+ */
+function rewriteMacros(source, parse) {
+    let text = source;
+    for (let round = 0; round < 4; round++) {
+        const tree = parse(text);
+        const edits = [];
+        try {
+            const stack = [tree.rootNode];
+            while (stack.length) {
+                const n = stack.pop();
+                if (n.type === 'macro_definition') continue;
+                if (n.type === 'macro_invocation') {
+                    const e = macroEdit(n, text, parse);
+                    if (e) edits.push(e);
+                    continue;
+                }
+                for (let i = n.namedChildCount - 1; i >= 0; i--) stack.push(n.namedChild(i));
+            }
+        } finally { tree.delete(); }
+        if (!edits.length) break;
+        let out = '', at = 0;
+        for (const e of edits.sort((a, b) => a.from - b.from)) { out += text.slice(at, e.from) + e.text; at = e.to; }
+        text = out + text.slice(at);
+    }
+    return text;
+}
+
+const blank = (s) => s.replace(/[^\n]/g, ' ');
+const ITEM_PARENTS = new Set(['source_file', 'declaration_list']);
+
+/** The same-length rewrite of one macro invocation, or null when its arguments are not plain Rust. */
+function macroEdit(node, text, parse) {
+    const macro = node.childForFieldName('macro');
+    const tt = node.namedChildren[node.namedChildCount - 1];
+    if (!macro || tt?.type !== 'token_tree' || macro.text === 'macro_rules') return null;
+    const bang = text.indexOf('!', macro.endIndex);
+    if (bang < 0 || bang >= tt.startIndex || text.slice(macro.endIndex, bang).trim()) return null;
+    const open = text[tt.startIndex], inner = text.slice(tt.startIndex + 1, tt.endIndex - 1);
+    let edit, probe;
+    if (open === '(') {
+        edit = { from: bang, to: bang + 1, text: ' ' };
+        probe = `fn __() { let _ = __(${inner}); }`;
+    } else if (open === '[') {
+        edit = { from: node.startIndex, to: bang + 1, text: blank(text.slice(node.startIndex, bang + 1)) };
+        probe = `fn __() { let _ = [${inner}]; }`;
+    } else if (open === '{' && ITEM_PARENTS.has(node.parent?.type) && inner.trim()) {
+        edit = { from: node.startIndex, to: tt.endIndex, text: blank(text.slice(node.startIndex, tt.startIndex + 1)) + inner + ' ' };
+        probe = `mod __ {${inner}}`;
+    } else return null;
+    // `$x` metavariables belong to a macro definition's body (a nested one is not a node here)
+    if (/\$[\w(]/.test(inner)) return null;
+    const t = parse(probe);
+    try { return t.rootNode.hasError ? null : edit; } finally { t.delete(); }
+}
+
 function visibility(node) {
     const v = node.namedChildren.find(c => c.type === 'visibility_modifier');
     return v ? 'public' : 'private';
@@ -135,6 +202,7 @@ export const rust = {
     commentTypes: ['line_comment', 'block_comment'],
     skipBeforeDoc: new Set(['attribute_item', 'inner_attribute_item']),
     parseImport,
+    rewriteSource: rewriteMacros,
     ownerOf: implOwner,
     refineKind(kind, d, parent) {
         if (kind === 'function' && implOwner(d.node)) return 'method';
@@ -152,6 +220,17 @@ export const rust = {
     // calls that hand back (a view of) the same value: unwrap, clone, borrow, lock, iter …
     identityMethods: new Set(['unwrap', 'expect', 'unwrap_or_default', 'unwrap_or', 'unwrap_or_else', 'as_ref', 'as_mut', 'as_deref', 'as_deref_mut',
         'clone', 'borrow', 'borrow_mut', 'lock', 'read', 'write', 'to_owned', 'deref', 'deref_mut', 'cloned', 'copied', 'iter', 'iter_mut', 'into_iter', 'drain', 'upgrade']),
-    normalizeRefName: (name, r) => (r.node.type === 'macro_invocation' ? (BUILTIN_MACROS.has(name) ? null : name) : name),
+    normalizeRefName(name, r) {
+        if (r.node.type === 'macro_invocation') return BUILTIN_MACROS.has(name) ? null : name;
+        // a type named by the path of `Type::item` / `Enum::Variant`, and a unit struct or constant
+        // used as a value (`&Mmap`), are capitalised; modules and locals are not
+        if ((r.kind === 'type' && r.node.type === 'scoped_identifier') || (r.kind === 'value' && r.node.type === 'identifier')) {
+            if (!/^[A-Z]/.test(name)) return null;
+            // the last segment of a path (`Value::Number`) is the path's own reference
+            if (r.kind === 'value' && (r.nameNode.parent?.type === 'scoped_identifier' || r.nameNode.parent?.type === 'scoped_type_identifier')) return null;
+            for (let p = r.nameNode.parent; p; p = p.parent) if (p.type === 'token_tree' || p.type === 'use_declaration' || p.type === 'attribute_item' || p.type === 'macro_definition') return null;
+        }
+        return name;
+    },
     bodyField: 'body',
 };

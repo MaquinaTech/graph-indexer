@@ -1,0 +1,8 @@
+[
+  "tests/dialects/test_mysql.py::TestMySQL::test_alter_drop_column",
+  "tests/dialects/test_postgres.py::TestPostgres::test_alter_drop_column",
+  "tests/dialects/test_postgres.py::TestPostgres::test_ddl",
+  "tests/dialects/test_redshift.py::TestRedshift::test_identity",
+  "tests/dialects/test_risingwave.py::TestRisingWave::test_risingwave",
+  "tests/dialects/test_singlestore.py::TestSingleStore::test_alter"
+]

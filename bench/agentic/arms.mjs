@@ -38,14 +38,18 @@
  *             CLAUDE.md block
  *   cc+gi+helper  as `init` installs it: also the structural helper sub-agent, which the main agent
  *             may hand structural questions to (routing inside a session)
+ *   cc+gi+hooks   as `init --no-helper --hooks` installs it: cc+gi plus the Claude Code hooks in the
+ *             project's .claude/settings.json (edit check, definition rescue, crawl-gated context)
  *   cc+v2     the same session with graph-indexer 2.x as its `init` installed it: its MCP server over
  *             its own index, and CLAUDE.md importing its assembled prompt suite (bench/agentic/v2.mjs)
+ *   cc+codegraph, cc+cbm, cc+serena  the same session with CodeGraph, codebase-memory-mcp or Serena, each installed as its
+ *             own installer does it for Claude Code (bench/agentic/competitors.mjs)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper', 'cc+v2'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper', 'cc+gi+hooks', 'cc+v2', 'cc+codegraph', 'cc+cbm', 'cc+serena', 'cc+serena-prompt'];
 
 /**
  * Arms that answer a delegated question: the sub-agent type to launch, and whether the message
@@ -69,8 +73,15 @@ export const SESSION_ARMS = {
     cc: { index: false, helper: false },
     'cc+gi': { index: true, helper: false },
     'cc+gi+helper': { index: true, helper: true },
+    'cc+gi+hooks': { index: true, helper: false, hooks: true },
     // graph-indexer 2.x as its `init` installed it (MCP server, index and prompt suite), for the v2 comparison
     'cc+v2': { index: true, helper: false, v2: true },
+    // other tools, each as its own installer sets it up for Claude Code (competitors.mjs)
+    'cc+codegraph': { index: false, helper: false, competitor: 'codegraph' },
+    'cc+cbm': { index: false, helper: false, competitor: 'cbm' },
+    'cc+serena': { index: false, helper: false, competitor: 'serena' },
+    // a control: Serena's system prompt with no Serena
+    'cc+serena-prompt': { index: false, helper: false, competitor: 'serena-prompt' },
 };
 
 /** Arms that need a harness with the MCP server (and hooks) wired in, not sub-agents following a card. */

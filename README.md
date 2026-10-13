@@ -90,8 +90,16 @@ Without `--repo` the server indexes the git repository containing its working di
 
 ## The tools
 
+`npx graph-indexer init` ends with an example from your own repository: a method that shares its
+name with other definitions, what grep returns for that name, and the calls the index binds to
+that one definition (`npx graph-indexer demo` shows it again).
+
 | Tool | Use it to | Typical reply |
 |---|---|---|
+| `explore` | start a task or bug in code you have not read, in one call | the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined and the tests to run with the command — inside a token budget, naming what it left out |
+| `explore` + routes | ask about an endpoint ("what happens on POST /owners/42/edit") | the handler the framework registers for it — FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi; `npx graph-indexer routes` lists them all |
+| dependency injection | look up a NestJS or Spring class, interface or token (`find_references`, `explore`) | what an injection point receives — NestJS: the `provide: TOKEN, useClass/useFactory/…` or `ClientsModule` registration of an `@Inject(TOKEN)`; Spring: the bean of an `@Autowired`/constructor/`@Bean` parameter, chosen by `@Qualifier`, `@Primary` and name, Feign, Spring Data and MyBatis proxies named as such — and where a provider is injected, which neither the type checker nor grep for the type connects; `npx graph-indexer inject` lists them all |
+| ORM models | look up a model (`find_references`, `explore`; `npx graph-indexer models`) | its table, the migrations that touch it, and for Prisma the client calls (`prisma.user.findMany`) that only the generated client types — Prisma, Django, SQLAlchemy/SQLModel, TypeORM |
 | `read_code` | read symbols, line ranges or files — several per call — without searching for what they use | code with line numbers, then where each name it uses is defined (file:line and signature); who uses a symbol and which tests reference it; a long file's outline |
 | `search_text` | grep any text across the repository (code, config, docs) | grep lines with the enclosing definition and, for identifiers, the definition each match refers to; where the definition is when the search missed it |
 | `search_code` | find where a behaviour or identifier lives (natural language or names) | ranked symbols with location, signature, doc line and matching lines |
@@ -236,9 +244,18 @@ files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30
 
 ## Languages
 
-JavaScript, TypeScript/TSX, Python, Go, Java, Kotlin, Scala, C#, Rust, C, C++, Ruby, PHP, Bash
-and CSS/SCSS/Less. Reference binding and type inference are deepest for TypeScript/JavaScript,
-Python, Go, Java, C# and Rust.
+Every language gets definitions, outlines, search and edit checks. How far references are bound
+differs, and is stated rather than implied:
+
+| Level | Languages | What it means |
+|---|---|---|
+| **Verified** | TypeScript/TSX, Go, Java, Python, Rust | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.955–0.994 / 0.861–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.871–0.998 / 0.929–0.998 against pyright (fastapi, flask, requests, httpx, rich, click), Rust 0.930–0.955 / 0.582–0.841 against rust-analyzer (serde_json, ripgrep, tokio) |
+| **Resolved** | JavaScript, C#, Vue and Svelte components (`<script>` as TypeScript; template tags as uses of the components imported) | scopes, imports and receiver types inferred from declarations, annotations and constructors; no compiler oracle yet |
+| **Scoped** | Kotlin, Scala, C, C++, Ruby, PHP | scopes, imports/includes and packages; less type inference, so more calls stay unbound or by name |
+| **Symbols** | Bash, CSS/SCSS/Less | definitions, outlines and search; references by name |
+
+Each answer marks how a reference was bound (`exact`, `likely`, `possible`) and says when a list is
+complete, whatever the level.
 
 ## Command line
 

@@ -10,7 +10,7 @@
  *
  *   node bench/agentic/session-round.mjs [--label rt1] [--model M] [--concurrency 3] [--max-budget 5] [--pilot]
  *        [--arms cc,cc+gi,cc+gi+helper] [--tasks qa-nestjs-r6.json,refactor-nestjs-r5.json,refactor-nestjs-held.json]
- *        [--claude-bin claude] [--reps 1]
+ *        [--claude-bin claude] [--reps 1] [--in-repo] [--ids ID,ID]
  *
  * Steps: check what it needs (the claude CLI, the nestjs fixture, TypeScript for grading) →
  * freeze this graph-indexer → prepare the runs → one one-turn session per arm to check its setup →
@@ -28,13 +28,19 @@ import { argv, WORK, GI_ROOT, HERE, readJson } from './lib.mjs';
 
 const { opt, list, flag } = argv();
 const label = opt('--label', 'rt1');
-const model = opt('--model', null);
+// every measured session runs on one model, pinned rather than the CLI's default (which has
+// changed between rounds); --model overrides it
+const model = opt('--model', 'claude-sonnet-5-5');
 const concurrency = opt('--concurrency', '3');
 const claude = opt('--claude-bin', 'claude');
 const arms = list('--arms', ['cc', 'cc+gi', 'cc+gi+helper']);
 // 12 new questions, 2 new refactors, and the 6 held-out refactors of round 2 (there are few new targets left)
 const taskFiles = list('--tasks', ['qa-nestjs-r6.json', 'refactor-nestjs-r5.json', 'refactor-nestjs-held.json']);
 const pilot = flag('--pilot');
+// only these tasks of the task files (a subset run on several models, say)
+const ids = list('--ids');
+// sessions in the repository itself, with each tool installed there (prepare.mjs --in-repo)
+const inRepo = flag('--in-repo');
 // dollars one session may spend at most (a run that reaches it stops, unsolved; runs cost far less)
 const maxBudget = opt('--max-budget', '5');
 // runs per task and arm (issues vary more from run to run than questions)
@@ -68,13 +74,16 @@ console.error(`TypeScript at ${process.env.TYPESCRIPT_PATH}`);
 step(`freezing this graph-indexer as "${label}"`);
 run([path.join(HERE, 'prepare.mjs'), 'snapshot', '--label', label]);
 const runsDir = path.join(WORK, 'runs', label);
-const tasks = taskFiles.flatMap(f => readJson(path.join(HERE, 'tasks', f), []));
-const chosen = pilot ? [tasks.find(t => t.family === 'qa'), tasks.find(t => t.family !== 'qa')].filter(Boolean) : tasks;
+const tasks = taskFiles.flatMap(f => readJson(path.join(HERE, 'tasks', f), [])).filter(t => !ids.length || ids.includes(t.id));
+if (ids.length && tasks.length !== ids.length) throw new Error(`--ids: ${ids.filter(i => !tasks.some(t => t.id === i)).join(', ')} not in ${taskFiles.join(', ')}`);
+// the pilot: one task of each kind (question, refactor, mined issue)
+const kindOf = (t) => t.family === 'qa' ? 'qa' : t.kind === 'fresh' ? 'fresh' : 'edit';
+const chosen = pilot ? [...new Map(tasks.map(t => [kindOf(t), t])).keys()].map(k => tasks.find(t => kindOf(t) === k)) : tasks;
 // runs already prepared are left as they are (their checkout may hold a finished run's changes)
 const toPrepare = chosen.flatMap(t => arms.flatMap(a => repIds.map((r, i) => ({ t, a, rep: i + 1 }))))
     .filter(({ t, a, rep }) => !fs.existsSync(path.join(runsDir, `${t.id}__${a}__r${rep}`, 'meta.json')));
 step(`preparing ${chosen.length} task(s) × ${arms.length} arm(s) × ${reps} run(s) (${toPrepare.length} run(s) not prepared yet)`);
-for (const { t, a, rep } of toPrepare) run([path.join(HERE, 'prepare.mjs'), 'run', '--task', t.id, '--arm', a, '--rep', String(rep), '--gi', label]);
+for (const { t, a, rep } of toPrepare) run([path.join(HERE, 'prepare.mjs'), 'run', '--task', t.id, '--arm', a, '--rep', String(rep), '--gi', label, ...(inRepo ? ['--in-repo'] : [])]);
 const runIds = chosen.flatMap(t => arms.flatMap(a => repIds.map(r => `${t.id}__${a}__${r}`)));
 
 // ── check each arm's session, then run ────────────────────────────────────────

@@ -326,6 +326,8 @@ function typeNarrowings(root, source) {
  */
 export async function extractFile(spec, source, relPath) {
     const { query, parser } = await prepareLanguage(spec);
+    // a language may rewrite its source first, keeping every position (Rust macro arguments)
+    if (spec.rewriteSource) source = spec.rewriteSource(source, (s) => parser.parse(s));
     const tree = parser.parse(source);
     try {
         return extractFromTree(spec, query, tree, source, relPath);
@@ -354,7 +356,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
         let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, bindEach = null, srcNode = null;
-        let bindKey = null, bindOf = null;
+        let bindKey = null, bindOf = null, bindLocal = false;
         let cbFn = null, cbArg = null;
         for (const c of m.captures) {
             const n = c.name;
@@ -378,6 +380,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
             else if (n === 'bind.each') bindEach = c.node;
             else if (n === 'bind.key') bindKey = c.node.text;
+            else if (n === 'bind.local') bindLocal = true;
             else if (n === 'bind.of') bindOf = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
             else if (n === 'ret') { role = 'ret'; main = c.node; }
@@ -405,6 +408,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const prev = seenRef.get(nameNode.id);
             if (prev !== undefined) {
                 if ((REF_PRIORITY[kind] ?? 0) > (REF_PRIORITY[rawRefs[prev].kind] ?? 0)) rawRefs[prev] = { node: main, nameNode, kind, recvNode: recvNode ?? rawRefs[prev].recvNode };
+                // the same reference seen with its qualifier (`de::Deserializer` after `Deserializer`)
+                else if (kind === rawRefs[prev].kind && recvNode && !rawRefs[prev].recvNode) rawRefs[prev] = { ...rawRefs[prev], node: main, recvNode };
                 continue;
             }
             seenRef.set(nameNode.id, rawRefs.length);
@@ -424,12 +429,12 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 else if (bindOf) { const t = normalizeType(bindOf.text, spec); expr = t ? `(${t}).${bindKey}` : null; }
                 else expr = memberOfDescriptor(expr, bindKey);
             }
-            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar,
+            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar, local: bindLocal,
                 expr, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
                 each: bindEach ? elementsDescriptor(bindEach, spec) : null };
             const prev = bindSites.get(key);
             if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
-            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; }
+            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; p.local ||= rec.local; }
         }
     }
 
@@ -633,7 +638,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx, end });
         else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx, end });
         else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx, end });
-        else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
+        else if (b.type || (b.expr && b.expr !== 'null') || b.local) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
     }
     const lookupLocal = (ctx, name) => {
         for (let k = ctx.scope; ; k = scopes[k].parent) {
@@ -872,7 +877,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
         // a value or a call by the name of a local (`stack := stack(3); log(stack)`, `check := func…;
         // check()`) is the local, in languages where no local stands for repository code (Go: no
         // imports bind locals)
-        if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues : kind === 'call' && spec.packageValues) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
+        // `localNames`: the same for any local, untyped parameters included (Python: `def send(self,
+        // request): … request` is the parameter, never a function named `request` elsewhere)
+        if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues || spec.localNames : kind === 'call' && (spec.packageValues || spec.localNames)) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
         const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });

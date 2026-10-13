@@ -46,3 +46,4 @@ BENCH_V2_REPORT.md
 
 # Local scratch area used during development
 scratch/
+bench/arena/.tools/

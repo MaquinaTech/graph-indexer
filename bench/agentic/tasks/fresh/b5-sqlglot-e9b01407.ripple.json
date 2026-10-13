@@ -1,0 +1,14 @@
+[
+  "tests/dialects/test_dialect.py::TestDialect::test_generate_date_array",
+  "tests/dialects/test_dialect.py::TestDialect::test_nested_ctes",
+  "tests/dialects/test_dialect.py::TestDialect::test_qualify",
+  "tests/dialects/test_dialect.py::TestDialect::test_set_operators",
+  "tests/dialects/test_redshift.py::TestRedshift::test_redshift",
+  "tests/dialects/test_tsql.py::TestTSQL::test_ddl",
+  "tests/dialects/test_tsql.py::TestTSQL::test_for_modifiers",
+  "tests/dialects/test_tsql.py::TestTSQL::test_parsename",
+  "tests/dialects/test_tsql.py::TestTSQL::test_qualify_derived_table_outputs",
+  "tests/dialects/test_tsql.py::TestTSQL::test_top",
+  "tests/dialects/test_tsql.py::TestTSQL::test_tsql",
+  "tests/dialects/test_tsql.py::TestTSQL::test_udf"
+]

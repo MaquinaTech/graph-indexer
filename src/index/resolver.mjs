@@ -16,8 +16,12 @@
 import path from 'node:path';
 import { normalizeType } from '../parse/extract.mjs';
 import { fits, sigArity } from '../parse/arity.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
+// element accesses one descriptor may stack (`xs[i][j]`…): a field assigned an element of itself
+// (`self.impl = self.impl[0]`) would add one on every lookup, with no end
+const MAX_ELEM = 8;
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
 const CALLABLE_KINDS = new Set(['function', 'method', 'constructor', 'macro']);
 const MEMBER_HOLDERS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'object', 'impl', 'module']);
@@ -100,7 +104,7 @@ function paramType(param) {
  */
 export function callbackParamTypeText(sig, name, i, j) {
     if (!sig) return null;
-    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
     const list = m ? bracketed(sig, m.index + m[0].length - 1) : null;
     let type = list ? paramType(splitTopLevel(list.inner)[i] ?? '') : null;
     if (!type) return null;
@@ -217,10 +221,11 @@ export class SymbolTable {
 }
 
 export class Resolver {
-    constructor(table, specsById, { sigOf = null } = {}) {
+    constructor(table, specsById, { sigOf = null, modules = null } = {}) {
         this.t = table;
         this.specs = specsById; // lang id -> spec (implicitThis etc.)
         this.sigOf = sigOf;     // symbol id -> signature text (read on demand: callback parameter types)
+        this.modules = modules; // module resolver (Rust paths: `crate::a::B`, `super::f`, `other_crate::x`)
         this.memo = new Map();
     }
 
@@ -275,8 +280,19 @@ export class Resolver {
                 if (a && b && a.lang === b.lang && (a.dir === b.dir || a.package === b.package || a.lang === 'cpp' || a.lang === 'c' || a.lang === 'rust' || a.lang === 'javascript' || a.lang === 'typescript')) out.push(id);
             } else out.push(id);
         }
-        if (out.length) return out;
         const typeSym = type.id != null ? this.t.sym(type.id) : null;
+        if (out.length) {
+            // Python: `self.x = …` hoisted as a field of a class whose base declares `x` as a property
+            // runs the base's setter — the attribute is the base's property, not a new field
+            if (typeSym && out.every(id => this.t.sym(id)?.kind === 'field') && this.t.file(typeSym.fileId)?.lang === 'python') {
+                for (const base of typeSym.bases ?? []) {
+                    const bt = this.resolveTypeName(base, typeSym.fileId);
+                    const inherited = bt ? this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name, depth + 1, new Set(seen)) : [];
+                    if (inherited.some(id => this.t.sym(id)?.kind === 'method')) return inherited;
+                }
+            }
+            return out;
+        }
         for (const base of typeSym?.bases ?? []) {
             const bt = this.resolveTypeName(base, typeSym.fileId);
             if (bt) {
@@ -376,7 +392,10 @@ export class Resolver {
      */
     typeFromString(str, fileId, elem = 0) {
         if (!str) return null;
-        if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
+        if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) {
+            const desc = str + '[]'.repeat(elem);
+            return desc.split('[]').length - 1 > MAX_ELEM ? null : this.resolveRecvType(desc, fileId, null);
+        }
         let s = str;
         for (let i = 0; i < elem; i++) {
             if (!s.endsWith('[]') && !s.endsWith('{}')) {
@@ -567,10 +586,39 @@ export class Resolver {
             const passes = imp.reexport === name || imp.reexport === '*' || imp.local === name || (imp.wildcard && imp.imported === '*');
             if (!passes || imp.targetFileId == null) continue;
             const inner = imp.reexport === name && imp.imported && imp.imported !== '*' ? imp.imported : (imp.local === name && imp.imported && imp.imported !== '*' ? imp.imported : name);
-            const r = this.exportedFrom(imp.targetFileId, inner, depth + 1, seen);
+            // `export { default as X } from './x'`: x's default export, whatever it is called there
+            const r = inner === 'default' && name !== 'default' ? this.#defaultExport(imp.targetFileId, name) : this.exportedFrom(imp.targetFileId, inner, depth + 1, seen);
             if (r.length) return r;
         }
         return out;
+    }
+
+    /** The module a Python package or module file exposes as `seg`: a submodule file, or a module it imports. */
+    #submodule(fileId, seg) {
+        const f = this.t.file(fileId);
+        if (f?.path.endsWith('/__init__.py')) {
+            const dir = f.path.slice(0, -'/__init__.py'.length);
+            const sub = this.t.fileByPath.get(`${dir}/${seg}.py`) ?? this.t.fileByPath.get(`${dir}/${seg}/__init__.py`);
+            if (sub) return sub.id;
+        }
+        return this.#moduleFileOf(fileId, seg);
+    }
+
+    /** Whether a module binds `name` through an import of a module outside the repository, following re-exports. */
+    #reexportsExternal(targetFileId, name, depth = 0) {
+        if (targetFileId == null || depth > 6) return false;
+        for (const imp of this.t.imports.get(targetFileId) ?? []) {
+            // `export * from './icons'` where ./icons re-exports `name` from a package
+            if (imp.reexport === '*' && imp.targetFileId != null && imp.local == null) {
+                if (this.#reexportsExternal(imp.targetFileId, name, depth + 1)) return true;
+                continue;
+            }
+            if (imp.wildcard || !(imp.local === name || imp.reexport === name)) continue;
+            if (imp.targetFileId == null && !imp.targetDir) return true;
+            const inner = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
+            if (imp.targetFileId != null && !this.exportedFrom(imp.targetFileId, inner).length) return this.#reexportsExternal(imp.targetFileId, inner, depth + 1);
+        }
+        return false;
     }
 
     #symbolsInDir(dir, name, fileId) {
@@ -719,8 +767,14 @@ export class Resolver {
             const target = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
             let ids = [];
             if (imp.targetFileId != null) {
-                ids = this.exportedFrom(imp.targetFileId, target);
-                if (!ids.length && imp.imported === 'default') ids = this.#defaultExport(imp.targetFileId, name);
+                if (imp.imported === 'default') {
+                    // a default import names the module's default export, whatever the importer calls it:
+                    // a definition of that name in the module itself, else its default export; only then
+                    // what the module imports under that name (it may import another `name` of its own)
+                    ids = (this.t.fileSyms.get(imp.targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.name === name && s.parentId == null; });
+                    if (!ids.length) ids = this.#defaultExport(imp.targetFileId, name);
+                    if (!ids.length) ids = this.exportedFrom(imp.targetFileId, target);
+                } else ids = this.exportedFrom(imp.targetFileId, target);
             }
             if (!ids.length && imp.targetDir) ids = this.#symbolsInDir(imp.targetDir, target, fileId);
             if (!ids.length && imp.source && PACKAGE_LANGS.has(file.lang)) ids = this.#symbolsInPackage(imp.source, target);
@@ -729,6 +783,9 @@ export class Resolver {
                 if (r) return r;
             }
             if (imp.targetFileId == null && !imp.targetDir && !PACKAGE_LANGS.has(file.lang)) return { id: null, conf: 0, ncand: 0, external: true };
+            // the module re-exports the name from a package outside the repository (`fastapi/__init__.py`:
+            // `from starlette.responses import Response`): not a same-name definition found globally
+            if (!ids.length && imp.targetFileId != null && this.#reexportsExternal(imp.targetFileId, target)) return { id: null, conf: 0, ncand: 0, external: true };
         }
         // 5. same package / directory
         if (PACKAGE_LANGS.has(file.lang) && file.package) {
@@ -774,13 +831,24 @@ export class Resolver {
         const ids = (this.t.fileSyms.get(targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.parentId == null && s.exported; });
         const same = ids.filter(id => this.t.sym(id).name.toLowerCase() === localName.toLowerCase());
         if (same.length) return same;
+        // a Vue or Svelte file's default export is the component, named after the file whatever the importer calls it
+        const file = this.t.file(targetFileId);
+        if (file && (file.lang === 'vue' || file.lang === 'svelte')) {
+            const base = file.path.split('/').pop().replace(/\.[^.]+$/, '');
+            const stem = (base === 'index' ? file.path.split('/').slice(-2, -1)[0] ?? base : base).replace(/(^|[-_.])(\w)/g, (_, __, c) => c.toUpperCase());
+            const comp = ids.filter(id => this.t.sym(id).name === stem || this.t.sym(id).name === `${stem}Component`);
+            if (comp.length) return comp;
+        }
         return ids.length === 1 ? ids : [];
     }
 
     #global(name, kind, fileId) {
         const all = (this.t.byName.get(name) ?? []).filter(id => {
             const s = this.t.sym(id);
-            return s && this.#compatible(s, kind) && (s.parentId == null || TYPE_KINDS.has(s.kind) || kind === 'call');
+            if (!s || !this.#compatible(s, kind) || !(s.parentId == null || TYPE_KINDS.has(s.kind) || kind === 'call')) return false;
+            // a function nested in a function is visible only inside it (found in step 1 there)
+            const parent = s.parentId != null ? this.t.sym(s.parentId) : null;
+            return !(parent && CALLABLE_KINDS.has(parent.kind) && CALLABLE_KINDS.has(s.kind));
         });
         const file = this.t.file(fileId);
         // never bind across unrelated languages (a TS call never resolves to a Python def)
@@ -788,16 +856,27 @@ export class Resolver {
             const f = this.t.file(this.t.sym(id).fileId);
             return f && (f.lang === file.lang || familyOf(f.lang) === familyOf(file.lang));
         });
+        // an ES module sees another module's top-level names only through an import (resolved
+        // above): a value read that reached here is a local the extractor did not scope (a lambda
+        // parameter, a block-scoped const), not that name. Calls are left alone (CommonJS patterns).
+        const isolated = (kind === 'value' || kind === 'read') && familyOf(file.lang) === 'ecma' && this.#isModule(fileId);
         // unqualified calls cannot target methods of unrelated classes in most languages
         const cands = sameFamily.filter(id => {
             const s = this.t.sym(id);
             if (s.kind === 'method' || s.kind === 'field' || s.kind === 'property') return false;
+            if (isolated && s.fileId !== fileId && s.parentId == null && this.#isModule(s.fileId)) return false;
             return true;
         });
         if (!cands.length) return null;
         if (cands.length > MAX_GLOBAL_CANDIDATES) return { id: null, conf: 0, ncand: cands.length };
         const base = cands.length === 1 ? 0.6 : 0.35;
         return this.#pick(cands, kind, base, fileId);
+    }
+
+    /** A JS/TS file that imports or exports something: its top-level names are its own. */
+    #isModule(fileId) {
+        if ((this.t.imports.get(fileId) ?? []).length) return true;
+        return (this.t.fileSyms.get(fileId) ?? []).some(id => { const s = this.t.sym(id); return s?.parentId == null && s?.exported; });
     }
 
     #resolveMember(name, kind, recv, recvType, fileId, srcId) {
@@ -819,6 +898,11 @@ export class Resolver {
                     return { id: null, conf: 0, ncand: 0 };
                 }
             }
+        }
+        // a Rust path: `crate::a::f`, `super::B::new`, `other_crate::m::T`, `alias::sub::f`
+        if (file.lang === 'rust' && this.modules) {
+            const r = this.#rustPath(name, kind, recv, fileId);
+            if (r) return r;
         }
         // inferred receiver type (locals, params, fields, factories; chains across files)
         if (recvType) {
@@ -844,8 +928,11 @@ export class Resolver {
                 if (!owners.length && PACKAGE_LANGS.has(file.lang)) owners = this.#symbolsInPackage(imp.source, importedName);
                 for (const oid of owners) ids.push(...this.#membersVia(this.t.sym(oid), name));
                 if (!ids.length && imp.targetFileId != null && owners.length === 0) {
-                    // `from pkg import submodule` then submodule.fn()
-                    ids = this.exportedFrom(imp.targetFileId, name);
+                    // `from pkg import submodule` then submodule.fn(): the submodule's own name first —
+                    // pkg/__init__.py may re-export something else under it (`from fastapi import
+                    // params; params.File` is the class in params.py, not the File function __init__ exports)
+                    const mod = file.lang === 'python' ? this.#moduleFileOf(fileId, imp.local) : null;
+                    ids = this.exportedFrom(mod ?? imp.targetFileId, name);
                 }
             } else if (rest.length === 0) {
                 if (imp.targetFileId != null) ids = this.exportedFrom(imp.targetFileId, name);
@@ -860,6 +947,12 @@ export class Resolver {
                 const mod = this.#moduleFileOf(fileId, imp.local);
                 if (mod != null && rest.length === 0) ids = this.exportedFrom(mod, name);
                 else if (mod != null && rest.length === 1) for (const oid of this.exportedFrom(mod, rest[0])) ids.push(...this.#membersVia(this.t.sym(oid), name));
+                // `import flask; flask.json.dumps(…)`: the rest of the receiver names submodules
+                if (!ids.length && mod != null && rest.length) {
+                    let cur = mod;
+                    for (const seg of rest) { cur = cur != null ? this.#submodule(cur, seg) : null; }
+                    if (cur != null) ids = this.exportedFrom(cur, name);
+                }
             }
             if (ids.length) {
                 const r = this.#pick(ids, kind, 0.95, fileId);
@@ -893,6 +986,50 @@ export class Resolver {
         // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
         if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
         return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
+    }
+
+    /**
+     * A Rust path receiver, walked module by module from where it starts — `crate`, `self`,
+     * `super`, a crate of the repository, or an imported module — to the module (and at most one
+     * type in it) that declares `name`. Null when the path does not start at a module the index
+     * knows; then the other rules apply.
+     */
+    #rustPath(name, kind, recv, fileId) {
+        const segs = recv.split('.');
+        const from = this.t.file(fileId)?.path;
+        const isModule = (p, seg) => p && (seg === 'crate' || seg === 'self' || seg === 'super' || this.modules.rustCrates?.get(seg) === p || new RegExp(`(^|/)${seg}(\\.rs|/mod\\.rs)$`).test(p));
+        let cur = null, rest = segs;
+        if (segs[0] === 'crate' || segs[0] === 'self' || segs[0] === 'super' || this.modules.rustCrates?.has(segs[0])) {
+            let k = 1;
+            while (segs[k] === 'super') k++;
+            const t = this.modules.resolve('rust', from, segs.slice(0, k).join('::'));
+            if (!t?.file || !isModule(t.file, segs[k - 1])) return null;
+            cur = t.file; rest = segs.slice(k);
+        } else {
+            const imp = this.#importFor(fileId, segs[0]);
+            const mod = imp?.imported === 'self' ? imp.source?.split('::').pop() : imp?.imported;
+            let target = imp && (imp.targetPath ?? this.t.file(imp.targetFileId)?.path);
+            if (!imp) {
+                // a child module of this one (`mod chan;` then `chan::channel()`)
+                target = this.modules.resolve('rust', from, `self::${segs[0]}`)?.file;
+                if (target === from) target = null;
+            }
+            else if (!isModule(target, mod)) return null;
+            if (!target || !isModule(target, imp ? mod : segs[0])) return null;
+            cur = target; rest = segs.slice(1);
+        }
+        // submodules, while a segment names one
+        while (rest.length) {
+            const t = this.modules.resolve('rust', cur, `self::${rest[0]}`);
+            if (!t?.file || t.file === cur || !isModule(t.file, rest[0])) break;
+            cur = t.file; rest = rest.slice(1);
+        }
+        const fid = this.t.fileByPath.get(cur)?.id;
+        if (fid == null || rest.length > 1) return null;
+        let ids = [];
+        if (!rest.length) ids = this.exportedFrom(fid, name);
+        else for (const oid of this.exportedFrom(fid, rest[0])) ids.push(...this.#membersVia(this.t.sym(oid), name));
+        return this.#pick(ids, kind, 0.95, fileId);
     }
 
     /**
@@ -940,7 +1077,7 @@ export class Resolver {
 }
 
 export function familyOf(lang) {
-    if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx') return 'ecma';
+    if (lang === 'javascript' || lang === 'typescript' || lang === 'tsx' || lang === 'vue' || lang === 'svelte') return 'ecma';
     if (lang === 'c' || lang === 'cpp') return 'c';
     if (lang === 'java' || lang === 'kotlin' || lang === 'scala') return 'jvm';
     return lang;

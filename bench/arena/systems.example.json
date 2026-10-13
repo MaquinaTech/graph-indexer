@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to bench/arena/systems.json and add one entry per tool. Write each entry from what its server offers: `node bench/arena/arena.mjs tools --system NAME --repo DIR` lists its tools and their input schemas. Placeholders: {name} {qname} {owner} {path} {abspath} {line} {repo} {gi}. The graph-indexer entry checks the harness end to end: its scores must match graph-indexer's own row.",
+  "systems": [
+    {
+      "name": "graph-indexer (MCP)",
+      "command": "node",
+      "args": ["{gi}/bin/graph-indexer.mjs", "serve", "--repo", "{repo}"],
+      "index": { "command": "node", "args": ["{gi}/bin/graph-indexer.mjs", "index", "--repo", "{repo}"] },
+      "references": { "tool": "find_references", "arguments": { "symbol": "{path}:{qname}", "limit": 500 }, "stopAt": "^(Possibly missed|Unbound:|Also named as a string|Other references named|Indirect subtypes|No references of kind|Dependency injection)", "ignoreLines": "^(note:|References to )" }
+    },
+    {
+      "name": "another tool",
+      "disabled": true,
+      "command": "<its MCP server command>",
+      "args": [],
+      "index": { "command": "<its index command>", "args": [] },
+      "references": { "tool": "<the tool that lists the uses of a symbol>", "arguments": { "symbol": "{name}" } }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-1234567890us-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-1234567890us-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-123456s-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-123456s-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-24h-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-24h-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq3-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq3-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq4-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq4-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq5-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq5-True]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq6-False]",
+  "xarray/tests/test_groupby.py::TestDataArrayResample::test_resample[datetime64-resample_freq6-True]"
+]

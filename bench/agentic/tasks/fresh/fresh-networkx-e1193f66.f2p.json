@@ -1,3 +1,0 @@
-[
-  "networkx/algorithms/connectivity/tests/test_kcomponents.py::::test_reconstruct_k_components_drops_nested_candidate"
-]

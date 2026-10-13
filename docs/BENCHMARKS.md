@@ -134,7 +134,10 @@ v2.10.22 (`240e9a4`, large types with many methods). Clone them at those tags an
 | nats-server (199, 24) | before | 0.971 | 0.975 | 0.894 | 0.966 / 0.249 | 0.232 | 0.483 |
 | | after | **0.992** | **0.978** | **0.935** | **0.977 / 0.938** | | |
 
-(dispatch oracle, micro averages; grep's recall is 1.000 by construction.) The first run found
+(dispatch oracle, micro averages; grep's recall is 1.000 by construction.) Re-run on 2026-10-11
+(Go 1.27.1) after the general resolver changes for TypeScript and Python (nested functions kept out
+of global binding, external re-exports): all three "after" rows and implementation scores are
+reproduced exactly. The first run found
 seven faults, fixed in this order (the agent tasks on caddy, below, found four more):
 
 - **Reopening an index lost Go's implicit implementations.** They lived only in memory after
@@ -229,6 +232,140 @@ functional interface they are passed to. The dispatch oracle, like TypeScript's,
 `super.m()` call as reaching every override of `m`, while the index knows it binds statically
 to the parent's `m`; those count as missed here.
 
+### The same measurement for Python
+
+```bash
+pip install pyright                                   # or npm i -g pyright; needs pyright-langserver on PATH
+node bench/eval-graph-python.mjs --n 150              # fastapi; --fixture/--fixture-dir/--scope for another repository
+```
+
+**Method.** Python has no compiler; the oracle is pyright (1.1.414), the type checker behind
+Pylance, through its language server's Find All References (`bench/eval-graph-python.mjs`).
+Third-party packages are not installed, so what the repository declares still resolves and
+library types do not, as for the other oracles. pyright binds `obj.m()` to the method of obj's
+declared type only, so its answer is an **exact** oracle; graph-indexer is scored on its exact
+answer (`family: false`). Import statements and declaration lines — the sampled one and
+redeclarations such as `if PYDANTIC_V2: def f … else: def f` — are excluded on both sides. The
+seed is 7; up to 150 functions, methods and classes per repository.
+
+Six repositories. fastapi, flask, requests and httpx were used while fixing what the oracle found;
+rich and click were measured only once, after the fixes. "Before" is graph-indexer 3.0.0.
+
+| repository | build | precision | recall | exact set | grep P | name-only P |
+|---|---|---|---|---|---|---|
+| fastapi 0.103.0 (`415eb14`, 150 symbols) | before | 0.984 | 0.986 | 0.793 | 0.273 | 0.571 |
+| | after | **0.997** | **0.998** | **0.940** | | |
+| flask 3.0.3 (`c12a5d8`, 150) | before | 0.869 | 0.851 | 0.667 | 0.110 | 0.358 |
+| | after | 0.868 | **0.909** | **0.713** | | |
+| | now | 0.871 | 0.929 | 0.720 | | |
+| requests 2.32.3 (`0e322af`, 149) | before | 0.927 | 0.936 | 0.826 | 0.251 | 0.477 |
+| | after | **0.952** | **0.964** | **0.846** | | |
+| | now | 0.952 | 0.967 | 0.852 | | |
+| httpx 0.27.2 (`609df7e`, 150) | before | 0.910 | 0.832 | 0.620 | 0.158 | 0.432 |
+| | after | **0.998** | **0.946** | **0.760** | | |
+| | now | 0.998 | 0.950 | 0.800 | | |
+| rich 13.9.4 (`43d3b04`, 144) *(held out)* | before | 0.991 | 0.867 | 0.785 | 0.214 | 0.543 |
+| | after | **0.992** | **0.971** | **0.854** | | |
+| | now | 0.992 | 0.972 | 0.854 | | |
+| click 8.1.7 (`874ca2b`, 144) *(held out)* | before | 0.962 | 0.882 | 0.785 | 0.266 | 0.493 |
+| | after | **0.967** | **0.888** | **0.826** | | |
+| | now | 0.970 | 0.980 | 0.910 | | |
+
+What changed:
+- `from pkg import submodule` then `submodule.X` was looked up in `pkg/__init__.py` first, which
+  may re-export something else under that name: fastapi's `params.File(…)` (the class) was bound
+  to the `File` function that `fastapi/__init__.py` exports.
+- A name imported from a module that re-exports it from an uninstalled package (`from fastapi
+  import Response`, Starlette's) fell back to a same-name definition anywhere in the repository; it
+  is now external.
+- An untyped parameter (`def send(self, request): … request`) was bound by name to a function
+  `request` elsewhere; parameters and other locals now shadow repository names, as in pyright.
+- A function nested in another is visible only inside it, so a call elsewhere no longer binds to it.
+- Missing uses: `return name`, PEP 604 unions (`A | B | None`), `except (A, B) as e`, dictionary
+  keys, generic arguments (`Union[A, B]`), `__all__` entries, `TypeVar(bound="A")`, `Class.attr`,
+  submodule chains (`import flask; flask.json.dumps`), and `self.x` under a property `x` of a base
+  class, which was taken for a new field.
+
+"Now" is 2026-10-11, after three more fixes found on flask and click: an absolute import resolves
+only from an import root (`import json as _json` inside `flask/json/` had been bound to that
+package rather than the standard library); `import click.utils` also binds `click`, the package
+(click's tests that write `click.open_file(…)` after it had none of those uses bound); and names
+inside the subscripts of qualified generics (`t.Optional[Command]`, `t.Callable[[Ctx], "Group"]`)
+are type references. (On this machine the "after" build reproduces every row except flask's exact
+set, 0.707 instead of 0.713; "now" is measured against that.) fastapi is unchanged (0.997 / 0.998 / 0.940); no Python repository lost
+precision or recall.
+
+What remains: flask's precision is lower because of test code whose receivers pyright cannot type
+either (`app` fixtures without annotations), which graph-indexer binds by name as `likely` — counted
+as false positives here; with `likely` and better only, flask is 0.929. Other differences: pyright
+does not count uses through an import alias (`from m import A as B; B()`), graph-indexer does; an
+assignment `self.x = …` that runs a base class's property setter is not counted as a use of it;
+and attribute chains through untyped values (`proxy.url.raw_host`) stay unbound.
+
+### The same measurement for Rust
+
+```bash
+rustup component add rust-analyzer
+(cd test/fixtures/rust && cargo fetch)               # serde_json; resolves dependencies as rust-analyzer does
+node bench/eval-graph-rust.mjs --n 150 --sample bench/rust-samples/rust.txt
+node bench/eval-graph-rust.mjs --fixture ripgrep --fixture-dir DIR --n 150 --sample bench/rust-samples/ripgrep.txt
+```
+
+**Method.** The oracle is rust-analyzer (1.96.0), the Rust language server: its Find All
+References comes from its own name resolution, trait solving and macro expansion over the cargo
+workspace. As for Python, it binds `x.m()` to the method of x's type and a call through a trait
+bound to the trait's method, so its answer is the **exact** oracle. `use` declarations and
+declaration lines are excluded on both sides, and so are two kinds of reference it reports that do
+not name the symbol: `Self` standing for a type, and the `fn` of each implementation of a trait
+method. Code the build leaves out is excluded on both sides, since the oracle has no answer there:
+`#[cfg]` code rust-analyzer reports as inactive with the default features, and whole files outside
+the module tree (serde_json's `lexical/` and `raw.rs` sit behind `#[cfg(feature = …)] mod`). The
+sample is frozen (`--sample`, one `path:line:qname` per line), so that two builds are scored on the
+same symbols even when one of them finds more definitions.
+
+Three repositories: serde_json 1.0.150 (the fixture, `a1ae73a`), ripgrep 14.1.1 (`4649aa9`, a
+workspace of nine crates that use each other by name) and tokio 1.41.1 (`bb7ca75`, seven crates,
+items declared inside `cfg_*! { … }` macros). Seed 7, 150 symbols each.
+
+| repository | build | precision | recall | exact set | grep P | name-only P |
+|---|---|---|---|---|---|---|
+| serde_json (150 symbols) | before | 0.895 | 0.523 | 0.667 | 0.129 | 0.296 |
+| | after | **0.955** | **0.841** | **0.807** | | |
+| ripgrep (150) | before | 0.914 | 0.555 | 0.773 | 0.024 | 0.049 |
+| | after | **0.941** | **0.768** | **0.880** | | |
+| tokio (150) | before | 0.887 | 0.389 | 0.520 | 0.015 | 0.041 |
+| | after | **0.930** | **0.582** | **0.600** | | |
+
+(micro averages, graph-indexer's `exact` answer.) What the first run found, fixed in this order:
+
+- **Macro arguments were opaque.** tree-sitter leaves a macro's arguments as a token tree, so
+  `tri!(self.parse_integer(false))`, `assert_eq!(x.len(), 2)` and `format!("{}", v.name())` held
+  no calls, and the items inside `cfg_rt! { pub struct Runtime … }` were not definitions. Before
+  extraction, invocations whose arguments are plain Rust are now rewritten in place to text of the
+  same length (`m!(a)` → `m (a)`, `m![a]` → an array, an item-position `m! { items }` → the items),
+  each kept only if it parses cleanly on its own; macro definitions are left alone.
+- **The crates of a workspace were external to each other.** `use tokio::sync::mpsc` in tokio's own
+  tests, or `grep::cli::CommandReaderBuilder` in ripgrep, did not resolve, and those calls were
+  dropped as library calls (110 of the 114 uses of tokio's `mpsc::channel`). Crate names now come
+  from each `Cargo.toml` (`[package]`/`[lib]` name, `-` read as `_`).
+- **Modules in the 2018 layout** (`util/rand.rs` next to `util/rand/`) were not found from their
+  children (`use super::RngSeed` in `util/rand/rt.rs`), and **`use a::b::chan`** resolved to the
+  module that declares `chan` rather than to `chan.rs`: `chan::channel()` was then bound, at 0.95,
+  to the `channel` that `a::b` re-exports from elsewhere.
+- **Paths were read by their last name only.** `crate::Parser::new()`, `super::f()`,
+  `other_crate::m::T` and `alias::sub::f()` are now walked module by module; the type in
+  `Type::new()` and `Enum::Variant` counts as a use of the type; `de::Deserializer` (serde's
+  trait) is no longer the repository's `Deserializer`; a unit struct used as a value (`&Mmap`)
+  is a use.
+
+**What is still missed** (from the debug output): receivers whose type only inference knows —
+builder chains (`builder.line_terminator(…).dot_matches_new_line(…)`), values returned by a chain
+of calls, calls on generic parameters (`T::when(item)`) and through trait bounds — and macros whose
+arguments are not plain Rust (`select!`, `matches!` with patterns). As elsewhere, these lower recall
+and do not produce wrong answers. The extras that remain are mostly calls through a primitive or a
+generic parameter (`f64::to_bits(self)`, `R::byte_offset(self)`) bound by name to a repository
+method with that name.
+
 ### A product monorepo: Twenty
 
 ```bash
@@ -280,6 +417,251 @@ The remaining misses led to five more general fixes, in every JavaScript/TypeScr
 object (`workspaceCommand.runOnWorkspace` for each of the upgrade commands), methods of object
 literals that implement an interface, fluent query builders whose chain returns `this` through a
 generic, and `factory['privateMethod']()` in tests.
+
+## The arena: other tools, measured the same way
+
+`bench/arena/` scores any code-intelligence tool that has an MCP server against the same oracles
+and samples as graph-indexer. Each tool is an entry in `bench/arena/systems.json` (start from
+`systems.example.json`): how to start its server and build its index, which tool answers "where is
+X used" and with which arguments. Nothing about a tool is assumed: `arena.mjs tools --system NAME`
+lists what its server offers, and the entry is written from that.
+
+```bash
+node bench/arena/arena.mjs tools --system "NAME" --repo test/fixtures/nestjs
+node bench/arena/arena.mjs exactness -- --n 150                   # TypeScript and Python oracles
+node bench/arena/arena.mjs speed --repos test/fixtures/nestjs,test/fixtures/fastapi
+```
+
+`bench/arena/systems.json` holds the entries used below; `systems.example.json` is the template
+for a new one.
+
+A tool is scored on the `path:line` locations its answer names, in any of three shapes (`file:line`
+inline, JSON objects with a file and a line, or a file heading followed by indented line numbers),
+with import lines left out as for every system. An entry may declare `stopAt` (where the answer's
+own list ends and notes about candidates begin) and `ignoreLines` (single lines such as a header
+naming the definition itself); both are in the entry, in the open. The answer's median size in
+tokens is reported next to its accuracy: an exact list that does not fit in an agent's context is
+not an answer.
+
+**Check of the harness.** graph-indexer's own MCP server, entered as an external tool, scores within
+0.007 of its native row on nestjs (dispatch oracle, 150 symbols: precision 0.993 vs 1.000, recall
+0.889 vs 0.889, exact sets 0.913 vs 0.919). On fastapi its micro recall is lower (0.806) only
+because `find_references` returns at most 500 uses and `FastAPI` has 743: per-symbol recall agrees
+(0.990 vs 0.996). Results for other tools are published only from runs with their own maintainers'
+recommended installation; entries that a tool's maintainers correct are welcome.
+
+### CodeGraph and codebase-memory-mcp (2026-10-11)
+
+Versions and installation, each as its README recommends, into `bench/arena/.tools` (git-ignored)
+rather than globally, and without running either tool's agent installer, which rewrites agent
+configuration:
+
+```bash
+npm i --prefix bench/arena/.tools/codegraph @colbymchenry/codegraph@1.6.2      # "Already have Node? Use npm"
+mkdir -p bench/arena/.tools/cbm/x && cd bench/arena/.tools/cbm                  # pre-built binary, checksum from the release
+curl -LO https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.11.0/codebase-memory-mcp-darwin-arm64.tar.gz
+curl -LO https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.11.0/checksums.txt
+shasum -a 256 -c --ignore-missing checksums.txt && tar xzf codebase-memory-mcp-darwin-arm64.tar.gz -C x
+```
+
+How each one is asked "where is X used", from what its server lists (`arena.mjs tools`):
+
+- **CodeGraph 1.6.2** exposes only `codegraph_explore` by default; its README documents
+  `CODEGRAPH_MCP_TOOLS` to list the others, and the entry enables them to call
+  `codegraph_callers` (symbol, `file` to pick the definition, `limit` 500). Telemetry is off
+  (`CODEGRAPH_TELEMETRY=0`) and the background daemon too (`CODEGRAPH_NO_DAEMON=1`, documented):
+  the daemon left by one session watched the fixtures and re-indexed them while the next
+  measurement deleted and rebuilt its index. The answer lists the referencing declarations, each at
+  its first line (a whole file at line 1 for module scope and imports), not the lines of the uses.
+- **codebase-memory-mcp 0.11.0** stores its graph under `CBM_CACHE_DIR` (set to
+  `bench/arena/.tools/cbm/cache`). Its `trace_path` answers with qualified names only, without
+  files or lines, so the entry uses its read-only Cypher tool, `query_graph`, over the incoming
+  `CALLS`, `USAGE`, `CALL_REFERENCE`, `INHERITS` and `IMPLEMENTS` edges of the sampled
+  definition. A `CALLS` edge carries the line of a call; the other edges carry none, and their
+  answer is the referencing declaration's range. This is the most exact answer its graph holds;
+  an agent following its instructions would more often call `trace_path`.
+
+An answer that names declarations rather than lines is read as for graph-indexer 2.x: a
+declaration's lines are those inside it that contain the name as a word, outside comments and
+string literals. For CodeGraph a declaration's extent is taken from the parsed source (syntax,
+the same for any parser); codebase-memory-mcp returns its own ranges. The file-level rows need no
+such reading.
+
+nestjs, TypeScript dispatch oracle, 149 symbols (seed 7):
+
+| system | precision | recall | exact set | file P / R | median answer |
+|---|---|---|---|---|---|
+| graph-indexer (MCP) | **0.993** | **0.886** | **0.913** | **0.991 / 0.879** | 310 tokens |
+| CodeGraph 1.6.2 | 0.743 | 0.755 | 0.510 | 0.719 / 0.699 | **80 tokens** |
+| codebase-memory-mcp 0.11.0 | 0.559 | 0.263 | 0.322 | 0.765 / 0.418 | 96 tokens |
+| grep | 0.140 | 1.000 | 0.255 | 0.209 / 1.000 | |
+
+fastapi, pyright oracle, 150 symbols (seed 7):
+
+| system | precision | recall | exact set | file P / R | median answer |
+|---|---|---|---|---|---|
+| graph-indexer (MCP) | **0.997** | **0.826** | **0.927** | **0.997 / 0.848** | 189 tokens |
+| CodeGraph 1.6.2 | 0.652 | 0.363 | 0.480 | 0.911 / 0.333 | **70 tokens** |
+| codebase-memory-mcp 0.11.0 | 0.929 | 0.571 | 0.493 | 0.964 / 0.645 | 96 tokens |
+| grep | 0.273 | 1.000 | 0.380 | 0.434 / 1.000 | |
+
+(micro averages; per-symbol macro recall is 0.961 / 0.824 / 0.503 on nestjs and 0.987 / 0.798 /
+0.654 on fastapi, in the same order.) Raw output: `bench/results/arena-exactness.txt` after a run.
+
+Cold index (`arena.mjs speed`, three runs each, all three identical to ±0.3 s; Apple Silicon,
+nothing else running). Each tool's index is deleted before its run:
+
+| system | nestjs (1,641 files) | fastapi (1,215 files) | index size nestjs / fastapi |
+|---|---|---|---|
+| graph-indexer | **1.9 s** | **1.2 s** | **13.2 / 7.8 MB** |
+| CodeGraph 1.6.2 | 3.0–3.3 s | 3.1–3.2 s | 47.8 / 25.3 MB |
+| codebase-memory-mcp 0.11.0 (default `full` mode) | 11.8–12.1 s | 12.6 s | 27.8 / 76 MB (cache directory) |
+
+**Where graph-indexer loses.** Its answers are the largest: 310 tokens median on nestjs against 80
+and 96, because it lists every use with its line while the others list fewer, coarser entries:
+for a question whose answer is "the five callers" an agent reads more text. Its MCP `find_references` stops at 500 uses (fastapi's `FastAPI` has 743),
+which is why its micro recall through MCP (0.826) is below its native one (0.998).
+
+**Notes on the others, from these runs.** CodeGraph's `codegraph_callers` returns at most 100
+callers whatever `limit` asks for, and says "100 found" (its CLI returned 133 for nestjs'
+`Module`); calls only, so a class or interface used as a type is not a caller. Its low recall on
+fastapi has not been broken down yet. codebase-memory-mcp keeps at most one `CALLS` edge per
+caller and callee, with the line of the first call (`isUndefined` called on lines 17 and 18 of
+`get-injection-providers.util.ts`: one edge, line 17), so further calls from the same function
+are missed; its precision on fastapi (0.929) is the closest to graph-indexer's.
+### The session axis (2026-10-12)
+
+What a tool's exactness is worth in an agent's session is measured in
+[AGENTIC-BENCHMARK.md](AGENTIC-BENCHMARK.md#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs):
+Claude Code (Sonnet 5.5) with each tool installed by its own installer (there the installers do
+run, into each run's repository) and Serena 1.7.0 as a third tool, on 34 tasks. Paired by task,
+graph-indexer cost 0.65 / 0.74 / 0.87 of CodeGraph on questions, refactors and issues, 0.79 /
+0.91 / 0.96 of codebase-memory-mcp and 0.87 / 0.93 / **1.12 of Serena (it loses on issues)**,
+and answered all 11 questions exactly against 9–10. The larger answers above do not make its
+sessions dearer: on code questions its arm is the cheapest of the five.
+
+## Dependency injection (NestJS)
+
+`@Inject(TOKEN)` hands a class whatever a module registered as `{ provide: TOKEN, useClass |
+useExisting | useFactory | useValue }` (or `ClientsModule.register([{ name: TOKEN }])`); its declared
+type is often an interface, so no compiler answers "what does this receive". There is no oracle,
+so the edges were checked by hand: every injection point in Twenty's server and in the nestjs
+repository (its packages and samples), 40 in all, was read together with each provider claimed
+for it and searched for providers not claimed (an independent reading of the code, by an agent
+told to be strict and to quote every line it marked wrong).
+
+| | count |
+|---|---|
+| injection points | 40 |
+| provider claims (injection → provider) | 45 |
+| claims wrong | **0** |
+| injection points whose provider is in the repository but not found | 1 |
+| injection points with no provider in the repository (library tokens such as `REQUEST`, `CACHE_MANAGER`) | 4 — reported as such |
+| class tokens (a class is its own provider) | 7 — reported as such |
+
+The first reading found four providers missed; all four are now found (`ClientsModule` clients, a
+token written `provider.provide`, and a string token given once as a constant and once as
+`Reflector.name`). The one still missed is computed at run time:
+`Object.values(CacheStorageNamespace).map(ns => ({ provide: ns, … }))`. Test files are left out
+(their providers are mocks). Where a token has several providers (`forRoot` and `forRootAsync`,
+or one per module) all are listed: which one a given module receives depends on what it imports.
+
+## Dependency injection (Spring)
+
+A Spring injection point — an `@Autowired`, `@Inject` or `@Resource` field or setter, a
+component's constructor parameter, a `@Bean` method's parameter, a final field under Lombok's
+`@RequiredArgsConstructor` — declares a type, usually an interface; Spring gives it the bean of
+that type, choosing by `@Qualifier`, `@Primary` and then the parameter's name, among the beans of
+the application the class belongs to. graph-indexer reads the beans (component classes, `@Bean`
+methods by return type, registered `@ConfigurationProperties`, and as generated proxies Feign
+clients, Spring Data repositories and MyBatis mappers), works out which build module belongs to
+which application from `pom.xml` / `build.gradle`, and resolves each point. There is no oracle, so
+every claim was checked by an independent reading of the code (an agent told to be strict and to
+quote the lines proving each error), on four applications: spring-petclinic (`a2c2ef9`),
+piggymetrics (`6bb2cf9`, seven services), jhipster-sample-app (`6b000b5`) and mall (`dcaa93b`,
+five modules, two applications sharing a security library).
+
+| | petclinic | piggymetrics | jhipster | mall |
+|---|---|---|---|---|
+| injection points (first reading) | 6 | 24 | 48 | 234 |
+| injection points (after the fixes) | 6 | 24 | 49 | 233 |
+| claims wrong at the first reading | 0 | 0 | 0 | 3 |
+| injection points missed at the first reading | 0 | 0 | 1 | 0 |
+| points whose bean is not in the repository (library or auto-configured: `Environment`, `JavaMailSender`…) — reported as such | 0 | 5 | 29 | 7 |
+
+The first version made the four errors fixed since: it took a `@ConfigurationProperties` class
+nothing registers for a second bean (a false "ambiguous", twice), it resolved a field in a class
+whose `@Component` is commented out, and it missed the constructor of the `@SpringBootApplication`
+class. After the fixes the four outputs differ from the first in exactly those four lines (two
+corrected, one removed, one added: 312 points either way). Before that reading, a check by hand
+on the same repositories had found three faults: beans of one service offered to another (piggymetrics), an application's
+bean not offered to the shared library it includes (mall), and a module (`mall-demo`) taken as
+including a library its `pom.xml` does not list. Every `@Autowired`, `@Inject` and `@Resource` in
+the non-test code of mall (223) and piggymetrics (24) is found. Not modelled: custom stereotype
+annotations, XML configuration, profiles and conditions beyond naming them, and generics as
+qualifiers.
+
+## Components in Vue and Svelte templates
+
+A `.vue` or `.svelte` file's `<script>` is indexed as TypeScript, and each tag in its template of
+a component the script imports (`<UserCard>`, `<user-card>`) is a use of that component, bound
+through the import like a call. There is no compiler oracle here either (vue-tsc and svelte-check
+need each project's dependencies installed), so the check is two-fold: for a tag whose import
+names a `.vue`/`.svelte` file directly, the bound definition must be that file (checked by
+script, every tag); for a tag imported through barrels and workspace packages, a sample was
+followed by hand by an independent reader (an agent with its own resolver, quoting each chain).
+
+| | open-webui (`f8ae8a6`, Svelte) | vue-vben-admin (`4634655`, Vue) |
+|---|---|---|
+| component files | 701 | 693 |
+| template tags of components imported from the repository | 3,604 | 1,179 |
+| … found and bound | 3,602 | 1,178 |
+| … imported from the file directly: bound to that file | 3,602 / 3,602 | 207 / 207 |
+| … through barrels or workspace packages: checked by hand (sample of 80) | — | 80 / 80 correct |
+| tags of library components (left out, as for any library) | 31 | 959 |
+
+Found while measuring, and fixed: SvelteKit's `$lib` and `kit.alias` (defined in a generated
+tsconfig the repository does not carry), `package.json` `imports` (`#/*`), `export { default as X }
+from './x'`, anonymous `export default function () {}` not counted as exported, and a default
+import resolved by the importer's name to whatever the module itself imported under that name.
+The last three touch TypeScript too; the compiler oracles of every language give the same scores
+as before. Library components re-exported through a workspace package (lucide icons through
+`@vben/icons`) are recognised as library ones: 125 of vben's tags. Not modelled: components
+registered globally (`app.component(…)`, Nuxt's auto-imports) and dynamic ones
+(`<component :is>`, `<svelte:component>`).
+
+## ORM models, their migrations and Prisma's client
+
+An ORM model's table is named in strings: migrations touch it by name, and Prisma's client is
+generated outside the repository (`prisma.envelope.findFirst(…)` is typed only by
+`node_modules/.prisma`). graph-indexer reads the models (Prisma `model` blocks, Django models,
+SQLAlchemy / SQLModel tables, TypeORM entities) with the table each ORM gives them, the migration
+statements that name that table, and Prisma's client calls. Every claim of the first version was
+checked by an independent reader with its own scripts against the source — all of them, not a
+sample:
+
+| | documenso (`38ecb21`, Prisma) | full-stack-fastapi-template (`7257e60`, SQLModel + Alembic) | django-oscar (`1635338`, Django) | twenty (`4c28e34f09`, TypeORM) |
+|---|---|---|---|---|
+| models found / in the code | 52 / 52 | 2 / 2 | 81 / 85 | 79 / 80 |
+| wrong table name | 0 | 0 | 1 | 0 |
+| migration statements claimed | 610 | 56 | 328 | 1,677 |
+| … that do not touch the table | 0 | 0 (1 mislabelled) | 0 | 0 |
+| Prisma client calls claimed | 1,073 | – | – | – |
+| … wrong | 0 | – | – | – |
+| … found of those in the code | 100% | – | – | – |
+
+What the reader found missing, all fixed since: a Django `db_table` inherited from an abstract
+base (the wrong table), Django models whose base comes from a library (treebeard's `MP_Node`,
+auth's `AbstractUser`: 4 models), an entity whose 49 lines of decorators hid its `@Entity`,
+statements that name the table only as an aliased `UPDATE "T" t`, a read (`FROM`, `JOIN`), a
+`RENAME TO` target or `create_primary_key`, Django data migrations (`apps.get_model(…)`), and
+twenty's schema changes in upgrade commands outside any `migrations` directory (code driving
+TypeORM's `queryRunner`). After the fixes: 85 / 85 and 80 / 80 models, no table name wrong, and
+1,109 more statements (documenso 84, the template 10, oscar 35, twenty 980), each of them checked
+by script to name its table; none of the first version's lines was lost. Still not modelled:
+TypeORM's data-source default schema (16 of twenty's entities show their table without `core.`),
+Kysely and raw queries through the Prisma client, materialized views, and a proxy model lists its
+base's migrations, which are its table's.
 
 ## 2. Localization from real commits
 
@@ -393,6 +775,10 @@ tokens, paired by task (bootstrap 95% CI):
 - Without grep nothing is lost, at about the same cost.
 - Fixing real issues costs the same with or without it (cost ratios between 0.96 and 1.10):
   reading the code around the fault and running tests are most of the work.
+- **An `explore` that reads issues** does not change this. It shows the code the fix changes in
+  25 of 50 fresh issues instead of 12, measured offline. In two pilots of real sessions (47 tasks,
+  94 runs) it cost 1.12 (1.01–1.25) and 1.03 (0.96–1.12) of Claude Code alone
+  ([details](AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs)).
 
 ## 5. Against graph-indexer 2.x
 

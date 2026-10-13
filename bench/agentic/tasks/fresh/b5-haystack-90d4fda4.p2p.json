@@ -1,0 +1,23 @@
+[
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_empty_result_is_not_offloaded",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_error_results_are_never_offloaded",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_hook_context_store_overrides_constructor_store",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_only_trailing_tool_results_are_offloaded",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_second_offload_hook_does_not_reoffload_pointer",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookInAgent::test_offloads_tool_result_seen_by_next_llm_call",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookInAgentAsync::test_offloads_tool_result_async",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookRouting::test_exact_tuple_and_wildcard_keys",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookRouting::test_over_chars_threshold",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookRouting::test_tool_without_matching_key_is_not_offloaded",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookSerde::test_to_dict_from_dict_roundtrip",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_read_rejects_absolute_reference_outside_root",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_read_rejects_parent_traversal_reference",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_read_rejects_symlink_reference_escaping_root",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_read_round_trips_written_content[text]",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_to_dict_from_dict_roundtrip",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_write_allows_nested_keys_within_root",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_write_creates_missing_directories",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_write_rejects_absolute_key",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_write_rejects_parent_traversal_key",
+  "test/hooks/tool_result_offloading/test_stores.py::TestFileSystemToolResultStore::test_write_returns_path_and_persists_content"
+]

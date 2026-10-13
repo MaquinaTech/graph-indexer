@@ -1,5 +1,5 @@
 /**
- * The MCP tool surface: eight read-only tools, each answering one kind of question an agent has
+ * The MCP tool surface: nine read-only tools, each answering one kind of question an agent has
  * while changing code; descriptions are short because clients re-read them on every turn (`get_symbol`, which `read_code` replaced, stays callable for older clients).
  * Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
@@ -11,16 +11,39 @@ import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
+import { testCommands } from '../query/testcmd.mjs';
+import { showcaseText } from '../query/showcase.mjs';
+import { collectRoutes, routesInQuery, matchRoutes } from '../query/routes.mjs';
+import { collectInjection, providedBy, tokenUses, injectedInto } from '../query/injection.mjs';
+import { collectModels, modelOf, prismaModelsNamed } from '../query/orm.mjs';
+import { isIssueText, issueSeeds } from '../query/issue.mjs';
 import fs from 'node:fs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_KINDS = new Set(['field', 'property', 'variable', 'constant']);
+const LARGE_TABLE = 100;
+/** Does a definition hold so many members (a token enum, a table of keywords) that one entry says little? */
+const largeTable = (intel, id) => (intel.store.get('SELECT count(*) AS n FROM symbols WHERE parent_id = ?', id)?.n ?? 0) >= LARGE_TABLE;
 const CALLABLE_KINDS = new Set(['function', 'method']);
 // examples, docs snippets and sample apps come after the library code they exercise
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|fixtures?|playground)\//i;
 const pathRank = (p) => (EXAMPLE_PATH.test(p) ? 1 : 0);
 
 export const TOOLS = [
+    {
+        name: 'explore',
+        title: 'Explore',
+        description: 'Start a task in one call: for a question, bug or feature in words ("why are expired tokens accepted"), an issue pasted as written, and/or named symbols, the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined, and the tests to run with the command. Fits `max_tokens` and says what it left out.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'The task, question or bug in words, or the issue as written (title first); identifiers in it are looked up exactly.' },
+                symbols: { type: 'array', items: { type: 'string' }, description: 'Symbols to centre on (name, Class.method, path:Name).' },
+                path: { type: 'string', description: 'Only search under this path prefix, e.g. "src/auth/".' },
+                max_tokens: { type: 'integer', minimum: 500, maximum: 6000, default: 2000, description: 'Answer budget (default 2000).' },
+            },
+        },
+    },
     {
         name: 'search_code',
         title: 'Search code',
@@ -121,6 +144,7 @@ export const TOOLS = [
             properties: {
                 files: { type: 'array', items: { type: 'string' }, description: 'Only check these changed files/directories (default: all changes).' },
                 base: { type: 'string', default: 'HEAD', description: 'Git revision to compare with.' },
+                by_name: { type: 'boolean', default: false, description: 'Also list the test files that name a changed module in a string (a dialect, plugin or backend picked by name): more of the affected tests, many more files to run.' },
             },
         },
     },
@@ -160,13 +184,14 @@ export const LEGACY_TOOLS = [
 // loaded up front even when the client defers MCP tools behind a tool search: the one tool agents
 // called in real sessions (docs/AGENTIC-BENCHMARK.md, rt1–rt2); every loaded definition is re-read
 // on every turn, so the others wait behind the client's tool search.
-const ALWAYS_LOAD = new Set(['find_references']);
+// `explore` joins it as the one call that opens a task (docs/PLAN-REFERENCIA.md §1.1; unmeasured).
+const ALWAYS_LOAD = new Set(['find_references', 'explore']);
 for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
     t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
-export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
+export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. To start on a task in unfamiliar code, explore gives the relevant code, its callers, the definitions it uses and its tests in one call. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 
@@ -239,7 +264,7 @@ function refSummary(intel, id) {
  * Hints inside tool output name the next tool to call; through the CLI they must name the
  * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
  */
-const CLI_NAMES = { search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
+const CLI_NAMES = { explore: 'explore', search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
 let surface = 'mcp';
 const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
 
@@ -270,6 +295,7 @@ export async function callTool(intel, name, args = {}, { cli = false } = {}) {
 
 async function dispatchTool(intel, name, args) {
     switch (name) {
+        case 'explore': return toolExplore(intel, args);
         case 'search_code': return toolSearch(intel, args);
         case 'search_text': return toolText(intel, args);
         case 'read_code': return toolRead(intel, args);
@@ -280,6 +306,10 @@ async function dispatchTool(intel, name, args) {
         case 'outline': return toolOutline(intel, args);
         case 'check_changes': return toolCheck(intel, args);
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
+        case 'demo': return showcaseText(intel);
+        case 'inject': return toolInject(intel, args); // CLI helper (`inject`): dependency-injection tokens, their providers and where they are injected
+        case 'models': return toolModels(intel, args); // CLI helper (`models`): ORM models, their tables, migrations and Prisma client calls
+        case 'routes': return toolRoutes(intel, args); // CLI helper (`routes`); explore finds the handler of a route named in its query // CLI helper (`demo`, end of `init`): grep versus exact uses, on this repository
         default: throw Object.assign(new Error(`Unknown tool: ${name}`), { code: -32602 });
     }
 }
@@ -502,8 +532,10 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
         fam.up.sort(order); fam.down.sort(order);
         if (fam.up.length) out.push(`overrides/implements: ${fam.up.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
         if (fam.down.length) out.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 12).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 12 ? ', …' : ''}`);
-        const inh = intel.inheritance(fresh.id, { max: 60 }).inherit.filter(x => !x.is_test);
+        const all = intel.inheritance(fresh.id, { max: 60 });
+        const inh = all.inherit.filter(x => !x.is_test), ext = all.extend.filter(x => !x.is_test);
         if (inh.length) out.push(`inherited unchanged by (${inh.length}, they run this code): ${inh.slice(0, 10).map(x => x.qname).join(', ')}${inh.length > 10 ? ', …' : ''}`);
+        if (ext.length) out.push(`extended by (${ext.length}, their own version uses this one): ${ext.slice(0, 10).map(x => x.qname).join(', ')}${ext.length > 10 ? ', …' : ''}`);
     }
     // what the body uses that is defined elsewhere, with signatures (read the listed targets rather
     // than searching for them); the bare callee list only when there is no card to show
@@ -543,6 +575,11 @@ async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200,
 
 async function toolReferences(intel, { symbol, kind = 'all', include_tests = true, limit = 80, path: p = null }) {
     const matches = pickSymbol(intel, symbol);
+    // a Prisma model is no indexed symbol: its uses are the client's calls (unless a definition has its exact name)
+    if (!matches.some(m => m.name === symbol)) {
+        const pm = prismaModelsNamed(intel, symbol).filter(m => m.name === symbol || !matches.length);
+        if (pm.length) return pm.map(m => modelText(m, { max: limit })).join('\n\n');
+    }
     if (!matches.length) return notFound(intel, symbol);
     const s = matches[0];
     const all = intel.references(s.id, { kinds: kind && kind !== 'all' ? [kind] : null, includeTests: include_tests });
@@ -586,7 +623,106 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         out.push(`Complete: every "${s.name}(…)" call in the indexed files is bound${res.elsewhere?.length ? ', here or to the definitions named above' : ' to this definition'}; none is left unresolved.`);
     }
     out.push(...stringMentionNote(intel, s));
+    out.push(...injectionNote(intel, s));
+    const model = modelOf(intel, s.id);
+    if (model) out.push(modelText(model, { max: 12, header: false }));
     return out.join('\n');
+}
+
+/** An ORM model: its table, the migrations that touch it and, for Prisma, the client's calls. */
+function modelText(m, { max = 30, header = true } = {}) {
+    const table = `${m.schema ? `${m.schema}.` : ''}${m.table}`;
+    const out = [header
+        ? `${m.orm} model ${m.name} (${m.file}:${m.line}) — table ${table}${m.defaultName ? ' (TypeORM\'s default name)' : ''}${m.proxyName ? ` (proxy of ${m.proxyName})` : ''}`
+        : `ORM (${m.orm}): table ${table}${m.defaultName ? ' (TypeORM\'s default name)' : ''}${m.proxyName ? ` (proxy of ${m.proxyName})` : ''}.`];
+    if (m.orm === 'Prisma') {
+        const files = new Set(m.calls.map(c => c.file));
+        out.push(`Client calls (${m.calls.length} in ${plural(files.size, 'file')}; \`<client>.${m.name[0].toLowerCase() + m.name.slice(1)}.<operation>(…)\`, typed only by the generated client):`);
+        for (const c of m.calls.slice(0, max)) out.push(`  ${c.file}:${c.line}  ${c.op}${c.owner ? `  in ${c.owner}` : ''}`);
+        if (m.calls.length > max) out.push(`  … ${m.calls.length - max} more`);
+    }
+    if (m.migrations.length) {
+        out.push(`Migrations that touch it (${m.migrations.length} statements in ${plural(new Set(m.migrations.map(x => x.file)).size, 'file')}):`);
+        for (const x of m.migrations.slice(-max)) out.push(`  ${x.file}:${x.line}  ${x.op}`);
+        if (m.migrations.length > max) out.push(`  (the last ${max}; ${m.migrations.length - max} earlier)`);
+    } else out.push('No migration in the repository names its table.');
+    return out.join('\n');
+}
+
+function toolModels(intel, { filter = '' }) {
+    const all = collectModels(intel);
+    if (!all.length) return 'No ORM models recognised (Prisma, Django, SQLAlchemy/SQLModel, TypeORM).';
+    const f = String(filter ?? '').trim().toLowerCase();
+    const ms = f ? all.filter(m => m.name.toLowerCase().includes(f) || m.table.toLowerCase().includes(f)) : all;
+    if (!ms.length) return `No model or table matches "${filter}" (${plural(all.length, 'model')}; \`models\` lists them all).`;
+    if (ms.length <= 3) return ms.map(m => modelText(m)).join('\n\n');
+    const out = [`${plural(ms.length, 'model')}${f ? ` matching "${filter}"` : ''}:`];
+    for (const m of ms.slice(0, 200)) out.push(`  ${m.orm.padEnd(10)} ${m.name.padEnd(28)} table ${(m.schema ? `${m.schema}.` : '') + m.table}   ${m.file}:${m.line}   ${plural(m.migrations.length, 'migration statement')}${m.orm === 'Prisma' ? `, ${plural(m.calls.length, 'client call')}` : ''}`);
+    if (ms.length > 200) out.push(`  … ${ms.length - 200} more (pass part of a name)`);
+    return out.join('\n');
+}
+
+/** Dependency injection around a definition: what it provides and to whom, or, for a token or an injected type, its providers. */
+function injectionNote(intel, s, max = 8) {
+    const out = [];
+    const into = (js) => js.map(j => `${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''} ${j.file}:${j.line}`);
+    for (const p of providedBy(intel, s.id)) {
+        const xs = into(p.into);
+        const to = xs.length ? ` and injected into ${xs.slice(0, max).join(', ')}${xs.length > max ? ', …' : ''}` : ', injected nowhere in the indexed code';
+        if (p.types) {
+            // a bean that loses to another at some points (@Primary, a name) is said so, not "injected nowhere"
+            const lost = p.into.length ? [] : collectInjection(intel).injections.filter(j => j.others?.some(o => o.target === p.target));
+            const to2 = lost.length ? `, not chosen at ${into(lost).slice(0, max).join(', ')} (${lost[0].from[0]?.target?.name ?? '?'} is: ${lost[0].why.split(',')[0]})` : to;
+            out.push(`Dependency injection: a Spring bean (${p.how}${p.how === '@Bean' ? '' : ` ${p.name}`}, ${p.file}:${p.line})${p.primary ? ', @Primary,' : ''}${to2}${p.exact ? '' : ' [type matched by its name]'}.`);
+        }
+        else out.push(`Dependency injection: provided as ${p.token} (${p.how}, ${p.file}:${p.line})${to}${p.exact ? '' : ' [token matched by its text]'}.`);
+    }
+    const t = tokenUses(intel, s.id);
+    const spring = t.injections.some(j => j.framework === 'spring');
+    const by = (p) => `${p.how} ${p.target?.qname ?? clip(p.targetText, 40)} (${p.file}:${p.line})`;
+    if (spring) {
+        const points = t.injections.slice(0, max).map(j => `${j.owner?.qname ?? '?'}.${j.param} ${j.file}:${j.line} ← ${j.from.length ? j.from.map(p => p.target?.name ?? p.targetText).join(' / ') : 'no bean in the indexed code'}${j.why && j.why !== 'by type' ? ` (${j.why})` : ''}`);
+        out.push(`Dependency injection (Spring): ${plural(t.injections.length, 'injection point')} of type ${s.name}${t.providers.length ? `, filled by ${t.providers.slice(0, max).map(by).join(', ')}` : ', no bean of it in the indexed code (a library or auto-configured bean)'}: ${points.join('; ')}${t.injections.length > max ? '; …' : ''}.`);
+    } else if (t.providers.length) out.push(`Dependency injection: ${s.name} is a token, provided by ${t.providers.slice(0, max).map(by).join(', ')}; ${plural(t.injections.length, 'injection point')}.`);
+    return out;
+}
+
+function toolInject(intel, { filter = '' }) {
+    const { providers, injections } = collectInjection(intel);
+    const f = String(filter ?? '').trim().toLowerCase();
+    // rows: what is asked for (a NestJS token, a Spring type), with what provides it and where it is injected;
+    // a Spring bean nobody injects (a controller, a configuration class) is counted, not listed
+    const nest = providers.filter(p => !p.types);
+    const keys = [...new Set([...nest, ...injections].map(x => x.key))];
+    const named = (p) => (p.target?.qname ?? p.targetText).toLowerCase();
+    const rows = keys.map(key => {
+        const js = injections.filter(j => j.key === key);
+        return { key, token: (nest.find(p => p.key === key) ?? js[0]).token, ps: [...new Set([...nest.filter(p => p.key === key), ...js.flatMap(j => j.from)])], js };
+    }).filter(r => !f || r.token.toLowerCase().includes(f) || r.ps.some(p => named(p).includes(f)) || r.js.some(j => (j.owner?.qname ?? '').toLowerCase().includes(f)));
+    const frameworks = [nest.length || injections.some(j => !j.framework) ? 'NestJS: provide/use… and @Inject' : null, providers.some(p => p.types) ? 'Spring: beans and their injection points' : null].filter(Boolean);
+    if (!keys.length) return providers.length ? `${plural(providers.length, 'Spring bean')} and no injection point recognised.` : 'No dependency-injection providers or injection points recognised (NestJS, Spring).';
+    if (!rows.length) return `Nothing matches "${filter}" (${plural(keys.length, 'injected type or token', 'injected types or tokens')} in the repository; \`inject\` lists them all).`;
+    const out = [`${plural(rows.length, 'injected type or token', 'injected types or tokens')}${f ? ` matching "${filter}"` : ''} (${frameworks.join('; ')}):`];
+    const where = (p) => p.target ? `${p.target.qname}  ${p.target.path}:${p.target.start_line}` : clip(p.targetText, 60);
+    for (const r of rows.slice(0, 100)) {
+        out.push(`  ${r.token}${r.ps.some(p => !p.exact) || r.js.some(j => !j.exact) ? '  [matched by its text]' : ''}`);
+        for (const p of r.ps) out.push(`    provided  ${p.how.padEnd(11)} ${where(p)}${p.primary && p.types ? '  @Primary' : ''}${p.conditions?.length ? `  ${p.conditions.join(' ')}` : ''}${!p.types ? `   (${p.file}:${p.line})` : ''}`);
+        if (!r.ps.length) out.push(`    provided  ${injectionSource(intel, r.key, r.js[0])}`);
+        for (const j of r.js) out.push(`    injected  ${j.owner?.qname ?? 'module level'}${j.param ? `.${j.param}` : ''}${j.type ? `: ${clip(j.type, 40)}` : ''}   (${j.file}:${j.line})${j.why && (j.from.length !== 1 || j.why !== 'by type') ? `  ← ${j.from.length === 1 ? `${j.from[0].target?.name ?? j.from[0].targetText}, ` : ''}${j.why}` : ''}`);
+    }
+    if (rows.length > 100) out.push(`  … ${rows.length - 100} more (pass part of a name to narrow)`);
+    const idle = providers.filter(p => p.types && !injections.some(j => j.from.includes(p)));
+    if (idle.length && !f) out.push(`${plural(idle.length, 'Spring bean')} injected nowhere by type in the indexed code (controllers, configuration, beans used by the framework or a library): \`inject <name>\` shows one.`);
+    return out.join('\n');
+}
+
+/** Where a token with no `provide:` comes from: a class provides itself; otherwise a library or dynamic module. */
+function injectionSource(intel, key, j = null) {
+    if (j?.framework === 'spring') return j.why.startsWith('@Qualifier') ? `no bean of this type named so in the indexed code (${j.why}): a library or auto-configured bean` : 'no bean of this type in the indexed code: a library or auto-configured bean, or one declared in XML';
+    const id = key.startsWith('id:') ? Number(key.slice(3)) : null;
+    const s = id != null ? intel.sym(id) : null;
+    if (s && TYPE_KINDS.has(s.kind)) return `the class itself (a class is its own token when a module lists it)  ${loc(s)}`;
+    return 'not in the indexed code (a library token such as REQUEST or CACHE_MANAGER, or a dynamic module)';
 }
 
 /** `path` argument → predicate on repository-relative paths (a directory prefix or one file). */
@@ -781,7 +917,7 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     overrides.sort((a, b) => pathRank(a.s.path) - pathRank(b.s.path) || a.s.path.localeCompare(b.s.path));
     // subclasses that inherit a changed member without redeclaring it run the changed code too
     const inheritors = new Map();
-    for (const id of seeds) for (const x of intel.inheritance(id).inherit) inheritors.set(x.id, x);
+    for (const id of seeds) { const h = intel.inheritance(id); for (const x of [...h.inherit, ...h.extend]) inheritors.set(x.id, x); }
     for (const t of intel.conventionTests([...seedFiles])) if (!tests.has(t)) tests.set(t, ['(by naming convention)']);
     for (const t of intel.conventionTests([...new Set([...inheritors.values()].map(x => x.path))])) if (!tests.has(t)) tests.set(t, ['(tests a subclass that inherits it)']);
     for (const x of inheritors.values()) if (x.is_test) { addTest(x.path, x.name); inheritors.delete(x.id); }
@@ -815,7 +951,7 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
         if (overrides.length > 15) out.push(`    … ${overrides.length - 15} more`);
     }
     if (inheritors.size) {
-        out.push(`inherited by (these subclasses run the changed code too): ${inheritors.size}`);
+        out.push(`inherited or extended by (these subclasses run the changed code too): ${inheritors.size}`);
         for (const x of [...inheritors.values()].slice(0, 15)) out.push(`    ${x.qname}  ${loc(x)}`);
         if (inheritors.size > 15) out.push(`    … ${inheritors.size - 15} more`);
     }
@@ -859,8 +995,8 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     return out.join('\n');
 }
 
-async function toolCheck(intel, { files = null, base = 'HEAD' }) {
-    const r = await checkChanges(intel, { base, files: files?.length ? files : null });
+async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName = false }) {
+    const r = await checkChanges(intel, { base, files: files?.length ? files : null, byName });
     if (r.error) return r.error;
     if (!r.files) return `No changed source files against ${base}${files?.length ? ` under ${files.join(', ')}` : ''}.`;
     const out = [`Checked ${plural(r.files, 'changed file')} against ${base}.`];
@@ -893,6 +1029,7 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
     for (const h of r.inherited ?? []) {
         const members = h.members.join(', ');
         if (h.inherit.length) out.push(`• subclasses of ${h.type} that inherit ${members} run the changed code too (${h.inherit.length}): ${h.inherit.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.inherit.length > 8 ? `, … ${h.inherit.length - 8} more` : ''}`);
+        if (h.extend?.length) out.push(`• subclasses of ${h.type} whose own ${members} uses this one run the changed code too (${h.extend.length}): ${h.extend.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.extend.length > 8 ? `, … ${h.extend.length - 8} more` : ''}`);
         if (h.override.length) out.push(`• overridden, so not reached by the change: ${h.override.slice(0, 8).map(x => `${x.qname} (${x.path})`).join(', ')}${h.override.length > 8 ? `, … ${h.override.length - 8} more` : ''}`);
     }
     if (r.cases.length) {
@@ -904,7 +1041,221 @@ async function toolCheck(intel, { files = null, base = 'HEAD' }) {
         out.push(`test files that exercise the change (${r.tests.length}): ${r.tests.slice(0, 12).join(', ')}${r.tests.length > 12 ? ', …' : ''}`);
         for (const c of r.commands) out.push(`    run: ${clip(c, 400)}`);
     } else out.push('tests: none found that exercise the changed code.');
+    if (r.byName?.length) {
+        out.push(`test files that name a changed module in a string (they may reach it by a lookup the index does not see; run them for more certainty) (${r.byName.length}): ${r.byName.slice(0, 12).join(', ')}${r.byName.length > 12 ? ', …' : ''}`);
+        for (const c of r.byNameCommands) out.push(`    run: ${clip(c, 400)}`);
+    }
     out.push(problems ? `${plural(problems, 'problem')} found.` : 'No problems found in the changed code (this check does not replace running the tests).');
+    return out.join('\n');
+}
+
+// explore: code is denser than prose, so the budget counts fewer characters per token than outline's 4
+const EXPLORE_CHARS_PER_TOKEN = 3.5;
+const EXPLORE_PRIMARY = 3;
+const EXPLORE_SECONDARY = 5;
+const CALLER_KINDS = ['call', 'new', 'value', 'decorator'];
+
+/**
+ * Definitions to centre an exploration on, most relevant first: the symbols named, identifiers in the
+ * query that name a definition, then the search results for the query (library code before tests and
+ * examples, callables and types before plain values). Each comes with why it was picked.
+ */
+function exploreSeeds(intel, { query, symbols, path: p }) {
+    const seeds = [], ids = new Set(), missing = [];
+    const add = (s, why) => { if (s && !ids.has(s.id)) { ids.add(s.id); seeds.push({ s, why }); } };
+    for (const t of symbols) {
+        const m = pickSymbol(intel, t);
+        if (m.length) add(m[0], 'named'); else missing.push(t);
+    }
+    if (query) {
+        // a route in the query (`POST /api/login`): its handler, found through the framework's registration
+        const routes = routesInQuery(query);
+        if (routes.length) {
+            const all = collectRoutes(intel);
+            for (const q of routes) for (const r of matchRoutes(all, q).slice(0, 3)) if (r.handler) add(intel.sym(r.handler.id), `handles ${r.method} ${r.path}`);
+        }
+        // an issue: the definitions where the most (and rarest) of the names it uses meet
+        if (isIssueText(query)) for (const r of issueSeeds(intel, query, { path: p || null })) add(intel.sym(r.id), `issue terms: ${r.terms.slice(0, 4).join(', ')}`);
+        const a = analyzeQuery(query);
+        for (const id of a.identifiers) {
+            if (id.length < 3) continue;
+            // a bare word that happens to name something (`user`, `config`) is not a lookup
+            if (a.natural && /^[a-z]+$/.test(id)) continue;
+            // the definition must carry the name as written: `CLAUDE.md` is a file, not a variable `md`
+            const norm = id.replace(/::|#|->/g, '.');
+            let m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
+            // a keyword in capitals (`ALTER`, `PIVOT`) that names an entry of a large table of values (a
+            // token enum) is the language being talked about, not a definition to look at
+            if (/^[A-Z][A-Z0-9_]*$/.test(id)) m = m.filter(x => !(VALUE_KINDS.has(x.kind) && x.parent_id != null && largeTable(intel, x.parent_id)));
+            if (m.length) add(m[0], 'named in the query');
+        }
+        const { results } = intel.search.search(String(query), { limit: 16, path: p || null });
+        const wantTests = /\btests?\b|\bspec\b/i.test(query);
+        const wantStyles = /\b(css|scss|less|styles?|stylesheet|selector)\b/i.test(query);
+        const found = results.map(r => intel.sym(r.id)).filter(Boolean)
+            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test) && (wantStyles || s.lang !== 'css'));
+        // stable re-order: rank keeps search order within each tier
+        const tier = (s) => pathRank(s.path) * 2 + (VALUE_KINDS.has(s.kind) ? 1 : 0);
+        found.map((s, i) => ({ s, i })).sort((x, y) => tier(x.s) - tier(y.s) || x.i - y.i).forEach(({ s }) => add(s, 'search'));
+    }
+    // a member whose class is already a seed is shown inside it; a class whose member is a seed
+    // ranked higher only repeats it
+    const kept = seeds.filter(({ s }) => !(s.parent_id != null && ids.has(s.parent_id) && seeds.findIndex(x => x.s.id === s.parent_id) < seeds.findIndex(x => x.s.id === s.id)));
+    return { seeds: kept, missing };
+}
+
+function toolRoutes(intel, { filter = '' }) {
+    const all = collectRoutes(intel);
+    const f = String(filter ?? '').trim();
+    const q = f ? routesInQuery(f.startsWith('/') || /^[A-Z]+\s+\//.test(f) ? f : '/' + f) : [];
+    const rows = f ? (q.length ? q.flatMap(x => matchRoutes(all, x)) : all.filter(r => r.path.includes(f))) : all;
+    if (!all.length) return 'No HTTP routes recognised (FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi, net/http).';
+    if (!rows.length) return `No route matches "${f}" (${plural(all.length, 'route')} in the repository; \`routes\` lists them all).`;
+    const out = [`${plural(rows.length, 'route')}${f ? ` matching "${f}"` : ''}:`];
+    for (const r of rows.slice(0, 200)) {
+        const h = r.handler ? `${r.handler.qname}  ${r.handler.path}:${r.handler.start_line}` : `inline handler at ${r.file}:${r.line}`;
+        out.push(`  ${r.method.padEnd(7)} ${r.path.padEnd(40)} → ${h}`);
+    }
+    if (rows.length > 200) out.push(`  … ${rows.length - 200} more (pass part of a path to narrow)`);
+    return out.join('\n');
+}
+
+/** Direct callers of a definition outside tests, and the tests that call it. */
+function exploreCallers(intel, s) {
+    const { nodes, fileLevel, truncated, overflow } = intel.dependents([s.id], { depth: 1, maxNodes: 80, kinds: CALLER_KINDS });
+    const code = [], tests = [];
+    for (const [id, info] of nodes) {
+        const c = intel.sym(id);
+        if (!c) continue;
+        const site = info.sites?.[0] ?? { path: c.path, line: c.start_line };
+        (c.is_test ? tests : code).push({ c, info, site });
+    }
+    code.sort((a, b) => pathRank(a.c.path) - pathRank(b.c.path) || b.info.conf - a.info.conf || a.c.path.localeCompare(b.c.path) || a.site.line - b.site.line);
+    const modules = [], testModules = [];
+    for (const [file, m] of fileLevel) (isTestPath(intel, file) ? testModules : modules).push({ file, line: m.sites[0], conf: m.conf });
+    return { code, tests, modules, testModules, more: truncated ? overflow : 0 };
+}
+
+const isTestPath = (intel, file) => Boolean(intel.store.get('SELECT is_test FROM files WHERE path = ?', file)?.is_test);
+
+async function toolExplore(intel, { query = '', symbols = [], path: p = null, max_tokens = 2000 }) {
+    const q = String(query ?? '').trim();
+    const named = (Array.isArray(symbols) ? symbols : String(symbols).split(/[\s,]+/)).map(t => String(t).trim()).filter(Boolean);
+    if (!q && !named.length) return 'Provide a query (the task, question or bug in words) and/or symbols to centre on.';
+    const budget = Math.round(Math.min(Math.max(500, Number(max_tokens) || 2000), 6000) * EXPLORE_CHARS_PER_TOKEN);
+    const { seeds, missing } = exploreSeeds(intel, { query: q, symbols: named, path: p });
+    if (!seeds.length) {
+        const what = q ? `"${clip(q, 80)}"${p ? ` under ${p}` : ''}` : named.map(t => `"${t}"`).join(', ');
+        return `Nothing in the index matches ${what}. Try other words for the behaviour, an identifier, or ${tn('outline')} for a map of the repository.`;
+    }
+    await intel.revalidate([...new Set(seeds.slice(0, EXPLORE_PRIMARY + EXPLORE_SECONDARY).map(x => x.s.path))]);
+    const fresh = seeds.map(x => ({ ...x, s: intel.sym(x.s.id) ?? x.s }));
+    // fewer definitions shown whole when the budget is small: each needs room for its code
+    const nPrimary = Math.max(1, Math.min(EXPLORE_PRIMARY, Math.floor(budget / 1200)));
+    const primary = fresh.slice(0, nPrimary), secondary = fresh.slice(nPrimary, nPrimary + EXPLORE_SECONDARY);
+    const seen = new Set(fresh.slice(0, nPrimary + EXPLORE_SECONDARY).map(x => x.s.id));
+
+    // 1. everything but the code, per definition: compact lines, so their cost is known up front
+    const testFiles = new Set(), testCases = [];
+    const sections = primary.map(({ s, why }, i) => {
+        const head = `## ${i + 1}. ${s.qname} — ${s.kind}${s.exported ? ', exported' : ''}${s.is_test ? ', test' : ''} · ${loc(s)}${why === 'search' ? '' : `  (${why})`}`;
+        const facts = [];
+        if (s.parent_id) { const par = intel.sym(s.parent_id); if (par) facts.push(`member of ${par.qname} (${par.kind}) ${loc(par)}`); }
+        if (CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind)) {
+            const { code, tests, modules, testModules, more } = exploreCallers(intel, s);
+            const total = code.length + modules.length + more;
+            if (total) {
+                const shown = code.slice(0, 6).map(x => `${x.c.qname} ${x.site.path}:${x.site.line}${x.info.conf < 0.9 ? ` [${confWord(x.info.conf)}]` : ''}`);
+                for (const m of modules.slice(0, Math.max(0, 6 - shown.length))) shown.push(`module level ${m.file}:${m.line}`);
+                facts.push(`called by (${total}): ${shown.join(', ')}${total > shown.length ? `, … (${tn('call_graph')} / ${tn('find_references')} for all)` : ''}`);
+            } else if (why.startsWith('handles ')) facts.push(`called by: the web framework, for ${why.slice(8)}`);
+            else if (!s.is_test) facts.push('called by: no bound callers (entry point, framework-invoked, or dynamic dispatch)');
+            const u = intel.unboundFor(s.id);
+            if (u.plausible.length) facts.push(`possibly also called at: ${u.plausible.slice(0, 3).map(r => `${r.path}:${r.line}`).join(', ')}${u.plausible.length > 3 ? ', …' : ''} (receiver type unknown)`);
+            for (const t of tests) { testFiles.add(t.c.path); testCases.push(`${t.c.qname} (${t.site.path}:${t.site.line})`); }
+            for (const m of testModules) { testFiles.add(m.file); testCases.push(`${m.file}:${m.line}`); }
+        }
+        if (s.kind === 'method' && !s.is_static) {
+            const fam = intel.methodFamily(s);
+            if (fam.up.length) facts.push(`overrides/implements: ${fam.up.slice(0, 4).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}`);
+            if (fam.down.length) facts.push(`overridden by (${fam.down.length}): ${fam.down.slice(0, 6).map(m => `${m.qname} (${m.path}:${m.start_line})`).join(', ')}${fam.down.length > 6 ? ', …' : ''}`);
+        }
+        if (TYPE_KINDS.has(s.kind)) {
+            const { direct, indirect } = subtypeTree(intel, s.id);
+            if (direct.length) facts.push(`subtypes/implementations (${direct.length + indirect.length}): ${[...direct, ...indirect].slice(0, 8).map(x => `${x.qname} (${x.path}:${x.start_line})`).join(', ')}${direct.length + indirect.length > 8 ? ', …' : ''}`);
+        }
+        // dependency injection: what this class receives through @Inject(TOKEN), and what it provides
+        const cls = s.kind === 'class' ? s : (s.parent_id ? intel.sym(s.parent_id) : null);
+        if (cls?.kind === 'class') {
+            const recv = injectedInto(intel, cls.id).filter(j => s.kind === 'class' || (j.line >= s.start_line && j.line <= s.end_line));
+            if (recv.length) facts.push(`receives by injection: ${recv.slice(0, 4).map(j => `${j.param ?? '?'} ← ${j.token}, ${j.from.length ? j.from.slice(0, 2).map(p => `${p.how} ${p.target?.qname ?? clip(p.targetText, 30)} (${p.file}:${p.line})`).join(' / ') : injectionSource(intel, j.key, j)}${j.why && j.why !== 'by type' && j.from.length ? ` [${j.why}]` : ''}`).join('; ')}${recv.length > 4 ? `; … ${recv.length - 4} more` : ''}`);
+        }
+        const model = modelOf(intel, s.id);
+        if (model) facts.push(`ORM model (${model.orm}): table ${(model.schema ? `${model.schema}.` : '') + model.table}; ${model.migrations.length ? `migrations touching it: ${model.migrations.slice(-3).map(x => `${x.file}:${x.line} ${x.op}`).join(', ')}${model.migrations.length > 3 ? `, … (${model.migrations.length} statements; find_references lists them)` : ''}` : 'no migration names it'}`);
+        const gives = providedBy(intel, s.id);
+        if (gives.length) facts.push(`provided by injection as ${gives.slice(0, 3).map(p => `${p.types ? `a Spring bean (${p.how})` : p.token} to ${p.into.length ? p.into.slice(0, 3).map(j => `${j.owner?.qname ?? '?'} (${j.file}:${j.line})`).join(', ') + (p.into.length > 3 ? `, … ${p.into.length - 3} more` : '') : 'no injection point'}`).join('; ')}`);
+        if (!s.is_test) for (const t of testsUsing(intel, s.id)) {
+            testFiles.add(t.path);
+            const label = t.qname === '(module)' ? `${t.path}:${t.line}` : `${t.qname} (${t.path}:${t.line})`;
+            if (!testCases.includes(label)) testCases.push(label);
+        }
+        return { s, head, facts };
+    });
+    for (const t of intel.conventionTests([...new Set(primary.filter(x => !x.s.is_test).map(x => x.s.path))])) testFiles.add(t);
+
+    // 2. what the shown code uses, defined elsewhere: one shared card, seeds and repeats left out
+    const card = [], moreNames = [];
+    for (const { s } of primary) {
+        const { rows, more } = definitionsUsed(intel, s.path, s.start_line, s.end_line, { max: Math.max(3, Math.floor(10 / primary.length) + 1), skipIds: seen, skipAncestorsOf: s.id });
+        for (const d of rows) {
+            seen.add(d.id);
+            card.push(`  ${d.qname}  ${d.path}:${d.start_line}${d.byName ? ' (by name)' : ''}  ${clip(String(d.sig || `${d.kind} ${d.name}`).replace(/\s+/g, ' '), 90)}`);
+        }
+        for (const d of more) if (!seen.has(d.id)) { seen.add(d.id); moreNames.push(d.qname); }
+    }
+    const tail = [];
+    if (card.length) tail.push('Defined elsewhere (used by the code above):', ...card);
+    if (moreNames.length) tail.push(`  … ${moreNames.length} more: ${moreNames.slice(0, 10).join(', ')}${moreNames.length > 10 ? ', …' : ''}`);
+    if (testFiles.size || testCases.length) {
+        tail.push(`Tests (${plural(testFiles.size, 'file')}): ${testCases.length ? testCases.slice(0, 5).join(', ') + (testCases.length > 5 ? ', …' : '') : [...testFiles].slice(0, 5).join(', ')}`);
+        for (const c of testCommands(intel.root, [...testFiles].slice(0, 12))) tail.push(`  run: ${clip(c, 300)}`);
+    } else if (primary.some(x => !x.s.is_test)) tail.push('Tests: none found that call this code (consider adding one).');
+    if (secondary.length) {
+        tail.push('Also relevant (not shown):');
+        for (const { s } of secondary) tail.push(`  ${s.qname} — ${s.kind} · ${loc(s)}${s.sig ? `  ${clip(String(s.sig).replace(/\s+/g, ' '), 90)}` : ''}`);
+    }
+    if (missing.length) tail.push(`Not found: ${missing.map(t => `"${t}"`).join(', ')}.`);
+
+    // 3. the code, in the budget that is left, in order of relevance; what does not fit is named
+    const fixed = [...sections.flatMap(x => [x.head, ...x.facts]), ...tail].join('\n').length + 200;
+    let left = budget - fixed;
+    const out = [`Exploring ${q ? `"${clip(q, 80)}"` : named.join(', ')}${p ? ` under ${p}` : ''}: ${plural(primary.length, 'definition')} shown${secondary.length ? `, ${secondary.length} more listed` : ''}.`];
+    const cut = [];
+    sections.forEach(({ s, head, facts }, i) => {
+        out.push('', head, ...facts);
+        const lines = intel.fileLines(s.path);
+        const span = s.end_line - s.start_line + 1;
+        // the rest of the budget is shared among the definitions not yet shown
+        const share = Math.floor(left / (sections.length - i));
+        let n = 0, used = 0;
+        for (let ln = s.start_line; ln <= s.end_line && lines; ln++) {
+            const w = Math.min(lines[ln - 1]?.length ?? 0, 220) + 8;
+            if (used + w > share) break;
+            used += w; n++;
+        }
+        if (n >= Math.min(span, 3)) {
+            out.push(codeBlock(lines, s.start_line, s.end_line, { maxLines: n }));
+            if (n < span) cut.push(`${s.path}:${s.start_line + n}-${s.end_line}`);
+            left -= used;
+        } else {
+            if (s.sig) out.push(`  ${clip(String(s.sig).replace(/\s+/g, ' '), 200)}`);
+            cut.push(s.qname);
+        }
+    });
+    if (tail.length) out.push('', ...tail);
+    out.push(cut.length
+        ? `Left out to fit the budget: ${cut.join(', ')} — ${surface === 'cli' ? `\`read ${cut.slice(0, 3).join(' ')}\`` : `read_code with ${cut.length === 1 ? 'it' : 'them'}`}, or raise max_tokens.`
+        : `Next: ${surface === 'cli' ? '`read <name>…`' : 'read_code'} for the names above; ${tn('change_impact')} before changing a signature others rely on.`);
     return out.join('\n');
 }
 

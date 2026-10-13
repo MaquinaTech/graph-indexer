@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_oracle.py::TestOracle::test_recursive_cte",
+  "tests/dialects/test_postgres.py::TestPostgres::test_recursive_cte"
+]

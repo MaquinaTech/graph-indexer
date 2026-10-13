@@ -32,6 +32,10 @@ The harness is in [`bench/agentic/`](../bench/agentic/); results and their inter
 | `cc` | a real Claude Code session with the tools it ships with, sub-agents (Explore, general-purpose) included | none |
 | `cc+gi` | the same session with graph-indexer's MCP server | as `init --no-helper` installs it: the server and the CLAUDE.md block |
 | `cc+gi+helper` | the same, with the structural helper among the sub-agents | as `init` installs it; the main agent decides on its own whether to hand a question to the helper |
+| `cc+codegraph` | the same session with CodeGraph 1.6.2 | as `codegraph install --target=claude --location=local` writes it: MCP server (`alwaysLoad`), its tool permission, the `UserPromptSubmit` hook that adds `codegraph_explore` context to the prompt, the `.claude/CLAUDE.md` section; then `codegraph init`, with the CLI on the session's `PATH` |
+| `cc+cbm` | the same session with codebase-memory-mcp 0.11.0 | as `install -y --clients=claude` writes it (user scope, copied into the project's): MCP server, `PreToolUse`/`PostToolUse`/`SessionStart`/`SubagentStart` hooks, three sub-agents and a skill; the repository indexed with its CLI beforehand |
+| `cc+serena` | the same session with Serena 1.7.0 | as its guide for Claude Code sets it up: MCP server with `--context claude-code` for the project, the four recommended hooks, and the system prompt it "highly recommends" (`serena prompts print-cc-system-prompt-override`, in place of Claude Code's); the project indexed with `serena project index` beforehand |
+| `cc+serena-prompt` | a control: Claude Code with Serena's system prompt and no Serena | the same system prompt; no MCP server, hook or index |
 
 The agents run as sub-agents, where graph-indexer is used through its CLI, whose commands print
 exactly what the MCP tools return — except the `cc` arms, which are real sessions (`claude -p`,
@@ -68,6 +72,58 @@ the third round.
 agent gets an issue-style statement, never the commit message or the diff. It works in a
 checkout made of the base snapshot alone — one commit, no remote, none of the later history — so
 `git log` cannot reveal the fix, and it is told to work offline.
+
+How a B3 task is made, from the fifth round on:
+
+- **Mined.** A commit after the model's training cutoff (June 2026 for Sonnet 5.5) that changes
+  source files and tests: the hidden test patch holds every file it changes under the test tree,
+  SQL fixtures included, and the test modules that read those fixtures run with it. Each state
+  (base with the hidden tests, then with the real fix) runs twice, and a test whose outcome
+  differs between the two runs is left out as flaky. FAIL_TO_PASS: fails at base, passes with the
+  fix; PASS_TO_PASS: passes in both.
+- **Validated through the grader** (`validate-fresh.mjs`), in the isolated checkout an agent gets:
+  at base every FAIL_TO_PASS test fails and PASS_TO_PASS passes; with the real fix the task is
+  solved, three times out of three.
+- **Selected by hand.** Out: refactors and API redesigns with no behaviour a user could report,
+  tests that pin details of one implementation (the exact partitions of a randomised community
+  detection), and more than two tasks of one feature family.
+- **Stated** as a user's issue (`statements.mjs`): written by a model from the tests and the fix,
+  then reviewed. Every assertion of the FAIL_TO_PASS tests follows from the statement — exact
+  output text where a test compares text, an `Interface:` paragraph where a test reads a field of
+  the result the fix introduces — and it names none of the files or functions the fix changes.
+  The reproduction is run at base and the expected behaviour with the fix.
+- **Same Python for the agent and the grader.** Sessions get the grading virtualenv first on
+  their `PATH` (`GI_PYTHON`), with each repository's test dependencies (pytest, hypothesis, mpmath,
+  duckdb, pandas, numpy); the preflight checks it from inside a session. On 2026-10-12
+  `typing_extensions` and `greenlet` were added for SQLAlchemy (B5). In sqlglot and SymPy every import
+  of them is under `TYPE_CHECKING`, so nothing they run changed; networkx does not import them.
+  xarray, mypy and pylint (B5) use a second virtualenv, `venv-b5`, with the same numpy, pandas,
+  pytest and hypothesis plus dask, flox (with numpy_groupies and scipy) and mypy's and pylint's
+  test requirements: wheels only, installed offline inside the sandbox. xarray's dask chunk
+  manager is registered by a metadata-only distribution (no code) instead of `pip install -e .`,
+  which would make every checkout import one tree. scrapy and haystack (B5) have one virtualenv
+  each, built the same way: scrapy with its declared dependencies and test requirements but
+  pyftpdlib, which has no wheel; haystack with its core dependencies, pandas and its pytest
+  plugins but not torch, transformers or the converters' libraries, so tests that import those
+  fail at import and rule 3 leaves them out. Repositories can set environment variables for
+  their runs (`env` in `repos.mjs`): haystack's telemetry is switched off, since it would write
+  to `~/.haystack`.
+- **Data-driven tests** run through the module that reads them (`fixtureTests` in `repos.mjs`):
+  sqlglot's `.sql` fixtures, pylint's functional cases (`tests/test_functional.py`) and mypy's
+  `test-data/unit/*.test` files (the `mypy/test/` module whose `files` lists them).
+- **Sandboxed** (since 2026-10-12): the repositories' code (tests at mining, measuring and grading)
+  runs inside the macOS sandbox `bench/agentic/sandbox.sb`, which allows no network beyond
+  localhost, no writes outside the checkout and temporary directories, and no reads of
+  credentials. It fails closed. Tasks validated before that date are validated again inside it.
+  Agent sessions and competitor binaries are not sandboxed yet.
+
+The fifth round asks for harder fixes: 2–6 source files and at least 40 changed source lines
+(`--min-src 2 --max-src 6 --min-lines 40`), from commits of July–October 2026. Mining gave 40 valid
+sqlglot tasks, 15 SymPy and none in networkx; 19 were selected, and 4 of them were withdrawn at
+statement review because a FAIL_TO_PASS test calls a private name the fix introduces or changes
+(`executor._subquery_plans`, `_array_add`, `MathematicaParser._literal`): stating them would point
+at the code to change. The round holds 15: 11 sqlglot (5 in the optimizer, 6 in dialect parsing
+and generation) and 4 SymPy (logic, simplification, integration, pickling).
 
 ## Validity rules
 
@@ -161,6 +217,19 @@ The acceptance criteria are the gates of the [SOTA plan](PLAN-SOTA.md):
    issues (`rt3i`) and `rt1`'s 20 tasks (`rt3q`) again with the tool surface trimmed, every arm
    re-run the same day so that `cc` is a concurrent control.
 
+10. **The arena in sessions** (snapshot `arena1`, arms `cc`, `cc+codegraph`, `cc+cbm`,
+   `cc+serena`, `cc+gi+helper`; then `arena1b`, arms `cc`, `cc+serena`, `cc+serena-prompt`): each
+   tool installed into the repository by its own installer or guide, and the sessions run **in
+   the repository** (`--in-repo`): the task's instructions are the prompt, the session's working
+   directory is the checkout, and what each installer wrote there is committed before it starts,
+   so the graded diff is the agent's alone. 11 new code questions (set `r7`, generated for this
+   round and seen by nobody before it), the 8 refactors of `rt1` and the 15 issues of the fifth
+   round, one run per task and arm. The refactors and issues are not new to graph-indexer: they ran
+   in `rt1`, `rt3q`, `b3h3` and `b3h4`, and the hooks of `b3h4` were written after reading `b3h3`'s
+   transcripts (the hooks are not part of the arm measured here, which is `init`'s default). The
+   other tools meet all of them for the first time. Because sessions run in the repository, with
+   the task in the prompt, costs are not comparable with earlier rounds, only within this one.
+
 Each of the four rounds and the delegation round is held out for the snapshot it tests — its tasks
 played no part in the changes. The resolved-indirection and smaller-model comparisons reuse
 earlier tasks. Every comparison is within a round, against the `grep` (or `ask-grep`) arm on the
@@ -169,8 +238,19 @@ same tasks, run at the same time.
 ## Results
 
 Four rounds (88 tasks, 359 graded runs), two later comparisons on earlier tasks (83 runs), a
-round of delegated questions on 24 new ones (72 runs) and a round of real Claude Code sessions on
-20 tasks (60 runs). In short:
+round of delegated questions on 24 new ones (72 runs), rounds of real Claude Code sessions, and
+a round against three other tools (215 runs), two pilots on issues (94 runs) and a pilot of two
+models (128 runs). In short:
+
+- **Against CodeGraph, codebase-memory-mcp and Serena, in real sessions with each tool installed
+  as its own installer does it (34 tasks, 170 runs), graph-indexer is the only one the agent
+  used, and the only arm that answered every code question.** It cost 0.65 of CodeGraph on
+  questions, 0.74 on refactors and 0.87 on issues; 0.79 / 0.91 / 0.96 of codebase-memory-mcp;
+  0.87 / 0.93 of Serena on questions and refactors — and **1.12 (1.05–1.21) of Serena on issues,
+  where it loses**. Serena's edge there does not come from its tools, which the agent called in 3
+  of 30 issue sessions, but from the system prompt its guide installs in place of Claude Code's:
+  that prompt alone, with no Serena, brought the cost to 0.91 (0.80–1.01). See
+  [Against other tools](#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs).
 
 - **Against graph-indexer 2.x, in real Claude Code sessions (nestjs and Twenty, a product
   monorepo; 40 tasks, 120 runs), 3.0 costs 0.43 of 2.x on code questions and 0.46 on refactors,
@@ -203,6 +283,12 @@ round of delegated questions on 24 new ones (72 runs) and a round of real Claude
 - **Multi-site refactors (B2) cost a fifth to a third less:** 0.81 (0.73–0.89) pooled over three
   rounds with the usual model, 0.69 (0.56–0.87) with the smaller one; every refactor passed its
   checks in every arm.
+- **An `explore` that reads issues does not make fixing them cheaper.** Offline, it shows the code the
+  fix changes in 25 of 50 issues instead of 12. In real sessions the agent writes a keyword query
+  rather than pasting the issue; with the capitals rule, those queries find the code in 25 of 50 too.
+  Calling it still did not shorten a session: cost 1.12 (1.01–1.25) when told to call it first,
+  1.03 (0.96–1.12) when told more softly, which the agent mostly ignored. B3 is now a no-regression
+  check; see [Issues as written](#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
 - **Fixing real issues (B3) costs the same with or without graph-indexer.** In the fourth round
   graph-indexer as installed cost 0.85 (0.76–0.96) of grep and its lookup rules alone 0.86
   (0.76–0.98), so the rules carry that gain; facts that resolve the code's indirection after each
@@ -221,6 +307,122 @@ round of delegated questions on 24 new ones (72 runs) and a round of real Claude
   issue with the rules alone, and none with graph-indexer; on the 24 delegated questions every
   arm missed 4, all of them two-level caller questions. In real sessions the usual model without
   graph-indexer missed 3 of 12 questions, all two-level caller questions, and with it none.
+
+### Issues as written: `explore` offline and in real sessions (issue1p, issue2): 47 tasks, 94 runs
+
+The arena left B3 at 1.03 with no session calling graph-indexer. These pilots asked whether `explore`
+could earn the agent's first call on an issue.
+
+**Offline first.** [`localize.mjs`](../bench/agentic/localize.mjs) runs `explore` on every fresh
+issue and checks whether a definition it shows with code overlaps a line the gold fix changes, with
+no agent involved. The 50 tasks are split into `dev` (32, for working on it) and `held` (18: the r5
+rounds and networkx r4).
+
+| `explore` input | build | dev: code shown / listed | held: code shown / listed |
+|---|---|---|---|
+| the issue as written | 3.0 (`962a7f2`) | 6 / 9 | 6 / 9 |
+| the issue as written | + issue terms | **15 / 18** | **10 / 13** |
+| a one-line keyword query, as agents write it | + issue terms | 9 / 16 | 6 / 15 |
+| a one-line keyword query, as agents write it | + capitals rule | **14 / 18** | **11 / 17** |
+
+- **Issue terms.** An issue's names (code spans, fenced blocks, identifier-shaped words) are matched by
+  their words, so `DATE_DIFF`, `DateDiff` and `_date_diff_sql` are the same term. Each definition
+  scores the summed IDF of the terms it carries, with title terms weighted ×4. Before this, given
+  sqlglot issues, explore returned `TokenType` entries for the SQL keywords in backticks.
+- **Capitals rule.** A word in capitals that only names an entry of a table with 100 or more members
+  (sqlglot's `TokenType` has 444) is the language under discussion, not a definition to look up.
+- **Keyword queries.** Sonnet 5.5 wrote them from each issue alone, told to write a short query. The
+  real sessions below showed that agents write that, not the issue: given the instruction "the
+  issue's title and text as the query", 7 of 7 calls were one-line keyword lists. In an isolated
+  prompt, the same model pasted the whole issue 50 times out of 50, so that setup does not predict
+  sessions.
+- **Rejected after measuring:**
+  - skipping docstrings (dev 11 → 8);
+  - a stopword list (it drops SQL words such as `using` and `over`);
+  - stronger length normalisation;
+  - issue scoring on keyword queries (3 → 2 of 7).
+- **Breaking existing tests.** Applying each gold fix and running the test files its tests touch shows
+  only 13 of 50 correct fixes break an existing test (26 tests). In sqlglot these are SQL-string
+  expectations that no call graph links to the changed code: `check` names the file for 18 of the 26
+  and the test function for 9. Predicting them would save at most about 2% of a session.
+
+**In real sessions.** Claude Code with Sonnet 5.5, `cc` against `cc+gi+helper`, one run each.
+
+| pilot | tasks | instruction for issues | solved | cost vs `cc` (95% CI) | sessions that called graph-indexer |
+|---|---|---|---|---|---|
+| `issue1p` | 15 held (sqlglot r5, sympy r5) | first call `explore` with the issue's title and text | 14 / 15 both | **1.12 (1.01–1.25)** | 7 of 15 |
+| `issue2` | 32 dev (sqlglot, sqlglot r4, networkx) | first call `explore` with the names and terms the issue uses | 32 / 32 both | 1.03 (0.96–1.12) | 1 of 32 |
+
+- **Calling `explore` did not shorten a session.** In `issue1p` the 7 sessions that called it cost 1.22
+  of their `cc` pair, and the other 8 cost 1.01. The agent kept its own greps after the answer (13.7
+  tool calls against 12.3), so the answer only added context.
+- **With the softer instruction, the agent hardly called it,** and the cost (1.03) is that of having
+  the tools installed.
+- **Bench bug fixed along the way.** sqlglot's test hint gave `python3 -m unittest discover tests`,
+  which fails to import the suite (55 errors), and agents in both arms ran it and then looked for the
+  right command. The hint now says `discover -s tests -t .`. That is one reason `issue2` sessions are
+  shorter (8 tool calls against 13); its tasks are also easier, so the two pilots' absolute costs do
+  not compare.
+- **Bias.** The `issue1p` tasks are 15 of the 18 `held` issues, examined while the localization was
+  being diagnosed. The `issue2` tasks are the ones it was tuned on.
+- **What this says.** Sonnet 5.5 reaches the code an issue is about in about 2 calls with grep, and
+  solves 93–100% of these issues alone. Locating code better does not lower that cost, for us or, so
+  far, for anyone in the arena. B3 now serves as a no-regression check (cost ≤ 1.03), and the work
+  moves to what grep cannot compute: exact references, the impact of an edit, verification. See
+  [PLAN-IDE-AGENTE.md](PLAN-IDE-AGENTE.md).
+
+### Against other tools in real sessions (arena1): 34 tasks, 170 runs
+
+Protocol item 10: Claude Code (Sonnet 5.5) in the repository, the task as its prompt, with nothing
+(`cc`), CodeGraph 1.6.2, codebase-memory-mcp 0.11.0, Serena 1.7.0 or graph-indexer as `init`
+installs it (`cc+gi+helper`) — each tool installed by its own installer or guide. 11 new code
+questions on nestjs (B1), 8 refactors (B2), 15 issues of sqlglot and SymPy (B3); one run per task
+and arm, all arms run side by side.
+
+| | Claude Code alone | graph-indexer | CodeGraph | codebase-memory-mcp | Serena |
+|---|---|---|---|---|---|
+| B1 questions solved (of 11) | 9 | **11** | 10 | 10 | 9 |
+| B2 refactors solved (of 8) | 8 | 8 | 8 | 7 | 8 |
+| B3 issues solved (of 15) | 15 | 15 | 14 | 15 | 15 |
+| B1 cost against `cc` | 1 | **0.92** (0.85–0.99) | 1.42 (1.33–1.53) | 1.16 (1.10–1.24) | 1.05 (1.02–1.09) |
+| B2 cost against `cc` | 1 | 1.00 (0.81–1.19) | 1.34 (1.28–1.41) | 1.09 (1.02–1.18) | 1.07 (0.90–1.27) |
+| B3 cost against `cc` | 1 | 1.03 (0.97–1.08) | 1.17 (1.08–1.28) | 1.07 (1.00–1.14) | **0.91** (0.85–0.99) |
+| sessions that called the tool (B1 + B2 / B3) | – | **19 of 19** / 0 of 15 | 0 of 19 / 0 of 15 | 0 of 19 / 0 of 15 | 2 of 19 / 2 of 15 |
+| prompt prefix at the first call, B1 (tokens) | 17,300 | 19,100 | 23,700 | 18,700 | 18,100 |
+
+graph-indexer against each tool, paired by task (cost of graph-indexer ÷ cost of the tool, 95% CI):
+
+| against | B1 questions | B2 refactors | B3 issues |
+|---|---|---|---|
+| CodeGraph 1.6.2 | **0.65** (0.60–0.69) | **0.74** (0.61–0.88) | **0.87** (0.80–0.96) |
+| codebase-memory-mcp 0.11.0 | **0.79** (0.73–0.85) | 0.91 (0.75–1.08) | 0.96 (0.90–1.01) |
+| Serena 1.7.0 | **0.87** (0.79–0.95) | 0.93 (0.73–1.22) | **1.12 (1.05–1.21) — loses** |
+
+What the transcripts show:
+
+- **Only graph-indexer is used.** The agent called it in every question and refactor session
+  (2.4 calls per question) and answered every question exactly; the misses of the other arms
+  were all two-level caller questions, as in earlier rounds. CodeGraph's and
+  codebase-memory-mcp's tools were never called in 68 sessions, Serena's in 4 of 34: what those
+  arms change is what their setup adds to every session. CodeGraph's prompt hook puts
+  `codegraph_explore` output for the task into the prompt (6,400 tokens more at the first call
+  than `cc`), which is why it is the dearest arm everywhere. codebase-memory-mcp's hooks ran on
+  every search (exit 0) and added nothing: replayed by hand, with its daemon running and with its
+  default cache, they returned no context either; we did not find out why.
+- **On issues no tool helps, and Serena's setup helps without its tools.** graph-indexer was not
+  called on any issue (as in `b3h2`–`b3h4`), so its arm costs what its definitions add (1.03).
+  Serena's arm made fewer turns (12.7 against 13.3), wrote less (6,900 output tokens against
+  7,700) and re-read less context, with its tools called in 2 of 15 sessions. A second round
+  (`arena1b`: `cc`, `cc+serena` and `cc+serena-prompt`, 45 runs) repeated it — Serena 0.85
+  (0.76–0.94) of `cc` — and the control with Serena's system prompt and no Serena came to 0.91
+  (0.80–1.01), with one issue missed. Most of the edge is the instructions that replace Claude
+  Code's system prompt; the rest is within noise or comes from Serena's reminder hooks.
+- **Wall time** is reported by the harness but varies with the machine's load from four
+  concurrent sessions; it is not used here.
+
+Three `arena1b` sessions were stopped by a SIGTERM at the same minute, unfinished; they were
+discarded and re-run from scratch (`runs/arena1b/discarded.tsv`). In `arena1` no run was
+discarded.
 
 ### Measurement correction and where the cost goes
 
@@ -260,6 +462,122 @@ call. Only 14% of the code lines it reads fall in the functions the fix changes;
 graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B3 much: the lever
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
+
+### Sonnet 5.5 against Haiku 5.5 (mp-sonnet, mp-haiku, pilot): 16 tasks, 128 runs
+
+The same 16 tasks, arms (`cc`, `cc+gi`) and two runs each, once with `--model claude-sonnet-5-5`
+and once with `--model claude-haiku-5-5` (graph-indexer at `0a9968c`): 6 code questions on nestjs
+(B1), the 4 held-out nestjs refactors (B2) and 6 B5 tasks, one per repository (sqlglot 930f1a32,
+mypy 6a6979c4, sqlalchemy 49e12e84, sympy 56bf4dbd, xarray d0366c65, haystack 90d4fda4). Every
+session used only its model. Cost is the list price Claude Code reports per session, in dollars,
+because cost units do not compare across models.
+
+| model | arm | solved B1 / B2 / B5 | RIPPLE passing (B5) | mean cost B1 / B2 / B5 | B5 turns | B5 wall |
+|---|---|---|---|---|---|---|
+| Sonnet 5.5 | `cc` | 11/12 · 8/8 · 12/12 | 12/12 | $0.082 / $0.080 / $0.197 | 11.8 | 59 s |
+| Sonnet 5.5 | `cc+gi` | 12/12 · 8/8 · 12/12 | 12/12 | $0.075 / $0.088 / $0.196 | 10.6 | 53 s |
+| Haiku 5.5 | `cc` | 12/12 · 8/8 · 12/12 | 12/12 | $0.006 / $0.006 / $0.030 | 27.8 | 158 s |
+| Haiku 5.5 | `cc+gi` | 12/12 · 8/8 · 12/12 | 12/12 | $0.006 / $0.006 / $0.037 | 30.4 | 165 s |
+
+`cc+gi` against `cc`, paired by task (cost ratio, 95% CI):
+
+| model | B1 | B2 | B5 | all 16 |
+|---|---|---|---|---|
+| Sonnet 5.5 | 0.93 (0.89–0.97) | 1.10 (1.03–1.17) | 1.00 (0.90–1.12) | 1.00 (0.93–1.07) |
+| Haiku 5.5 | 0.98 (0.89–1.06) | 1.04 (0.94–1.20) | 1.22 (1.03–1.35) | 1.17 (1.01–1.27) |
+
+- **Both models solved everything but one Sonnet answer, and left no silent error.** The one miss
+  is a `cc` caller list on Sonnet (score 0.95). On B5 the RIPPLE tests — the other sites the
+  fix must reach, never shown to the agent — passed in all 48 runs, with and without
+  graph-indexer. These 6 tasks do not separate the models or the arms on silent errors: the
+  B5 target (half of Claude Code's silent errors) cannot be shown on them.
+- **Haiku costs about an eighth of Sonnet (0.12 in `cc`, 0.14 in `cc+gi`, all tasks) and takes
+  2.7 times as long on B5**, with more than twice the turns. It also edited the task's own test
+  files in 17 of 24 B5 runs (Sonnet 8); grading resets those files, so the score is not affected.
+- **graph-indexer helps Sonnet a little on questions and costs more with Haiku on B5.** On Sonnet
+  it took the one point `cc` lost and cost 0.93 on questions, but 1.10 on refactors; on Haiku it
+  cost 1.22 on B5, where Haiku called it 1.2 times per session and ended with more context (69k
+  tokens against 61k). Adoption was 100% on B1 and B2 in both models.
+- Two runs per task and a ceiling on solved: the solved rate cannot tell the models apart, and the
+  intervals are on cost only.
+
+### The shell-aware hooks, on Sonnet 5.5 (b3h4, pilot): 15 tasks, 30 runs
+
+The same 15 issues and arms as b3h3, with the hook that follows the shell (graph-indexer at
+`3b92896`): every read in a chained shell line resolved, and the edit checker run on the files any
+shell command changed.
+
+| arm | solved | mean cost | median cost | tool calls | graph-indexer calls | wall |
+|---|---|---|---|---|---|---|
+| `cc` | 15 / 15 | 126k | 124k | 12.7 | 0 | 145 s |
+| `cc+gi+hooks` | 15 / 15 | 134k | 134k | 12.9 | 0 | 130 s |
+
+- **Both arms solved all 30; graph-indexer costs more.** Cost 1.07 (1.01–1.12) of `cc`, paired by
+  task: the interval no longer reaches 1. Time 0.90.
+- **The hooks now act, and the agent still never calls the tools.** From the hooks' own state
+  (one file per session; stream-json transcripts do not record hook context): across the 15
+  `cc+gi+hooks` sessions they named 256 definitions for lines the agent read, resolved 23
+  indirections (dispatch tables, overrides), and followed edits made through the shell in 14 of
+  them. The agent took none of it as a reason to change how it worked: same tool calls (12.9
+  against 12.7), same solved rate, more context to carry.
+- What this says: on these issues Sonnet 5.5 finds its way with grep and `sed` at least as cheaply
+  as with the facts the hooks add, so adding them only adds tokens. The B3 target (≤ 0.70 of the
+  cost) is not reachable by adding context to this agent's loop; it needs tasks where the agent
+  fails or wanders without the index, or a smaller footprint (the hooks quiet unless a fact
+  changes what the agent would do).
+- One pilot, one run each; b3h3 and b3h4 agree in direction (1.05, 1.07).
+
+### Harder issues with the hooks installed, on Sonnet 5.5 (b3h3, pilot): 15 tasks, 30 runs
+
+The fifth round's 15 issues (sqlglot 11, SymPy 4; fixes of 2–6 files), one run per task and arm,
+`cc` against `cc+gi+hooks` as in b3h2, the sessions' tests run with the grading Python
+(checked by the preflight from inside a session).
+
+| arm | solved | mean cost | median cost | tool calls | graph-indexer calls | wall |
+|---|---|---|---|---|---|---|
+| `cc` | 15 / 15 | 132k | 149k | 13.0 | 0 | 170 s |
+| `cc+gi+hooks` | 15 / 15 | 139k | 137k | 13.1 | 0 | 174 s |
+
+- **Both arms solved all 30.** Cost 1.05 (0.96–1.15) of `cc`, paired by task. The harder round
+  costs about three times b3h2's per issue (132k against ~40k input-equivalent tokens) and still
+  leaves no failure for an index to prevent.
+- **The agent again never called graph-indexer.** It worked through the shell: 336 Bash calls across
+  the 30 runs against 46 `Read` (30 of them the task's instructions), no `Grep` and 6 `Edit`. It
+  read files with chained commands (`cd repo; sed -n 1120,1210p a.py; sed -n 1,40p b.py`: 97 calls,
+  178 ranges) and edited them with Python heredocs and `sed -i` (about 115 calls).
+- **The hooks saw little of it.** The installed hook read a shell line only when it was a single
+  command after `cd DIR &&`, and ran its edit checker only after the edit tool. Replaying the
+  `cc+gi+hooks` runs' 191 calls through it (on the checkouts as the runs left them, so
+  approximate), it adds context to 33: 19 searches for a name several definitions share, 11
+  reads, 3 missed definition searches. The hook now splits a shell line into its commands and
+  resolves every read (the same replay: 50 calls, 26 of them reads), and checks the source files a
+  shell command changed; that version is not yet measured in sessions. Post-tool context does
+  reach the model (checked in a session whose hook logs its calls); stream-json transcripts just
+  do not record it.
+- One pilot, one run each: no interval on the solved rate.
+
+### Issues with the hooks installed, on Sonnet 5.5 (b3h2, pilot): 11 tasks, 22 runs
+
+The fourth round's 11 B3 issues (networkx 3, sqlglot 8), one run per task and arm, in real Claude
+Code sessions on Sonnet 5.5 (`claude-sonnet-5-5`, pinned): `cc` against `cc+gi+hooks` (graph-indexer
+as `init --hooks` installs it: MCP server, CLAUDE.md block and the Claude Code hooks).
+
+- **Both arms solved all 22.** Cost 1.00 (0.88–1.15) of `cc`; on the six one-file fixes 1.14
+  (1.03–1.30).
+- **The agent never called graph-indexer.** Sonnet 5.5 fixed each issue in 3–13 tool calls and
+  22–95k input-equivalent tokens (the fourth round's model spent about 950k per issue), reading
+  with `Read` and searching with grep in the shell: there was nothing left for an index to save.
+  These issues no longer separate the arms; the B3 target (≤ 0.70 of the cost) needs harder ones.
+- One pilot, one run each: no interval on the solved rate, and the cost interval is wide.
+- Found afterwards: these sessions ran Python from the system, which had no pytest, while the
+  grader used its own virtualenv, so the agents could run sqlglot's tests (`unittest`) but not
+  networkx's — alike in both arms. And the grader read `unittest`'s verbose text, which misses a
+  test whose subtests fail; that can only count a solved task as unsolved, and all 22 were
+  solved. Both are fixed (see [Tasks](#tasks)); the 11 tasks pass the new validation unchanged.
+
+Two faults in the harness, found while setting it up and fixed before these runs: Claude Code
+2.1.296 listed none of graph-indexer's tools (MCP 2026-07-28 results lacked `resultType`), and
+the hooks answered for the session's directory instead of the repository named with `--repo`.
 
 ### Real sessions (rt1): 20 tasks, 60 runs
 
@@ -930,18 +1248,18 @@ tasks:
 
 ```sh
 node bench/fixtures.mjs                                   # nestjs (B1, B2)
-git clone --filter=blob:none https://github.com/tobymao/sqlglot.git /tmp/gi-agentic/repos/sqlglot
-git clone --filter=blob:none https://github.com/networkx/networkx.git /tmp/gi-agentic/repos/networkx
+git clone --filter=blob:none https://github.com/tobymao/sqlglot.git ~/.gi-agentic/repos/sqlglot
+git clone --filter=blob:none https://github.com/networkx/networkx.git ~/.gi-agentic/repos/networkx
 node bench/agentic/prepare.mjs snapshot --label local
 for t in qa-nestjs-r4 refactor-nestjs-r4 fresh-sqlglot-r4 fresh-networkx-r4; do
   node bench/agentic/prepare.mjs batch --tasks $t.json --arms grep,grep+rules,mcp,mcp+hooks --reps 1 --gi local >/dev/null
 done
-node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # add --model M to pin one
-node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts /tmp/gi-agentic/transcripts/local
+node bench/agentic/run-headless.mjs --gi local --runs all --concurrency 2   # Sonnet 5.5 unless --model M
+node bench/agentic/grade-batch.mjs --gi local --agents all --transcripts ~/.gi-agentic/transcripts/local
 node bench/agentic/report.mjs --gi local --integrated mcp+hooks --nogrep grep+rules
 ```
 
-`GI_AGENTIC_WORK` moves the work area from `/tmp/gi-agentic`. The 76 runs use the account's
+`GI_AGENTIC_WORK` moves the work area from `~/.gi-agentic`. The 76 runs use the account's
 quota: in the fourth round a run cost between 0.1M and 1.9M input-equivalent tokens, and an
 issue took 1–15 minutes.
 
@@ -964,12 +1282,32 @@ them), and starts one short session per arm that must show the Agent tool, the g
 connected and the helper offered only where it belongs — nothing else runs if one of them does
 not. The sessions run under `acceptEdits` with Bash and graph-indexer's tools allowed, the web
 tools off, no MCP server but graph-indexer's and none of the machine's own settings, with a
-ceiling of $5 each (`--max-budget`). The report (`/tmp/gi-agentic/reports/<label>.md`) compares
+ceiling of $5 each (`--max-budget`). The report (`~/.gi-agentic/reports/<label>.md`) compares
 dollars, every model included, and adds a table of what the main agent handed to sub-agents, to
 which, and the context it carried itself. With the usual model the 60 sessions should come to
 tens of dollars, billed to the account the `claude` CLI is logged in with (a subscription's quota,
 or `ANTHROPIC_API_KEY`); the runs are graded where they ran, since the answers and edits stay in
 the work area.
+
+**Against other tools (protocol item 10).** Install the pinned builds as
+[BENCHMARKS.md](BENCHMARKS.md#the-arena-other-tools-measured-the-same-way) says (CodeGraph and
+codebase-memory-mcp under `bench/arena/.tools`; Serena with
+`python3 -m venv $GI_AGENTIC_WORK/tools/serena-venv && $GI_AGENTIC_WORK/tools/serena-venv/bin/pip install serena-agent==1.7.0 uv`),
+then:
+
+```sh
+node bench/agentic/gen-qa-ts.mjs --repo test/fixtures/nestjs --name nestjs --scope packages/ --seed 7 \
+     --calls 6 --callers 3 --impls 3 --subclasses 3 --impl-max 30 --set r7
+node bench/agentic/session-round.mjs --label arena1 --in-repo --arms cc,cc+codegraph,cc+cbm,cc+serena,cc+gi+helper \
+     --tasks qa-nestjs-r7.json,refactor-nestjs-r5.json,refactor-nestjs-held.json,fresh-sqlglot-r5.json,fresh-sympy-r5.json --concurrency 4 --max-budget 8
+node bench/agentic/report.mjs --gi arena1 --baseline cc+codegraph --integrated cc+gi+helper --cost usd   # graph-indexer against one tool
+```
+
+`competitors.mjs` runs each tool's installer into the run's repository (CodeGraph's and Serena's
+project-scoped; codebase-memory-mcp's, which writes user-scope files, against a scratch `HOME`,
+its files then copied into the project's scope) and builds each index before the session starts.
+Once every run is graded, `session-round` removes the round's worktrees and checkouts
+(`cleanup.mjs`; `--keep-checkouts` keeps them); patches, results and transcripts stay.
 
 ## Limitations
 

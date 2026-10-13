@@ -1,0 +1,82 @@
+[
+  {
+    "id": "b5-xarray-d0366c65",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "xarray",
+    "base": "23c9dd138605ef46e59a7341a1c8e07821bf416f",
+    "statement": "# groupby reductions on dask arrays fail when the members of a group are not contiguous\n\n## What happens\n\nReducing a dask-backed Dataset or DataArray with `groupby(...).median()` (and `groupby(...).mean(method=\"blockwise\")`) raises an error when the groups are interleaved along the grouped dimension, i.e. when the elements of one group are not next to each other. The same reduction on the numpy-backed object works. This happens with `flox` installed.\n\n```python\nimport numpy as np\nimport xarray as xr\n\nlabels = np.array([3.0, 1.0, np.nan, 3.0, 1.0, 2.0, np.nan, 2.0, 1.0])\nds = xr.Dataset(\n    {\n        \"a\": (\"x\", np.arange(9.0)),\n        \"b\": ((\"y\", \"x\"), np.arange(18.0).reshape(2, 9)),\n    },\n    coords={\"labels\": (\"x\", labels)},\n)\nchunked = ds.chunk(x=2).assign_coords(labels=ds.labels)\n\nprint(ds.groupby(\"labels\").median().a.values)       # [4.  6.  1.5]\nprint(chunked.groupby(\"labels\").median().a.values)\nprint(chunked.groupby(\"labels\").mean(method=\"blockwise\").a.values)\n```\n\nThe second and third `print` calls fail at the moment with\n\n```\npandas.errors.InvalidIndexError: Reindexing only valid with uniquely valued Index objects\n```\n\n## Expected\n\nThe dask-backed reductions give the same result as the in-memory ones, for a Dataset and for a DataArray alike (labels that are NaN are dropped, as in the numpy case). With the example above:\n\n```python\nchunked.groupby(\"labels\").median().a.values                    # [4.  6.  1.5]\nchunked.groupby(\"labels\").mean(method=\"blockwise\").a.values    # [4.33333333 6.  1.5]\n```\n\nIn general, for `func` in `\"median\"` and `\"mean\"` (the latter with `method=\"blockwise\"`), `getattr(chunked.groupby(\"labels\"), func)(...)` is identical (`xr.testing.assert_identical`) to `getattr(ds.groupby(\"labels\"), func)()`, and `getattr(chunked.b.groupby(\"labels\"), func)(...)` is identical to `getattr(ds.b.groupby(\"labels\"), func)()`.",
+    "testHint": "from the repository root, `pytest xarray/tests/test_coarsen.py` runs one test file (pytest, numpy, pandas and dask are installed; tests that need zarr, netCDF or matplotlib are skipped).",
+    "grade": {
+      "testPatch": "diff --git a/xarray/tests/test_groupby.py b/xarray/tests/test_groupby.py\nindex 34db8c9..c45b37e 100644\n--- a/xarray/tests/test_groupby.py\n+++ b/xarray/tests/test_groupby.py\n@@ -359,6 +359,31 @@ def test_dask_da_resample_median() -> None:\n     assert_identical(expected, actual)\n \n \n+@requires_dask\n+@requires_flox\n+@pytest.mark.parametrize(\"func\", [\"median\", \"mean\"])\n+def test_dask_groupby_blockwise_interleaved_groups(func: str) -> None:\n+    # https://github.com/pydata/xarray/issues/11651\n+    labels = np.array([3.0, 1.0, np.nan, 3.0, 1.0, 2.0, np.nan, 2.0, 1.0])\n+    ds = xr.Dataset(\n+        {\n+            \"a\": (\"x\", np.arange(9.0)),\n+            \"b\": ((\"y\", \"x\"), np.arange(18.0).reshape(2, 9)),\n+        },\n+        coords={\"labels\": (\"x\", labels)},\n+    )\n+    expected = getattr(ds.groupby(\"labels\"), func)()\n+\n+    chunked = ds.chunk(x=2).assign_coords(labels=ds.labels)\n+    kwargs = {} if func == \"median\" else {\"method\": \"blockwise\"}\n+    actual = getattr(chunked.groupby(\"labels\"), func)(**kwargs)\n+    assert_identical(expected, actual)\n+\n+    expected = getattr(ds.b.groupby(\"labels\"), func)()\n+    actual = getattr(chunked.b.groupby(\"labels\"), func)(**kwargs)\n+    assert_identical(expected, actual)\n+\n+\n @pytest.mark.parametrize(\"use_flox\", [pytest.param(True, marks=requires_flox), False])\n def test_da_groupby_quantile(use_flox: bool) -> None:\n     array = xr.DataArray(\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-xarray-d0366c65.f2p.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python -m pytest"
+          }
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-xarray-d0366c65.p2p.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python -m pytest"
+          }
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-xarray-d0366c65.ripple.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-b5/bin/python -m pytest"
+          },
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "xarray/core/groupby.py",
+        "xarray/core/resample.py"
+      ],
+      "patch": "diff --git a/xarray/core/groupby.py b/xarray/core/groupby.py\nindex 13f0262..b7cf63a 100644\n--- a/xarray/core/groupby.py\n+++ b/xarray/core/groupby.py\n@@ -762,26 +762,80 @@ class GroupBy[T_Xarray: (DataArray, Dataset)]:\n         dask.array.shuffle\n         \"\"\"\n         self._raise_if_by_is_chunked()\n-        return self._shuffle_obj(chunks)\n+        obj, _ = self._shuffle_obj(chunks)\n+        return obj\n+\n+    def _shuffle_obj(self, chunks: T_Chunks) -> tuple[T_Xarray, tuple[DataArray, ...]]:\n+        \"\"\"Shuffle the object, so that all members of a group are in the same chunk.\n \n-    def _shuffle_obj(self, chunks: T_Chunks) -> T_Xarray:\n+        The codes of each grouper are shuffled along with it, so that they match\n+        the shuffled object.\n+        \"\"\"\n         from xarray.core.dataarray import DataArray\n \n         was_array = isinstance(self._obj, DataArray)\n         as_dataset = self._obj._to_temp_dataset() if was_array else self._obj\n \n-        for grouper in self.groupers:\n-            if grouper.name not in as_dataset._variables:\n-                as_dataset.coords[grouper.name] = grouper.group\n+        group_coords = {\n+            grouper.name: grouper.group\n+            for grouper in self.groupers\n+            if grouper.name not in as_dataset._variables\n+        }\n+        codes_names = [f\"__codes_{i}__\" for i in range(len(self.groupers))]\n+        codes_coords = {\n+            name: grouper.codes.variable\n+            for name, grouper in zip(codes_names, self.groupers, strict=True)\n+        }\n+        as_dataset = as_dataset.assign_coords(group_coords | codes_coords)\n \n         shuffled = as_dataset._shuffle(\n             dim=self._group_dim, indices=self.encoded.group_indices, chunks=chunks\n         )\n-        unstacked: Dataset = self._maybe_unstack(shuffled)\n+        codes = tuple(\n+            shuffled[name].rename(grouper.codes.name)\n+            for name, grouper in zip(codes_names, self.groupers, strict=True)\n+        )\n+        unstacked: Dataset = self._maybe_unstack(shuffled.drop_vars(codes_names))\n         if was_array:\n-            return self._obj._from_temp_dataset(unstacked)\n-        else:\n-            return unstacked  # type: ignore[return-value]\n+            return self._obj._from_temp_dataset(unstacked), codes\n+        return unstacked, codes  # type: ignore[return-value]\n+\n+    def _needs_shuffle_for_blockwise(self) -> bool:\n+        \"\"\"Whether flox's blockwise strategy needs us to shuffle first.\n+\n+        Flox can only rechunk so that chunk boundaries line up with group\n+        boundaries, which requires the members of each group to be contiguous.\n+        \"\"\"\n+        # Obsolete once xarray-contrib/flox#501 is fixed, see `_flox_reduce`.\n+        # _shuffle_obj can't shuffle by a chunked array, and the order would be\n+        # lost again when unstacking a multi-dimensional group.\n+        if self._by_chunked or self._stacked_dim is not None:\n+            return False\n+\n+        from xarray.core.dataarray import DataArray\n+\n+        # Without multiple chunks along the group dimension, e.g. for numpy\n+        # arrays, blockwise always works. Shuffling would only copy the data.\n+        was_array = isinstance(self._obj, DataArray)\n+        as_dataset = self._obj._to_temp_dataset() if was_array else self._obj\n+        dim = self._group_dim\n+        if not any(\n+            var.chunks is not None and len(var.chunks[var.get_axis_num(dim)]) > 1\n+            for var in as_dataset._variables.values()\n+            if dim in var.dims\n+        ):\n+            return False\n+\n+        # Flox can rechunk contiguous groups on its own, e.g. for resampling, so\n+        # only shuffle if some group is interrupted by another one. Missing\n+        # values (code -1) are dropped by the reduction and don't count.\n+        codes = self.encoded.codes.data\n+        codes = codes[codes >= 0]\n+        if codes.size == 0:\n+            return False\n+        # every group is contiguous if it forms exactly one run of equal codes\n+        n_runs = np.count_nonzero(np.diff(codes)) + 1\n+        return n_runs != len(np.unique(codes))\n \n     def map(\n         self,\n@@ -1085,6 +1139,15 @@ class GroupBy[T_Xarray: (DataArray, Dataset)]:\n         from xarray.core.dataset import Dataset\n \n         obj = self._original_obj\n+        codes = tuple(g.codes for g in self.groupers)\n+        # flox can only rechunk contiguous groups for blockwise reductions,\n+        # so shuffle every group into a single chunk ourselves (GH11651).\n+        # TODO: Once flox shuffles automatically for blockwise-only reductions\n+        # (https://github.com/xarray-contrib/flox/issues/501), restrict this to\n+        # older flox versions and remove it when the minimum flox version allows.\n+        if kwargs.get(\"method\") == \"blockwise\" and self._needs_shuffle_for_blockwise():\n+            obj, codes = self._shuffle_obj(chunks=None)\n+\n         variables = (\n             {k: v.variable for k, v in obj.data_vars.items()}\n             if isinstance(obj, Dataset)  # type: ignore[redundant-expr]  # seems to be a mypy bug\n@@ -1154,7 +1217,6 @@ class GroupBy[T_Xarray: (DataArray, Dataset)]:\n             pd.RangeIndex(len(grouper)) for grouper in self.groupers\n         )\n \n-        codes = tuple(g.codes for g in self.groupers)\n         result = xarray_reduce(\n             obj.drop_vars(non_numeric.keys()),\n             *codes,\ndiff --git a/xarray/core/resample.py b/xarray/core/resample.py\nindex bc8f4c7..6df64f7 100644\n--- a/xarray/core/resample.py\n+++ b/xarray/core/resample.py\n@@ -106,7 +106,8 @@ class Resample(GroupBy[T_Xarray]):\n         dask.array.shuffle\n         \"\"\"\n         (_grouper,) = self.groupers\n-        return self._shuffle_obj(chunks).drop_vars(RESAMPLE_DIM)\n+        obj, _ = self._shuffle_obj(chunks)\n+        return obj.drop_vars(RESAMPLE_DIM)\n \n     @override\n     def _first_or_last(\n",
+      "partial": [
+        "xarray/core/groupby.py"
+      ],
+      "ripple": [
+        "xarray/core/resample.py"
+      ]
+    },
+    "meta": {
+      "sha": "d0366c659b0b7209d8e4882353e1afb76d23cf0e",
+      "date": "2026-10-02",
+      "subject": "Fix groupby median on dask arrays with non-contiguous groups (#11653)",
+      "tests": [
+        "xarray/tests/test_groupby.py"
+      ],
+      "testFiles": [
+        "xarray/tests/test_groupby.py"
+      ],
+      "ripples": [
+        {
+          "name": "_shuffle_obj",
+          "a": "xarray/core/groupby.py",
+          "b": "xarray/core/resample.py"
+        }
+      ],
+      "f2p": 2,
+      "p2p": 370,
+      "ripple": 14,
+      "flaky": 0,
+      "suite": 75,
+      "commitMessage": "Fix groupby median on dask arrays with non-contiguous groups (#11653)\n\nCo-authored-by: Claude <noreply@anthropic.com>"
+    }
+  }
+]

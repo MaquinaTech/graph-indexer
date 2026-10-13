@@ -1,0 +1,7 @@
+[
+  "test/aaa_profiling/test_memusage.py::MemUsageTest::test_registry_dispose_releases_classes[declare_last]",
+  "test/orm/declarative/test_mixin.py::DeclarativeMixinTest::test_declare_hooks_are_registry_local",
+  "test/orm/declarative/test_mixin.py::DeclarativeMixinTest::test_declare_hooks_dont_reference_class",
+  "test/orm/declarative/test_mixin.py::DeclarativeMixinTest::test_declare_hooks_event_ordering",
+  "test/orm/declarative/test_mixin.py::DeclarativeMixinTest::test_declare_hooks_imperative_mapping"
+]

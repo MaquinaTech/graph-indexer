@@ -69,6 +69,32 @@ export class ModuleResolver {
             const scope = this.#tsScope(rel);
             if (scope) this.tsScopes.set(dir, scope);
         }
+        // package.json "imports" (subpath imports, `#/*` → `./src/*`): aliases of that package's files
+        for (const [, { dir, json }] of this.packages) {
+            const imp = json.imports;
+            if (!imp || typeof imp !== 'object') continue;
+            const at = (p) => path.posix.normalize(dir === '.' ? p : `${dir}/${p}`);
+            const target = (v) => typeof v === 'string' ? v : (v && typeof v === 'object' ? (v.types ?? v.import ?? v.default ?? v.node ?? null) : null);
+            const paths = Object.entries(imp).map(([pat, v]) => [pat, target(v)]).filter(([pat, t]) => typeof t === 'string' && t.startsWith('.') && pat.startsWith('#'))
+                .map(([pat, t]) => ({ pat, targets: [at(t)] }));
+            if (!paths.length) continue;
+            const scope = this.tsScopes.get(dir);
+            this.tsScopes.set(dir, scope ? { ...scope, paths: [...scope.paths, ...paths] } : { paths, baseUrl: null });
+        }
+        // SvelteKit: `$lib` (and `kit.alias`) map into the project; they live in a generated
+        // .svelte-kit/tsconfig.json that a repository does not carry, so read svelte.config itself
+        for (const rel of [...this.#findManifests('svelte.config.js'), ...this.#findManifests('svelte.config.ts')]) {
+            const dir = path.posix.dirname(rel), at = (p) => path.posix.normalize(dir === '.' ? p : `${dir}/${p}`);
+            let text = '';
+            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { /* unreadable */ }
+            const lib = /\bfiles\s*:\s*\{[^}]*\blib\s*:\s*['"]([^'"]+)['"]/.exec(text)?.[1] ?? 'src/lib';
+            const aliases = [['$lib', lib]];
+            const block = /\balias\s*:\s*\{([^}]*)\}/.exec(text)?.[1] ?? '';
+            for (const m of block.matchAll(/['"]?([$@#~\w/-]+?)(?:\/\*)?['"]?\s*:\s*['"]([^'"]+?)(?:\/\*)?['"]/g)) aliases.push([m[1], m[2]]);
+            const paths = aliases.flatMap(([a, t]) => [{ pat: a, targets: [at(t)] }, { pat: `${a}/*`, targets: [`${at(t)}/*`] }]);
+            const scope = this.tsScopes.get(dir);
+            this.tsScopes.set(dir, scope ? { ...scope, paths: [...scope.paths, ...paths] } : { paths, baseUrl: null });
+        }
         // Go module path
         this.goModules = [];
         for (const rel of this.#findManifests('go.mod')) {
@@ -78,6 +104,32 @@ export class ModuleResolver {
             } catch { /* unreadable */ }
         }
         this.goModules.sort((a, b) => b.module.length - a.module.length);
+        // Rust crates of the repository (a workspace's members, or one package): the name other
+        // crates, tests and examples use for each library (`serde_json::Value`, `tokio::sync`)
+        this.rustCrates = new Map();
+        for (const rel of this.#findManifests('Cargo.toml')) {
+            let text;
+            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { continue; }
+            const dir = path.posix.dirname(rel), at = (p) => (dir === '.' ? p : `${dir}/${p}`);
+            const table = (name) => { const m = new RegExp(`^\\[${name}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, 'm').exec(text); return m?.[1] ?? ''; };
+            const key = (body, k) => new RegExp(`^\\s*${k}\\s*=\\s*"([^"]+)"`, 'm').exec(body)?.[1];
+            const pkg = key(table('package'), 'name'), lib = table('lib');
+            const libFile = path.posix.normalize(at(key(lib, 'path') ?? 'src/lib.rs'));
+            if (!pkg || !this.files.has(libFile)) continue;
+            this.rustCrates.set((key(lib, 'name') ?? pkg).replace(/-/g, '_'), libFile);
+        }
+    }
+
+    /**
+     * Resolve one import (`imp.source`, `imp.imported`). In Rust, `use a::b::c` resolves to the
+     * module `c` when c is a module (a file `c.rs` or `c/mod.rs`), not to the module that declares it.
+     */
+    resolveImport(lang, fromFile, imp) {
+        if (lang === 'rust' && imp.imported && !['self', '*', 'super', 'crate'].includes(imp.imported) && /^[a-z_][a-z0-9_]*$/.test(imp.imported)) {
+            const sub = this.resolve(lang, fromFile, imp.source ? `${imp.source}::${imp.imported}` : imp.imported);
+            if (sub?.file && new RegExp(`(^|/)${imp.imported}(\\.rs|/mod\\.rs)$`).test(sub.file)) return sub;
+        }
+        return this.resolve(lang, fromFile, imp.source);
     }
 
     /** compilerOptions of a tsconfig file, following relative `extends` (a child's paths replace its parent's). */
@@ -177,7 +229,7 @@ export class ModuleResolver {
         if (!source) return null;
         const fromDir = path.posix.dirname(fromFile);
         switch (lang) {
-            case 'javascript': case 'typescript': case 'tsx': return this.#resolveEcma(fromDir, source);
+            case 'javascript': case 'typescript': case 'tsx': case 'vue': case 'svelte': return this.#resolveEcma(fromDir, source);
             case 'python': return this.#resolvePython(fromDir, source);
             case 'go': return this.#resolveGo(source);
             case 'c': case 'cpp': return this.#resolveInclude(fromDir, source);
@@ -246,7 +298,10 @@ export class ModuleResolver {
         const rel = mod.replace(/\./g, '/');
         const idx = this.#suffixIndex();
         const cands = [...(idx.get(rel + '.py') ?? []), ...(idx.get(rel + '/__init__.py') ?? [])]
-            .filter(f => f === rel + '.py' || f === rel + '/__init__.py' || f.endsWith('/' + rel + '.py') || f.endsWith('/' + rel + '/__init__.py'));
+            .filter(f => f === rel + '.py' || f === rel + '/__init__.py' || f.endsWith('/' + rel + '.py') || f.endsWith('/' + rel + '/__init__.py'))
+            // an absolute import starts at an import root: `import json` is not `flask/json/`, since
+            // `flask/` is a package (it has an __init__.py) and only reaches it as `flask.json`
+            .filter(f => { const root = f.slice(0, f.length - (f.endsWith('/__init__.py') ? rel.length + 12 : rel.length + 3)).replace(/\/$/, ''); return !root || !this.files.has(root + '/__init__.py'); });
         if (cands.length) {
             cands.sort((a, b) => a.length - b.length);
             const f = cands[0];
@@ -304,12 +359,20 @@ export class ModuleResolver {
         if (segs[0] === 'crate') { baseDir = crateRoot; segs.shift(); }
         else if (segs[0] === 'self') { baseDir = this.#rustModDir(fromFile); segs.shift(); }
         else if (segs[0] === 'super') { baseDir = path.posix.dirname(this.#rustModDir(fromFile)); segs.shift(); while (segs[0] === 'super') { baseDir = path.posix.dirname(baseDir); segs.shift(); } }
+        else if (this.rustCrates?.has(segs[0])) {
+            // another crate of the repository, by name; its root module is its lib.rs
+            const lib = this.rustCrates.get(segs.shift());
+            if (!segs.length) return { file: lib };
+            baseDir = path.posix.dirname(lib);
+        }
         else return null; // external crate
         for (let n = segs.length; n > 0; n--) {
             const p = path.posix.join(baseDir, ...segs.slice(0, n));
             if (this.files.has(p + '.rs')) return { file: p + '.rs' };
             if (this.files.has(p + '/mod.rs')) return { file: p + '/mod.rs' };
         }
+        // the module itself: `dir/mod.rs`, or `dir.rs` next to its directory (2018 layout)
+        if (this.files.has(baseDir + '.rs') && !['lib.rs', 'main.rs', 'mod.rs'].some(f => this.files.has(path.posix.join(baseDir, f)))) return { file: baseDir + '.rs' };
         const lib = ['lib.rs', 'main.rs', 'mod.rs'].map(f => path.posix.join(baseDir, f)).find(f => this.files.has(f));
         return lib ? { file: lib } : null;
     }

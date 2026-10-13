@@ -9,7 +9,9 @@
  *   removed       definitions that were deleted or renamed but are still used or imported
  *   untouched     callers of a changed signature in files the change did not touch (to review)
  *   inherited     subclasses that inherit a changed member (they run the new code) or override it
- *   tests         the test files that exercise the changed code, and the command to run them
+ *   tests         the test files that exercise the changed code, and the command to run them;
+ *                 then, apart, the test files that name a changed module in a string (dialect,
+ *                 plugin or backend lookups such as `read="mysql"`, which no reference shows)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +20,7 @@ import { specForPath, isConstructor } from '../parse/languages.mjs';
 import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const CALLABLE = new Set(['function', 'method', 'constructor']);
 const MEMBER_KINDS = new Set(['class', 'interface', 'struct', 'trait', 'enum', 'object', 'impl', 'module', 'type']);
@@ -141,7 +144,32 @@ function unionFits(argc, arities) {
     return list.some(r => fits(argc, r));
 }
 
-export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true } = {}) {
+const GENERIC_STEMS = new Set(['__init__', 'index', 'main', 'mod', 'lib', 'core', 'base', 'utils', 'util', 'helpers', 'common', 'types']);
+
+/**
+ * Test files that mention a changed source module's name as a string literal ("mysql" for
+ * generators/mysql.py): code reached by a registry lookup — a dialect, plugin or backend chosen by
+ * name — that no reference shows. A second tier: broader than the files the index links to.
+ */
+function testsNamingModules(intel, files) {
+    const stems = new Set();
+    for (const f of files) {
+        if (intel.store.get('SELECT is_test FROM files WHERE path = ?', f)?.is_test) continue;
+        const stem = path.posix.basename(f).replace(/\.[^.]+$/, '');
+        if (stem.length >= 3 && !GENERIC_STEMS.has(stem) && /^\w+$/.test(stem)) stems.add(stem);
+    }
+    if (!stems.size) return [];
+    const re = new RegExp(`["'](${[...stems].join('|')})["']`);
+    const out = [];
+    for (const { path: p } of intel.store.all('SELECT path FROM files WHERE is_test = 1 ORDER BY path')) {
+        let text;
+        try { text = fs.readFileSync(path.join(intel.root, p), 'utf8'); } catch { continue; }
+        if (re.test(text)) out.push(p);
+    }
+    return out;
+}
+
+export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true, byName = false } = {}) {
     const root = intel.root;
     const changed = changedFiles(root, base);
     if (!changed) return { error: `git diff against ${base} failed — is this a git repository with that commit?` };
@@ -149,7 +177,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
     await intel.ensureFresh();
     await intel.ix.syncPaths([...changed.keys()]);
     const targets = [...changed.keys()].filter(f => specForPath(f) && (!files || files.some(x => f === x || f.startsWith(x.replace(/\/?$/, '/')))));
-    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], inherited: [], tests: [], commands: [], cases: [], casesTotal: 0, caseCommands: [], notes: [] };
+    const report = { base, files: targets.length, syntax: [], arity: [], removed: [], untouched: [], inherited: [], tests: [], commands: [], byName: [], byNameCommands: [], cases: [], casesTotal: 0, caseCommands: [], notes: [] };
     if (!targets.length) return report;
     // callers only need a syntax tree; definitions (changed files, callees) also need symbols + arities
     const treeCache = new Map(), symCache = new Map();
@@ -276,7 +304,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         const files = new Map();
         const mentions = (p, word) => {
             const key = p + '\u0000' + word;
-            if (!files.has(key)) { const lines = intel.fileLines(p); files.set(key, !!lines && lines.some(l => new RegExp(`\\b${word.replace(/[$]/g, '\\$')}\\b`).test(l))); }
+            if (!files.has(key)) { const lines = intel.fileLines(p); files.set(key, !!lines && lines.some(l => new RegExp(`\\b${escapeRegExp(word)}\\b`).test(l))); }
             return files.get(key);
         };
         rows = rows.filter(r => {
@@ -297,19 +325,19 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
     const members = new Map();
     for (const id of seeds) { const m = memberOf(intel, id); if (m && !m.is_test) members.set(m.id, m); }
     for (const m of members.values()) {
-        const { inherit, override } = intel.inheritance(m.id);
-        if (!inherit.length && !override.length) continue;
+        const { inherit, extend, override } = intel.inheritance(m.id);
+        if (!inherit.length && !extend.length && !override.length) continue;
         const owner = m.parent_id != null ? intel.sym(m.parent_id) : null;
         const type = owner?.qname ?? m.qname.split('.').slice(0, -1).join('.');
-        const e = byType.get(type) ?? byType.set(type, { type, path: m.path, members: [], inherit: new Map(), override: [] }).get(type);
+        const e = byType.get(type) ?? byType.set(type, { type, path: m.path, members: [], inherit: new Map(), extend: new Map(), override: [] }).get(type);
         e.members.push(m.name);
-        for (const s of inherit) {
+        for (const [list, into] of [[inherit, e.inherit], [extend, e.extend]]) for (const s of list) {
             inheritorFiles.add(s.path); // a test subclass is not listed, but its file is a test to run
-            if (!s.is_test) e.inherit.set(s.id, { qname: s.qname, path: s.path });
+            if (!s.is_test) into.set(s.id, { qname: s.qname, path: s.path });
         }
         for (const s of override) if (!s.is_test) e.override.push({ qname: `${s.qname}.${m.name}`, path: s.path });
     }
-    report.inherited = [...byType.values()].map(e => ({ ...e, inherit: [...e.inherit.values()] })).filter(e => e.inherit.length || e.override.length);
+    report.inherited = [...byType.values()].map(e => ({ ...e, inherit: [...e.inherit.values()], extend: [...e.extend.values()] })).filter(e => e.inherit.length || e.extend.length || e.override.length);
 
     // ── tests to run ─────────────────────────────────────────────────────────────
     if (seeds.length) {
@@ -322,6 +350,12 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         for (const rel of targets) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', rel)?.is_test) tests.add(rel);
         report.tests = [...tests].sort();
         report.commands = testCommands(root, report.tests.slice(0, 40));
+        // opt-in: the test files that name a changed module in a string (measured: more of the tests
+        // a fix breaks are found, fewer test files are avoided, and nothing gained outside sqlglot)
+        if (byName) {
+            report.byName = testsNamingModules(intel, [...targets, ...inheritorFiles]).filter(t => !tests.has(t));
+            report.byNameCommands = testCommands(root, report.byName.slice(0, 40));
+        }
         // the test functions closest to the change: changed themselves, calling it, or calling a
         // function that calls it — running these first verifies a fix in seconds
         const near = new Map(seeds.map(id => [id, 0]));
