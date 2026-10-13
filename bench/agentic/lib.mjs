@@ -51,22 +51,40 @@ export function fairJobs(want) {
 
 // Runs $GI_CMD as a job in its own process group and, past the time limit, kills the whole group
 // (SIGTERM, then SIGKILL): killing only the shell would leave its children (a test run) orphaned.
+// The job and everything it starts carry GI_RUN_TAG; once it ends, any of them still running (a
+// test's server in a session of its own, which the group kill misses, and which would also keep
+// the output pipe open) is killed. (macOS hides the environment of its own binaries, such as
+// /bin/sleep, so only those escape the sweep.)
 const WATCHDOG = `set -m
-bash -c "$GI_CMD" & p=$!
+env GI_RUN_TAG="$GI_REAP" bash -c "$GI_CMD" & p=$!
 ( sleep "$GI_LIMIT"; kill -TERM -- -$p; sleep 5; kill -KILL -- -$p ) >/dev/null 2>&1 & w=$!
+disown $w
 set +m
 wait $p; rc=$?
 kill -- -$w 2>/dev/null
+ps -A -wwE -o pid=,command= | awk 'index($0, "GI_RUN_TAG=" ENVIRON["GI_REAP"]) { print $1 }' | xargs kill -9 2>/dev/null
 exit $rc`;
 
-/** Run a shell command; never throws. */
+/** Backstop for the watchdog's own sweep: kill any process still carrying the command's tag. */
+function reapTagged(tag) {
+    const ps = spawnSync('ps', ['-A', '-wwE', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 1 << 28 });
+    for (const line of (ps.stdout ?? '').split('\n')) {
+        if (!line.includes(`GI_RUN_TAG=${tag}`)) continue;
+        const pid = Number(line.trim().split(/\s+/)[0]);
+        if (pid && pid !== process.pid) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+}
+
+/** Run a shell command; never throws. Nothing it started outlives it. */
 export function sh(cmd, { cwd = process.cwd(), timeout = 600_000, env = {}, input } = {}) {
     const t0 = Date.now();
     const limit = Math.max(1, Math.ceil(timeout / 1000));
+    const tag = `${process.pid}-${t0}-${Math.random().toString(36).slice(2, 8)}`;
     const r = spawnSync('bash', ['-lc', WATCHDOG], {
         cwd, encoding: 'utf8', timeout: timeout + 30_000, input, maxBuffer: 1 << 28,
-        env: { ...process.env, ...env, GI_CMD: cmd, GI_LIMIT: String(limit) },
+        env: { ...process.env, ...env, GI_CMD: cmd, GI_LIMIT: String(limit), GI_REAP: tag },
     });
+    reapTagged(tag);
     const elapsed = Date.now() - t0;
     return {
         code: r.status ?? (r.signal ? 124 : 1),
