@@ -1,0 +1,3 @@
+[
+  "mypy/test/testcheck.py::TypeCheckSuite.check-overloading.test::testRespectPreciseOverloadFallbackIfPossible"
+]

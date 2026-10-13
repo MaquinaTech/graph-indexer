@@ -123,6 +123,8 @@ Calificación:
 
 Se publican todos los candidatos y la regla que descartó cada uno.
 
+Estado a 2026-10-13: **19 tareas validadas** en el sandbox, de 6 repositorios y con commits desde el 2026-06-15. Por repositorio: sqlglot 8, sympy 3, sqlalchemy 3, mypy 3, xarray 1 y pylint 1. Una tarea más de sqlalchemy (0dcfa5e9) se minó pero no se validó: en la tercera ejecución con el parche de referencia sus tests de R no dieron resultado dentro del tiempo límite. No se llega al objetivo de 30 con estos repositorios. Por tamaño de R, las tareas cuyo arreglo parcial rompe más de 100 tests son 6: 143 y 190 en sympy y pylint, 213, 363 y 762 en sqlglot, y 12.318 en una de mypy (b5b279fe), donde el arreglo parcial rompe casi toda la suite. Reparto por tamaño de R: 7 tareas con 1–10, 6 con 11–100 y 6 con más de 100. Se quedan, por la regla de no excluir a posteriori, y S4 se informa por tamaño.
+
 Cambios sobre el texto fijado, todos del 2026-10-12, y su motivo:
 - **Antes de ver resultados**, la exclusión de commits que crean o borran otros ficheros Python.
 - **Después del primer minado de sqlglot**, se alinea el texto con lo que el minero ya hacía desde el principio: ficheros modificados, nada de métodos especiales, B distinto de A y el tope de 40 FAIL_TO_PASS. El límite de tiempo pasó de tiempo de reloj a tiempo de CPU porque la máquina se comparte con otros trabajos: dos candidatos de sympy se descartaron por lentitud con la máquina cargada, y se vuelven a juzgar con la regla nueva. Las tareas ya minadas se vuelven a validar dentro del sandbox.

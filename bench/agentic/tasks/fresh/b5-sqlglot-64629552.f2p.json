@@ -1,0 +1,5 @@
+[
+  "tests/dialects/test_databricks.py::TestDatabricks::test_databricks",
+  "tests/dialects/test_postgres.py::TestPostgres::test_extract_date_parts",
+  "tests/dialects/test_tsql.py::TestTSQL::test_day_month_year"
+]

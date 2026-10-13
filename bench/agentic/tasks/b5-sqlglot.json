@@ -1,0 +1,663 @@
+[
+  {
+    "id": "b5-sqlglot-930f1a32",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "ce427c96246a8a0bc4f05a47a39adbba0bc7a7b1",
+    "statement": "fix!(postgres, duckdb): preserve JSON extraction RHS grouping [CODEX] (#8237)\n\n* feat(generator): Fix JSON operators for DUCKDB and POSTGRES\n\n* chore: bump sqlglot-integration-tests pointer to retrigger submodule CI\n\n* fix(generator): simplify JSON operator parenthesization [CODEX]\n\n---------\n\nCo-authored-by: tobymao <toby.mao@gmail.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_duckdb.py b/tests/dialects/test_duckdb.py\nindex 6f5ef53a..5ded1897 100644\n--- a/tests/dialects/test_duckdb.py\n+++ b/tests/dialects/test_duckdb.py\n@@ -690,6 +690,10 @@ class TestDuckDB(Validator):\n             \"\"\"SELECT '{\"foo\": [1, 2, 3]}' -> 'foo' -> 0\"\"\",\n             \"\"\"SELECT '{\"foo\": [1, 2, 3]}' -> '$.foo' -> '$[0]'\"\"\",\n         )\n+        self.validate_all(\n+            \"SELECT a -> ('x' || 'y')\",\n+            read={\"duckdb\": \"SELECT JSON_EXTRACT(a, 'x' || 'y')\"},\n+        )\n         self.validate_identity(\n             \"SELECT ($$hello)'world$$)\",\n             \"SELECT ('hello)''world')\",\ndiff --git a/tests/dialects/test_postgres.py b/tests/dialects/test_postgres.py\nindex f0e05b44..335d8712 100644\n--- a/tests/dialects/test_postgres.py\n+++ b/tests/dialects/test_postgres.py\n@@ -1853,6 +1853,23 @@ CROSS JOIN JSON_ARRAY_ELEMENTS(CAST(JSON_EXTRACT_PATH(tbox, 'boxes') AS JSON)) A\n         )\n \n     def test_json_extract(self):\n+        self.validate_all(\n+            \"SELECT a -> ('x' || 'y')\",\n+            read={\"postgres\": \"SELECT JSON_EXTRACT(a, 'x' || 'y')\"},\n+        )\n+        self.validate_all(\n+            \"SELECT a -> (1 + 2)\",\n+            read={\"postgres\": \"SELECT JSON_EXTRACT(a, 1 + 2)\"},\n+        )\n+        self.validate_all(\n+            \"SELECT a -> (NOT x)\",\n+            read={\"postgres\": \"SELECT JSON_EXTRACT(a, NOT x)\"},\n+        )\n+        self.validate_all(\n+            \"SELECT a #> (n IN (1, 2))\",\n+            read={\"postgres\": \"SELECT JSONB_EXTRACT(a, n IN (1, 2))\"},\n+        )\n+\n         for arrow_op in (\"->\", \"->>\"):\n             with self.subTest(f\"Ensure {arrow_op} operator roundtrips int values as subscripts\"):\n                 self.validate_all(\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-930f1a32.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-930f1a32.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-930f1a32.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/dialects/dialect.py",
+        "sqlglot/generators/duckdb.py",
+        "sqlglot/generators/postgres.py"
+      ],
+      "patch": "diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py\nindex 40c7b4ac..2005de21 100644\n--- a/sqlglot/dialects/dialect.py\n+++ b/sqlglot/dialects/dialect.py\n@@ -1265,12 +1265,20 @@ def if_sql(\n     return _if_sql\n \n \n-def arrow_json_extract_sql(self: Generator, expression: JSON_EXTRACT_TYPE) -> str:\n+def arrow_json_extract_sql(\n+    self: Generator,\n+    expression: JSON_EXTRACT_TYPE,\n+    op: str | None = None,\n+) -> str:\n     this = expression.this\n     if self.JSON_TYPE_REQUIRED_FOR_EXTRACTION and isinstance(this, exp.Literal) and this.is_string:\n         this.replace(exp.cast(this, exp.DType.JSON))\n \n-    return self.binary(expression, \"->\" if isinstance(expression, exp.JSONExtract) else \"->>\")\n+    if isinstance(expression.expression, (exp.Binary, exp.Predicate, exp.Not)):\n+        expression.set(\"expression\", exp.paren(expression.expression, copy=False))\n+\n+    op = op or (\"->\" if isinstance(expression, exp.JSONExtract) else \"->>\")\n+    return self.binary(expression, op)\n \n \n def inline_array_sql(self: Generator, expression: exp.Expr) -> str:\ndiff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py\nindex a4b9d994..ab45dbe9 100644\n--- a/sqlglot/generators/duckdb.py\n+++ b/sqlglot/generators/duckdb.py\n@@ -10,10 +10,10 @@ from sqlglot.dialects.dialect import (\n     DATETIME_DELTA,\n     JSON_EXTRACT_TYPE,\n     approx_count_distinct_sql,\n+    arrow_json_extract_sql,\n     array_append_sql,\n     array_compact_sql,\n     array_concat_sql,\n-    arrow_json_extract_sql,\n     count_if_to_sum,\n     date_delta_to_binary_interval_op,\n     datestrtodate_sql,\ndiff --git a/sqlglot/generators/postgres.py b/sqlglot/generators/postgres.py\nindex 8ad90bfa..b9e90941 100644\n--- a/sqlglot/generators/postgres.py\n+++ b/sqlglot/generators/postgres.py\n@@ -7,6 +7,7 @@ from sqlglot.dialects.dialect import (\n     DATE_ADD_OR_SUB,\n     JSON_EXTRACT_TYPE,\n     any_value_to_max_sql,\n+    arrow_json_extract_sql,\n     array_append_sql,\n     array_concat_sql,\n     bool_xor_sql,\n@@ -189,7 +190,7 @@ def _json_extract_sql(\n         if not isinstance(path, (exp.JSONPath, exp.Variadic)) and not ensure_list(\n             expression.args.get(\"expressions\")\n         ):\n-            return self.binary(expression, op)\n+            return arrow_json_extract_sql(self, expression, op=op)\n \n         # JSON_EXTRACT_PATH requires a key, so use an empty variadic array for the root path\n         if len(path.expressions) == 1 and isinstance(path.expressions[0], exp.JSONPathRoot):\n@@ -351,8 +352,8 @@ class PostgresGenerator(generator.Generator):\n         ),\n         exp.JSONExtract: _json_extract_sql(\"JSON_EXTRACT_PATH\", \"->\"),\n         exp.JSONExtractScalar: _json_extract_sql(\"JSON_EXTRACT_PATH_TEXT\", \"->>\"),\n-        exp.JSONBExtract: lambda self, e: self.binary(e, \"#>\"),\n-        exp.JSONBExtractScalar: lambda self, e: self.binary(e, \"#>>\"),\n+        exp.JSONBExtract: lambda self, e: arrow_json_extract_sql(self, e, op=\"#>\"),\n+        exp.JSONBExtractScalar: lambda self, e: arrow_json_extract_sql(self, e, op=\"#>>\"),\n         exp.ParseJSON: lambda self, e: self.sql(exp.cast(e.this, exp.DType.JSON)),\n         exp.JSONPathKey: json_path_key_only_name,\n         exp.JSONPathRoot: lambda *_: \"\",\n",
+      "partial": [
+        "sqlglot/dialects/dialect.py"
+      ],
+      "ripple": [
+        "sqlglot/generators/duckdb.py"
+      ]
+    },
+    "meta": {
+      "sha": "930f1a32f788867a02868512eda2371fd1cac4da",
+      "date": "2026-08-21",
+      "subject": "fix!(postgres, duckdb): preserve JSON extraction RHS grouping [CODEX] (#8237)",
+      "tests": [
+        "tests/dialects/test_duckdb.py",
+        "tests/dialects/test_postgres.py"
+      ],
+      "testFiles": [
+        "tests/dialects/test_duckdb.py",
+        "tests/dialects/test_postgres.py"
+      ],
+      "ripples": [
+        {
+          "name": "arrow_json_extract_sql",
+          "a": "sqlglot/dialects/dialect.py",
+          "b": "sqlglot/generators/duckdb.py"
+        }
+      ],
+      "f2p": 2,
+      "p2p": 73,
+      "ripple": 1,
+      "flaky": 0,
+      "suite": 57
+    }
+  },
+  {
+    "id": "b5-sqlglot-cefce191",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "8f606659077c0380cfbfe2ae53bd43583f41c4cf",
+    "statement": "fix(postgres)!: map JSONB_CONTAINS to @>, add JSONBContainsTopKey (#8156)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_postgres.py b/tests/dialects/test_postgres.py\nindex 53c27f4b..606f281e 100644\n--- a/tests/dialects/test_postgres.py\n+++ b/tests/dialects/test_postgres.py\n@@ -460,10 +460,11 @@ FROM json_data, field_ids\"\"\",\n         self.validate_all(\n             \"x ? y\",\n             write={\n-                \"\": \"JSONB_CONTAINS(x, y)\",\n+                \"\": \"x ? y\",\n                 \"postgres\": \"x ? y\",\n             },\n         )\n+        self.validate_identity(\"JSONB_CONTAINS(x, y)\").assert_is(exp.JSONBContains)\n         self.validate_all(\n             \"SELECT E'a\\\\tb'\",\n             write={\n@@ -1082,6 +1083,11 @@ FROM json_data, field_ids\"\"\",\n         self.validate_identity(\"SELECT * FROM foo WHERE id = %(id_param)s\")\n         self.validate_identity(\"SELECT * FROM foo WHERE id = ?\")\n \n+        self.validate_identity(\"a ? b\").assert_is(exp.JSONBContainsTopKey)\n+\n+        # `@>` is polymorphic in Postgres (arrays, ranges, jsonb), so it parses to ArrayContainsAll\n+        self.validate_identity(\"a @> b\").assert_is(exp.ArrayContainsAll)\n+\n         self.validate_identity(\"a ?| b\").assert_is(exp.JSONBContainsAnyTopKeys)\n         self.validate_identity(\n             \"\"\"SELECT '{\"a\":1, \"b\":2, \"c\":3}'::jsonb ?| array['b', 'c']\"\"\",\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-cefce191.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-cefce191.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-cefce191.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/expressions/json.py",
+        "sqlglot/generator.py",
+        "sqlglot/generators/postgres.py",
+        "sqlglot/parser.py",
+        "sqlglot/parsers/postgres.py"
+      ],
+      "patch": "diff --git a/sqlglot/expressions/json.py b/sqlglot/expressions/json.py\nindex 1ac0221f..e09b1353 100644\n--- a/sqlglot/expressions/json.py\n+++ b/sqlglot/expressions/json.py\n@@ -54,6 +54,10 @@ class JSONBContainsAllTopKeys(Expression, Binary, Predicate, Func):\n     pass\n \n \n+class JSONBContainsTopKey(Expression, Binary, Predicate, Func):\n+    pass\n+\n+\n class JSONBContainsAnyTopKeys(Expression, Binary, Predicate, Func):\n     pass\n \ndiff --git a/sqlglot/generator.py b/sqlglot/generator.py\nindex 25fb7117..5946c3f8 100644\n--- a/sqlglot/generator.py\n+++ b/sqlglot/generator.py\n@@ -206,6 +206,7 @@ class Generator:\n         exp.Int64: lambda self, e: self.sql(exp.cast(e.this, exp.DType.BIGINT)),\n         exp.JSONBContainsAnyTopKeys: lambda self, e: self.binary(e, \"?|\"),\n         exp.JSONBContainsAllTopKeys: lambda self, e: self.binary(e, \"?&\"),\n+        exp.JSONBContainsTopKey: lambda self, e: self.binary(e, \"?\"),\n         exp.JSONBDeleteAtPath: lambda self, e: self.binary(e, \"#-\"),\n         exp.JSONBPathExists: lambda self, e: self.binary(e, \"@?\"),\n         exp.JSONObject: lambda self, e: self._jsonobject_sql(e),\ndiff --git a/sqlglot/generators/postgres.py b/sqlglot/generators/postgres.py\nindex ce264b81..90f5a76e 100644\n--- a/sqlglot/generators/postgres.py\n+++ b/sqlglot/generators/postgres.py\n@@ -349,7 +349,6 @@ class PostgresGenerator(generator.Generator):\n         exp.JSONExtractScalar: _json_extract_sql(\"JSON_EXTRACT_PATH_TEXT\", \"->>\"),\n         exp.JSONBExtract: lambda self, e: self.binary(e, \"#>\"),\n         exp.JSONBExtractScalar: lambda self, e: self.binary(e, \"#>>\"),\n-        exp.JSONBContains: lambda self, e: self.binary(e, \"?\"),\n         exp.ParseJSON: lambda self, e: self.sql(exp.cast(e.this, exp.DType.JSON)),\n         exp.JSONPathKey: json_path_key_only_name,\n         exp.JSONPathRoot: lambda *_: \"\",\ndiff --git a/sqlglot/parser.py b/sqlglot/parser.py\nindex b3aec9d0..9fe023d7 100644\n--- a/sqlglot/parser.py\n+++ b/sqlglot/parser.py\n@@ -325,8 +325,10 @@ def build_jsonb_extract_scalar(\n     return self.expression(exp.JSONBExtractScalar(this=this, expression=path))\n \n \n-def build_jsonb_contains(self: Parser, this: exp.Expr, key: exp.Expr) -> exp.JSONBContains:\n-    return self.expression(exp.JSONBContains(this=this, expression=key))\n+def build_jsonb_contains_top_key(\n+    self: Parser, this: exp.Expr, key: exp.Expr\n+) -> exp.JSONBContainsTopKey:\n+    return self.expression(exp.JSONBContainsTopKey(this=this, expression=key))\n \n \n SENTINEL_NONE: Token = Token(TokenType.SENTINEL, \"SENTINEL\")\n@@ -1102,7 +1104,7 @@ class Parser:\n             exp.JSONBExtractScalar(this=this, expression=path)\n         ),\n         TokenType.PLACEHOLDER: lambda self, this, key: self.expression(\n-            exp.JSONBContains(this=this, expression=key)\n+            exp.JSONBContainsTopKey(this=this, expression=key)\n         ),\n     }\n \ndiff --git a/sqlglot/parsers/postgres.py b/sqlglot/parsers/postgres.py\nindex 45d01e83..8bae4903 100644\n--- a/sqlglot/parsers/postgres.py\n+++ b/sqlglot/parsers/postgres.py\n@@ -216,7 +216,7 @@ class PostgresParser(parser.Parser):\n         ),\n         TokenType.HASH_ARROW: parser.build_jsonb_extract,\n         TokenType.DHASH_ARROW: parser.build_jsonb_extract_scalar,\n-        TokenType.PLACEHOLDER: parser.build_jsonb_contains,\n+        TokenType.PLACEHOLDER: parser.build_jsonb_contains_top_key,\n     }\n \n     ARG_MODE_TOKENS: t.ClassVar = {TokenType.IN, TokenType.OUT, TokenType.INOUT, TokenType.VARIADIC}\n",
+      "partial": [
+        "sqlglot/parser.py"
+      ],
+      "ripple": [
+        "sqlglot/parsers/postgres.py"
+      ]
+    },
+    "meta": {
+      "sha": "cefce19186791442c9995239e1e2bd4931db863a",
+      "date": "2026-08-13",
+      "subject": "fix(postgres)!: map JSONB_CONTAINS to @>, add JSONBContainsTopKey (#8156)",
+      "tests": [
+        "tests/dialects/test_postgres.py"
+      ],
+      "testFiles": [
+        "tests/dialects/test_postgres.py"
+      ],
+      "ripples": [
+        {
+          "name": "build_jsonb_contains",
+          "a": "sqlglot/parser.py",
+          "b": "sqlglot/parsers/postgres.py"
+        }
+      ],
+      "f2p": 1,
+      "p2p": 29,
+      "ripple": 213,
+      "flaky": 0,
+      "suite": 57
+    }
+  },
+  {
+    "id": "b5-sqlglot-f7dfbacd",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "66ecca33975e06fc862d3b159f8c4c1418fc04e9",
+    "statement": "fix(expressions)!: classify boolean binary operators as Predicate (#8073)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/fixtures/optimizer/simplify.sql b/tests/fixtures/optimizer/simplify.sql\nindex f023d1aa..dd176e7d 100644\n--- a/tests/fixtures/optimizer/simplify.sql\n+++ b/tests/fixtures/optimizer/simplify.sql\n@@ -13,6 +13,15 @@ NOT x AND x;\n x OR NOT x;\n NOT x OR x;\n \n+-- unlike a bare column, a predicate known to be non-null is eliminated by its complement\n+# dialect: postgres\n+'abc' ~ 'a' AND NOT 'abc' ~ 'a';\n+FALSE;\n+\n+# dialect: postgres\n+'abc' ~ 'a' OR NOT 'abc' ~ 'a';\n+TRUE;\n+\n 1 AND TRUE;\n TRUE;\n \n@@ -448,6 +457,63 @@ SELECT -(x.a IS NULL) FROM x;\n SELECT * FROM A WHERE a - (b < c) < 0 AND a + (b > c) >= 0;\n SELECT * FROM A WHERE a + (b > c) >= 0 AND a - (b < c) < 0;\n \n+# dialect: postgres\n+NOT (a @> b);\n+NOT a @> b;\n+\n+# dialect: postgres\n+NOT (a <@ b);\n+NOT a <@ b;\n+\n+# dialect: postgres\n+NOT (a && b);\n+NOT a && b;\n+\n+# dialect: postgres\n+(j ? 'a') AND id = 1;\n+j ? 'a' AND id = 1;\n+\n+# dialect: postgres\n+(j ?& ARRAY['a']) AND id = 1;\n+j ?& ARRAY['a'] AND id = 1;\n+\n+# dialect: postgres\n+(j ?| ARRAY['a']) AND id = 1;\n+j ?| ARRAY['a'] AND id = 1;\n+\n+# dialect: postgres\n+NOT (s ~ 'a');\n+NOT s ~ 'a';\n+\n+# dialect: postgres\n+NOT (s ~* 'a');\n+NOT s ~* 'a';\n+\n+# dialect: postgres\n+(r1 -|- r2) AND id = 1;\n+r1 -|- r2 AND id = 1;\n+\n+# dialect: postgres\n+(r1 &< r2) AND id = 1;\n+r1 &< r2 AND id = 1;\n+\n+# dialect: postgres\n+(r1 &> r2) AND id = 1;\n+r1 &> r2 AND id = 1;\n+\n+-- a predicate parent keeps the parens\n+# dialect: postgres\n+(a @> b) = (c @> d);\n+(a @> b) = (c @> d);\n+\n+# dialect: duckdb\n+NOT (REGEXP_MATCHES(s, 'a'));\n+NOT REGEXP_MATCHES(s, 'a');\n+\n+# dialect: spark\n+NOT (s RLIKE 'a');\n+NOT s RLIKE 'a';\n+\n \n --------------------------------------\n -- Literals\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-f7dfbacd.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-f7dfbacd.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-f7dfbacd.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/expressions/array.py",
+        "sqlglot/expressions/core.py",
+        "sqlglot/expressions/json.py",
+        "sqlglot/expressions/string.py",
+        "sqlglot/optimizer/unnest_subqueries.py",
+        "sqlglot/typing/__init__.py"
+      ],
+      "patch": "diff --git a/sqlglot/expressions/array.py b/sqlglot/expressions/array.py\nindex 16a3fb92..0c5689cc 100644\n--- a/sqlglot/expressions/array.py\n+++ b/sqlglot/expressions/array.py\n@@ -8,6 +8,7 @@ from sqlglot.expressions.core import (\n     Expr,\n     Func,\n     Binary,\n+    Predicate,\n     to_identifier,\n )\n from sqlglot.helper import trait\n@@ -109,16 +110,16 @@ class ArrayAny(Expression, Func):\n     arg_types = {\"this\": True, \"expression\": True}\n \n \n-class ArrayContains(Expression, Binary, Func):\n+class ArrayContains(Expression, Binary, Predicate, Func):\n     arg_types = {\"this\": True, \"expression\": True, \"ensure_variant\": False, \"check_null\": False}\n     _sql_names = [\"ARRAY_CONTAINS\", \"ARRAY_HAS\"]\n \n \n-class ArrayContainsAll(Expression, Binary, Func):\n+class ArrayContainsAll(Expression, Binary, Predicate, Func):\n     _sql_names = [\"ARRAY_CONTAINS_ALL\", \"ARRAY_HAS_ALL\"]\n \n \n-class ArrayContainedBy(Expression, Binary, Func):\n+class ArrayContainedBy(Expression, Binary, Predicate, Func):\n     pass\n \n \n@@ -132,7 +133,7 @@ class ArrayIntersect(Expression, Func):\n     _sql_names = [\"ARRAY_INTERSECT\", \"ARRAY_INTERSECTION\"]\n \n \n-class ArrayOverlaps(Expression, Binary, Func):\n+class ArrayOverlaps(Expression, Binary, Predicate, Func):\n     arg_types = {\"this\": True, \"expression\": True, \"null_safe\": False}\n \n \ndiff --git a/sqlglot/expressions/core.py b/sqlglot/expressions/core.py\nindex 954348f8..fcb14aeb 100644\n--- a/sqlglot/expressions/core.py\n+++ b/sqlglot/expressions/core.py\n@@ -1577,7 +1577,7 @@ class Condition(Expr):\n \n @trait\n class Predicate(Condition):\n-    \"\"\"Relationships like x = y, x > 1, x >= y.\"\"\"\n+    \"\"\"Any condition that evaluates to a boolean, e.g. x = y, x LIKE 'a%', a @> b.\"\"\"\n \n \n class Cache(Expression):\n@@ -2122,15 +2122,15 @@ class Div(Expression, Binary):\n     arg_types = {\"this\": True, \"expression\": True, \"typed\": False, \"safe\": False}\n \n \n-class Overlaps(Expression, Binary):\n+class Overlaps(Expression, Binary, Predicate):\n     pass\n \n \n-class ExtendsLeft(Expression, Binary):\n+class ExtendsLeft(Expression, Binary, Predicate):\n     pass\n \n \n-class ExtendsRight(Expression, Binary):\n+class ExtendsRight(Expression, Binary, Predicate):\n     pass\n \n \n@@ -2234,7 +2234,7 @@ class Sub(Expression, Binary):\n     pass\n \n \n-class Adjacent(Expression, Binary):\n+class Adjacent(Expression, Binary, Predicate):\n     pass\n \n \n@@ -2320,7 +2320,7 @@ class Pow(Expression, Binary, Func):\n     _sql_names = [\"POWER\", \"POW\"]\n \n \n-class RegexpLike(Expression, Binary, Func):\n+class RegexpLike(Expression, Binary, Predicate, Func):\n     arg_types = {\"this\": True, \"expression\": True, \"flag\": False, \"full_match\": False}\n \n \ndiff --git a/sqlglot/expressions/json.py b/sqlglot/expressions/json.py\nindex efb679e8..1ac0221f 100644\n--- a/sqlglot/expressions/json.py\n+++ b/sqlglot/expressions/json.py\n@@ -46,15 +46,15 @@ class JSONArrayInsert(Expression, Func):\n     _sql_names = [\"JSON_ARRAY_INSERT\"]\n \n \n-class JSONBContains(Expression, Binary, Func):\n+class JSONBContains(Expression, Binary, Predicate, Func):\n     _sql_names = [\"JSONB_CONTAINS\"]\n \n \n-class JSONBContainsAllTopKeys(Expression, Binary, Func):\n+class JSONBContainsAllTopKeys(Expression, Binary, Predicate, Func):\n     pass\n \n \n-class JSONBContainsAnyTopKeys(Expression, Binary, Func):\n+class JSONBContainsAnyTopKeys(Expression, Binary, Predicate, Func):\n     pass\n \n \ndiff --git a/sqlglot/expressions/string.py b/sqlglot/expressions/string.py\nindex 2f2d65c6..981df0d3 100644\n--- a/sqlglot/expressions/string.py\n+++ b/sqlglot/expressions/string.py\n@@ -2,7 +2,7 @@\n \n from __future__ import annotations\n \n-from sqlglot.expressions.core import Expression, Func, Binary\n+from sqlglot.expressions.core import Expression, Func, Binary, Predicate\n \n \n # String basics\n@@ -445,11 +445,11 @@ class RegexpExtractAll(Expression, Func):\n     }\n \n \n-class RegexpFullMatch(Expression, Binary, Func):\n+class RegexpFullMatch(Expression, Binary, Predicate, Func):\n     arg_types = {\"this\": True, \"expression\": True, \"options\": False}\n \n \n-class RegexpILike(Expression, Binary, Func):\n+class RegexpILike(Expression, Binary, Predicate, Func):\n     arg_types = {\"this\": True, \"expression\": True, \"flag\": False}\n \n \ndiff --git a/sqlglot/optimizer/unnest_subqueries.py b/sqlglot/optimizer/unnest_subqueries.py\nindex 13112b86..ac1e8ab0 100644\n--- a/sqlglot/optimizer/unnest_subqueries.py\n+++ b/sqlglot/optimizer/unnest_subqueries.py\n@@ -302,16 +302,17 @@ def decorrelate(select, parent_select, external_columns, next_alias_name):\n \n         if key in group_by:\n             key.replace(nested)\n-        elif isinstance(predicate, exp.EQ):\n-            parent_predicate = _replace(\n-                parent_predicate,\n-                f\"({parent_predicate} AND ARRAY_CONTAINS({nested}, {column}))\",\n-            )\n         else:\n+            # Built as AST rather than a SQL string, because dialect-specific operators such as\n+            # Postgres' `@>` can't be round-tripped through the default dialect's parser.\n             key.replace(exp.to_identifier(\"_x\"))\n+            right = exp.ArrayAny(\n+                this=nested,\n+                expression=exp.Lambda(this=predicate.copy(), expressions=[exp.to_identifier(\"_x\")]),\n+            )\n             parent_predicate = _replace(\n                 parent_predicate,\n-                f\"({parent_predicate} AND ARRAY_ANY({nested}, _x -> {predicate}))\",\n+                exp.paren(exp.and_(parent_predicate.copy(), right, copy=False)),\n             )\n \n     parent_select.join(\ndiff --git a/sqlglot/typing/__init__.py b/sqlglot/typing/__init__.py\nindex d653cdac..b717ae7e 100644\n--- a/sqlglot/typing/__init__.py\n+++ b/sqlglot/typing/__init__.py\n@@ -52,32 +52,18 @@ EXPRESSION_METADATA: ExprMetadataType = {\n     **{\n         expr_type: {\"returns\": exp.DType.BOOLEAN}\n         for expr_type in {\n-            exp.Adjacent,\n             exp.All,\n             exp.Any,\n-            exp.ArrayContainedBy,\n-            exp.ArrayContains,\n-            exp.ArrayContainsAll,\n-            exp.ArrayOverlaps,\n             exp.Between,\n             exp.Boolean,\n             exp.Contains,\n             exp.EndsWith,\n             exp.Exists,\n-            exp.ExtendsLeft,\n-            exp.ExtendsRight,\n             exp.In,\n             exp.IsInf,\n             exp.IsNan,\n-            exp.JSONBContains,\n-            exp.JSONBContainsAllTopKeys,\n-            exp.JSONBContainsAnyTopKeys,\n             exp.LogicalAnd,\n             exp.LogicalOr,\n-            exp.Overlaps,\n-            exp.RegexpFullMatch,\n-            exp.RegexpILike,\n-            exp.RegexpLike,\n             exp.StartsWith,\n         }\n     },\n",
+      "partial": [
+        "sqlglot/expressions/array.py",
+        "sqlglot/expressions/core.py",
+        "sqlglot/expressions/json.py",
+        "sqlglot/expressions/string.py"
+      ],
+      "ripple": [
+        "sqlglot/typing/__init__.py"
+      ]
+    },
+    "meta": {
+      "sha": "f7dfbacd3b245aca169abb52f0b515230e9b6715",
+      "date": "2026-08-10",
+      "subject": "fix(expressions)!: classify boolean binary operators as Predicate (#8073)",
+      "tests": [
+        "tests/test_optimizer.py"
+      ],
+      "testFiles": [
+        "tests/fixtures/optimizer/simplify.sql"
+      ],
+      "ripples": [
+        {
+          "name": "ArrayContains",
+          "a": "sqlglot/expressions/array.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "ArrayContainsAll",
+          "a": "sqlglot/expressions/array.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "ArrayContainedBy",
+          "a": "sqlglot/expressions/array.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "ArrayOverlaps",
+          "a": "sqlglot/expressions/array.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "Overlaps",
+          "a": "sqlglot/expressions/core.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "ExtendsLeft",
+          "a": "sqlglot/expressions/core.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "ExtendsRight",
+          "a": "sqlglot/expressions/core.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "Adjacent",
+          "a": "sqlglot/expressions/core.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "RegexpLike",
+          "a": "sqlglot/expressions/core.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "JSONBContains",
+          "a": "sqlglot/expressions/json.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "JSONBContainsAllTopKeys",
+          "a": "sqlglot/expressions/json.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "JSONBContainsAnyTopKeys",
+          "a": "sqlglot/expressions/json.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "RegexpFullMatch",
+          "a": "sqlglot/expressions/string.py",
+          "b": "sqlglot/typing/__init__.py"
+        },
+        {
+          "name": "RegexpILike",
+          "a": "sqlglot/expressions/string.py",
+          "b": "sqlglot/typing/__init__.py"
+        }
+      ],
+      "f2p": 1,
+      "p2p": 86,
+      "ripple": 1,
+      "flaky": 0,
+      "suite": 57
+    }
+  },
+  {
+    "id": "b5-sqlglot-64629552",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "728d11c3af5c07b5eccbfb03ffc91dc28729c1f2",
+    "statement": "fix(postgres): transpile DAY/MONTH/YEAR to EXTRACT [CLAUDE] (#7984)\n\n* fix(postgres): transpile DAY/MONTH/YEAR to EXTRACT [CLAUDE]\n\n* fix(postgres): cast DAY/MONTH/YEAR args to DATE and reject integers [CLAUDE]\n\n* fix(tsql): wrap DAY/MONTH/YEAR argument in TsOrDsToDate at parse time [CLAUDE]\n\n* fix(tsql): strip TsOrDsToDate when generating DAY/MONTH/YEAR [CLAUDE]\n\n* refactor: move remove_ts_or_ds_to_date to dialect.py, simplify tests [CLAUDE]\n\n---------\n\nCo-authored-by: vjpovlitz <vjpovlitz@users.noreply.github.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_databricks.py b/tests/dialects/test_databricks.py\nindex 7201c9f5..ce6d64f6 100644\n--- a/tests/dialects/test_databricks.py\n+++ b/tests/dialects/test_databricks.py\n@@ -172,7 +172,7 @@ class TestDatabricks(Validator):\n             \"CREATE TABLE foo (x INT GENERATED ALWAYS AS (YEAR(y)))\",\n             write={\n                 \"databricks\": \"CREATE TABLE foo (x INT GENERATED ALWAYS AS (YEAR(y)))\",\n-                \"tsql\": \"CREATE TABLE foo (x AS YEAR(CAST(y AS DATE)))\",\n+                \"tsql\": \"CREATE TABLE foo (x AS YEAR(y))\",\n             },\n         )\n         self.validate_all(\ndiff --git a/tests/dialects/test_postgres.py b/tests/dialects/test_postgres.py\nindex 6266124f..0062cbdf 100644\n--- a/tests/dialects/test_postgres.py\n+++ b/tests/dialects/test_postgres.py\n@@ -1,5 +1,6 @@\n-from sqlglot import ParseError, UnsupportedError, exp, transpile\n+from sqlglot import ErrorLevel, ParseError, UnsupportedError, exp, parse_one, transpile\n from sqlglot.helper import logger as helper_logger\n+from sqlglot.optimizer.annotate_types import annotate_types\n from tests.dialects.test_dialect import Validator\n \n \n@@ -1820,6 +1821,24 @@ CROSS JOIN JSON_ARRAY_ELEMENTS(CAST(JSON_EXTRACT_PATH(tbox, 'boxes') AS JSON)) A\n             \"ROUND(CAST(x AS DECIMAL(18, 3)), 4)\", read={\"duckdb\": \"ROUND(x::DECIMAL, 4)\"}\n         )\n \n+    def test_extract_date_parts(self):\n+        self.validate_all(\n+            \"SELECT EXTRACT(DAY FROM CAST(x AS DATE)), EXTRACT(MONTH FROM CAST(x AS DATE)), EXTRACT(YEAR FROM CAST(x AS DATE))\",\n+            read={\n+                \"tsql\": \"SELECT DAY(x), MONTH(x), YEAR(x)\",\n+            },\n+        )\n+\n+        self.assertEqual(\n+            annotate_types(parse_one(\"SELECT DAY(CAST(x AS DATE))\", read=\"tsql\")).sql(\"postgres\"),\n+            \"SELECT EXTRACT(DAY FROM CAST(x AS DATE))\",\n+        )\n+\n+        with self.assertRaises(UnsupportedError):\n+            annotate_types(\n+                parse_one(\"WITH t AS (SELECT 1 AS col) SELECT YEAR(t.col) FROM t\", read=\"tsql\")\n+            ).sql(\"postgres\", unsupported_level=ErrorLevel.RAISE)\n+\n     def test_datatype(self):\n         self.assertEqual(exp.DataType.build(\"XML\", dialect=\"postgres\").sql(\"postgres\"), \"XML\")\n         self.validate_identity(\"CREATE TABLE foo (data XML)\")\ndiff --git a/tests/dialects/test_tsql.py b/tests/dialects/test_tsql.py\nindex 99ab4c58..7a6b178c 100644\n--- a/tests/dialects/test_tsql.py\n+++ b/tests/dialects/test_tsql.py\n@@ -2057,6 +2057,12 @@ WHERE\n             write={\"spark\": r\"SELECT '\\'test\\''\"},\n         )\n \n+    def test_day_month_year(self):\n+        self.validate_all(\"DAY(x)\", write={\"tsql\": \"DAY(x)\", \"\": \"DAY(CAST(x AS DATE))\"})\n+        self.validate_all(\"MONTH(x)\", write={\"tsql\": \"MONTH(x)\", \"\": \"MONTH(CAST(x AS DATE))\"})\n+        self.validate_all(\"YEAR(x)\", write={\"tsql\": \"YEAR(x)\", \"\": \"YEAR(CAST(x AS DATE))\"})\n+        self.validate_identity(\"WITH t AS (SELECT 0 AS col) SELECT YEAR(col) FROM t\")\n+\n     def test_eomonth(self):\n         self.validate_all(\n             \"EOMONTH(GETDATE())\",\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-64629552.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-64629552.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-64629552.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/dialects/dialect.py",
+        "sqlglot/generators/mysql.py",
+        "sqlglot/generators/postgres.py",
+        "sqlglot/generators/singlestore.py",
+        "sqlglot/generators/tsql.py",
+        "sqlglot/parsers/tsql.py"
+      ],
+      "patch": "diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py\nindex 17148a9d..d1841a04 100644\n--- a/sqlglot/dialects/dialect.py\n+++ b/sqlglot/dialects/dialect.py\n@@ -1993,6 +1993,23 @@ def ts_or_ds_add_cast(expression: exp.TsOrDsAdd) -> exp.TsOrDsAdd:\n     return expression\n \n \n+def remove_ts_or_ds_to_date(\n+    to_sql: t.Callable[[Generator, exp.Expr], str] | None = None,\n+    args: tuple[str, ...] = (\"this\",),\n+) -> t.Callable[[Generator, exp.Func], str]:\n+    def func(self: Generator, expression: exp.Func) -> str:\n+        for arg_key in args:\n+            arg = expression.args.get(arg_key)\n+            if isinstance(arg, (exp.TsOrDsToDate, exp.TsOrDsToTimestamp)) and not arg.args.get(\n+                \"format\"\n+            ):\n+                expression.set(arg_key, arg.this)\n+\n+        return to_sql(self, expression) if to_sql else self.function_fallback_sql(expression)\n+\n+    return func\n+\n+\n def date_delta_sql(name: str, cast: bool = False) -> t.Callable[[Generator, DATE_ADD_OR_DIFF], str]:\n     def _delta_sql(self: Generator, expression: DATE_ADD_OR_DIFF) -> str:\n         if cast and isinstance(expression, exp.TsOrDsAdd):\ndiff --git a/sqlglot/generators/mysql.py b/sqlglot/generators/mysql.py\nindex 21974021..4db7c20d 100644\n--- a/sqlglot/generators/mysql.py\n+++ b/sqlglot/generators/mysql.py\n@@ -17,6 +17,7 @@ from sqlglot.dialects.dialect import (\n     no_pivot_sql,\n     no_tablesample_sql,\n     no_trycast_sql,\n+    remove_ts_or_ds_to_date,\n     rename_func,\n     strposition_sql,\n     unit_to_var,\n@@ -102,23 +103,6 @@ def _ts_or_ds_to_date_sql(self: MySQLGenerator, expression: exp.TsOrDsToDate) ->\n     return _str_to_date_sql(self, expression) if time_format else self.func(\"DATE\", expression.this)\n \n \n-def _remove_ts_or_ds_to_date(\n-    to_sql: t.Callable[[MySQLGenerator, exp.Expr], str] | None = None,\n-    args: tuple[str, ...] = (\"this\",),\n-) -> t.Callable[[MySQLGenerator, exp.Func], str]:\n-    def func(self: MySQLGenerator, expression: exp.Func) -> str:\n-        for arg_key in args:\n-            arg = expression.args.get(arg_key)\n-            if isinstance(arg, (exp.TsOrDsToDate, exp.TsOrDsToTimestamp)) and not arg.args.get(\n-                \"format\"\n-            ):\n-                expression.set(arg_key, arg.this)\n-\n-        return to_sql(self, expression) if to_sql else self.function_fallback_sql(expression)\n-\n-    return func\n-\n-\n class MySQLGenerator(generator.Generator):\n     SELECT_KINDS: tuple[str, ...] = ()\n     TRY_SUPPORTED = False\n@@ -160,17 +144,17 @@ class MySQLGenerator(generator.Generator):\n         exp.Chr: lambda self, e: self.chr_sql(e, \"CHAR\"),\n         exp.CurrentDate: no_paren_current_date_sql,\n         exp.CurrentVersion: rename_func(\"VERSION\"),\n-        exp.DateDiff: _remove_ts_or_ds_to_date(\n+        exp.DateDiff: remove_ts_or_ds_to_date(\n             lambda self, e: self.func(\"DATEDIFF\", e.this, e.expression), (\"this\", \"expression\")\n         ),\n-        exp.DateAdd: _remove_ts_or_ds_to_date(date_add_sql(\"ADD\")),\n+        exp.DateAdd: remove_ts_or_ds_to_date(date_add_sql(\"ADD\")),\n         exp.DateStrToDate: datestrtodate_sql,\n-        exp.DateSub: _remove_ts_or_ds_to_date(date_add_sql(\"SUB\")),\n+        exp.DateSub: remove_ts_or_ds_to_date(date_add_sql(\"SUB\")),\n         exp.DateTrunc: _date_trunc_sql,\n-        exp.Day: _remove_ts_or_ds_to_date(),\n-        exp.DayOfMonth: _remove_ts_or_ds_to_date(rename_func(\"DAYOFMONTH\")),\n-        exp.DayOfWeek: _remove_ts_or_ds_to_date(rename_func(\"DAYOFWEEK\")),\n-        exp.DayOfYear: _remove_ts_or_ds_to_date(rename_func(\"DAYOFYEAR\")),\n+        exp.Day: remove_ts_or_ds_to_date(),\n+        exp.DayOfMonth: remove_ts_or_ds_to_date(rename_func(\"DAYOFMONTH\")),\n+        exp.DayOfWeek: remove_ts_or_ds_to_date(rename_func(\"DAYOFWEEK\")),\n+        exp.DayOfYear: remove_ts_or_ds_to_date(rename_func(\"DAYOFYEAR\")),\n         exp.GroupConcat: lambda self, e: (\n             f\"\"\"GROUP_CONCAT({self.sql(e, \"this\")} SEPARATOR {self.sql(e, \"separator\") or \"','\"})\"\"\"\n         ),\n@@ -181,7 +165,7 @@ class MySQLGenerator(generator.Generator):\n         exp.LogicalAnd: rename_func(\"MIN\"),\n         exp.Max: max_or_greatest,\n         exp.Min: min_or_least,\n-        exp.Month: _remove_ts_or_ds_to_date(),\n+        exp.Month: remove_ts_or_ds_to_date(),\n         exp.NullSafeEQ: lambda self, e: self.binary(e, \"<=>\"),\n         exp.NullSafeNEQ: lambda self, e: f\"NOT {self.binary(e, '<=>')}\",\n         exp.NumberToStr: rename_func(\"FORMAT\"),\n@@ -215,7 +199,7 @@ class MySQLGenerator(generator.Generator):\n             e,\n             include_precision=not e.args.get(\"zone\"),\n         ),\n-        exp.TimeToStr: _remove_ts_or_ds_to_date(\n+        exp.TimeToStr: remove_ts_or_ds_to_date(\n             lambda self, e: self.func(\"DATE_FORMAT\", e.this, self.format_time(e))\n         ),\n         exp.Trim: trim_sql,\n@@ -226,9 +210,9 @@ class MySQLGenerator(generator.Generator):\n         exp.TsOrDsToDate: _ts_or_ds_to_date_sql,\n         exp.Unicode: lambda self, e: f\"ORD(CONVERT({self.sql(e.this)} USING utf32))\",\n         exp.UnixToTime: _unix_to_time_sql,\n-        exp.Week: _remove_ts_or_ds_to_date(),\n-        exp.WeekOfYear: _remove_ts_or_ds_to_date(rename_func(\"WEEKOFYEAR\")),\n-        exp.Year: _remove_ts_or_ds_to_date(),\n+        exp.Week: remove_ts_or_ds_to_date(),\n+        exp.WeekOfYear: remove_ts_or_ds_to_date(rename_func(\"WEEKOFYEAR\")),\n+        exp.Year: remove_ts_or_ds_to_date(),\n         exp.UtcTimestamp: rename_func(\"UTC_TIMESTAMP\"),\n         exp.UtcTime: rename_func(\"UTC_TIME\"),\n     }\ndiff --git a/sqlglot/generators/postgres.py b/sqlglot/generators/postgres.py\nindex 3457d62f..8b2e0937 100644\n--- a/sqlglot/generators/postgres.py\n+++ b/sqlglot/generators/postgres.py\n@@ -77,6 +77,17 @@ def _date_add_sql(kind: str) -> t.Callable[[PostgresGenerator, DATE_ADD_OR_SUB],\n     return func\n \n \n+def _day_month_year_sql(self: PostgresGenerator, expression: exp.Day | exp.Month | exp.Year) -> str:\n+    this = expression.this\n+    value = this.this if isinstance(this, exp.TsOrDsToDate) else this\n+    if value.is_int or value.is_type(*exp.DataType.INTEGER_TYPES):\n+        self.unsupported(\n+            f\"Cannot transpile {expression.sql_name()} of an integer value to Postgres\"\n+        )\n+\n+    return self.sql(exp.Extract(this=exp.var(expression.sql_name()), expression=this))\n+\n+\n def _date_diff_sql(self: PostgresGenerator, expression: exp.DateDiff | exp.TsOrDsDiff) -> str:\n     unit = expression.text(\"unit\").upper() or \"DAY\"\n \n@@ -312,6 +323,7 @@ class PostgresGenerator(generator.Generator):\n         exp.DateDiff: _date_diff_sql,\n         exp.DateStrToDate: datestrtodate_sql,\n         exp.DateSub: _date_add_sql(\"-\"),\n+        exp.Day: _day_month_year_sql,\n         exp.Explode: rename_func(\"UNNEST\"),\n         exp.ExplodingGenerateSeries: rename_func(\"GENERATE_SERIES\"),\n         exp.GenerateSeries: generate_series_sql(\"GENERATE_SERIES\"),\n@@ -341,6 +353,7 @@ class PostgresGenerator(generator.Generator):\n         exp.MapFromEntries: no_map_from_entries_sql,\n         exp.Min: min_or_least,\n         exp.Merge: merge_without_target_sql,\n+        exp.Month: _day_month_year_sql,\n         exp.PartitionedByProperty: lambda self, e: f\"PARTITION BY {self.sql(e, 'this')}\",\n         exp.PercentileCont: transforms.preprocess([transforms.add_within_group_for_percentiles]),\n         exp.PercentileDisc: transforms.preprocess([transforms.add_within_group_for_percentiles]),\n@@ -389,6 +402,7 @@ class PostgresGenerator(generator.Generator):\n         exp.VariancePop: rename_func(\"VAR_POP\"),\n         exp.Variance: rename_func(\"VAR_SAMP\"),\n         exp.Xor: bool_xor_sql,\n+        exp.Year: _day_month_year_sql,\n         exp.Unicode: rename_func(\"ASCII\"),\n         exp.UnixToTime: _unix_to_time_sql,\n         exp.Levenshtein: _levenshtein_sql,\ndiff --git a/sqlglot/generators/singlestore.py b/sqlglot/generators/singlestore.py\nindex db03ed00..a8b828c3 100644\n--- a/sqlglot/generators/singlestore.py\n+++ b/sqlglot/generators/singlestore.py\n@@ -13,11 +13,12 @@ from sqlglot.dialects.dialect import (\n     timestamptrunc_sql,\n     date_add_interval_sql,\n     timestampdiff_sql,\n+    remove_ts_or_ds_to_date,\n )\n from sqlglot.expressions import DataType\n from sqlglot import generator\n from sqlglot.generator import unsupported_args\n-from sqlglot.generators.mysql import MySQLGenerator, _remove_ts_or_ds_to_date, date_add_sql\n+from sqlglot.generators.mysql import MySQLGenerator, date_add_sql\n \n \n def _unicode_substitute(m: re.Match[str]) -> str:\n@@ -121,7 +122,7 @@ class SingleStoreGenerator(MySQLGenerator):\n             f\"(DATE_FORMAT({self.sql(e, 'this')}, {self.dialect.DATEINT_FORMAT}) :> INT)\"\n         ),\n         exp.Time: unsupported_args(\"zone\")(lambda self, e: f\"{self.sql(e, 'this')} :> TIME\"),\n-        exp.DatetimeAdd: _remove_ts_or_ds_to_date(date_add_sql(\"ADD\")),\n+        exp.DatetimeAdd: remove_ts_or_ds_to_date(date_add_sql(\"ADD\")),\n         exp.DatetimeTrunc: unsupported_args(\"zone\")(timestamptrunc_sql()),\n         exp.DatetimeSub: date_add_interval_sql(\"DATE\", \"SUB\"),\n         exp.DatetimeDiff: timestampdiff_sql,\ndiff --git a/sqlglot/generators/tsql.py b/sqlglot/generators/tsql.py\nindex cffd066a..66adcd27 100644\n--- a/sqlglot/generators/tsql.py\n+++ b/sqlglot/generators/tsql.py\n@@ -10,6 +10,7 @@ from sqlglot.dialects.dialect import (\n     generatedasidentitycolumnconstraint_sql,\n     max_or_greatest,\n     min_or_least,\n+    remove_ts_or_ds_to_date,\n     rename_func,\n     strposition_sql,\n     timestrtotime_sql,\n@@ -201,6 +202,7 @@ class TSQLGenerator(generator.Generator):\n         exp.CurrentTimestamp: rename_func(\"GETDATE\"),\n         exp.CurrentTimestampLTZ: rename_func(\"SYSDATETIMEOFFSET\"),\n         exp.DateStrToDate: datestrtodate_sql,\n+        exp.Day: remove_ts_or_ds_to_date(),\n         exp.GeneratedAsIdentityColumnConstraint: generatedasidentitycolumnconstraint_sql,\n         exp.GroupConcat: _string_agg_sql,\n         exp.If: rename_func(\"IIF\"),\n@@ -211,6 +213,7 @@ class TSQLGenerator(generator.Generator):\n         exp.Max: max_or_greatest,\n         exp.MD5: lambda self, e: self.func(\"HASHBYTES\", exp.Literal.string(\"MD5\"), e.this),\n         exp.Min: min_or_least,\n+        exp.Month: remove_ts_or_ds_to_date(),\n         exp.NumberToStr: _format_sql,\n         exp.Repeat: rename_func(\"REPLICATE\"),\n         exp.CurrentSchema: rename_func(\"SCHEMA_NAME\"),\n@@ -247,6 +250,7 @@ class TSQLGenerator(generator.Generator):\n             exp.Literal.number(1),\n         ),\n         exp.Uuid: lambda *_: \"NEWID()\",\n+        exp.Year: remove_ts_or_ds_to_date(),\n         exp.DateFromParts: rename_func(\"DATEFROMPARTS\"),\n     }\n \ndiff --git a/sqlglot/parsers/tsql.py b/sqlglot/parsers/tsql.py\nindex 4c8b5774..6b2f0a9b 100644\n--- a/sqlglot/parsers/tsql.py\n+++ b/sqlglot/parsers/tsql.py\n@@ -363,6 +363,7 @@ class TSQLParser(parser.Parser):\n         ),\n         \"DATENAME\": _build_formatted_time(exp.TimeToStr, full_format_mapping=True),\n         \"DATETIMEFROMPARTS\": _build_datetimefromparts,\n+        \"DAY\": lambda args: exp.Day(this=exp.TsOrDsToDate(this=seq_get(args, 0))),\n         \"EOMONTH\": _build_eomonth,\n         \"FORMAT\": _build_format,\n         \"GETDATE\": exp.CurrentTimestamp.from_arg_list,\n@@ -372,6 +373,7 @@ class TSQLParser(parser.Parser):\n         \"JSON_VALUE\": parser.build_extract_json_with_path(exp.JSONExtractScalar),\n         \"LEN\": _build_with_arg_as_text(exp.Length),\n         \"LEFT\": _build_with_arg_as_text(exp.Left),\n+        \"MONTH\": lambda args: exp.Month(this=exp.TsOrDsToDate(this=seq_get(args, 0))),\n         \"NEWID\": exp.Uuid.from_arg_list,\n         \"RIGHT\": _build_with_arg_as_text(exp.Right),\n         \"PARSENAME\": _build_parsename,\n@@ -385,6 +387,7 @@ class TSQLParser(parser.Parser):\n         \"SYSTEM_USER\": exp.CurrentUser.from_arg_list,\n         \"TIMEFROMPARTS\": _build_timefromparts,\n         \"DATETRUNC\": _build_datetrunc,\n+        \"YEAR\": lambda args: exp.Year(this=exp.TsOrDsToDate(this=seq_get(args, 0))),\n     }\n \n     JOIN_HINTS = {\"LOOP\", \"HASH\", \"MERGE\", \"REMOTE\"}\n",
+      "partial": [
+        "sqlglot/generators/mysql.py"
+      ],
+      "ripple": [
+        "sqlglot/generators/singlestore.py",
+        "sqlglot/dialects/dialect.py"
+      ]
+    },
+    "meta": {
+      "sha": "646295528c953311540fe2175999ac0231a25b71",
+      "date": "2026-07-30",
+      "subject": "fix(postgres): transpile DAY/MONTH/YEAR to EXTRACT [CLAUDE] (#7984)",
+      "tests": [
+        "tests/dialects/test_databricks.py",
+        "tests/dialects/test_postgres.py",
+        "tests/dialects/test_tsql.py"
+      ],
+      "testFiles": [
+        "tests/dialects/test_databricks.py",
+        "tests/dialects/test_postgres.py",
+        "tests/dialects/test_tsql.py"
+      ],
+      "ripples": [
+        {
+          "name": "_remove_ts_or_ds_to_date",
+          "a": "sqlglot/generators/mysql.py",
+          "b": "sqlglot/generators/singlestore.py"
+        },
+        {
+          "name": "func",
+          "a": "sqlglot/generators/mysql.py",
+          "b": "sqlglot/dialects/dialect.py"
+        }
+      ],
+      "f2p": 3,
+      "p2p": 101,
+      "ripple": 363,
+      "flaky": 0,
+      "suite": 55
+    }
+  },
+  {
+    "id": "b5-sqlglot-77c78147",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "da55602dea6e70de54c500d072a0bff5ecfb3d6d",
+    "statement": "fix(optimizer)!: annotate type for databricks REGR_AVGY, REGR_COUNT, REGR_INTERCEPT, REGR_R2, REGR_SLOPE (#7820)\n\n* perf(optimizer): memoize UNNEST/EXPLODE column-type resolution [CLAUDE] (#7823)\n\n`Resolver._get_column_type_from_scope` resolves the element type of an\nunnested/exploded column by recursing over the sources of each scope. It had no\nmemoization, so when the same CTE is reachable through several paths of the scope\ngraph, its subtree was re-walked once per path. Qualifying a query whose CTEs\nreconverge on a shared upstream CTE was therefore exponential in the depth of the\ngraph, for a single UNNEST/EXPLODE. On a real query this reached ~3.8M calls (~4s)\ninto the trace.\n\nThe scope and schema are immutable during qualification, so the type of a column\nunder a given source depends only on `(source, column name)`. Cache the result on\nthat key so each source is walked once, which makes the trace roughly linear in the\nsize of the scope graph. Qualified output is unchanged.\n\nReached through both BigQuery `UNNEST(col)` and Spark/Hive `LATERAL VIEW\nEXPLODE(col)`.\n\nCloses #7821\n\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n\n* feat(typing): add DISTINCT/ALL/OVER fixtures and parser fix for REGR_* functions in databricks [CLAUDE]\n\n* fix: update aggregate expressions and databricks parser\n\n* fix: update databricks parser to have a generic function for regr_avgy/x\n\n---------\n\nCo-authored-by: dvryaboy <dvryaboy@users.noreply.github.com>\nCo-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/fixtures/optimizer/annotate_functions.sql b/tests/fixtures/optimizer/annotate_functions.sql\nindex 7f7e5144..b477982b 100644\n--- a/tests/fixtures/optimizer/annotate_functions.sql\n+++ b/tests/fixtures/optimizer/annotate_functions.sql\n@@ -1051,6 +1051,10 @@ DOUBLE;\n REGR_AVGX(ALL tbl.double_col, tbl.double_col);\n DOUBLE;\n \n+# dialect: databricks\n+REGR_AVGX(DISTINCT tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n # dialect: databricks\n REGR_AVGX(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n DOUBLE;\n@@ -4259,6 +4263,26 @@ DOUBLE;\n REGR_AVGY(tbl.decfloat_col, tbl.decfloat_col);\n DECFLOAT;\n \n+# dialect: databricks\n+REGR_AVGY(tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_AVGY(tbl.int_col, tbl.int_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_AVGY(ALL tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_AVGY(DISTINCT tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_AVGY(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n+DOUBLE;\n+\n # dialect: snowflake\n REGR_COUNT(tbl.double_col, tbl.double_col);\n DOUBLE;\n@@ -4275,6 +4299,26 @@ DOUBLE;\n REGR_COUNT(tbl.decfloat_col, tbl.decfloat_col);\n DECFLOAT;\n \n+# dialect: databricks\n+REGR_COUNT(tbl.double_col, tbl.double_col);\n+BIGINT;\n+\n+# dialect: databricks\n+REGR_COUNT(tbl.int_col, tbl.int_col);\n+BIGINT;\n+\n+# dialect: databricks\n+REGR_COUNT(ALL tbl.double_col, tbl.double_col);\n+BIGINT;\n+\n+# dialect: databricks\n+REGR_COUNT(DISTINCT tbl.double_col, tbl.double_col);\n+BIGINT;\n+\n+# dialect: databricks\n+REGR_COUNT(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n+BIGINT;\n+\n # dialect: snowflake\n REGR_INTERCEPT(tbl.double_col, tbl.double_col);\n DOUBLE;\n@@ -4291,6 +4335,26 @@ DOUBLE;\n REGR_INTERCEPT(tbl.decfloat_col, tbl.decfloat_col);\n DECFLOAT;\n \n+# dialect: databricks\n+REGR_INTERCEPT(tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_INTERCEPT(tbl.int_col, tbl.int_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_INTERCEPT(ALL tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_INTERCEPT(DISTINCT tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_INTERCEPT(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n+DOUBLE;\n+\n # dialect: snowflake\n REGR_R2(tbl.double_col, tbl.double_col);\n DOUBLE;\n@@ -4307,6 +4371,26 @@ DOUBLE;\n REGR_R2(tbl.decfloat_col, tbl.decfloat_col);\n DECFLOAT;\n \n+# dialect: databricks\n+REGR_R2(tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_R2(tbl.int_col, tbl.int_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_R2(ALL tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_R2(DISTINCT tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_R2(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n+DOUBLE;\n+\n # dialect: snowflake\n REGR_SXX(tbl.double_col, tbl.double_col);\n DOUBLE;\n@@ -4371,6 +4455,26 @@ DOUBLE;\n REGR_SLOPE(tbl.decfloat_col, tbl.decfloat_col);\n DECFLOAT;\n \n+# dialect: databricks\n+REGR_SLOPE(tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_SLOPE(tbl.int_col, tbl.int_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_SLOPE(ALL tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_SLOPE(DISTINCT tbl.double_col, tbl.double_col);\n+DOUBLE;\n+\n+# dialect: databricks\n+REGR_SLOPE(tbl.double_col, tbl.double_col) OVER (PARTITION BY 1);\n+DOUBLE;\n+\n # dialect: snowflake\n REGR_VALX(NULL, 2.0);\n DOUBLE;\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-77c78147.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-77c78147.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-77c78147.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/expressions/aggregate.py",
+        "sqlglot/generators/databricks.py",
+        "sqlglot/parsers/databricks.py",
+        "sqlglot/parsers/hive.py",
+        "sqlglot/parsers/spark2.py",
+        "sqlglot/typing/databricks.py"
+      ],
+      "patch": "diff --git a/sqlglot/expressions/aggregate.py b/sqlglot/expressions/aggregate.py\nindex 9e9bbf83..b5d301f9 100644\n--- a/sqlglot/expressions/aggregate.py\n+++ b/sqlglot/expressions/aggregate.py\n@@ -256,19 +256,19 @@ class RegrAvgy(Expression, AggFunc):\n \n \n class RegrCount(Expression, AggFunc):\n-    arg_types = {\"this\": True, \"expression\": True}\n+    arg_types = {\"this\": True, \"expression\": False}\n \n \n class RegrIntercept(Expression, AggFunc):\n-    arg_types = {\"this\": True, \"expression\": True}\n+    arg_types = {\"this\": True, \"expression\": False}\n \n \n class RegrR2(Expression, AggFunc):\n-    arg_types = {\"this\": True, \"expression\": True}\n+    arg_types = {\"this\": True, \"expression\": False}\n \n \n class RegrSlope(Expression, AggFunc):\n-    arg_types = {\"this\": True, \"expression\": True}\n+    arg_types = {\"this\": True, \"expression\": False}\n \n \n class RegrSxx(Expression, AggFunc):\ndiff --git a/sqlglot/generators/databricks.py b/sqlglot/generators/databricks.py\nindex a58de59c..5ec44b1c 100644\n--- a/sqlglot/generators/databricks.py\n+++ b/sqlglot/generators/databricks.py\n@@ -109,6 +109,14 @@ class DatabricksGenerator(SparkGenerator):\n \n         return self.func(\"UNIFORM\", expression.this, expression.expression, seed)\n \n+    def regravgx_sql(self, expression: exp.RegrAvgx) -> str:\n+        x = expression.expression\n+        if isinstance(x, exp.Distinct):\n+            return self.func(\n+                \"REGR_AVGX\", exp.Distinct(expressions=[expression.this]), *x.expressions\n+            )\n+        return self.func(\"REGR_AVGX\", expression.this, x)\n+\n     def clusterproperty_sql(self, expression):\n         this = self.sql(expression, \"this\") or f\"({self.expressions(expression, flat=True)})\"\n         return f\"CLUSTER BY {this}\"\ndiff --git a/sqlglot/parsers/databricks.py b/sqlglot/parsers/databricks.py\nindex 2805c1d9..6f5b4b20 100644\n--- a/sqlglot/parsers/databricks.py\n+++ b/sqlglot/parsers/databricks.py\n@@ -31,6 +31,12 @@ class DatabricksParser(SparkParser):\n         \"CURDATE\": lambda self: self._parse_curdate(),\n     }\n \n+    FUNCTION_PARSERS = {\n+        **SparkParser.FUNCTION_PARSERS,\n+        \"REGR_AVGX\": lambda self: self._parse_distinct_arg_function(exp.RegrAvgx, distinct_index=1),\n+        \"REGR_AVGY\": lambda self: self._parse_distinct_arg_function(exp.RegrAvgy),\n+    }\n+\n     FACTOR = {\n         **SparkParser.FACTOR,\n         TokenType.COLON: exp.JSONExtract,\ndiff --git a/sqlglot/parsers/hive.py b/sqlglot/parsers/hive.py\nindex 9b3e8f85..347b40f7 100644\n--- a/sqlglot/parsers/hive.py\n+++ b/sqlglot/parsers/hive.py\n@@ -63,8 +63,8 @@ class HiveParser(parser.Parser):\n \n     FUNCTION_PARSERS = {\n         **parser.Parser.FUNCTION_PARSERS,\n-        \"PERCENTILE\": lambda self: self._parse_quantile_function(exp.Quantile),\n-        \"PERCENTILE_APPROX\": lambda self: self._parse_quantile_function(exp.ApproxQuantile),\n+        \"PERCENTILE\": lambda self: self._parse_distinct_arg_function(exp.Quantile),\n+        \"PERCENTILE_APPROX\": lambda self: self._parse_distinct_arg_function(exp.ApproxQuantile),\n     }\n \n     FUNCTIONS = {\n@@ -178,19 +178,19 @@ class HiveParser(parser.Parser):\n             )\n         )\n \n-    def _parse_quantile_function(self, func: type[F]) -> F:\n-        if self._match(TokenType.DISTINCT):\n-            first_arg: exp.Expr | None = self.expression(\n-                exp.Distinct(expressions=[self._parse_lambda()])\n-            )\n-        else:\n+    def _parse_distinct_arg_function(self, func: type[F], distinct_index: int = 0) -> F:\n+        is_distinct = self._match(TokenType.DISTINCT)\n+        if not is_distinct:\n             self._match(TokenType.ALL)\n-            first_arg = self._parse_lambda()\n \n-        args = [first_arg]\n+        args = [self._parse_lambda()]\n         if self._match(TokenType.COMMA):\n             args.extend(self._parse_function_args())\n \n+        target = seq_get(args, distinct_index)\n+        if is_distinct and target:\n+            args[distinct_index] = self.expression(exp.Distinct(expressions=[target]))\n+\n         return func.from_arg_list(args)\n \n     def _parse_types(\ndiff --git a/sqlglot/parsers/spark2.py b/sqlglot/parsers/spark2.py\nindex f88b3333..021af686 100644\n--- a/sqlglot/parsers/spark2.py\n+++ b/sqlglot/parsers/spark2.py\n@@ -80,7 +80,7 @@ class Spark2Parser(HiveParser):\n \n     FUNCTION_PARSERS = {\n         **HiveParser.FUNCTION_PARSERS,\n-        \"APPROX_PERCENTILE\": lambda self: self._parse_quantile_function(exp.ApproxQuantile),\n+        \"APPROX_PERCENTILE\": lambda self: self._parse_distinct_arg_function(exp.ApproxQuantile),\n         \"BROADCAST\": lambda self: self._parse_join_hint(\"BROADCAST\"),\n         \"BROADCASTJOIN\": lambda self: self._parse_join_hint(\"BROADCASTJOIN\"),\n         \"MAPJOIN\": lambda self: self._parse_join_hint(\"MAPJOIN\"),\ndiff --git a/sqlglot/typing/databricks.py b/sqlglot/typing/databricks.py\nindex 1a342ef6..bf2d4faf 100644\n--- a/sqlglot/typing/databricks.py\n+++ b/sqlglot/typing/databricks.py\n@@ -9,6 +9,10 @@ EXPRESSION_METADATA = {\n         exp_type: {\"returns\": exp.DType.DOUBLE}\n         for exp_type in {\n             exp.RegrAvgx,\n+            exp.RegrAvgy,\n+            exp.RegrIntercept,\n+            exp.RegrR2,\n+            exp.RegrSlope,\n         }\n     },\n     **{\n@@ -19,6 +23,7 @@ EXPRESSION_METADATA = {\n         }\n     },\n     exp.RegexpSubstr: {\"returns\": exp.DType.VARCHAR},\n+    exp.RegrCount: {\"returns\": exp.DType.BIGINT},\n     exp.RegexpExtractAll: {\n         \"annotator\": lambda self, e: self._set_type(\n             e, exp.DataType.from_str(\"ARRAY<STRING>\", dialect=\"databricks\")\n",
+      "partial": [
+        "sqlglot/parsers/hive.py"
+      ],
+      "ripple": [
+        "sqlglot/parsers/spark2.py"
+      ]
+    },
+    "meta": {
+      "sha": "77c78147fc6a83bd4126c247c149df7205424010",
+      "date": "2026-07-08",
+      "subject": "fix(optimizer)!: annotate type for databricks REGR_AVGY, REGR_COUNT, REGR_INTERCEPT, REGR_R2, REGR_SLOPE (#7820)",
+      "tests": [
+        "tests/test_optimizer.py"
+      ],
+      "testFiles": [
+        "tests/fixtures/optimizer/annotate_functions.sql"
+      ],
+      "ripples": [
+        {
+          "name": "_parse_quantile_function",
+          "a": "sqlglot/parsers/hive.py",
+          "b": "sqlglot/parsers/spark2.py"
+        }
+      ],
+      "f2p": 1,
+      "p2p": 79,
+      "ripple": 2,
+      "flaky": 0,
+      "suite": 54
+    }
+  },
+  {
+    "id": "b5-sqlglot-da55602d",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "0ce4063ae9c2de1e05e4597d08b5e546c5d2a43c",
+    "statement": "Fix(parser)!: delimited text incorrectly consumed by _match_texts, _match_text_seq (#7843)",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_exasol.py b/tests/dialects/test_exasol.py\nindex 1297baa8..23799e31 100644\n--- a/tests/dialects/test_exasol.py\n+++ b/tests/dialects/test_exasol.py\n@@ -910,6 +910,10 @@ class TestExasol(Validator):\n         self.validate_identity(\n             \"\"\"SELECT JSON_EXTRACT('{\"firstname\" : \"Ann\", \"surname\" : \"Smith\", \"age\" : 29}', '$.firstname', '$.surname', '$.age') EMITS (firstname VARCHAR(100), surname VARCHAR(100), age INT)\"\"\"\n         )\n+        self.validate_identity(\n+            \"SELECT JSON_EXTRACT(x, '$.a') s FROM t\",\n+            \"SELECT JSON_EXTRACT(x, '$.a') AS s FROM t\",\n+        )\n \n     def test_group_by_all(self):\n         self.validate_all(\ndiff --git a/tests/dialects/test_snowflake.py b/tests/dialects/test_snowflake.py\nindex 66aca6f0..229c504b 100644\n--- a/tests/dialects/test_snowflake.py\n+++ b/tests/dialects/test_snowflake.py\n@@ -1525,6 +1525,9 @@ class TestSnowflake(Validator):\n             },\n         )\n \n+        # FROM here is the query's FROM clause, not the FROM FIRST | LAST modifier\n+        self.validate_identity(\"SELECT NTH_VALUE(a, 2) FROM t\")\n+\n         # NTH_VALUE FROM FIRST not supported in DuckDB\n         self.validate_all(\n             \"SELECT NTH_VALUE(is_deleted, 2) FROM FIRST IGNORE NULLS OVER (PARTITION BY id) AS nth_is_deleted FROM my_table\",\ndiff --git a/tests/fixtures/identity.sql b/tests/fixtures/identity.sql\nindex 71446863..f2819fe4 100644\n--- a/tests/fixtures/identity.sql\n+++ b/tests/fixtures/identity.sql\n@@ -953,3 +953,27 @@ SELECT UNIFORM(1, 10)\n SELECT CURRENT_TIMEZONE()\n SELECT NUMRANGE(1.1, 2.2) -|- NUMRANGE(2.2, 3.3)\n CREATE TABLE t (a VARCHAR, check INT)\n+CREATE TABLE \"if\" (x INT)\n+DROP TABLE \"if\"\n+SELECT TRIM(\"both\") FROM t\n+\"while\"\n+DROP INDEX \"concurrently\"\n+CREATE INDEX \"concurrently\" ON t(x)\n+CREATE TABLE t AS \"minvalue\"\n+CREATE TABLE t AS \"increment\"\n+CREATE TABLE t AS \"start\"\n+CREATE TABLE t AS \"cache\"\n+CREATE TABLE t AS \"sample\"\n+DESCRIBE \"history\"\n+SELECT * FROM t CONNECT BY \"nocycle\" = 1\n+SELECT a BETWEEN \"symmetric\" AND b FROM t\n+SELECT JSON_OBJECT(\"key\": 1)\n+SELECT JSON_OBJECT('a': \"value\")\n+CREATE INDEX i ON t(c \"nulls\")\n+GRANT SELECT ON TABLE t TO \"role\"\n+ANALYZE \"verbose\"\n+ANALYZE \"tables\"\n+ANALYZE \"database\"\n+CREATE TABLE t (a INT, UNIQUE \"key\" (a))\n+USE \"role\"\n+SELECT MATCH(\"table\") AGAINST('x') FROM t\ndiff --git a/tests/test_parser.py b/tests/test_parser.py\nindex 27246da3..f7dcf8f6 100644\n--- a/tests/test_parser.py\n+++ b/tests/test_parser.py\n@@ -109,6 +109,108 @@ class TestParser(unittest.TestCase):\n         self.assertIsInstance(cast.this, exp.Column)\n         self.assertEqual(cast.this.name, \"current_user\")\n \n+    def test_text_match_excludes_delimited_tokens(self):\n+        # Tokens whose delimiters are stripped during tokenization (quoted identifiers,\n+        # heredoc/national strings, etc.) must not be matched as keywords by text.\n+        # Base-dialect roundtrip cases live in identity.sql; these are the dialect-specific\n+        # and non-roundtripping ones\n+        for dialect, sql, expected in [\n+            (\"postgres\", \"SELECT TRIM($$leading$$)\", \"SELECT TRIM('leading')\"),\n+            (\"tsql\", \"SELECT TRIM(N'both')\", \"SELECT TRIM(N'both')\"),\n+            (\"postgres\", 'SELECT TRIM(\"leading\" FROM x)', 'SELECT TRIM(\"leading\" FROM x)'),\n+            (\"mysql\", \"INSERT `local` (a) VALUES (1)\", \"INSERT INTO `local` (a) VALUES (1)\"),\n+            (\n+                \"mysql\",\n+                \"INSERT `directory` (a) VALUES (1)\",\n+                \"INSERT INTO `directory` (a) VALUES (1)\",\n+            ),\n+            (\"mysql\", \"SELECT `high_priority` FROM t\", \"SELECT `high_priority` FROM t\"),\n+            (\"postgres\", 'SELECT * INTO \"unlogged\" FROM t', 'SELECT * INTO \"unlogged\" FROM t'),\n+            (\n+                \"oracle\",\n+                'SELECT XMLELEMENT(\"name\", x) FROM t',\n+                'SELECT XMLELEMENT(NAME \"name\", x) FROM t',\n+            ),\n+            (\n+                \"postgres\",\n+                'SELECT c::INT \"unsigned\" FROM t',\n+                'SELECT CAST(c AS INT) AS \"unsigned\" FROM t',\n+            ),\n+            (\n+                \"oracle\",\n+                \"SELECT INTERVAL '1' DAY \\\"to\\\" FROM t\",\n+                \"SELECT INTERVAL '1' DAY AS \\\"to\\\" FROM t\",\n+            ),\n+            (\n+                \"clickhouse\",\n+                \"CREATE TABLE t (j JSON(`skip` String))\",\n+                'CREATE TABLE t (j JSON(\"skip\" String))',\n+            ),\n+            (\n+                \"clickhouse\",\n+                'ALTER TABLE t DROP PARTITION \"id\"',\n+                'ALTER TABLE t DROP PARTITION \"id\"',\n+            ),\n+            (\"databricks\", \"DECLARE `var` INT\", \"DECLARE `var` INT\"),\n+            (\n+                \"redshift\",\n+                'ALTER TABLE t ALTER \"sortkey\" TYPE INT',\n+                'ALTER TABLE t ALTER COLUMN \"sortkey\" TYPE INTEGER',\n+            ),\n+            (\n+                \"duckdb\",\n+                'ALTER TABLE t ADD \"columns\" INT',\n+                'ALTER TABLE t ADD COLUMN \"columns\" INT',\n+            ),\n+            (\n+                \"postgres\",\n+                'ALTER TABLE \"only\" ADD COLUMN x INT',\n+                'ALTER TABLE \"only\" ADD COLUMN x INT',\n+            ),\n+            (\"duckdb\", 'SELECT MAX(\"lambda\") FROM t', 'SELECT MAX(\"lambda\") FROM t'),\n+            (\"duckdb\", 'CREATE MACRO m() AS \"return\"', 'CREATE MACRO m() AS \"return\"'),\n+            (\"mysql\", \"ALTER TABLE t RENAME `index`\", \"ALTER TABLE t RENAME `index`\"),\n+            (\n+                \"mysql\",\n+                \"CREATE TABLE t (x TEXT, FULLTEXT `index` (x))\",\n+                \"CREATE TABLE t (x TEXT, FULLTEXT INDEX `index` (x))\",\n+            ),\n+            (\"mysql\", \"SHOW CREATE TABLE `json`\", \"SHOW CREATE TABLE `json`\"),\n+            (\n+                \"snowflake\",\n+                'WITH \"identifier\" (c) AS (SELECT 1) SELECT c FROM \"identifier\"',\n+                'WITH \"identifier\"(c) AS (SELECT 1) SELECT c FROM \"identifier\"',\n+            ),\n+            (\n+                \"snowflake\",\n+                'SELECT * FROM t AS \"identifier\"(a, b)',\n+                'SELECT * FROM t AS \"identifier\"(a, b)',\n+            ),\n+            (\n+                \"bigquery\",\n+                \"SELECT ML.PREDICT(MODEL m, `table`)\",\n+                \"SELECT ML.PREDICT(MODEL m, TABLE `table`)\",\n+            ),\n+            (\n+                \"spark\",\n+                \"ALTER TABLE t CHANGE COLUMN a `type` INT\",\n+                \"ALTER TABLE t RENAME COLUMN a TO `type`\",\n+            ),\n+            (\n+                \"exasol\",\n+                \"SELECT JSON_EXTRACT(x, '$.a') \\\"emits\\\" FROM t\",\n+                \"SELECT JSON_EXTRACT(x, '$.a') AS \\\"emits\\\" FROM t\",\n+            ),\n+            (\"trino\", \"SELECT U&'abc' \\\"uescape\\\"\", \"SELECT U&'abc' AS \\\"uescape\\\"\"),\n+            (\n+                \"snowflake\",\n+                'SELECT * FROM t MATCH_RECOGNIZE(MEASURES \"final\" AS f PATTERN (a) DEFINE a AS TRUE)',\n+                'SELECT * FROM t MATCH_RECOGNIZE ( MEASURES \"final\" AS f PATTERN (a) DEFINE a AS TRUE)',\n+            ),\n+        ]:\n+            with self.subTest(f\"{dialect}: {sql}\"):\n+                self.assertEqual(parse_one(sql, dialect=dialect).sql(dialect), expected)\n+\n     def test_tuple(self):\n         parse_one(\"(a,)\").assert_is(exp.Tuple)\n \n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-da55602d.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-da55602d.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-da55602d.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/parser.py",
+        "sqlglot/parsers/exasol.py",
+        "sqlglot/parsers/snowflake.py"
+      ],
+      "patch": "diff --git a/sqlglot/parser.py b/sqlglot/parser.py\nindex 6feb9939..d8515f83 100644\n--- a/sqlglot/parser.py\n+++ b/sqlglot/parser.py\n@@ -37,6 +37,10 @@ logger = logging.getLogger(\"sqlglot\")\n \n OPTIONS_TYPE = dict[str, Sequence[t.Union[Sequence[str], str]]]\n \n+# Excludes bare strings, which are also collections of strings, so that a single keyword\n+# can't accidentally be matched with substring semantics (e.g. _match_texts(\"FOO\"))\n+TEXTS_TYPE = t.Union[tuple[str, ...], list[str], t.AbstractSet[str], t.Mapping[str, t.Any]]\n+\n # Used to detect alphabetical characters and +/- in timestamp literals\n TIME_ZONE_RE: Pattern[str] = re.compile(r\":.*?[a-zA-Z\\+\\-]\")\n \n@@ -615,6 +619,22 @@ class Parser:\n         TokenType.SELECT,\n     } - {TokenType.IDENTIFIER}\n \n+    # Tokens whose text is extracted from delimited source text (e.g. quoted identifiers,\n+    # string literals), so they must never be treated as keywords when matching by text\n+    TEXT_MATCH_EXCLUDED_TOKENS: t.ClassVar[frozenset] = frozenset(\n+        {\n+            TokenType.BIT_STRING,\n+            TokenType.BYTE_STRING,\n+            TokenType.HEREDOC_STRING,\n+            TokenType.HEX_STRING,\n+            TokenType.IDENTIFIER,\n+            TokenType.NATIONAL_STRING,\n+            TokenType.RAW_STRING,\n+            TokenType.STRING,\n+            TokenType.UNICODE_STRING,\n+        }\n+    )\n+\n     DB_CREATABLES: t.ClassVar = {\n         TokenType.DATABASE,\n         TokenType.DICTIONARY,\n@@ -1955,8 +1975,11 @@ class Parser:\n             return True\n         return False\n \n-    def _match_texts(self, texts: t.Collection[str], advance: bool = True) -> bool:\n-        if self._curr.token_type != TokenType.STRING and self._curr.text.upper() in texts:\n+    def _match_texts(self, texts: TEXTS_TYPE, advance: bool = True) -> bool:\n+        if (\n+            self._curr.token_type not in self.TEXT_MATCH_EXCLUDED_TOKENS\n+            and self._curr.text.upper() in texts\n+        ):\n             if advance:\n                 self._advance()\n             return True\n@@ -1964,9 +1987,9 @@ class Parser:\n \n     def _match_text_seq(self, *texts: str, advance: bool = True) -> bool:\n         index = self._index\n-        string_type = TokenType.STRING\n+        excluded_tokens = self.TEXT_MATCH_EXCLUDED_TOKENS\n         for text in texts:\n-            if self._curr.token_type != string_type and self._curr.text.upper() == text:\n+            if self._curr.token_type not in excluded_tokens and self._curr.text.upper() == text:\n                 self._advance()\n             else:\n                 self._retreat(index)\n@@ -7492,9 +7515,7 @@ class Parser:\n \n         return constraints\n \n-    def _parse_unnamed_constraint(\n-        self, constraints: t.Collection[str] | None = None\n-    ) -> exp.Expr | None:\n+    def _parse_unnamed_constraint(self, constraints: TEXTS_TYPE | None = None) -> exp.Expr | None:\n         index = self._index\n \n         if self._match(TokenType.IDENTIFIER, advance=False) or not self._match_texts(\n@@ -9067,7 +9088,7 @@ class Parser:\n         elif self._match(TokenType.FOR):\n             if self._match_text_seq(\"ALL\", \"COLUMNS\"):\n                 this = \"FOR ALL COLUMNS\"\n-            if self._match_texts(\"COLUMNS\"):\n+            if self._match_text_seq(\"COLUMNS\"):\n                 this = \"FOR COLUMNS\"\n                 expressions = self._parse_csv(self._parse_column_reference)\n         elif self._match_text_seq(\"SAMPLE\"):\n@@ -9297,7 +9318,9 @@ class Parser:\n             return None\n \n         option = start.text.upper()\n-        continuations = options.get(option)\n+        continuations = (\n+            None if start.token_type in self.TEXT_MATCH_EXCLUDED_TOKENS else options.get(option)\n+        )\n \n         index = self._index\n         self._advance()\ndiff --git a/sqlglot/parsers/exasol.py b/sqlglot/parsers/exasol.py\nindex 9dd504e5..4b284682 100644\n--- a/sqlglot/parsers/exasol.py\n+++ b/sqlglot/parsers/exasol.py\n@@ -153,7 +153,7 @@ class ExasolParser(parser.Parser):\n \n         expression = exp.JSONExtract(expressions=args)\n \n-        if self._match_texts(\"EMITS\"):\n+        if self._match_text_seq(\"EMITS\"):\n             expression.set(\"emits\", self._parse_schema())\n \n         return expression\ndiff --git a/sqlglot/parsers/snowflake.py b/sqlglot/parsers/snowflake.py\nindex 93a626ed..6db19e80 100644\n--- a/sqlglot/parsers/snowflake.py\n+++ b/sqlglot/parsers/snowflake.py\n@@ -1393,10 +1393,10 @@ class SnowflakeParser(parser.Parser):\n \n     def _parse_window(self, this: exp.Expr | None, alias: bool = False) -> exp.Expr | None:\n         if isinstance(this, exp.NthValue):\n-            if self._match_text_seq(\"FROM\"):\n-                if self._match_texts((\"FIRST\", \"LAST\")):\n-                    from_first = self._prev.text.upper() == \"FIRST\"\n-                    this.set(\"from_first\", from_first)\n+            if self._match_text_seq(\"FROM\", \"FIRST\"):\n+                this.set(\"from_first\", True)\n+            elif self._match_text_seq(\"FROM\", \"LAST\"):\n+                this.set(\"from_first\", False)\n \n         result = super()._parse_window(this, alias)\n \n",
+      "partial": [
+        "sqlglot/parser.py"
+      ],
+      "ripple": [
+        "sqlglot/parsers/exasol.py",
+        "sqlglot/parsers/snowflake.py"
+      ]
+    },
+    "meta": {
+      "sha": "da55602dea6e70de54c500d072a0bff5ecfb3d6d",
+      "date": "2026-07-08",
+      "subject": "Fix(parser)!: delimited text incorrectly consumed by _match_texts, _match_text_seq (#7843)",
+      "tests": [
+        "tests/dialects/test_exasol.py",
+        "tests/dialects/test_snowflake.py",
+        "tests/test_parser.py",
+        "tests/test_transpile.py"
+      ],
+      "testFiles": [
+        "tests/dialects/test_exasol.py",
+        "tests/dialects/test_snowflake.py",
+        "tests/fixtures/identity.sql",
+        "tests/test_parser.py"
+      ],
+      "ripples": [
+        {
+          "name": "_match_texts",
+          "a": "sqlglot/parser.py",
+          "b": "sqlglot/parsers/exasol.py"
+        },
+        {
+          "name": "_match_texts",
+          "a": "sqlglot/parser.py",
+          "b": "sqlglot/parsers/snowflake.py"
+        }
+      ],
+      "f2p": 4,
+      "p2p": 208,
+      "ripple": 2,
+      "flaky": 0,
+      "suite": 54
+    }
+  },
+  {
+    "id": "b5-sqlglot-e9b01407",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "a5ab08bbbbed61567913eda8a95ccc6094036027",
+    "statement": "fix(optimizer)!: normalization of synthesized output aliases (#7816)\n\n* Normalization of synthesized output aliases\n\n* PR tweaks / updates\n\n* tweak to deal with dialects that preserve case\n\n* adjusted comment\n\n* fixed test schema, made dialect non optional, and infers quotes from schema\n\n* minor tweak\n\n* fixed other branch\n\n* updates / PR Feedback\n\n* removed PRESERVE_ORIGINAL_OUTPUT_NAME_CASE\n\n* remove redundant if",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/fixtures/optimizer/optimizer.sql b/tests/fixtures/optimizer/optimizer.sql\nindex 21fdab1c..bea5ffa2 100644\n--- a/tests/fixtures/optimizer/optimizer.sql\n+++ b/tests/fixtures/optimizer/optimizer.sql\n@@ -1588,5 +1588,5 @@ CROSS JOIN LATERAL FLATTEN(input => \"OBJ\".\"DATA\") AS \"F\"(\"SEQ\", \"KEY\", \"PATH\", \"\n SELECT array_agg(id) WITHIN GROUP (ORDER BY id) OVER (PARTITION BY grp) FROM t;\n SELECT\n   ARRAY_AGG(\"T\".\"ID\") WITHIN GROUP (ORDER BY\n-    \"T\".\"ID\") OVER (PARTITION BY \"T\".\"GRP\") AS \"_col_0\"\n+    \"T\".\"ID\") OVER (PARTITION BY \"T\".\"GRP\") AS \"_COL_0\"\n FROM \"T\" AS \"T\";\n\\ No newline at end of file\ndiff --git a/tests/fixtures/optimizer/pushdown_projections.sql b/tests/fixtures/optimizer/pushdown_projections.sql\nindex 02bdda74..bf6f1412 100644\n--- a/tests/fixtures/optimizer/pushdown_projections.sql\n+++ b/tests/fixtures/optimizer/pushdown_projections.sql\n@@ -122,11 +122,11 @@ SELECT _0.a AS a, _0.b AS b FROM (WITH cte1 AS (SELECT 1 AS a, 2 AS b) SELECT ct\n \n # dialect: snowflake\n SELECT OBJECT_CONSTRUCT(*) FROM (SELECT a, b FROM x) AS t;\n-SELECT OBJECT_CONSTRUCT(*) AS _col_0 FROM (SELECT a AS a, b AS b FROM x AS x) AS t;\n+SELECT OBJECT_CONSTRUCT(*) AS _COL_0 FROM (SELECT a AS A, b AS B FROM x AS x) AS t;\n \n # dialect: snowflake\n WITH base AS (SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d) SELECT OBJECT_INSERT(OBJECT_CONSTRUCT(*), 'e', 5) FROM base;\n-WITH base AS (SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d) SELECT OBJECT_INSERT(OBJECT_CONSTRUCT(*), 'e', 5) AS _col_0 FROM base AS base;\n+WITH base AS (SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d) SELECT OBJECT_INSERT(OBJECT_CONSTRUCT(*), 'e', 5) AS _COL_0 FROM base AS base;\n \n # dialect: snowflake\n WITH base AS (SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d) SELECT obj:A, obj:B FROM (SELECT OBJECT_INSERT(OBJECT_CONSTRUCT(*), 'e', 5) AS obj, a FROM base) AS t;\n@@ -134,11 +134,11 @@ WITH base AS (SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d) SELECT GET_PATH(t.obj, 'A')\n \n # dialect: snowflake\n WITH cte AS (SELECT 1 AS a, 2 as b) SELECT HASH_AGG(*) FROM cte;\n-WITH cte AS (SELECT 1 AS a, 2 AS b) SELECT HASH_AGG(*) AS _col_0 FROM cte AS cte;\n+WITH cte AS (SELECT 1 AS a, 2 AS b) SELECT HASH_AGG(*) AS _COL_0 FROM cte AS cte;\n \n # dialect: snowflake\n WITH cte AS (SELECT a, b FROM x) SELECT COUNT(* EXCLUDE a) FROM cte;\n-WITH cte AS (SELECT a AS a, b AS b FROM x AS x) SELECT COUNT(* EXCLUDE (a)) AS _col_0 FROM cte AS cte;\n+WITH cte AS (SELECT a AS A, b AS B FROM x AS x) SELECT COUNT(* EXCLUDE (a)) AS _COL_0 FROM cte AS cte;\n \n WITH cte1 AS (SELECT a, SUM(b) AS sale FROM x GROUP BY a), cte2 AS (SELECT cte1.a, COUNT(*) AS cnt FROM cte1 GROUP BY cte1.a) SELECT a, cnt FROM cte2;\n WITH cte1 AS (SELECT x.a AS a FROM x AS x GROUP BY x.a), cte2 AS (SELECT cte1.a AS a, COUNT(*) AS cnt FROM cte1 AS cte1 GROUP BY cte1.a) SELECT cte2.a AS a, cte2.cnt AS cnt FROM cte2 AS cte2;\ndiff --git a/tests/fixtures/optimizer/qualify_columns.sql b/tests/fixtures/optimizer/qualify_columns.sql\nindex f75a0a3a..35a5824f 100644\n--- a/tests/fixtures/optimizer/qualify_columns.sql\n+++ b/tests/fixtures/optimizer/qualify_columns.sql\n@@ -5,7 +5,7 @@ SELECT a FROM x;\n SELECT x.a AS a FROM x AS x;\n \n SELECT \"a\" FROM x;\n-SELECT x.\"a\" AS a FROM x AS x;\n+SELECT x.\"a\" AS \"a\" FROM x AS x;\n \n # execute: false\n SELECT a FROM zz GROUP BY a ORDER BY a;\n@@ -110,7 +110,7 @@ SELECT T.\"col\" AS \"col\" FROM TBL T;\n # execute: false\n # dialect: oracle\n WITH base AS (SELECT x.dummy AS COL_1 FROM dual x) SELECT b.\"COL_1\" FROM base b;\n-WITH BASE AS (SELECT X.DUMMY AS COL_1 FROM DUAL X) SELECT B.\"COL_1\" AS COL_1 FROM BASE B;\n+WITH BASE AS (SELECT X.DUMMY AS COL_1 FROM DUAL X) SELECT B.\"COL_1\" AS \"COL_1\" FROM BASE B;\n \n # execute: false\n -- this query seems to be invalid in postgres and duckdb but valid in bigquery\ndiff --git a/tests/test_optimizer.py b/tests/test_optimizer.py\nindex 24a8c6b8..307986cf 100644\n--- a/tests/test_optimizer.py\n+++ b/tests/test_optimizer.py\n@@ -1345,9 +1345,8 @@ SELECT :with_,WITH :expressions,CTE :this,UNION :this,SELECT :expressions,1,:exp\n         self.assertEqual(canon_pg_a, canon_pg_qa)\n \n         # In Snowflake (upper-folding), unquoted `a` becomes `A`, while quoted `\"a\"` stays\n-        # lowercase — they reference *different* columns. Base-table names are preserved,\n-        # and the quote state on the lowercase column is retained because dropping it\n-        # would let Snowflake re-case-fold `a` back to `A` (changing semantics).\n+        # lowercase — they reference *different* columns. The generated alias for the quoted\n+        # column keeps its exact spelling, since folding it would re-case-fold `a` back to `A`.\n         sf_schema = {\"X\": {\"A\": \"INT\", '\"a\"': \"INT\"}}\n         canon_sf = qualify_then_canonicalize(\n             parse_one('SELECT a, \"a\" FROM x', dialect=\"snowflake\"),\n@@ -2748,7 +2747,7 @@ SELECT :with_,WITH :expressions,CTE :this,UNION :this,SELECT :expressions,1,:exp\n \n         # Databricks\n         sql = _parse_and_optimize(\"SELECT col:A.a, col:a.A FROM t\", dialect=\"databricks\")\n-        assert sql == \"SELECT `t`.`col`:A.a AS `a`, `t`.`col`:a.A AS `A` FROM `t` AS `t`\"\n+        assert sql == \"SELECT `t`.`col`:A.a AS `a`, `t`.`col`:a.A AS `a` FROM `t` AS `t`\"\n \n         # Clickhouse\n         sql = _parse_and_optimize(\"SELECT col.A.a, col.a.A FROM t\", dialect=\"clickhouse\")\n@@ -2762,7 +2761,7 @@ SELECT :with_,WITH :expressions,CTE :this,UNION :this,SELECT :expressions,1,:exp\n         sql = _parse_and_optimize(\"SELECT col:A.a, col:a.A FROM t\", dialect=\"snowflake\")\n         assert (\n             sql\n-            == '''SELECT GET_PATH(\"T\".\"COL\", 'A.a') AS \"a\", GET_PATH(\"T\".\"COL\", 'a.A') AS \"A\" FROM \"T\" AS \"T\"'''\n+            == '''SELECT GET_PATH(\"T\".\"COL\", 'A.a') AS \"A\", GET_PATH(\"T\".\"COL\", 'a.A') AS \"A\" FROM \"T\" AS \"T\"'''\n         )\n \n         query = parse_one(\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-e9b01407.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-e9b01407.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-e9b01407.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/generators/tsql.py",
+        "sqlglot/optimizer/qualify_columns.py"
+      ],
+      "patch": "diff --git a/sqlglot/generators/tsql.py b/sqlglot/generators/tsql.py\nindex 88de0bfc..60c86a9f 100644\n--- a/sqlglot/generators/tsql.py\n+++ b/sqlglot/generators/tsql.py\n@@ -74,6 +74,7 @@ def qualify_derived_table_outputs(expression: exp.Expr) -> exp.Expr:\n         and isinstance(alias, exp.TableAlias)\n         and not alias.columns\n     ):\n+        from sqlglot.dialects.tsql import TSQL\n         from sqlglot.optimizer.qualify_columns import qualify_outputs\n \n         # We keep track of the unaliased column projection indexes instead of the expressions\n@@ -84,7 +85,7 @@ def qualify_derived_table_outputs(expression: exp.Expr) -> exp.Expr:\n             i for i, c in enumerate(query.selects) if isinstance(c, exp.Column) and not c.alias\n         )\n \n-        qualify_outputs(query)\n+        qualify_outputs(query, dialect=TSQL())\n \n         # Preserve the quoting information of columns for newly added Alias nodes\n         query_selects = query.selects\ndiff --git a/sqlglot/optimizer/qualify_columns.py b/sqlglot/optimizer/qualify_columns.py\nindex a976c02a..80a5a3b4 100644\n--- a/sqlglot/optimizer/qualify_columns.py\n+++ b/sqlglot/optimizer/qualify_columns.py\n@@ -101,7 +101,7 @@ def qualify_columns(\n                     pseudocolumns,\n                     annotator,\n                 )\n-            qualify_outputs(scope)\n+            qualify_outputs(scope, dialect=dialect)\n \n         _expand_group_by(scope, dialect)\n \n@@ -831,7 +831,8 @@ def _expand_stars(\n             continue\n \n         for table in tables:\n-            if table not in scope.sources:\n+            source = scope.sources.get(table)\n+            if source is None:\n                 raise OptimizeError(f\"Unknown table: {table}\")\n \n             columns = resolver.get_source_columns(table, only_visible=True)\n@@ -848,6 +849,15 @@ def _expand_stars(\n             renamed_columns = rename_columns.get(table_id, {})\n             replaced_columns = replace_columns.get(table_id, {})\n \n+            # Preserve case-sensitivity of quoted source columns when expanding stars,\n+            # so the generated alias isn't folded by dialect normalization\n+            source_expression = source.expression if isinstance(source, Scope) else None\n+            quoted_columns = (\n+                {s.output_name for s in source_expression.selects if _output_identifier_quoted(s)}\n+                if isinstance(source_expression, exp.Query)\n+                else set()\n+            )\n+\n             if pivot:\n                 pivot_columns = pivot.output_columns(columns) or pivot.alias_column_names\n \n@@ -875,7 +885,13 @@ def _expand_stars(\n                     )\n                 else:\n                     alias_ = renamed_columns.get(name, name)\n-                    selection_expr = replaced_columns.get(name) or exp.column(name, table=table)\n+                    quoted = name in quoted_columns or (\n+                        # if it has characters that the dialect would have changed, infer that it was quoted.\n+                        isinstance(source, exp.Table) and dialect.case_sensitive(name)\n+                    )\n+                    selection_expr = replaced_columns.get(name) or exp.column(\n+                        name, table=table, quoted=quoted\n+                    )\n                     new_selections.append(\n                         alias(selection_expr, alias_, copy=False)\n                         if alias_ != name\n@@ -887,6 +903,18 @@ def _expand_stars(\n         scope_expression.set(\"expressions\", new_selections)\n \n \n+def _output_identifier_quoted(selection: exp.Expr) -> bool:\n+    \"\"\"Whether a projection's output column name is a quoted (case-sensitive) identifier.\"\"\"\n+    if isinstance(selection, exp.Alias):\n+        identifier = selection.args.get(\"alias\")\n+    elif isinstance(selection, exp.Column):\n+        identifier = selection.this\n+    else:\n+        identifier = None\n+\n+    return isinstance(identifier, exp.Identifier) and identifier.quoted\n+\n+\n def _add_ilike_columns(expression: exp.Expr) -> str | None:\n     ilike = expression.args.get(\"ilike\")\n \n@@ -936,7 +964,7 @@ def _add_replace_columns(\n         replace_columns[id(table)] = columns\n \n \n-def qualify_outputs(scope_or_expression: Scope | exp.Expr) -> None:\n+def qualify_outputs(scope_or_expression: Scope | exp.Expr, dialect: Dialect) -> None:\n     \"\"\"Ensure all output columns are aliased\"\"\"\n     if isinstance(scope_or_expression, exp.Expr):\n         scope = build_scope(scope_or_expression)\n@@ -960,13 +988,19 @@ def qualify_outputs(scope_or_expression: Scope | exp.Expr) -> None:\n \n         if isinstance(selection, exp.Subquery):\n             if not selection.output_name:\n-                selection.set(\"alias\", exp.TableAlias(this=exp.to_identifier(f\"_col_{i}\")))\n+                alias_identifier = exp.to_identifier(f\"_col_{i}\")\n+                dialect.normalize_identifier(alias_identifier)\n+                selection.set(\"alias\", exp.TableAlias(this=alias_identifier))\n         elif not isinstance(selection, (exp.Alias, exp.Aliases)) and not selection.is_star:\n+            source_quoted = isinstance(selection, exp.Column) and selection.this.quoted\n             selection = alias(\n                 selection,\n                 alias=selection.output_name or f\"_col_{i}\",\n                 copy=False,\n             )\n+            if source_quoted:\n+                selection.args[\"alias\"].set(\"quoted\", True)\n+            dialect.normalize_identifier(selection.args[\"alias\"])\n         if aliased_column:\n             selection.set(\"alias\", exp.to_identifier(aliased_column))\n \n",
+      "partial": [
+        "sqlglot/optimizer/qualify_columns.py"
+      ],
+      "ripple": [
+        "sqlglot/generators/tsql.py"
+      ]
+    },
+    "meta": {
+      "sha": "e9b014074b47ddb85aca93fac43d431e28add9f1",
+      "date": "2026-07-07",
+      "subject": "fix(optimizer)!: normalization of synthesized output aliases (#7816)",
+      "tests": [
+        "tests/test_optimizer.py"
+      ],
+      "testFiles": [
+        "tests/fixtures/optimizer/optimizer.sql",
+        "tests/fixtures/optimizer/pushdown_projections.sql",
+        "tests/fixtures/optimizer/qualify_columns.sql",
+        "tests/test_optimizer.py"
+      ],
+      "ripples": [
+        {
+          "name": "qualify_outputs",
+          "a": "sqlglot/optimizer/qualify_columns.py",
+          "b": "sqlglot/generators/tsql.py"
+        }
+      ],
+      "f2p": 4,
+      "p2p": 76,
+      "ripple": 12,
+      "flaky": 0,
+      "suite": 54
+    }
+  },
+  {
+    "id": "b5-sqlglot-4e271fbe",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sqlglot",
+    "base": "6c1f08191f2aa32540de960ffb8c1d72b05ec7c4",
+    "statement": "fix(duckdb): default missing year to 1970 for BigQuery PARSE_DATE/PARSE_TIMESTAMP (#7800)\n\nBigQuery's PARSE_DATE/PARSE_TIMESTAMP default a missing year to 1970.\nTranspiling to DuckDB dropped that, so a format without %Y parsed to the\ncurrent year. Prepend the 1970 default in the DuckDB strptime path.\n\nMove the default-year handling into a base StrToDate generator so it stays\nBigQuery-scoped and does not leak a stray argument into dialects that render\nStrToDate via the function fallback.",
+    "needsStatement": true,
+    "testHint": "from the repository root, `python3 -m unittest tests.test_parser` runs one test module (`tests/dialects/test_duckdb.py` → `tests.dialects.test_duckdb`); `python3 -m unittest discover -s tests -t .` runs everything (slow); duckdb, pandas and numpy, which some tests use, are installed.",
+    "grade": {
+      "testPatch": "diff --git a/tests/dialects/test_bigquery.py b/tests/dialects/test_bigquery.py\nindex 617618be..9c8ee86a 100644\n--- a/tests/dialects/test_bigquery.py\n+++ b/tests/dialects/test_bigquery.py\n@@ -546,7 +546,7 @@ LANGUAGE js AS\n             \"PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E6S%z', x)\",\n             write={\n                 \"bigquery\": \"PARSE_TIMESTAMP('%FT%H:%M:%E6S%z', x)\",\n-                \"duckdb\": \"STRPTIME(x, '%Y-%m-%dT%H:%M:%S.%f%z')\",\n+                \"duckdb\": \"STRPTIME('1970 ' || x, '%Y ' || '%Y-%m-%dT%H:%M:%S.%f%z')\",\n             },\n         )\n         self.validate_all(\n@@ -620,7 +620,7 @@ LANGUAGE js AS\n             \"PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E6S%z', x)\",\n             write={\n                 \"bigquery\": \"PARSE_TIMESTAMP('%FT%H:%M:%E6S%z', x)\",\n-                \"duckdb\": \"STRPTIME(x, '%Y-%m-%dT%H:%M:%S.%f%z')\",\n+                \"duckdb\": \"STRPTIME('1970 ' || x, '%Y ' || '%Y-%m-%dT%H:%M:%S.%f%z')\",\n             },\n         )\n         self.validate_all(\n@@ -1799,17 +1799,31 @@ WHERE\n             \"SELECT PARSE_DATE('%A %b %e %Y', 'Thursday Dec 25 2008')\",\n             write={\n                 \"bigquery\": \"SELECT PARSE_DATE('%A %b %e %Y', 'Thursday Dec 25 2008')\",\n-                \"duckdb\": \"SELECT CAST(STRPTIME('Thursday Dec 25 2008', '%A %b %-d %Y') AS DATE)\",\n+                \"duckdb\": \"SELECT CAST(STRPTIME('1970 ' || 'Thursday Dec 25 2008', '%Y ' || '%A %b %-d %Y') AS DATE)\",\n             },\n         )\n         self.validate_all(\n             \"SELECT PARSE_DATE('%Y%m%d', '20081225')\",\n             write={\n                 \"bigquery\": \"SELECT PARSE_DATE('%Y%m%d', '20081225')\",\n-                \"duckdb\": \"SELECT CAST(STRPTIME('20081225', '%Y%m%d') AS DATE)\",\n+                \"duckdb\": \"SELECT CAST(STRPTIME('1970 ' || '20081225', '%Y ' || '%Y%m%d') AS DATE)\",\n                 \"snowflake\": \"SELECT DATE('20081225', 'yyyymmDD')\",\n             },\n         )\n+        self.validate_all(\n+            \"SELECT PARSE_DATE('%m-%d', '12-25')\",\n+            write={\n+                \"bigquery\": \"SELECT PARSE_DATE('%m-%d', '12-25')\",\n+                \"duckdb\": \"SELECT CAST(STRPTIME('1970 ' || '12-25', '%Y ' || '%m-%d') AS DATE)\",\n+            },\n+        )\n+        self.validate_all(\n+            \"SELECT PARSE_TIMESTAMP('%m-%d %H:%M:%S', '12-25 07:30:00')\",\n+            write={\n+                \"bigquery\": \"SELECT PARSE_TIMESTAMP('%m-%d %T', '12-25 07:30:00')\",\n+                \"duckdb\": \"SELECT STRPTIME('1970 ' || '12-25 07:30:00', '%Y ' || '%m-%d %H:%M:%S')\",\n+            },\n+        )\n         self.validate_all(\n             \"SELECT ARRAY_TO_STRING(['cake', 'pie', NULL], '--') AS text\",\n             write={\ndiff --git a/tests/dialects/test_duckdb.py b/tests/dialects/test_duckdb.py\nindex f48866a0..ebb10627 100644\n--- a/tests/dialects/test_duckdb.py\n+++ b/tests/dialects/test_duckdb.py\n@@ -1826,7 +1826,7 @@ class TestDuckDB(Validator):\n             },\n         )\n         self.validate_all(\n-            \"SELECT CAST(CAST(STRPTIME('05/06/2020', '%m/%d/%Y') AS DATE) AS DATE)\",\n+            \"SELECT CAST(CAST(STRPTIME('1970 ' || '05/06/2020', '%Y ' || '%m/%d/%Y') AS DATE) AS DATE)\",\n             read={\n                 \"bigquery\": \"SELECT DATE(PARSE_DATE('%m/%d/%Y', '05/06/2020'))\",\n             },\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-4e271fbe.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-4e271fbe.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner unittest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sqlglot-4e271fbe.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sqlglot/dialects/dialect.py",
+        "sqlglot/expressions/temporal.py",
+        "sqlglot/generator.py",
+        "sqlglot/generators/duckdb.py",
+        "sqlglot/parsers/bigquery.py"
+      ],
+      "patch": "diff --git a/sqlglot/dialects/dialect.py b/sqlglot/dialects/dialect.py\nindex 63b0aed3..aa6304c4 100644\n--- a/sqlglot/dialects/dialect.py\n+++ b/sqlglot/dialects/dialect.py\n@@ -1797,10 +1797,6 @@ def trim_sql(self: Generator, expression: exp.Trim, default_trim_type: str = \"\")\n     return f\"TRIM({trim_type}{remove_chars}{from_part}{target}{collation})\"\n \n \n-def str_to_time_sql(self: Generator, expression: exp.Expr) -> str:\n-    return self.func(\"STRPTIME\", expression.this, self.format_time(expression))\n-\n-\n def concat_to_dpipe_sql(self: Generator, expression: exp.Concat) -> str:\n     return self.sql(reduce(lambda x, y: exp.DPipe(this=x, expression=y), expression.expressions))\n \ndiff --git a/sqlglot/expressions/temporal.py b/sqlglot/expressions/temporal.py\nindex 99cffd13..b34130e9 100644\n--- a/sqlglot/expressions/temporal.py\n+++ b/sqlglot/expressions/temporal.py\n@@ -450,11 +450,18 @@ class ParseTime(Expression, Func):\n \n \n class StrToDate(Expression, Func):\n-    arg_types = {\"this\": True, \"format\": False, \"safe\": False}\n+    arg_types = {\"this\": True, \"format\": False, \"safe\": False, \"default_year\": False}\n \n \n class StrToTime(Expression, Func):\n-    arg_types = {\"this\": True, \"format\": True, \"zone\": False, \"safe\": False, \"target_type\": False}\n+    arg_types = {\n+        \"this\": True,\n+        \"format\": True,\n+        \"zone\": False,\n+        \"safe\": False,\n+        \"target_type\": False,\n+        \"default_year\": False,\n+    }\n \n \n class StrToUnix(Expression, Func):\ndiff --git a/sqlglot/generator.py b/sqlglot/generator.py\nindex af1f4213..e2d27ec4 100644\n--- a/sqlglot/generator.py\n+++ b/sqlglot/generator.py\n@@ -4087,6 +4087,10 @@ class Generator:\n     def strtotime_sql(self, expression: exp.StrToTime) -> str:\n         return self.func(\"STR_TO_TIME\", expression.this, expression.args.get(\"format\"))\n \n+    # Base implementation that excludes the safe and default_year metadata args\n+    def strtodate_sql(self, expression: exp.StrToDate) -> str:\n+        return self.func(\"STR_TO_DATE\", expression.this, expression.args.get(\"format\"))\n+\n     def parsedatetime_sql(self, expression: exp.ParseDatetime) -> str:\n         return self.func(\n             \"PARSE_DATETIME\",\ndiff --git a/sqlglot/generators/duckdb.py b/sqlglot/generators/duckdb.py\nindex b139ac43..96773d4c 100644\n--- a/sqlglot/generators/duckdb.py\n+++ b/sqlglot/generators/duckdb.py\n@@ -32,7 +32,6 @@ from sqlglot.dialects.dialect import (\n     rename_func,\n     remove_from_array_using_filter,\n     strposition_sql,\n-    str_to_time_sql,\n     timestrtotime_sql,\n     unit_to_str,\n )\n@@ -2751,14 +2750,13 @@ class DuckDBGenerator(generator.Generator):\n             exp.DType.TIMESTAMPTZ,\n         )\n \n+        value, formatted_time = self._strptime_default_year(expression)\n+\n         if expression.args.get(\"safe\"):\n-            formatted_time = self.format_time(expression)\n             cast_type = exp.DType.TIMESTAMPTZ if needs_tz else exp.DType.TIMESTAMP\n-            return self.sql(\n-                exp.cast(self.func(\"TRY_STRPTIME\", expression.this, formatted_time), cast_type)\n-            )\n+            return self.sql(exp.cast(self.func(\"TRY_STRPTIME\", value, formatted_time), cast_type))\n \n-        base_sql = str_to_time_sql(self, expression)\n+        base_sql = self.func(\"STRPTIME\", value, formatted_time)\n         if needs_tz:\n             return self.sql(\n                 exp.cast(\n@@ -2769,27 +2767,30 @@ class DuckDBGenerator(generator.Generator):\n         return base_sql\n \n     def strtodate_sql(self, expression: exp.StrToDate) -> str:\n-        formatted_time = self.format_time(expression)\n+        value, formatted_time = self._strptime_default_year(expression)\n         function_name = \"STRPTIME\" if not expression.args.get(\"safe\") else \"TRY_STRPTIME\"\n         return self.sql(\n             exp.cast(\n-                self.func(function_name, expression.this, formatted_time),\n+                self.func(function_name, value, formatted_time),\n                 exp.DataType(this=exp.DType.DATE),\n             )\n         )\n \n-    def parsedatetime_sql(self, expression: exp.ParseDatetime) -> str:\n-        formatted_time = self.format_time(expression)\n+    def _strptime_default_year(\n+        self, expression: exp.StrToTime | exp.StrToDate | exp.ParseDatetime\n+    ) -> tuple[exp.ExpOrStr, exp.ExpOrStr | None]:\n+        value: exp.ExpOrStr = expression.this\n+        formatted_time: exp.ExpOrStr | None = self.format_time(expression)\n \n-        default_year = expression.args.get(\"default_year\")\n-        if default_year:\n-            year_str = exp.Literal.string(f\"{default_year.name} \")\n-            fmt_prefix = exp.Literal.string(\"%Y \")\n-            value = exp.DPipe(this=year_str, expression=expression.this)\n-            fmt = exp.DPipe(this=fmt_prefix, expression=formatted_time)\n-            return self.func(\"STRPTIME\", value, fmt)\n+        if default_year := expression.args.get(\"default_year\"):\n+            value = exp.DPipe(this=exp.Literal.string(f\"{default_year.name} \"), expression=value)\n+            formatted_time = exp.DPipe(this=exp.Literal.string(\"%Y \"), expression=formatted_time)\n \n-        return self.func(\"STRPTIME\", expression.this, formatted_time)\n+        return value, formatted_time\n+\n+    def parsedatetime_sql(self, expression: exp.ParseDatetime) -> str:\n+        value, formatted_time = self._strptime_default_year(expression)\n+        return self.func(\"STRPTIME\", value, formatted_time)\n \n     def parsetime_sql(self, expression: exp.ParseTime) -> str:\n         formatted_time = self.format_time(expression)\ndiff --git a/sqlglot/parsers/bigquery.py b/sqlglot/parsers/bigquery.py\nindex ddbc43a7..040e6ee3 100644\n--- a/sqlglot/parsers/bigquery.py\n+++ b/sqlglot/parsers/bigquery.py\n@@ -92,9 +92,16 @@ def _build_levenshtein(args: list) -> exp.Levenshtein:\n     )\n \n \n+def _build_parse_date(args: list, dialect: Dialect) -> exp.StrToDate:\n+    this = build_formatted_time(exp.StrToDate)([seq_get(args, 1), seq_get(args, 0)], dialect)\n+    this.set(\"default_year\", exp.Literal.number(1970))\n+    return this\n+\n+\n def _build_parse_timestamp(args: list, dialect: Dialect) -> exp.StrToTime:\n     this = build_formatted_time(exp.StrToTime)([seq_get(args, 1), seq_get(args, 0)], dialect)\n     this.set(\"zone\", seq_get(args, 2))\n+    this.set(\"default_year\", exp.Literal.number(1970))\n     return this\n \n \n@@ -248,9 +255,7 @@ class BigQueryParser(parser.Parser):\n         ),\n         \"OCTET_LENGTH\": exp.ByteLength.from_arg_list,\n         \"TO_HEX\": _build_to_hex,\n-        \"PARSE_DATE\": lambda args, dialect: build_formatted_time(exp.StrToDate)(\n-            [seq_get(args, 1), seq_get(args, 0)], dialect\n-        ),\n+        \"PARSE_DATE\": _build_parse_date,\n         \"PARSE_TIME\": lambda args, dialect: build_formatted_time(exp.ParseTime)(\n             [seq_get(args, 1), seq_get(args, 0)], dialect\n         ),\n",
+      "partial": [
+        "sqlglot/dialects/dialect.py"
+      ],
+      "ripple": [
+        "sqlglot/generators/duckdb.py"
+      ]
+    },
+    "meta": {
+      "sha": "4e271fbe3e24223bb7761b46a89b3405a3b4df09",
+      "date": "2026-06-30",
+      "subject": "fix(duckdb): default missing year to 1970 for BigQuery PARSE_DATE/PARSE_TIMESTAMP (#7800)",
+      "tests": [
+        "tests/dialects/test_bigquery.py",
+        "tests/dialects/test_duckdb.py"
+      ],
+      "testFiles": [
+        "tests/dialects/test_bigquery.py",
+        "tests/dialects/test_duckdb.py"
+      ],
+      "ripples": [
+        {
+          "name": "str_to_time_sql",
+          "a": "sqlglot/dialects/dialect.py",
+          "b": "sqlglot/generators/duckdb.py"
+        }
+      ],
+      "f2p": 2,
+      "p2p": 100,
+      "ripple": 762,
+      "flaky": 0,
+      "suite": 54
+    }
+  }
+]

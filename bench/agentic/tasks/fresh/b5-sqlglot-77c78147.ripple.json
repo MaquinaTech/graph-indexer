@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_spark.py::TestSpark::test_approx_percentile",
+  "tests/test_optimizer.py::TestOptimizer::test_annotate_funcs"
+]

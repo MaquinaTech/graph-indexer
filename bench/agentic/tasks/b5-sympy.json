@@ -1,0 +1,260 @@
+[
+  {
+    "id": "b5-sympy-09a4396d",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sympy",
+    "base": "43c4ae7fd5777b48762642c07cb3b49fb41d52a7",
+    "statement": "tensor: remove _CodegenArrayAbstract\n\nAll array expression classes derive from _ArrayExpr, which takes over the\nmembers of the removed class.\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>",
+    "needsStatement": true,
+    "testHint": "from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).",
+    "grade": {
+      "testPatch": "diff --git a/sympy/printing/tests/test_torch.py b/sympy/printing/tests/test_torch.py\nindex 64dfe30cec..a1e9951697 100644\n--- a/sympy/printing/tests/test_torch.py\n+++ b/sympy/printing/tests/test_torch.py\n@@ -8,7 +8,7 @@\n from sympy.tensor.array import NDimArray\n from sympy.tensor.array.expressions.array_expressions import (\n     ArrayTensorProduct, ArrayAdd,\n-    PermuteDims, ArrayDiagonal, _CodegenArrayAbstract)\n+    PermuteDims, ArrayDiagonal, _ArrayExpr)\n from sympy.utilities.lambdify import lambdify\n from sympy.core.relational import Eq, Ne, Ge, Gt, Le, Lt\n from sympy.functions import \\\n@@ -49,7 +49,7 @@ def _compare_torch_matrix(variables, expr):\n     r = f(*random_variables)\n     e = expr.subs(dict(zip(variables, random_matrices))).doit()\n \n-    if isinstance(e, _CodegenArrayAbstract):\n+    if isinstance(e, _ArrayExpr):\n         e = e.doit()\n \n     if hasattr(e, 'is_number') and e.is_number:\ndiff --git a/sympy/tensor/array/expressions/tests/test_array_expressions.py b/sympy/tensor/array/expressions/tests/test_array_expressions.py\nindex 28959797f7..99665145ff 100644\n--- a/sympy/tensor/array/expressions/tests/test_array_expressions.py\n+++ b/sympy/tensor/array/expressions/tests/test_array_expressions.py\n@@ -14,7 +14,7 @@\n     PermuteDims, ArrayContraction, ArrayTensorProduct, ArrayDiagonal, \\\n     ArrayAdd, nest_permutation, ArrayElementwiseApplyFunc, _EditArrayContraction, _ArgE, _array_tensor_product, \\\n     _array_contraction, _array_diagonal, _array_add, _permute_dims, Reshape, ArraySum, _split_scalar_coefficient, \\\n-    get_shape, get_ndim\n+    get_shape, get_ndim, _ArrayExpr\n from sympy.testing.pytest import raises\n \n i, j, k, l, m, n = symbols(\"i j k l m n\")\n@@ -1150,3 +1150,30 @@ def test_get_ndim_matrix_element():\n     expr = _array_tensor_product(A[0, 1], _array_contraction(A, (0, 1)))\n     assert expr == _array_contraction(_array_tensor_product(A[0, 1], A), (0, 1))\n     assert get_shape(expr) == ()\n+\n+\n+def test_array_expressions_base_class():\n+    A3 = ArraySymbol(\"A3\", (3, 3))\n+    B3 = ArraySymbol(\"B3\", (3, 3))\n+    for expr in [A3, ZeroArray(3, 3), OneArray(3, 3)]:\n+        assert isinstance(expr, _ArrayExpr)\n+        assert expr.doit() == expr\n+\n+    exprs = [\n+        ArrayTensorProduct(A3, B3),\n+        ArrayAdd(A3, B3),\n+        PermuteDims(A3, [1, 0]),\n+        ArrayDiagonal(A3, (0, 1)),\n+        ArrayContraction(ArrayTensorProduct(A3, B3), (1, 2)),\n+        ArrayElementwiseApplyFunc(sin, A3),\n+        Reshape(A3, (9,)),\n+    ]\n+    for expr in exprs:\n+        assert isinstance(expr, _ArrayExpr)\n+        assert expr.doit() == expr\n+        indices = (0,)*len(expr.shape)\n+        assert expr[indices] == ArrayElement(expr, indices)\n+\n+    expr = ArrayAdd(A3, B3)\n+    assert expr[i, j] == ArrayElement(expr, (i, j))\n+    raises(IndexError, lambda: expr[i])\ndiff --git a/sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py b/sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py\nindex 85585454c7..6d7cde3078 100644\n--- a/sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py\n+++ b/sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py\n@@ -1116,3 +1116,9 @@ def test_arrayexpr_convert_array_to_matrix_scalar_coefficients():\n     assert convert_array_to_matrix(cg) == ArrayTensorProduct(3, P, M*N)\n \n     assert _support_function_tp1_recognize([(1, 2)], [2*M, N]) == 2*M*N\n+\n+\n+def test_convert_array_to_matrix_contraction_of_applyfunc():\n+    d = Dummy(\"d\")\n+    expr = ArrayContraction(ArrayElementwiseApplyFunc(Lambda(d, sin(d)), M), (0, 1))\n+    assert convert_array_to_matrix(expr) == Trace(M.applyfunc(Lambda(d, sin(d))))\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-09a4396d.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-09a4396d.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-09a4396d.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sympy/tensor/array/arrayop.py",
+        "sympy/tensor/array/expressions/array_expressions.py",
+        "sympy/tensor/array/expressions/from_array_to_indexed.py",
+        "sympy/tensor/array/expressions/from_array_to_matrix.py",
+        "sympy/tensor/array/expressions/from_indexed_to_array.py",
+        "sympy/tensor/array/expressions/from_matrix_to_array.py"
+      ],
+      "patch": "diff --git a/sympy/tensor/array/arrayop.py b/sympy/tensor/array/arrayop.py\nindex c839b0afbb..912ffa7867 100644\n--- a/sympy/tensor/array/arrayop.py\n+++ b/sympy/tensor/array/arrayop.py\n@@ -64,11 +64,10 @@ def tensorproduct(*args):\n         return S.One\n     if len(args) == 1:\n         return _arrayfy(args[0])\n-    from sympy.tensor.array.expressions.array_expressions import _CodegenArrayAbstract\n     from sympy.tensor.array.expressions.array_expressions import ArrayTensorProduct\n     from sympy.tensor.array.expressions.array_expressions import _ArrayExpr\n     from sympy.matrices.expressions.matexpr import MatrixSymbol\n-    if any(isinstance(arg, (_ArrayExpr, _CodegenArrayAbstract, MatrixSymbol)) for arg in args):\n+    if any(isinstance(arg, (_ArrayExpr, MatrixSymbol)) for arg in args):\n         return ArrayTensorProduct(*args)\n     if len(args) > 2:\n         return tensorproduct(tensorproduct(args[0], args[1]), *args[2:])\n@@ -180,10 +179,9 @@ def tensorcontraction(array, *contraction_axes):\n \n     \"\"\"\n     from sympy.tensor.array.expressions.array_expressions import _array_contraction\n-    from sympy.tensor.array.expressions.array_expressions import _CodegenArrayAbstract\n     from sympy.tensor.array.expressions.array_expressions import _ArrayExpr\n     from sympy.matrices.expressions.matexpr import MatrixSymbol\n-    if isinstance(array, (_ArrayExpr, _CodegenArrayAbstract, MatrixSymbol)):\n+    if isinstance(array, (_ArrayExpr, MatrixSymbol)):\n         return _array_contraction(array, *contraction_axes)\n \n     array, remaining_indices, remaining_shape, summed_deltas = _util_contraction_diagonal(array, *contraction_axes)\n@@ -263,10 +261,9 @@ def tensordiagonal(array, *diagonal_axes):\n         raise ValueError(\"need at least two axes to diagonalize\")\n \n     from sympy.tensor.array.expressions.array_expressions import _ArrayExpr\n-    from sympy.tensor.array.expressions.array_expressions import _CodegenArrayAbstract\n     from sympy.tensor.array.expressions.array_expressions import ArrayDiagonal, _array_diagonal\n     from sympy.matrices.expressions.matexpr import MatrixSymbol\n-    if isinstance(array, (_ArrayExpr, _CodegenArrayAbstract, MatrixSymbol)):\n+    if isinstance(array, (_ArrayExpr, MatrixSymbol)):\n         return _array_diagonal(array, *diagonal_axes)\n \n     ArrayDiagonal._validate(array, *diagonal_axes)\n@@ -419,13 +416,12 @@ def permutedims(expr, perm=None, index_order_old=None, index_order_new=None):\n     from sympy.tensor.array import SparseNDimArray\n \n     from sympy.tensor.array.expressions.array_expressions import _ArrayExpr\n-    from sympy.tensor.array.expressions.array_expressions import _CodegenArrayAbstract\n     from sympy.tensor.array.expressions.array_expressions import _permute_dims\n     from sympy.matrices.expressions.matexpr import MatrixSymbol\n     from sympy.tensor.array.expressions import PermuteDims\n     from sympy.tensor.array.expressions.array_expressions import get_ndim\n     perm = PermuteDims._get_permutation_from_arguments(perm, index_order_old, index_order_new, get_ndim(expr))\n-    if isinstance(expr, (_ArrayExpr, _CodegenArrayAbstract, MatrixSymbol)):\n+    if isinstance(expr, (_ArrayExpr, MatrixSymbol)):\n         return _permute_dims(expr, perm)\n \n     if not isinstance(expr, NDimArray):\ndiff --git a/sympy/tensor/array/expressions/array_expressions.py b/sympy/tensor/array/expressions/array_expressions.py\nindex a477db90a4..162d5ab2c2 100644\n--- a/sympy/tensor/array/expressions/array_expressions.py\n+++ b/sympy/tensor/array/expressions/array_expressions.py\n@@ -40,7 +40,34 @@\n \n \n class _ArrayExpr(Expr):\n-    shape: tuple[Expr, ...]\n+\n+    is_Atom = True\n+\n+    _iterable = False\n+\n+    @property\n+    @deprecated(\"DO NOT USE\",\n+                deprecated_since_version=\"1.15\", active_deprecations_target=\"ndim-array-rank\")\n+    def subranks(self):\n+        return self._sub_ndim_list[:]\n+\n+    @deprecated(\"DO NOT USE\", deprecated_since_version=\"1.15\", active_deprecations_target=\"ndim-array-rank\")\n+    def subrank(self):\n+        return sum(self._sub_ndim_list)\n+\n+    @property\n+    def shape(self):\n+        return self._shape\n+\n+    def _canonicalize(self):\n+        return self\n+\n+    def doit(self, **hints):\n+        deep = hints.get(\"deep\", True)\n+        if deep:\n+            return self.func(*[arg.doit(**hints) for arg in self.args])._canonicalize()\n+        else:\n+            return self._canonicalize()\n \n     def __getitem__(self, item):\n         if not isinstance(item, collections.abc.Iterable):\n@@ -57,8 +84,6 @@ class ArraySymbol(_ArrayExpr):\n     Symbol representing an array expression\n     \"\"\"\n \n-    _iterable = False\n-\n     def __new__(cls, symbol, shape: typing.Iterable) -> \"ArraySymbol\":\n         if isinstance(symbol, str):\n             symbol = Symbol(symbol)\n@@ -246,32 +271,6 @@ def _get(self, item):\n         return S.One\n \n \n-class _CodegenArrayAbstract(Expr):\n-\n-    is_Atom = True\n-\n-    @property\n-    @deprecated(\"DO NOT USE\",\n-                deprecated_since_version=\"1.15\", active_deprecations_target=\"ndim-array-rank\")\n-    def subranks(self):\n-        return self._sub_ndim_list[:]\n-\n-    @deprecated(\"DO NOT USE\", deprecated_since_version=\"1.15\", active_deprecations_target=\"ndim-array-rank\")\n-    def subrank(self):\n-        return sum(self._sub_ndim_list)\n-\n-    @property\n-    def shape(self):\n-        return self._shape\n-\n-    def doit(self, **hints):\n-        deep = hints.get(\"deep\", True)\n-        if deep:\n-            return self.func(*[arg.doit(**hints) for arg in self.args])._canonicalize()\n-        else:\n-            return self._canonicalize()\n-\n-\n def _split_scalar_coefficient(arg):\n     \"\"\"Split *arg* into a scalar coefficient and its array part.\n \n@@ -280,7 +279,7 @@ def _split_scalar_coefficient(arg):\n     scalar factors are extracted from ``MatMul`` objects and from ``Mul``\n     objects containing a single array-shaped factor.\n     \"\"\"\n-    if isinstance(arg, (_ArrayExpr, _CodegenArrayAbstract)):\n+    if isinstance(arg, _ArrayExpr):\n         # Array expressions are kept whole, even when they have rank 0\n         # (e.g. a full contraction):\n         return S.One, arg\n@@ -305,7 +304,7 @@ def _split_scalar_coefficient(arg):\n     return S.One, arg\n \n \n-class ArrayTensorProduct(_CodegenArrayAbstract):\n+class ArrayTensorProduct(_ArrayExpr):\n     r\"\"\"\n     Class to represent the tensor product of array-like objects.\n     \"\"\"\n@@ -362,7 +361,7 @@ def _is_plain_scalar(arg):\n             # Rank-0 array expressions (e.g. full contractions) are not\n             # merged: the branches below lift them into the expression.\n             return (get_shape(arg) == () and\n-                    not isinstance(arg, (_ArrayExpr, _CodegenArrayAbstract)))\n+                    not isinstance(arg, _ArrayExpr))\n \n         # Extract the scalar coefficients of matrix arguments, e.g.\n         # ArrayTensorProduct(2*M, N) becomes ArrayTensorProduct(2, M, N):\n@@ -532,7 +531,7 @@ def _array_term_from_coeff_arrays(coeff, arrays):\n     return _array_tensor_product(coeff, *arrays)\n \n \n-class ArrayAdd(_CodegenArrayAbstract):\n+class ArrayAdd(_ArrayExpr):\n     r\"\"\"\n     Class for elementwise array additions.\n     \"\"\"\n@@ -652,7 +651,7 @@ def as_explicit(self):\n         return reduce(operator.add, terms)\n \n \n-class PermuteDims(_CodegenArrayAbstract):\n+class PermuteDims(_ArrayExpr):\n     r\"\"\"\n     Class to represent permutation of axes of arrays.\n \n@@ -926,7 +925,7 @@ def _get_permutation_from_index_orders(cls, index_order_old, index_order_new, di\n         return permutation\n \n \n-class ArrayDiagonal(_CodegenArrayAbstract):\n+class ArrayDiagonal(_ArrayExpr):\n     r\"\"\"\n     Class to represent the diagonal operator.\n \n@@ -1153,7 +1152,7 @@ def as_explicit(self):\n         return tensordiagonal(expr, *self.diagonal_indices)\n \n \n-class ArrayElementwiseApplyFunc(_CodegenArrayAbstract):\n+class ArrayElementwiseApplyFunc(_ArrayExpr):\n \n     def __new__(cls, function, element):\n \n@@ -1161,7 +1160,7 @@ def __new__(cls, function, element):\n             d = Dummy('d')\n             function = Lambda(d, function(d))\n \n-        obj = _CodegenArrayAbstract.__new__(cls, function, element)\n+        obj = _ArrayExpr.__new__(cls, function, element)\n         obj._sub_ndim_list = _get_sub_ndim_list(element)\n         return obj\n \n@@ -1203,7 +1202,7 @@ def _canonicalize(self):\n         return self\n \n \n-class ArrayContraction(_CodegenArrayAbstract):\n+class ArrayContraction(_ArrayExpr):\n     r\"\"\"\n     Contraction operation of array axes.\n \n@@ -1804,7 +1803,7 @@ def as_explicit(self):\n         return tensorcontraction(expr, *self.contraction_indices)\n \n \n-class Reshape(_CodegenArrayAbstract):\n+class Reshape(_ArrayExpr):\n     \"\"\"\n     Reshape the dimensions of an array expression.\n \n@@ -2211,8 +2210,6 @@ def get_ndim(expr):\n     if isinstance(expr, MatrixElement):\n         # a matrix element is a scalar (consistently with ``get_shape``):\n         return 0\n-    if isinstance(expr, _CodegenArrayAbstract):\n-        return len(expr.shape)\n     if isinstance(expr, NDimArray):\n         return expr.ndim\n     if isinstance(expr, Indexed):\n@@ -2234,9 +2231,7 @@ def get_rank(expr):\n \n \n def _get_sub_ndim(expr):\n-    if isinstance(expr, _CodegenArrayAbstract):\n-        return sum(expr._sub_ndim_list)\n-    return get_ndim(expr)\n+    return sum(_get_sub_ndim_list(expr))\n \n \n def _get_sub_ndim_list(expr):\n@@ -2265,10 +2260,10 @@ def _get_sub_ndim_list(expr):\n     >>> _get_sub_ndim_list(co)\n     [2, 2, 2]\n     \"\"\"\n-    if isinstance(expr, _CodegenArrayAbstract):\n-        return expr._sub_ndim_list\n-    else:\n+    sub_ndim_list = getattr(expr, \"_sub_ndim_list\", None)\n+    if sub_ndim_list is None:\n         return [get_ndim(expr)]\n+    return sub_ndim_list\n \n \n def get_shape(expr):\n@@ -2285,7 +2280,7 @@ def nest_permutation(expr):\n \n \n def _array_tensor_product(*args, **kwargs):\n-    if all(not isinstance(i, (_ArrayExpr, _CodegenArrayAbstract)) and get_shape(i) == () for i in args):\n+    if all(not isinstance(i, _ArrayExpr) and get_shape(i) == () for i in args):\n         return Mul.fromiter(args)\n     return ArrayTensorProduct(*args, canonicalize=True, **kwargs)\n \ndiff --git a/sympy/tensor/array/expressions/from_array_to_indexed.py b/sympy/tensor/array/expressions/from_array_to_indexed.py\nindex 3cfea21658..9d8b62294e 100644\n--- a/sympy/tensor/array/expressions/from_array_to_indexed.py\n+++ b/sympy/tensor/array/expressions/from_array_to_indexed.py\n@@ -58,8 +58,6 @@ def do_convert(self, expr, indices):\n             return self.do_convert(expr.expr, permuted_indices)\n         if isinstance(expr, ArrayAdd):\n             return Add.fromiter(self.do_convert(arg, indices) for arg in expr.args)\n-        if isinstance(expr, _ArrayExpr):\n-            return expr.__getitem__(tuple(indices))\n         if isinstance(expr, ArrayElementwiseApplyFunc):\n             return expr.function(self.do_convert(expr.expr, indices))\n         if isinstance(expr, Reshape):\n@@ -82,4 +80,6 @@ def do_convert(self, expr, indices):\n                 c *= e\n             dest_indices.reverse()\n             return self.do_convert(expr.expr, dest_indices)\n+        if isinstance(expr, _ArrayExpr):\n+            return expr.__getitem__(tuple(indices))\n         return _get_array_element_or_slice(expr, indices)\ndiff --git a/sympy/tensor/array/expressions/from_array_to_matrix.py b/sympy/tensor/array/expressions/from_array_to_matrix.py\nindex 722884742c..60aac43be3 100644\n--- a/sympy/tensor/array/expressions/from_array_to_matrix.py\n+++ b/sympy/tensor/array/expressions/from_array_to_matrix.py\n@@ -20,7 +20,7 @@\n from sympy.matrices.expressions.matexpr import MatrixElement\n from sympy.tensor.array.expressions.array_expressions import PermuteDims, ArrayDiagonal, \\\n     ArrayTensorProduct, OneArray, get_ndim, _get_sub_ndim, ZeroArray, ArrayContraction, \\\n-    ArrayAdd, _CodegenArrayAbstract, get_shape, ArrayElementwiseApplyFunc, _ArrayExpr, _EditArrayContraction, _ArgE, \\\n+    ArrayAdd, get_shape, ArrayElementwiseApplyFunc, _ArrayExpr, _EditArrayContraction, _ArgE, \\\n     ArrayElement, _array_tensor_product, _array_contraction, _array_diagonal, _array_add, _permute_dims, ArraySum, \\\n     _get_sub_ndim_list, _array_term_as_coeff_arrays\n from sympy.tensor.array.expressions.utils import _get_mapping_from_sub_ndim_list\n@@ -304,7 +304,7 @@ def _(expr: ArrayContraction):\n         assert isinstance(newexpr, ArrayContraction)\n         ret = _support_function_tp1_recognize(contraction_indices, list(newexpr.expr.args))\n         return ret\n-    elif not isinstance(subexpr, _CodegenArrayAbstract):\n+    else:\n         ret = _array2matrix(subexpr)\n         if isinstance(ret, MatrixExpr) and expr.contraction_indices == ((0, 1),):\n             return _a2m_trace(ret)\n@@ -840,7 +840,7 @@ def _array_diag2contr_diagmatrix(expr: ArrayDiagonal):\n \n \n def _a2m_mul(*args):\n-    if not any(isinstance(i, _CodegenArrayAbstract) for i in args):\n+    if not any(isinstance(i, _ArrayExpr) for i in args):\n         from sympy.matrices.expressions.matmul import MatMul\n         return MatMul(*args).doit()\n     else:\n@@ -859,7 +859,7 @@ def _a2m_tensor_product(*args):\n             # (e.g. the derivative of ``1/Trace(X)``): convert it, it must\n             # not be treated as a noncommutative scalar factor:\n             arg = _array2matrix(arg)\n-        if isinstance(arg, (MatrixExpr, _ArrayExpr, _CodegenArrayAbstract)):\n+        if isinstance(arg, (MatrixExpr, _ArrayExpr)):\n             arrays.append(arg)\n         elif isinstance(arg, (NDimArray, MatrixBase)):\n             # This fixes issue 15651\n@@ -870,7 +870,7 @@ def _a2m_tensor_product(*args):\n     if len(arrays) == 0:\n         return scalar\n     if scalar != 1:\n-        if isinstance(arrays[0], (_CodegenArrayAbstract, _ArrayExpr)) or \\\n+        if isinstance(arrays[0], _ArrayExpr) or \\\n                 scalar.is_commutative is False:\n             # An in-place multiplication would create a shapeless ``Mul``\n             # object (or a ``MatMul`` with a structurally noncommutative\n@@ -889,7 +889,7 @@ def _a2m_tensor_product(*args):\n \n \n def _a2m_add(*args):\n-    if not any(isinstance(i, _CodegenArrayAbstract) for i in args):\n+    if not any(isinstance(i, _ArrayExpr) for i in args):\n         if not any(isinstance(i, MatrixExpr) for i in args):\n             # All addends are scalars (e.g. traces):\n             from sympy.core.add import Add\n@@ -901,7 +901,7 @@ def _a2m_add(*args):\n \n \n def _a2m_trace(arg):\n-    if isinstance(arg, _CodegenArrayAbstract):\n+    if isinstance(arg, _ArrayExpr):\n         return _array_contraction(arg, (0, 1))\n     else:\n         from sympy.matrices.expressions.trace import Trace\n@@ -909,7 +909,7 @@ def _a2m_trace(arg):\n \n \n def _a2m_transpose(arg):\n-    if isinstance(arg, _CodegenArrayAbstract):\n+    if isinstance(arg, _ArrayExpr):\n         return _permute_dims(arg, [1, 0])\n     else:\n         from sympy.matrices.expressions.transpose import Transpose\ndiff --git a/sympy/tensor/array/expressions/from_indexed_to_array.py b/sympy/tensor/array/expressions/from_indexed_to_array.py\nindex f8cd709e96..f40ecaa7ae 100644\n--- a/sympy/tensor/array/expressions/from_indexed_to_array.py\n+++ b/sympy/tensor/array/expressions/from_indexed_to_array.py\n@@ -16,7 +16,7 @@\n from sympy.tensor.indexed import (Indexed, IndexedBase)\n from sympy.combinatorics import Permutation\n from sympy.matrices.expressions.matexpr import MatrixElement\n-from sympy.tensor.array.expressions.array_expressions import ArrayDiagonal, _ArrayExpr, _CodegenArrayAbstract, \\\n+from sympy.tensor.array.expressions.array_expressions import ArrayDiagonal, _ArrayExpr, \\\n     get_shape, ArrayElement, _array_tensor_product, _array_diagonal, _array_contraction, _array_add, \\\n     _permute_dims, OneArray, ArrayAdd\n from sympy.tensor.array.expressions.utils import _get_argindex, _get_diagonal_indices\n@@ -112,7 +112,7 @@ def _is_array_expression(expr):\n     # Whether a converted (sub)expression is an array expression, as opposed\n     # to a plain scalar. Rank-0 array expressions (e.g. a full contraction)\n     # have no indices but still have to be combined with array operators.\n-    return isinstance(expr, (_ArrayExpr, _CodegenArrayAbstract))\n+    return isinstance(expr, _ArrayExpr)\n \n \n def _convert_indexed_to_array(expr):\ndiff --git a/sympy/tensor/array/expressions/from_matrix_to_array.py b/sympy/tensor/array/expressions/from_matrix_to_array.py\nindex 912b6a781c..dd977e89c3 100644\n--- a/sympy/tensor/array/expressions/from_matrix_to_array.py\n+++ b/sympy/tensor/array/expressions/from_matrix_to_array.py\n@@ -15,7 +15,7 @@\n from sympy.matrices.expressions.matexpr import MatrixExpr\n from sympy.tensor.array.expressions.array_expressions import \\\n     ArrayElementwiseApplyFunc, _array_tensor_product, _array_contraction, \\\n-    _array_diagonal, _array_add, _permute_dims, Reshape, get_shape, _ArrayExpr, _CodegenArrayAbstract\n+    _array_diagonal, _array_add, _permute_dims, Reshape, get_shape, _ArrayExpr\n from typing import TYPE_CHECKING\n \n if TYPE_CHECKING:\n@@ -23,7 +23,7 @@\n \n \n def _array_elementwise_apply_func(function, element):\n-    if not isinstance(element, (MatrixExpr, _ArrayExpr, _CodegenArrayAbstract)):\n+    if not isinstance(element, (MatrixExpr, _ArrayExpr)):\n         return function(element)\n     return ArrayElementwiseApplyFunc(function, element)\n \n@@ -66,7 +66,7 @@ def convert_matrix_to_array(expr: Basic) -> Basic:\n     elif isinstance(expr, Pow):\n         base = convert_matrix_to_array(expr.base)\n         if get_shape(base) == ():\n-            if not isinstance(base, (MatrixExpr, _ArrayExpr, _CodegenArrayAbstract)):\n+            if not isinstance(base, (MatrixExpr, _ArrayExpr)):\n                 # Plain scalar base: return a plain scalar power.\n                 return base**expr.exp\n             if isinstance(expr.exp, (int, Integer)) and expr.exp > 0:\n",
+      "partial": [
+        "sympy/tensor/array/expressions/array_expressions.py"
+      ],
+      "ripple": [
+        "sympy/tensor/array/arrayop.py",
+        "sympy/tensor/array/expressions/from_array_to_matrix.py",
+        "sympy/tensor/array/expressions/from_indexed_to_array.py",
+        "sympy/tensor/array/expressions/from_matrix_to_array.py"
+      ]
+    },
+    "meta": {
+      "sha": "09a4396d36bd8a2fe6741d5bd7e81339fdd744ea",
+      "date": "2026-09-27",
+      "subject": "tensor: remove _CodegenArrayAbstract",
+      "tests": [
+        "sympy/printing/tests/test_torch.py",
+        "sympy/tensor/array/expressions/tests/test_array_expressions.py",
+        "sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py"
+      ],
+      "testFiles": [
+        "sympy/printing/tests/test_torch.py",
+        "sympy/tensor/array/expressions/tests/test_array_expressions.py",
+        "sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py"
+      ],
+      "ripples": [
+        {
+          "name": "_CodegenArrayAbstract",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/arrayop.py"
+        },
+        {
+          "name": "_CodegenArrayAbstract",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_array_to_matrix.py"
+        },
+        {
+          "name": "_CodegenArrayAbstract",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_indexed_to_array.py"
+        },
+        {
+          "name": "_CodegenArrayAbstract",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_matrix_to_array.py"
+        },
+        {
+          "name": "ArrayAdd",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_array_to_matrix.py"
+        },
+        {
+          "name": "ArrayDiagonal",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_indexed_to_array.py"
+        },
+        {
+          "name": "ArrayElementwiseApplyFunc",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_array_to_matrix.py"
+        },
+        {
+          "name": "Reshape",
+          "a": "sympy/tensor/array/expressions/array_expressions.py",
+          "b": "sympy/tensor/array/expressions/from_matrix_to_array.py"
+        }
+      ],
+      "f2p": 2,
+      "p2p": 78,
+      "ripple": 143,
+      "flaky": 0,
+      "suite": 23
+    }
+  },
+  {
+    "id": "b5-sympy-56bf4dbd",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sympy",
+    "base": "5c376fada29e296dc55a09606c7c7d658cd53668",
+    "statement": "modify the constructor and the display of character tables",
+    "needsStatement": true,
+    "testHint": "from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).",
+    "grade": {
+      "testPatch": "diff --git a/sympy/combinatorics/tests/test_character_table.py b/sympy/combinatorics/tests/test_character_table.py\nindex 8648dcd25c..081bd6248a 100644\n--- a/sympy/combinatorics/tests/test_character_table.py\n+++ b/sympy/combinatorics/tests/test_character_table.py\n@@ -12,7 +12,7 @@\n     S5TransitiveSubgroups,\n     S6TransitiveSubgroups\n )\n-from sympy.combinatorics.character_table import CharacterTable, dixon_character_table\n+from sympy.combinatorics.character_table import dixon_character_table\n \n import pytest\n \n@@ -24,16 +24,16 @@ def _cmp_tbl(tbl1, tbl2):\n \n \n def test_character_table():\n-    tbl = CharacterTable(SymmetricGroup(1))\n+    tbl = SymmetricGroup(1).character_table()\n     assert (tbl.as_matrix() - Matrix([[1]])).is_zero_matrix\n \n-    tbl = CharacterTable(SymmetricGroup(2))\n+    tbl = SymmetricGroup(2).character_table()\n     assert tbl.tolist() == [[1, 1], [1, -1]]\n     assert (tbl.as_matrix() - Matrix([[1, 1], [1, -1]])).is_zero_matrix\n     assert tbl.shape == (2, 2)\n     assert tbl.zeta_order == 1\n \n-    tbl = CharacterTable(AlternatingGroup(3))\n+    tbl = AlternatingGroup(3).character_table()\n     assert tbl.as_matrix()._rep.domain.is_CyclotomicField\n     assert tbl.zeta_order == 3\n \n@@ -148,7 +148,7 @@ def test_dixon_character_table():\n @pytest.mark.parametrize(\"group\", GROUPS, ids=lambda g: g.value)\n def test_generic_character_table(group):\n     G = group.get_perm_group()\n-    table = CharacterTable(G)\n+    table = G.character_table()\n     cc = G.conjugacy_classes()\n     reps = table.conjugacy_class_reps()\n     assert all(r in c for r, c in zip(reps, cc))\ndiff --git a/sympy/printing/tests/test_latex.py b/sympy/printing/tests/test_latex.py\nindex 71bf682666..8475ac8451 100644\n--- a/sympy/printing/tests/test_latex.py\n+++ b/sympy/printing/tests/test_latex.py\n@@ -4,7 +4,6 @@\n from sympy.calculus.accumulationbounds import AccumBounds\n from sympy.combinatorics.free_groups import free_group\n from sympy.combinatorics.permutations import Cycle, Permutation, AppliedPermutation\n-from sympy.combinatorics.character_table import CharacterTable\n from sympy.concrete.products import Product\n from sympy.concrete.summations import Sum\n from sympy.core.containers import Tuple, Dict\n@@ -3133,9 +3132,9 @@ def test_PermutationMatrix():\n \n def test_CharacterTable():\n     from sympy.combinatorics.named_groups import SymmetricGroup\n-    tbl = CharacterTable(SymmetricGroup(1))\n+    tbl = SymmetricGroup(1).character_table()\n     assert latex(tbl) == '\\\\left[\\\\begin{matrix}1\\\\end{matrix}\\\\right]'\n-    tbl = CharacterTable(SymmetricGroup(2))\n+    tbl = SymmetricGroup(2).character_table()\n     assert latex(tbl) == '\\\\left[\\\\begin{matrix}1 & 1\\\\\\\\1 & -1\\\\end{matrix}\\\\right]'\n \n \ndiff --git a/sympy/printing/tests/test_repr.py b/sympy/printing/tests/test_repr.py\nindex 0c16c10626..78fcc43887 100644\n--- a/sympy/printing/tests/test_repr.py\n+++ b/sympy/printing/tests/test_repr.py\n@@ -146,6 +146,15 @@ def test_empty_Matrix():\n     sT(ones(0, 0), \"MutableDenseMatrix([])\")\n \n \n+def test_CharacterTable():\n+    from sympy.combinatorics.named_groups import SymmetricGroup\n+    tbl = SymmetricGroup(1).character_table()\n+    assert srepr(tbl) == \"CharacterTable(DomainMatrix([[1]], (1, 1), ZZ), [Permutation(0)])\"\n+\n+    tbl = SymmetricGroup(2).character_table()\n+    assert srepr(tbl) == \"CharacterTable(DomainMatrix([[1, 1], [1, -1]], (2, 2), ZZ), [Permutation(1), Permutation(0, 1)])\"\n+\n+\n def test_Rational():\n     sT(Rational(1, 3), \"Rational(1, 3)\")\n     sT(Rational(-1, 3), \"Rational(-1, 3)\")\ndiff --git a/sympy/printing/tests/test_str.py b/sympy/printing/tests/test_str.py\nindex 1d82326431..50ad1c1854 100644\n--- a/sympy/printing/tests/test_str.py\n+++ b/sympy/printing/tests/test_str.py\n@@ -4,7 +4,6 @@\n from sympy.assumptions.ask import Q\n from sympy.calculus.accumulationbounds import AccumBounds\n from sympy.combinatorics.partitions import Partition\n-from sympy.combinatorics.character_table import CharacterTable\n from sympy.concrete.summations import (Sum, summation)\n from sympy.core.add import Add\n from sympy.core.containers import (Dict, Tuple)\n@@ -1041,12 +1040,11 @@ def test_MatrixSlice():\n \n def test_CharacterTable_str():\n     from sympy.combinatorics.named_groups import SymmetricGroup\n-    tbl = CharacterTable(SymmetricGroup(1))\n-    assert str(tbl) == sstr(tbl) == 'CharacterTable([[1]])'\n+    tbl = SymmetricGroup(1).character_table()\n+    assert str(tbl) == sstr(tbl) == 'CharacterTable(DomainMatrix([[1]], (1, 1), ZZ), [(0)])'\n \n-    tbl = CharacterTable(SymmetricGroup(2))\n-    assert str(tbl) == 'CharacterTable([[1, 1], [1, -1]])'\n-    assert sstr(tbl) == 'CharacterTable([\\n[1,  1],\\n[1, -1]])'\n+    tbl = SymmetricGroup(2).character_table()\n+    assert str(tbl) == sstr(tbl) == 'CharacterTable(DomainMatrix([[1, 1], [1, -1]], (2, 2), ZZ), [(1), (0 1)])'\n \n \n def test_true_false():\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-56bf4dbd.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-56bf4dbd.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-56bf4dbd.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sympy/combinatorics/character_table.py",
+        "sympy/combinatorics/perm_groups.py",
+        "sympy/printing/repr.py",
+        "sympy/printing/str.py"
+      ],
+      "patch": "diff --git a/sympy/combinatorics/character_table.py b/sympy/combinatorics/character_table.py\nindex 230426b643..ae4caea83c 100644\n--- a/sympy/combinatorics/character_table.py\n+++ b/sympy/combinatorics/character_table.py\n@@ -10,11 +10,10 @@\n from sympy.polys.matrices.domainmatrix import DomainMatrix\n from sympy.polys.polyclasses import ANP\n from sympy.printing.defaults import DefaultPrinting\n-from sympy.printing.str import StrPrinter\n+from sympy.printing.repr import srepr\n \n if TYPE_CHECKING:\n-    from typing import Protocol, Iterable, Iterator, Generator, Sequence\n-    from typing_extensions import Self\n+    from typing import Protocol, Iterable, Iterator, Sequence\n     from sympy.combinatorics.perm_groups import PermutationGroup\n     from sympy.core import Expr\n     from sympy.polys.domains.domain import Domain, Er\n@@ -43,18 +42,17 @@ class CharacterTable(DefaultPrinting):\n     Examples\n     ========\n \n-    >>> from sympy.combinatorics import CharacterTable, SymmetricGroup, AlternatingGroup\n-    >>> CharacterTable(SymmetricGroup(4)) # doctest: +SKIP\n-    CharacterTable([\n-     [1,  1,  1,  1,  1],\n-     [1, -1,  1, -1,  1],\n-     [2,  0,  2,  0, -1],\n-     [3, -1, -1,  1,  0],\n-     [3,  1, -1, -1,  0]])\n+    The character table of a permutation group is computed by calling the\n+    `character_table` method on the group.\n+\n+    >>> from sympy.combinatorics import SymmetricGroup, AlternatingGroup\n+    >>> M = SymmetricGroup(4).character_table()\n+    >>> type(M)\n+    <class 'sympy.combinatorics.character_table.CharacterTable'>\n \n     Calling `.as_matrix()` on the character table returns a matrix.\n \n-    >>> CharacterTable(SymmetricGroup(4)).as_matrix() # doctest: +SKIP\n+    >>> M.as_matrix()\n     Matrix([\n      [1,  1,  1,  1,  1],\n      [1, -1,  1, -1,  1],\n@@ -66,9 +64,9 @@ class CharacterTable(DefaultPrinting):\n     the values of the characters as domain elements. The domain of a character table is\n     either ZZ or a cyclotomic field.\n \n-    >>> M = CharacterTable(AlternatingGroup(4))\n-    >>> M # doctest: +SKIP\n-    CharacterTable([\n+    >>> M = AlternatingGroup(4).character_table()\n+    >>> M.as_matrix()\n+    Matrix([\n      [1,          1,          1,  1],\n      [1, -1 - zeta3,      zeta3,  1],\n      [1,      zeta3, -1 - zeta3,  1],\n@@ -82,7 +80,7 @@ class CharacterTable(DefaultPrinting):\n     which can be accessed with the method `conjugacy_class_reps`.\n \n     >>> M.conjugacy_class_reps() # doctest: +SKIP\n-    [Permutation(3), Permutation(0, 2, 3), Permutation(0, 1, 3), Permutation(0, 2)(1, 3)]\n+    [(3), (0 3 1), (3)(0 2 1), (0 3)(1 2)]\n \n     References\n     ==========\n@@ -97,15 +95,9 @@ class CharacterTable(DefaultPrinting):\n     _rep: DomainMatrix\n     _conjugacy_class_reps: list[Permutation]\n \n-    def __new__(cls, G: PermutationGroup):\n-        return cls.from_perm_group(G)\n-\n-    @classmethod\n-    def new(cls, rep: DomainMatrix, conjugacy_class_reps: list[Permutation]) -> Self:\n-        obj = super().__new__(cls)\n-        obj._rep = rep\n-        obj._conjugacy_class_reps = conjugacy_class_reps\n-        return obj\n+    def __init__(self, rep: DomainMatrix, conjugacy_class_reps: list[Permutation]):\n+        self._rep = rep\n+        self._conjugacy_class_reps = conjugacy_class_reps\n \n     def conjugacy_class_reps(self) -> list[Permutation]:\n         return self._conjugacy_class_reps[:]\n@@ -123,15 +115,8 @@ def tolist(self) -> list[list[Expr]]:\n     def shape(self) -> tuple[int, int]:\n         return self._rep.shape\n \n-    def __str__(self) -> str:\n-        return \"CharacterTable(%s)\" % str(self.tolist())\n-\n-    def _format_str(self, printer=None) -> str:\n-        if not printer:\n-            printer = StrPrinter()\n-        linefeed = \"\\n\" if self.shape[0] > 1 else \"\"\n-        table = self.as_matrix().table(printer, rowsep=',\\n')\n-        return \"CharacterTable([%s%s])\" % (linefeed, table)\n+    def __repr__(self):\n+        return srepr(self)\n \n     @property\n     def zeta_order(self) -> int:\n@@ -143,15 +128,15 @@ def zeta_order(self) -> int:\n         ========\n \n         >>> from sympy.combinatorics import CharacterTable, AlternatingGroup\n-        >>> CharacterTable(AlternatingGroup(3)).zeta_order\n+        >>> AlternatingGroup(3).character_table().zeta_order\n         3\n-        >>> CharacterTable(AlternatingGroup(5)).zeta_order\n+        >>> AlternatingGroup(5).character_table().zeta_order\n         5\n \n         It returns 1 if the character table is over ZZ.\n \n         >>> from sympy.combinatorics import SymmetricGroup\n-        >>> CharacterTable(SymmetricGroup(4)).zeta_order\n+        >>> SymmetricGroup(4).character_table().zeta_order\n         1\n         \"\"\"\n         if self._rep.domain.is_CyclotomicField:\n@@ -177,7 +162,7 @@ def from_perm_group(cls, G: PermutationGroup) -> CharacterTable:\n         ========\n \n         >>> from sympy.combinatorics import CharacterTable, AlternatingGroup\n-        >>> CharacterTable.from_perm_group(AlternatingGroup(4)) # doctest: +SKIP\n+        >>> CharacterTable.from_perm_group(AlternatingGroup(4)).as_matrix()\n         Matrix([\n          [1,          1,          1,  1],\n          [1, -1 - zeta3,      zeta3,  1],\n@@ -189,7 +174,7 @@ def from_perm_group(cls, G: PermutationGroup) -> CharacterTable:\n \n def _compute_cmmatrices(\n     cc: Sequence[CC], dom: Domain[Er]\n-) -> Generator[DomainMatrix, None, None]:\n+) -> Iterator[DomainMatrix]:\n     \"\"\"\n     Compute the class multiplication matrices.\n     \"\"\"\n@@ -233,6 +218,9 @@ def _simultaneous_diagonalize(\n     Compute the simultaneous diagonalization of a list of DomainMatrices.\n     Returns Z such that `Z * N * Z.inv()` is diagonal for all N in mats\n     and Z is on the same domain as mats (assuming Z exists).\n+\n+    This is used internally for computing the simultaneous diagonalization\n+    of class multiplication matrices, where such Z must exist.\n     \"\"\"\n     it = iter(mats)\n     N0 = next(it)\n@@ -472,8 +460,8 @@ def dixon_character_table(conjugacy_classes: Sequence[set[Permutation]]) -> Char\n     >>> from sympy.combinatorics.character_table import dixon_character_table\n     >>> from sympy.combinatorics import AlternatingGroup\n     >>> G = AlternatingGroup(4)\n-    >>> dixon_character_table(G.conjugacy_classes())\n-    CharacterTable([\n+    >>> dixon_character_table(G.conjugacy_classes()).as_matrix()\n+    Matrix([\n      [1,          1,          1,  1],\n      [1, -1 - zeta3,      zeta3,  1],\n      [1,      zeta3, -1 - zeta3,  1],\n@@ -527,4 +515,4 @@ def dixon_character_table(conjugacy_classes: Sequence[set[Permutation]]) -> Char\n         dm = dm.extract(_rows, _cols)\n \n     conjugacy_class_reps = [next(iter(c)) for c in conjugacy_classes]\n-    return CharacterTable.new(dm, conjugacy_class_reps)\n+    return CharacterTable(dm, conjugacy_class_reps)\ndiff --git a/sympy/combinatorics/perm_groups.py b/sympy/combinatorics/perm_groups.py\nindex 4ec1177445..fc85f98424 100644\n--- a/sympy/combinatorics/perm_groups.py\n+++ b/sympy/combinatorics/perm_groups.py\n@@ -1,4 +1,5 @@\n from __future__ import annotations\n+from typing import TYPE_CHECKING\n from math import factorial as _factorial, log, prod\n from itertools import chain, product\n \n@@ -20,6 +21,10 @@\n from sympy.ntheory.primetest import isprime\n from sympy.utilities.iterables import has_variety, is_sequence, uniq\n \n+if TYPE_CHECKING:\n+    from sympy.combinatorics.character_table import CharacterTable\n+\n+\n rmul = Permutation.rmul_with_af\n _af_new = Permutation._af_new\n \n@@ -5142,6 +5147,26 @@ def quotient_group(self,N):\n \n         return PermutationGroup(gen)\n \n+    def character_table(self) -> CharacterTable:\n+        \"\"\"\n+        Computes the character table of the permutation group.\n+\n+        Examples\n+        ========\n+        >>> from sympy.combinatorics import AlternatingGroup\n+\n+        >>> M = AlternatingGroup(4).character_table()\n+        >>> M.as_matrix()\n+        Matrix([\n+         [1,          1,          1,  1],\n+         [1, -1 - zeta3,      zeta3,  1],\n+         [1,      zeta3, -1 - zeta3,  1],\n+         [3,          0,          0, -1]])\n+\n+        \"\"\"\n+        from sympy.combinatorics.character_table import CharacterTable\n+        return CharacterTable.from_perm_group(self)\n+\n \n def _orbit(degree, generators, alpha, action='tuples'):\n     r\"\"\"Compute the orbit of alpha `\\{g(\\alpha) | g \\in G\\}` as a set.\ndiff --git a/sympy/printing/repr.py b/sympy/printing/repr.py\nindex cb81485223..f8e7cca449 100644\n--- a/sympy/printing/repr.py\n+++ b/sympy/printing/repr.py\n@@ -184,6 +184,10 @@ def _print_MatrixBase(self, expr):\n                 l[-1].append(expr[i, j])\n         return '%s(%s)' % (expr.__class__.__name__, self._print(l))\n \n+    def _print_CharacterTable(self, expr):\n+        return \"CharacterTable(%s, %s)\" % (\n+            self._print(expr._rep), self._print(expr._conjugacy_class_reps))\n+\n     def _print_BooleanTrue(self, expr):\n         return \"true\"\n \ndiff --git a/sympy/printing/str.py b/sympy/printing/str.py\nindex 1a71b9a472..aa5ec1262a 100644\n--- a/sympy/printing/str.py\n+++ b/sympy/printing/str.py\n@@ -403,7 +403,8 @@ def _print_MatMul(self, expr):\n         )\n \n     def _print_CharacterTable(self, P):\n-        return P._format_str(self)\n+        return \"CharacterTable(%s, %s)\" % (\n+            self._print(P._rep), self._print(P._conjugacy_class_reps))\n \n     def _print_ElementwiseApplyFunction(self, expr):\n         return \"{}.({})\".format(\n",
+      "partial": [
+        "sympy/combinatorics/character_table.py"
+      ],
+      "ripple": [
+        "sympy/printing/str.py"
+      ]
+    },
+    "meta": {
+      "sha": "56bf4dbd40059923d71b604188b6bb1c53f01618",
+      "date": "2026-07-28",
+      "subject": "modify the constructor and the display of character tables",
+      "tests": [
+        "sympy/combinatorics/tests/test_character_table.py",
+        "sympy/printing/tests/test_latex.py",
+        "sympy/printing/tests/test_repr.py",
+        "sympy/printing/tests/test_str.py"
+      ],
+      "testFiles": [
+        "sympy/combinatorics/tests/test_character_table.py",
+        "sympy/printing/tests/test_latex.py",
+        "sympy/printing/tests/test_repr.py",
+        "sympy/printing/tests/test_str.py"
+      ],
+      "ripples": [
+        {
+          "name": "_format_str",
+          "a": "sympy/combinatorics/character_table.py",
+          "b": "sympy/printing/str.py"
+        }
+      ],
+      "f2p": 34,
+      "p2p": 328,
+      "ripple": 34,
+      "flaky": 0,
+      "suite": 59
+    }
+  },
+  {
+    "id": "b5-sympy-9d92cc14",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "sympy",
+    "base": "f02d76b87c4a97dca181d7a5a9b7811635342b5f",
+    "statement": "ENH: rename reset_bounds to reset on lra-refactor",
+    "needsStatement": true,
+    "testHint": "from the repository root, `pytest sympy/sets/tests/test_sets.py` runs one test file (pytest, mpmath and hypothesis are installed).",
+    "grade": {
+      "testPatch": "diff --git a/sympy/logic/tests/test_lra_theory.py b/sympy/logic/tests/test_lra_theory.py\nindex 2336d45436..5c4e3db531 100644\n--- a/sympy/logic/tests/test_lra_theory.py\n+++ b/sympy/logic/tests/test_lra_theory.py\n@@ -448,9 +448,9 @@ def test_pivot():\n                 assert lra.A.rref() == rref\n \n \n-def test_reset_bounds():\n+def test_reset():\n     \"\"\"\n-    Tests that reset_bounds properly resets all state variables to their default values.\n+    Tests that reset properly resets all state variables to their default values.\n     \"\"\"\n     # Test solver behavior after reset\n     bf = Q.ge(x, 1) & Q.lt(x, 1)\n@@ -462,7 +462,7 @@ def test_reset_bounds():\n             lra.assert_lit(lit)\n \n     assert lra.check()[0] == False\n-    lra.reset_bounds()\n+    lra.reset()\n     assert lra.check()[0] == True\n \n     # Test individual state variable resets\n@@ -482,7 +482,7 @@ def test_reset_bounds():\n         for var in lra.all_var:\n             setattr(var, attr_name, test_value)\n \n-        lra.reset_bounds()\n+        lra.reset()\n \n         for var in lra.all_var:\n             actual_value = getattr(var, attr_name)\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-9d92cc14.f2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-9d92cc14.p2p.json",
+          "timeoutSec": 900
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-sympy-9d92cc14.ripple.json",
+          "timeoutSec": 900,
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "sympy/logic/algorithms/dpll2.py",
+        "sympy/logic/algorithms/lra_theory.py"
+      ],
+      "patch": "diff --git a/sympy/logic/algorithms/dpll2.py b/sympy/logic/algorithms/dpll2.py\nindex 0462fb37c4..349a30c732 100644\n--- a/sympy/logic/algorithms/dpll2.py\n+++ b/sympy/logic/algorithms/dpll2.py\n@@ -231,7 +231,7 @@ def _find_model(self):\n                             if res is not None:\n                                 break\n                         res = self.lra.check()\n-                        self.lra.reset_bounds()\n+                        self.lra.reset()\n                     else:\n                         res = None\n                     if res is None or res[0]:\ndiff --git a/sympy/logic/algorithms/lra_theory.py b/sympy/logic/algorithms/lra_theory.py\nindex 38495a109f..3845ca8af9 100644\n--- a/sympy/logic/algorithms/lra_theory.py\n+++ b/sympy/logic/algorithms/lra_theory.py\n@@ -366,7 +366,7 @@ def from_encoded_cnf(encoded_cnf, testing_mode=False):\n                            s_subs, testing_mode)\n         return solver, conflicts\n \n-    def reset_bounds(self):\n+    def reset(self):\n         \"\"\"\n         Resets the state of the LRASolver to before\n         anything was asserted.\n",
+      "partial": [
+        "sympy/logic/algorithms/lra_theory.py"
+      ],
+      "ripple": [
+        "sympy/logic/algorithms/dpll2.py"
+      ]
+    },
+    "meta": {
+      "sha": "9d92cc14f34a2fed1ff550bebc84cdbcbf219658",
+      "date": "2026-07-22",
+      "subject": "ENH: rename reset_bounds to reset on lra-refactor",
+      "tests": [
+        "sympy/logic/tests/test_lra_theory.py"
+      ],
+      "testFiles": [
+        "sympy/logic/tests/test_lra_theory.py"
+      ],
+      "ripples": [
+        {
+          "name": "reset_bounds",
+          "a": "sympy/logic/algorithms/lra_theory.py",
+          "b": "sympy/logic/algorithms/dpll2.py"
+        }
+      ],
+      "f2p": 1,
+      "p2p": 13,
+      "ripple": 2,
+      "flaky": 0,
+      "suite": 4
+    }
+  }
+]
