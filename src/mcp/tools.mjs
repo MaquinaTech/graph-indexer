@@ -144,6 +144,7 @@ export const TOOLS = [
             properties: {
                 files: { type: 'array', items: { type: 'string' }, description: 'Only check these changed files/directories (default: all changes).' },
                 base: { type: 'string', default: 'HEAD', description: 'Git revision to compare with.' },
+                by_name: { type: 'boolean', default: false, description: 'Also list the test files that name a changed module in a string (a dialect, plugin or backend picked by name): more of the affected tests, many more files to run.' },
             },
         },
     },
@@ -994,8 +995,8 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
     return out.join('\n');
 }
 
-async function toolCheck(intel, { files = null, base = 'HEAD' }) {
-    const r = await checkChanges(intel, { base, files: files?.length ? files : null });
+async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName = false }) {
+    const r = await checkChanges(intel, { base, files: files?.length ? files : null, byName });
     if (r.error) return r.error;
     if (!r.files) return `No changed source files against ${base}${files?.length ? ` under ${files.join(', ')}` : ''}.`;
     const out = [`Checked ${plural(r.files, 'changed file')} against ${base}.`];

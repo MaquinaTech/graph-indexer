@@ -22,13 +22,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
     (0.96–1.12) of Claude Code alone in the pilots `issue1p` and `issue2`.
   - `init`'s instructions now suggest the issue's names and terms as the query.
   - [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
-- **`check` lists, apart, the test files that name a changed module in a string**, such as
-  `transpile(sql, write="presto")` for `generators/presto.py`. They reach the change through a
-  dialect, plugin or backend lookup that no reference shows.
-  - Over 46 fresh issues, adding them takes the existing tests the gold fix breaks from 10 of 13
-    detected to 13 of 13, and the developer's test files from 88 % to 97 %.
-  - The share of test files avoided falls from 88 % to 66 %: 54 % in sqlglot and 52 % on the held
-    split.
+- **`check_changes` with `by_name: true` lists, apart, the test files that name a changed module in
+  a string**, such as `transpile(sql, write="presto")` for `generators/presto.py`. They reach the
+  change through a dialect, plugin or backend lookup that no reference shows. It is off by default.
+  - Over 50 fresh issues, adding them takes the existing test files the gold fix affects from 11
+    of 15 detected to 14 of 15, and the developer's test files from 86 % to 94 %.
+  - The share of test files avoided falls from 88.5 % to 68.8 %.
+  - The gain came from sqlglot, where the rule was found. On SymPy, measured afterwards, it found
+    nothing more (1 of 2 affected files either way), so it stays opt-in. Neither setting reaches
+    the goal of 99 % of affected files.
   - Measured with `localize.mjs select`, which runs the whole suite with and without the gold fix,
     the way NameRTS measures test selection.
 - **B5, silent errors** (`bench/agentic/mine-b5.mjs`): tasks from real commits whose partial fix,

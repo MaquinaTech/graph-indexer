@@ -168,7 +168,7 @@ function testsNamingModules(intel, files) {
     return out;
 }
 
-export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true } = {}) {
+export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true, byName = false } = {}) {
     const root = intel.root;
     const changed = changedFiles(root, base);
     if (!changed) return { error: `git diff against ${base} failed — is this a git repository with that commit?` };
@@ -349,8 +349,12 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         for (const rel of targets) if (intel.store.get('SELECT is_test FROM files WHERE path = ?', rel)?.is_test) tests.add(rel);
         report.tests = [...tests].sort();
         report.commands = testCommands(root, report.tests.slice(0, 40));
-        report.byName = testsNamingModules(intel, [...targets, ...inheritorFiles]).filter(t => !tests.has(t));
-        report.byNameCommands = testCommands(root, report.byName.slice(0, 40));
+        // opt-in: the test files that name a changed module in a string (measured: more of the tests
+        // a fix breaks are found, fewer test files are avoided, and nothing gained outside sqlglot)
+        if (byName) {
+            report.byName = testsNamingModules(intel, [...targets, ...inheritorFiles]).filter(t => !tests.has(t));
+            report.byNameCommands = testCommands(root, report.byName.slice(0, 40));
+        }
         // the test functions closest to the change: changed themselves, calling it, or calling a
         // function that calls it — running these first verifies a fix in seconds
         const near = new Map(seeds.map(id => [id, 0]));

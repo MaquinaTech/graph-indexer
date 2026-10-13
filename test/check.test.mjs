@@ -135,7 +135,7 @@ test('a subclass whose own version uses the changed one is reached, not overridd
     } finally { intel.close(); rmrf(root); }
 });
 
-test('tests that reach a changed module by its name in a string are listed apart', async () => {
+test('on request, tests that reach a changed module by its name in a string are listed apart', async () => {
     // transpile(sql, write="presto") picks the generator by name: no reference shows it
     const root = makeRepo({
         'sqlx/__init__.py': 'def transpile(sql, write=None):\n    return sql\n',
@@ -150,7 +150,11 @@ test('tests that reach a changed module by its name in a string are listed apart
     try {
         await intel.open();
         writeFile(root, 'sqlx/generators/presto.py', 'def date_diff_sql(e):\n    return "DATE_DIFF(x)"\n');
-        const text = await callTool(intel, 'check_changes', {});
+        // off by default: only the tests that reach the change by a reference
+        const plain = await callTool(intel, 'check_changes', {});
+        assert.match(plain, /test files that exercise the change \(1\): tests\/test_presto\.py/, plain);
+        assert.doesNotMatch(plain, /name a changed module|test_mysql/, plain);
+        const text = await callTool(intel, 'check_changes', { by_name: true });
         assert.match(text, /test files that exercise the change \(1\): tests\/test_presto\.py/, text);
         assert.match(text, /test files that name a changed module in a string [^\n]*\(1\): tests\/test_mysql\.py/, text);
         assert.doesNotMatch(text, /test_other/, text);

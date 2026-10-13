@@ -217,7 +217,7 @@ if (cmd === 'prepare') {
                 const intel = new CodeIntel({ root: wt });
                 await intel.open();
                 let report;
-                try { report = await checkChanges(intel); } finally { intel.close(); }
+                try { report = await checkChanges(intel, { byName: true }); } finally { intel.close(); }
                 const was = row.selected.length;
                 Object.assign(row, { selected: report.tests, byName: report.byName, cases: report.cases.map(c => `${c.path}::${c.cls ?? ''}::${c.name}`), casesTotal: report.casesTotal });
                 writeJson(dest, row);
@@ -236,7 +236,7 @@ if (cmd === 'prepare') {
             const intel = new CodeIntel({ root: wt });
             await intel.open();
             let report;
-            try { report = await checkChanges(intel); } finally { intel.close(); }
+            try { report = await checkChanges(intel, { byName: true }); } finally { intel.close(); }
             const after = await suite(wt, repo.runner, all);
             // confirm: the differing files once more on each side
             const diffFiles = [...new Set(changed(before, after).map(fileOf))];
