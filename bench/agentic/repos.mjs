@@ -10,6 +10,7 @@ import { WORK } from './lib.mjs';
 // the virtualenv of the B5 repositories that need packages the main grading one does not have
 // (dask, mypy's and pylint's test requirements): wheels only, installed offline in the sandbox
 const VENV_B5 = path.join(WORK, 'venv-b5', 'bin', 'python');
+const venv = (name) => path.join(WORK, `venv-${name}`, 'bin', 'python');
 
 export const REPOS = {
     nestjs: {
@@ -126,5 +127,29 @@ export const REPOS = {
         srcPrefix: 'lib/sqlalchemy/',
         testRe: '^test/',
         testHint: 'from the repository root, `pytest test/orm/test_session.py` runs one test file against SQLite (pytest, greenlet and typing_extensions are installed).',
+    },
+    // the web-crawling framework (B5), on Twisted; its FTP tests need pyftpdlib, which has no wheel
+    scrapy: {
+        source: path.join(WORK, 'repos', 'scrapy'),
+        fetch: `git clone --filter=blob:none --shallow-since=2026-05-15 https://github.com/scrapy/scrapy.git ${path.join(WORK, 'repos', 'scrapy')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: venv('scrapy'),
+        srcPrefix: 'scrapy/',
+        testRe: '^tests/',
+        testHint: 'from the repository root, `pytest tests/test_http_response.py` runs one test file (pytest, pytest-twisted and the test requirements are installed; the FTP tests are not).',
+    },
+    // the LLM pipeline framework (B5), with its core and light test dependencies; tests that need
+    // torch, transformers or a document converter's library are not runnable
+    haystack: {
+        source: path.join(WORK, 'repos', 'haystack'),
+        fetch: `git clone --filter=blob:none --shallow-since=2026-05-15 https://github.com/deepset-ai/haystack.git ${path.join(WORK, 'repos', 'haystack')}`,
+        language: 'python',
+        runner: 'pytest',
+        python: venv('haystack'),
+        env: { HAYSTACK_TELEMETRY_ENABLED: 'False' }, // telemetry would write ~/.haystack, outside the sandbox
+        srcPrefix: 'haystack/',
+        testRe: '^test/',
+        testHint: 'from the repository root, `pytest test/core/pipeline/test_pipeline.py` runs one test file (pytest, pytest-asyncio and the core dependencies are installed; torch, transformers and the converters\' libraries are not).',
     },
 };

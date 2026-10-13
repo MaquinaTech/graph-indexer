@@ -101,7 +101,13 @@ How a B3 task is made, from the fifth round on:
   pytest and hypothesis plus dask, flox (with numpy_groupies and scipy) and mypy's and pylint's
   test requirements: wheels only, installed offline inside the sandbox. xarray's dask chunk
   manager is registered by a metadata-only distribution (no code) instead of `pip install -e .`,
-  which would make every checkout import one tree.
+  which would make every checkout import one tree. scrapy and haystack (B5) have one virtualenv
+  each, built the same way: scrapy with its declared dependencies and test requirements but
+  pyftpdlib, which has no wheel; haystack with its core dependencies, pandas and its pytest
+  plugins but not torch, transformers or the converters' libraries, so tests that import those
+  fail at import and rule 3 leaves them out. Repositories can set environment variables for
+  their runs (`env` in `repos.mjs`): haystack's telemetry is switched off, since it would write
+  to `~/.haystack`.
 - **Data-driven tests** run through the module that reads them (`fixtureTests` in `repos.mjs`):
   sqlglot's `.sql` fixtures, pylint's functional cases (`tests/test_functional.py`) and mypy's
   `test-data/unit/*.test` files (the `mypy/test/` module whose `files` lists them).

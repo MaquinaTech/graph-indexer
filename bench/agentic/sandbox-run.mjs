@@ -10,7 +10,7 @@
  * Prints the command's output and exits with its status (124 on timeout).
  */
 import path from 'node:path';
-import { argv, sandboxed, sh } from './lib.mjs';
+import { argv, sandboxed, sh, WORK } from './lib.mjs';
 import { REPOS } from './repos.mjs';
 
 const { args, opt } = argv();
@@ -21,11 +21,12 @@ if (sep < 0 || !opt('--checkout')) {
 }
 const checkout = path.resolve(opt('--checkout'));
 const repo = REPOS[opt('--repo', '')];
-const python = repo?.python ?? process.env.GI_PYTHON;
+// a repository's own virtualenv, else the grading one (GI_PYTHON, by default WORK/venv)
+const python = repo?.python ?? process.env.GI_PYTHON ?? path.join(WORK, 'venv', 'bin', 'python');
 const bin = python ? path.dirname(python) : null;
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 const cmd = `${bin ? `PATH=${q(bin)}:"$PATH" ` : ''}${args.slice(sep + 1).map(q).join(' ')}`;
-const r = sh(sandboxed(cmd, { checkout }), { cwd: checkout, timeout: Number(opt('--timeout', 600)) * 1000 });
+const r = sh(sandboxed(cmd, { checkout }), { cwd: checkout, env: repo?.env ?? {}, timeout: Number(opt('--timeout', 600)) * 1000 });
 process.stdout.write(r.stdout);
 process.stderr.write(r.stderr);
 process.exit(r.timedOut ? 124 : r.code);

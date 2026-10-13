@@ -77,9 +77,10 @@ const taskRepo = new Map(loadTasks().map(t => [t.id, t.repo]));
 const pythonOf = (meta) => REPOS[taskRepo.get(meta.taskId)]?.python ?? process.env.GI_PYTHON ?? null;
 const envFor = (meta) => {
     const py = pythonOf(meta);
-    if (!py) return process.env;
+    const extra = REPOS[taskRepo.get(meta.taskId)]?.env ?? {};
+    if (!py) return { ...process.env, ...extra };
     const bin = path.dirname(py);
-    return { ...process.env, GI_PYTHON: py, GI_PYTEST: `${py} -m pytest`, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(bin) };
+    return { ...process.env, ...extra, GI_PYTHON: py, GI_PYTEST: `${py} -m pytest`, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(bin) };
 };
 if (!dry) for (const m of runs.filter(m => /^(fresh|b5)-/.test(m.taskId))) {
     if (!pythonOf(m)) throw new Error('mined Python tasks need GI_PYTHON (the virtualenv python that grades them), so agents and grading share one environment');

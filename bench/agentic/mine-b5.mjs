@@ -39,8 +39,10 @@ const { opt, flag } = argv();
 const name = opt('--name');
 const R = REPOS[name];
 // a repository with its own virtualenv: the miner's runs, and later the task's checks, use it
-if (R?.python) Object.assign(process.env, { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` });
-const pyEnv = R?.python ? { env: { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` } } : {};
+// (and its `env`, such as a telemetry switch)
+const repoEnv = { ...(R?.python ? { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` } : {}), ...(R?.env ?? {}) };
+Object.assign(process.env, repoEnv);
+const pyEnv = Object.keys(repoEnv).length ? { env: repoEnv } : {};
 const repo = path.resolve(opt('--repo', R?.source ?? path.join(WORK, 'repos', name)));
 const runner = opt('--runner', R?.runner ?? 'pytest');
 const srcPrefix = opt('--src', R?.srcPrefix ?? '');
