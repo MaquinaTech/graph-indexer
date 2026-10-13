@@ -31,6 +31,12 @@
  * checks that it has what the arm needs — the Agent tool, the graph-indexer server connected, the
  * helper among the sub-agents it can start — before anything is spent on the runs themselves.
  *
+ * Every shell command a session runs goes through Claude Code's own sandbox (`sandboxSettings`,
+ * passed with --settings): fail-closed, no network but localhost, writes only in the run directory,
+ * the checkout and the temporary directory, no reads of the home directory beyond the work area.
+ * --preflight checks it: a write to the home directory, a connection out and a read of a home file
+ * must all fail.
+ *
  * It streams each transcript to <transcripts>/<agent id>.jsonl and registers the agent id in
  * runs/<label>/agents.tsv. Grade afterwards with
  *   node bench/agentic/grade-batch.mjs --gi LABEL --agents <ids> --transcripts <dir>
@@ -39,6 +45,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import os from 'node:os';
 import { argv, loadTasks, WORK } from './lib.mjs';
 import { REPOS } from './repos.mjs';
 import { giBin } from './prepare.mjs';
@@ -88,6 +95,31 @@ if (!dry) for (const m of runs.filter(m => /^(fresh|b5)-/.test(m.taskId))) {
     if (r.status !== 0) throw new Error(`python3 on the sessions' PATH cannot import pytest: ${r.stderr.trim().split('\n').pop()}`);
 }
 
+/**
+ * Claude Code's own sandbox for every shell command a session runs (the repository's tests, a
+ * build, anything the agent starts), fail-closed: no network but localhost, writes only in the run
+ * directory, the checkout and the temporary directory, no reads of the home directory beyond what
+ * the tests need (the work area, Node, git's settings), no way out (allowUnsandboxedCommands
+ * false ignores `dangerouslyDisableSandbox`), and no start at all if the sandbox cannot start.
+ * Claude Code's file tools and MCP servers run outside it (graph-indexer's server is ours).
+ */
+export function sandboxSettings(meta) {
+    const home = os.homedir();
+    return {
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+        autoAllowBashIfSandboxed: true,
+        excludedCommands: [],
+        network: { allowedDomains: [], strictAllowlist: true, allowLocalBinding: true },
+        filesystem: {
+            allowWrite: [meta.runDir, meta.checkout],
+            denyRead: [home],
+            allowRead: [meta.runDir, meta.checkout, WORK, path.dirname(path.dirname(process.execPath)), path.join(home, '.gitconfig'), path.join(home, '.config', 'git')],
+        },
+    };
+}
+
 /** The command line for one run, and the config files it needs (written next to the run). */
 function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } = {}) {
     // in the repository (prepare.mjs --in-repo) the instructions are the prompt, as a user's request is
@@ -103,27 +135,28 @@ function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } =
         // a tool whose setup replaces Claude Code's system prompt (Serena's recommended override)
         if (meta.competitor?.systemPrompt) args.push('--system-prompt', fs.readFileSync(path.join(meta.runDir, meta.competitor.systemPrompt), 'utf8'));
         if (budget ?? maxBudget) args.push('--max-budget-usd', String(budget ?? maxBudget));
+        args.push('--settings', path.join(meta.runDir, 'sandbox.json'));
         const servers = session.v2 ? { 'graph-indexer': serverV2(meta.checkout) }
             : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } }
             : meta.competitor ? meta.competitor.mcpServers : {};
-        return { args, files: { 'mcp.json': { mcpServers: servers } } };
+        return { args, files: { 'mcp.json': { mcpServers: servers }, 'sandbox.json': { sandbox: sandboxSettings(meta) } } };
     }
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions',
         '--tools', 'Read,Grep,Glob,Bash,Edit,Write', '--add-dir', meta.checkout];
     if (model) args.push('--model', model);
-    const files = {};
+    const files = { 'settings.json': { sandbox: sandboxSettings(meta) } };
+    args.push('--settings', path.join(meta.runDir, 'settings.json'));
     if (meta.arm === 'mcp' || meta.arm === 'mcp+hooks') {
         files['mcp.json'] = { mcpServers: { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } };
         args.push('--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config');
     }
     if (meta.arm === 'mcp+hooks') {
         const hook = (event) => ({ type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} hook ${event} --repo ${JSON.stringify(meta.checkout)}`, timeout: 10 });
-        files['settings.json'] = { hooks: {
+        files['settings.json'].hooks = {
             PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|Grep|Bash|Read', hooks: [hook('post-tool')] }],
             SessionStart: [{ hooks: [hook('session-start')] }],
             SubagentStart: [{ hooks: [hook('subagent-start')] }],
-        } };
-        args.push('--settings', path.join(meta.runDir, 'settings.json'));
+        };
     }
     return { args, files };
 }
@@ -166,12 +199,17 @@ async function preflightArms() {
         const session = SESSION_ARMS[arm];
         // the sub-agents a session can start are listed in its Agent tool, which the model reads
         // a mined Python task: the session's own shell must find the grading Python first
-        const python = /^fresh-/.test(meta.taskId) && pyBin;
+        const pyBin = /^(fresh|b5)-/.test(meta.taskId) && pythonOf(meta);
+        // the sandbox: a write to the home directory, a connection out and a read of a home file must all fail
+        const probe = path.join(os.homedir(), '.gi-sandbox-probe');
+        const sandboxProbe = `(touch ${probe} && echo WRITE-OPEN || echo WRITE-BLOCKED); (curl -sS -m 5 https://example.com >/dev/null 2>&1 && echo NET-OPEN || echo NET-BLOCKED); (head -c1 ${path.join(os.homedir(), '.zshrc')} >/dev/null 2>&1 && echo READ-OPEN || echo READ-BLOCKED)`;
+        const command = pyBin ? `python3 -c "import pytest, sys; print(sys.executable)"; ${sandboxProbe}` : sandboxProbe;
         const { args, files } = commandFor(meta, { bin: usesIndex(arm) ? giBin(label) : null, budget: 0.5,
-            prompt: python ? 'Run this Bash command once: python3 -c "import pytest, sys; print(sys.executable)" — then, without using any other tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.'
-                : 'Without using any tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.' });
+            prompt: `Run this Bash command once, exactly as written: ${command} — then, without using any other tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.` });
         const file = path.join(dir, `preflight-${arm.replace(/[^\w.+-]/g, '_')}-${Date.now().toString(36)}.jsonl`);
         const code = await launch(meta, args, files, file);
+        const leaked = fs.existsSync(probe);
+        fs.rmSync(probe, { force: true });
         const events = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
         const init = events.find(e => e.type === 'system' && e.subtype === 'init');
         const result = events.find(e => e.type === 'result');
@@ -185,11 +223,11 @@ async function preflightArms() {
             ['web tools off', !tools.some(t => t === 'WebSearch' || t === 'WebFetch'), ''],
         ];
         if (session) checks.push(['sub-agents (Agent tool)', tools.includes('Agent') || tools.includes('Task'), '']);
-        if (python) {
-            const out = events.filter(e => e.type === 'user').flatMap(e => e.message?.content ?? []).filter(c => c.type === 'tool_result')
-                .map(c => (Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? ''))).join('\n');
-            checks.push(['tests run with the grading Python', out.includes(pyBin) || out.includes(path.dirname(pyBin)), out.trim().split('\n').pop()?.slice(0, 160) ?? 'no command output']);
-        }
+        const out = events.filter(e => e.type === 'user').flatMap(e => e.message?.content ?? []).filter(c => c.type === 'tool_result')
+            .map(c => (Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? ''))).join('\n');
+        checks.push(['shell sandboxed (no home write, no network, no home read)', !leaked && ['WRITE', 'NET', 'READ'].every(k => out.includes(`${k}-BLOCKED`)),
+            ['WRITE', 'NET', 'READ'].map(k => (out.includes(`${k}-BLOCKED`) ? `${k.toLowerCase()} blocked` : out.includes(`${k}-OPEN`) ? `${k.toLowerCase()} OPEN` : `${k.toLowerCase()} ?`)).join(', ')]);
+        if (pyBin) checks.push(['tests run with the grading Python', out.includes(pyBin) || out.includes(path.dirname(pyBin)), out.trim().split('\n').find(l => l.includes('python'))?.slice(0, 160) ?? 'no command output']);
         if (meta.competitor && Object.keys(meta.competitor.mcpServers).length) {
             const name = Object.keys(meta.competitor.mcpServers)[0];
             const srv = servers.find(s => s.name === name);
