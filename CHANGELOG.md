@@ -173,6 +173,10 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **Indexing no longer overflows the stack on a field assigned an element of itself**
+  (`self.impl = self.impl[0]`, in SQLAlchemy's `test/perf`): each lookup added one element access
+  to the type, without end, and the whole index failed. A type now stacks at most 8 element
+  accesses. The four reference oracles give identical results.
 - **Names built into regular expressions are escaped in full** (`src/util/regex.mjs`), not only
   their `$`; the location query `file.ext:name` no longer backtracks polynomially on long input.
   Identifiers are matched as before: the four reference oracles give identical results.
