@@ -31,7 +31,7 @@ for (const t of tasks) {
         console.log(`stated    ${t.id}`);
     }
     if (t.needsStatement && flag('--prune')) {
-        for (const k of ['f2p', 'p2p']) fs.rmSync(path.join(HERE, 'tasks', 'fresh', `${t.id}.${k}.json`), { force: true });
+        for (const k of ['f2p', 'p2p', 'ripple']) fs.rmSync(path.join(HERE, 'tasks', 'fresh', `${t.id}.${k}.json`), { force: true });
         console.log(`withdrawn ${t.id}  ${t.meta.subject}`);
         continue;
     }

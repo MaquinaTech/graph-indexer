@@ -1,4 +1,0 @@
-[
-  "sympy/tensor/array/expressions/tests/test_array_expressions.py::::test_array_expressions_base_class",
-  "sympy/tensor/array/expressions/tests/test_convert_array_to_matrix.py::::test_convert_array_to_matrix_contraction_of_applyfunc"
-]
