@@ -37,6 +37,17 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   the changed definition without the updates its existing users needed, breaks tests elsewhere.
   - The criterion was fixed before mining ([PLAN-IDE-AGENTE §4](docs/PLAN-IDE-AGENTE.md)).
   - `validate-fresh` checks that RIPPLE passes with the real fix and fails with the partial one.
+  - 17 tasks with reviewed statements, from 8 repositories: sqlglot 6, haystack 3, sympy 2,
+    sqlalchemy 2, mypy 2, scrapy 1, xarray 1. The goal is 30.
+  - A test of RIPPLE that does not run with the partial fix (its module, a conftest or an import
+    no longer loads, or its file never finishes) now makes the task loud, as rule 3 says; the
+    miner used to count it as broken. `mine-b5.mjs --recheck` applied the rule again to every kept
+    task and withdrew 8, six of them already stated. A test missing while its file ran cleanly
+    does not exist without the rest of the fix and is dropped from RIPPLE instead.
+  - The miner stops when a repository has no virtualenv and `GI_PYTHON` is unset, and the test
+    runner takes pytest from `GI_PYTHON` when `GI_PYTEST` is unset. Without them every file
+    "crashed" under the system Python and read as loud.
+  - Test runs remove the result files that runs killed on their timeout left behind.
 - **Bench: the repositories' code runs sandboxed.** Tests at mining, measuring and grading run
   under `bench/agentic/sandbox.sb` (`sandboxed()` in `lib.mjs`):
   - no network beyond localhost;

@@ -1,6 +1,4 @@
 [
-  "test/dialect/test_suite.py::HasTableTest_sqlite+pysqlite_3_53_4::test_has_multi_table",
-  "test/dialect/test_suite.py::HasTableTest_sqlite+pysqlite_3_53_4::test_has_multi_table_schema",
   "test/sql/test_ddlemit.py::EmitDDLTest::test_create_collection_checkfirst[CheckFirst.ALL]",
   "test/sql/test_ddlemit.py::EmitDDLTest::test_create_collection_checkfirst[CheckFirst.TABLES]",
   "test/sql/test_ddlemit.py::EmitDDLTest::test_create_collection_checkfirst[True]",

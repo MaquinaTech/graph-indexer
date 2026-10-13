@@ -1,4 +1,0 @@
-[
-  "tests/dialects/test_bigquery.py::TestBigQuery::test_bigquery",
-  "tests/dialects/test_duckdb.py::TestDuckDB::test_time"
-]

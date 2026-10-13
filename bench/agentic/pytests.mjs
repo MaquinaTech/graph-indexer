@@ -16,8 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { argv, sh, sandboxed, fairJobs } from './lib.mjs';
 
 // read when a run starts: a repository can bring its own virtualenv (REPOS[repo].python, passed as
-// GI_PYTHON / GI_PYTEST by the miner and by the task's checks)
-const pytestCmd = () => process.env.GI_PYTEST ?? (fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
+// GI_PYTHON / GI_PYTEST by the miner and by the task's checks); GI_PYTHON alone means its pytest
+const pytestCmd = () => process.env.GI_PYTEST ?? (process.env.GI_PYTHON ? `${process.env.GI_PYTHON} -m pytest`
+    : fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
 const pythonCmd = () => process.env.GI_PYTHON ?? 'python3';
 
 const modOf = (f) => f.replace(/\.py$/, '').replace(/\//g, '.');
@@ -54,6 +55,7 @@ if __name__ == '__main__':
 `;
 
 function runUnittest(cwd, targets, timeoutSec) {
+    sweepDead();
     const json = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.json`);
     const driver = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.py`);
     fs.writeFileSync(driver, UNITTEST_DRIVER);
@@ -69,8 +71,21 @@ function runUnittest(cwd, targets, timeoutSec) {
     return { outcomes: out, code: r.code, ms: r.ms, cpuMs: cpuMs(r.stdout), tail: r.stdout.slice(-1500) };
 }
 
+/**
+ * A run killed on its timeout (the grader stops the whole process group) leaves its result file
+ * behind: before each run, remove those of processes that no longer exist.
+ */
+function sweepDead() {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+        const m = /^gi-(?:pytest|unittest|files)-(\d+)-/.exec(f);
+        if (!m || Number(m[1]) === process.pid) continue;
+        try { process.kill(Number(m[1]), 0); } catch (e) { if (e.code === 'ESRCH') fs.rmSync(path.join(os.tmpdir(), f), { force: true }); }
+    }
+}
+
 /** pytest: junit XML per test case. */
 function runPytest(cwd, targets, timeoutSec) {
+    sweepDead();
     const xml = path.join(os.tmpdir(), `gi-pytest-${process.pid}-${Date.now()}.xml`);
     const r = sh(sandboxed(`/usr/bin/time -p ${pytestCmd()} -q -p no:cacheprovider -o addopts= --junitxml=${xml} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
     const out = new Map();

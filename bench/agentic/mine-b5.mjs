@@ -12,8 +12,9 @@
  *   3. the partial fix breaks something: with the commit's tests applied, the commit limited to the
  *      A files fails tests R that the full commit passes (whole test suite, or with `--scope package`
  *      the test files of A's and B's packages), confirmed by a second run of each side; no test of R
- *      is an import error (that one is loud: any test run shows it);
- *   4. validated as fresh tasks are: FAIL_TO_PASS non-empty, flaky tests left out, and the commit's
+ *      is an import error or a test the partial fix stops from running at all (a module or a
+ *      conftest that no longer imports: that one is loud, any test run shows it);
+ *   4. validated as fresh tasks are: FAIL_TO_PASS non-empty and at most 40 tests, flaky tests left out, and the commit's
  *      tests take at most 180 s of CPU time (user + sys, not the wall clock: the verdict must not
  *      depend on the machine's load).
  *
@@ -23,6 +24,7 @@
  *
  *   node bench/agentic/mine-b5.mjs --name sqlglot [--since 2026-06-15] [--max 30] [--scope all|package] [--jobs 6]
  *   node bench/agentic/mine-b5.mjs --name X --repo DIR --src PREFIX --tests-re RE --count   (rules 1–2 only, no tests run)
+ *   node bench/agentic/mine-b5.mjs --name sqlglot --recheck   (rule 3's loudness again on the tasks kept; drops the loud ones)
  *
  * Writes bench/agentic/tasks/b5-<name>.json (kind "fresh", bench "b5"): the grade's FAIL_TO_PASS and
  * PASS_TO_PASS checks decide "solved", as in B3; RIPPLE (R, kind info) counts the silent errors left.
@@ -42,6 +44,12 @@ const R = REPOS[name];
 // (and its `env`, such as a telemetry switch)
 const repoEnv = { ...(R?.python ? { GI_PYTHON: R.python, GI_PYTEST: `${R.python} -m pytest` } : {}), ...(R?.env ?? {}) };
 Object.assign(process.env, repoEnv);
+// without one, pytest would be the system Python's (no pytest, no test dependencies): every file
+// would "crash" and read as loud
+if (!process.env.GI_PYTHON && !flag('--count')) {
+    console.error(`mine-b5: ${name} has no virtualenv of its own (repos.mjs); set GI_PYTHON to the grading one (WORK/venv/bin/python)`);
+    process.exit(2);
+}
 const pyEnv = Object.keys(repoEnv).length ? { env: repoEnv } : {};
 const repo = path.resolve(opt('--repo', R?.source ?? path.join(WORK, 'repos', name)));
 const runner = opt('--runner', R?.runner ?? 'pytest');
@@ -138,6 +146,20 @@ function runTwice(tests) {
     return { outcomes, flaky, ms: Math.max(cost(a), cost(b)) };
 }
 const loud = (id) => /::<(import|run)>$/.test(id) || id.startsWith('::');
+// the file of an outcome id; a collection error reads "::::pkg.mod" (pytest) for file pkg/mod.py
+const fileOf = (id) => id.startsWith('::') ? id.replace(/^:+/, '').split('::')[0].replace(/\./g, '/') + '.py' : id.split('::')[0];
+// a test missing from the partial run's outcomes while its file ran without crashing does not exist
+// without the rest of the fix (a test a changed non-test file defines, such as a shared test suite
+// in the library): it is no RIPPLE test, it is dropped
+const absentIn = (part) => {
+    const ids = Object.keys(part);
+    const crashed = new Set(ids.filter(loud).map(fileOf)), ran = new Set(ids.filter(id => !loud(id)).map(fileOf));
+    return (id) => !(id in part) && ran.has(fileOf(id)) && !crashed.has(fileOf(id));
+};
+// a test R counts only if the partial fix let it run and fail: one otherwise missing from the
+// partial run's outcomes did not run at all (its module or a conftest no longer imports, its file
+// crashed or hung)
+const loudIn = (part) => { const absent = absentIn(part); return (id) => loud(id) || (!(id in part) && !absent(id)); };
 const broke = (full, part) => Object.keys(full).filter(id => full[id] === 'pass' && part[id] !== 'pass');
 /** The suite rule 3 runs: every test file, or (scope package) those of the packages of A and B. */
 function suiteFiles(c) {
@@ -148,6 +170,40 @@ function suiteFiles(c) {
 }
 
 const tasks = readJson(out, []);
+
+// --recheck: the tasks kept, with the commit's tests and the partial fix, their RIPPLE files run once
+// more; a task whose RIPPLE holds a test that did not run (loud) is withdrawn, with its id lists
+if (flag('--recheck')) {
+    const verdictsR = readJson(logFile, []);
+    const kept = [];
+    for (const t of tasks) {
+        const ripple = readJson(path.join(idsDir, `${t.id}.ripple.json`), []);
+        reset(t.base);
+        apply(t.grade.testPatch);
+        apply(git(repo, 'diff', '--no-color', t.base, t.meta.sha, '--', ...t.gold.partial));
+        const part = await runFiles(wt, runner, [...new Set(ripple.map(id => id.split('::')[0]))], { jobs });
+        const absent = ripple.filter(absentIn(part));
+        const bad = ripple.filter(loudIn(part));
+        if (!bad.length && absent.length < ripple.length) {
+            if (absent.length) {
+                const left = ripple.filter(id => !absent.includes(id));
+                writeJson(path.join(idsDir, `${t.id}.ripple.json`), left);
+                t.meta.ripple = left.length;
+            }
+            kept.push(t);
+            log(`  ok    ${t.id}  RIPPLE ${ripple.length - absent.length}, every test ran${absent.length ? ` (${absent.length} dropped: not defined without the rest of the fix)` : ''}`);
+            continue;
+        }
+        for (const k of ['f2p', 'p2p', 'ripple']) fs.rmSync(path.join(idsDir, `${t.id}.${k}.json`), { force: true });
+        verdictsR.push({ sha: t.meta.sha, subject: t.meta.subject, rule: 'rule 3: the partial fix breaks an import (recheck)', ripple: ripple.length, loud: bad.length, loudIds: bad.slice(0, 5), crashed: Object.keys(part).filter(loud).slice(0, 5) });
+        log(`  loud  ${t.id}  ${bad.length}/${ripple.length} RIPPLE tests did not run (${Object.keys(part).filter(loud).slice(0, 2).join(', ')}): withdrawn`);
+    }
+    reset('HEAD');
+    writeJson(out, kept);
+    writeJson(logFile, verdictsR);
+    log(`${kept.length}/${tasks.length} tasks kept → ${path.relative(process.cwd(), out)}`);
+    process.exit(0);
+}
 const done = new Set(tasks.map(t => t.meta?.sha));
 const verdicts = readJson(logFile, []);
 const judged = new Set(verdicts.map(v => v.sha));
@@ -200,9 +256,11 @@ for (const c of cands) {
         const twice = new Set(broke(full2, part2));
         ripple = ripple.filter(id => twice.has(id) && !flaky.includes(id)).sort();
     }
-    const detail = { A, B, suite: files.length, ripple: ripple.length, loud: ripple.filter(loud).length, secs: Math.round((Date.now() - t0) / 1000) };
+    ripple = ripple.filter(id => !absentIn(part)(id));
+    const isLoud = loudIn(part);
+    const detail = { A, B, suite: files.length, ripple: ripple.length, loud: ripple.filter(isLoud).length, secs: Math.round((Date.now() - t0) / 1000) };
     if (!ripple.length) { verdict(c, 'rule 3: the partial fix breaks no test', detail); continue; }
-    if (ripple.some(loud)) { verdict(c, 'rule 3: the partial fix breaks an import', { ...detail, loudIds: ripple.filter(loud).slice(0, 5) }); continue; }
+    if (ripple.some(isLoud)) { verdict(c, 'rule 3: the partial fix breaks an import', { ...detail, loudIds: ripple.filter(isLoud).slice(0, 5), crashed: Object.keys(part).filter(loud).slice(0, 5) }); continue; }
     const id = `b5-${name}-${c.sha.slice(0, 8)}`;
     writeJson(path.join(idsDir, `${id}.f2p.json`), f2pAll);
     writeJson(path.join(idsDir, `${id}.p2p.json`), p2p);

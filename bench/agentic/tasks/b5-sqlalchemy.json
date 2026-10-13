@@ -167,7 +167,7 @@
       ],
       "f2p": 22,
       "p2p": 47,
-      "ripple": 24,
+      "ripple": 22,
       "flaky": 0,
       "suite": 225,
       "commitMessage": "Add has_multi_table reflection method\n\nCreated new reflection method :meth:`_engine.Inspector.has_multi_table`\nto check the existence of multiple tables at once, allowing for\nbetter performance when checking many tables. Like the other \"multi\"\nreflection methods, the default dialect offers a default implementation\nthat just call the single method in a loop. Backends that wish to take\nadvantage of this new method can implement it in their dialects.\nThe PostgreSQL, Oracle and SQL Server dialects have been updated to use\nthis new method.\nThe implementation of :meth:`_schema.MetaData.create_all` has been updated\nto make use of this new method to check the existence of the tables,\nreducing the number of round trips to the database when creating many tables.\n\nFixes: #13311\nChange-Id: I75a660fc9d5d5df88a277a792c56058b8355ed0c"
