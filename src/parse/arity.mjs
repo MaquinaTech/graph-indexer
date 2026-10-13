@@ -4,6 +4,7 @@
  * ({ n, open }, open = a spread/splat makes n a lower bound). Used by the edit checker to spot
  * call sites that no longer match a changed signature, without compiling anything.
  */
+import { escapeRegExp } from '../util/regex.mjs';
 
 const PARAM_LIST_TYPES = new Set(['formal_parameters', 'parameters', 'parameter_list', 'function_value_parameters', 'method_parameters',
     'lambda_parameters', 'block_parameters', 'parameter_clause']);
@@ -117,7 +118,7 @@ export function callArgc(call) {
  */
 export function sigArity(sig, name) {
     if (!sig) return null;
-    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
     if (!m) return null;
     let depth = 0, cur = '', min = 0, max = 0, done = false;
     const param = (p) => {

@@ -39,6 +39,7 @@ import { tsSetup } from './agentic/tsconfig.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { v2Comparison, answerSizes } from './v2-client.mjs';
 import { loadSystems, answersOf, sourceOf } from './arena/mcp-system.mjs';
+import { escapeRegExp } from '../src/util/regex.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -185,7 +186,7 @@ function nameOnlyRefs(sym) {
 
 const grepCache = new Map();
 function grepRefs(sym) {
-    const re = new RegExp(`\\b${sym.name.replace(/[$]/g, '\\$')}\\b`);
+    const re = new RegExp(`\\b${escapeRegExp(sym.name)}\\b`);
     const out = new Set();
     for (const f of tsFiles) {
         let lines = grepCache.get(f);

@@ -34,6 +34,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { escapeRegExp } from '../../src/util/regex.mjs';
 
 const GI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -162,7 +163,7 @@ export async function answersOf(systems, { root, sample, files, fileRe = null, d
                 const all = text.split('\n'), end = stop ? all.findIndex(l => stop.test(l)) : -1;
                 const claimed = (end >= 0 ? all.slice(0, end) : all).filter(l => !skip?.test(l)).join('\n');
                 // a declaration's lines are those inside it that contain the name as a word
-                const word = new RegExp(`(^|[^\\w$])${s.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`);
+                const word = new RegExp(`(^|[^\\w$])${escapeRegExp(s.name)}(?![\\w$])`);
                 const within = linesOf ? (f, a, b) => { const ls = linesOf(f), r = []; for (let i = Math.max(1, a); i <= Math.min(ls.length, b); i++) if (word.test(codeOnly(ls[i - 1]))) r.push(i); return r; } : null;
                 let locs = locationsIn(claimed, root, files, within);
                 if (sys.references.enclosing && within && extentOf) {

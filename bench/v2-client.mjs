@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { escapeRegExp } from '../src/util/regex.mjs';
 
 export function buildIndexV2(v2Root, repo) {
     const r = spawnSync(process.execPath, [path.join(v2Root, 'indexer.mjs'), '--repo', repo], { encoding: 'utf8', maxBuffer: 1 << 28, timeout: 3_600_000 });
@@ -82,7 +83,7 @@ export async function v2Comparison({ v2Root, root, sample, intel, fileRe, linesO
     } finally { v2.stop(); }
     for (const sym of sample) answers['graph-indexer'].push((await callTool(intel, 'find_references', { symbol: `${sym.path}:${sym.name_line}` })).length / CHARS_PER_TOKEN);
     const refs = (sym, { highOnly = false } = {}) => {
-        const re = new RegExp(`\\b${sym.name.replace(/[$]/g, '\\$')}\\b`);
+        const re = new RegExp(`\\b${escapeRegExp(sym.name)}\\b`);
         const out = new Set();
         for (const c of cardsOf.get(sym.id) ?? []) {
             if ((highOnly && c.confidence === 'name-only') || !fileRe.test(c.file_path)) continue;

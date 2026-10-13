@@ -20,6 +20,7 @@ import { specForPath, isConstructor } from '../parse/languages.mjs';
 import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const CALLABLE = new Set(['function', 'method', 'constructor']);
 const MEMBER_KINDS = new Set(['class', 'interface', 'struct', 'trait', 'enum', 'object', 'impl', 'module', 'type']);
@@ -303,7 +304,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         const files = new Map();
         const mentions = (p, word) => {
             const key = p + '\u0000' + word;
-            if (!files.has(key)) { const lines = intel.fileLines(p); files.set(key, !!lines && lines.some(l => new RegExp(`\\b${word.replace(/[$]/g, '\\$')}\\b`).test(l))); }
+            if (!files.has(key)) { const lines = intel.fileLines(p); files.set(key, !!lines && lines.some(l => new RegExp(`\\b${escapeRegExp(word)}\\b`).test(l))); }
             return files.get(key);
         };
         rows = rows.filter(r => {

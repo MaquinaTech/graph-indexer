@@ -162,6 +162,9 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+- **Names built into regular expressions are escaped in full** (`src/util/regex.mjs`), not only
+  their `$`; the location query `file.ext:name` no longer backtracks polynomially on long input.
+  Identifiers are matched as before: the four reference oracles give identical results.
 - **`check` no longer says "overridden, so not reached" of a subclass whose own version uses the
   changed one.** Examples are `TRANSFORMS = {**MySQLGenerator.TRANSFORMS, …}` and `super().m()`.
   - Such subclasses, and their subclasses, are now listed as running the changed code, with their

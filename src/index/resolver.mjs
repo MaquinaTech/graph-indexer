@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { normalizeType } from '../parse/extract.mjs';
 import { fits, sigArity } from '../parse/arity.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
@@ -100,7 +101,7 @@ function paramType(param) {
  */
 export function callbackParamTypeText(sig, name, i, j) {
     if (!sig) return null;
-    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
     const list = m ? bracketed(sig, m.index + m[0].length - 1) : null;
     let type = list ? paramType(splitTopLevel(list.inner)[i] ?? '') : null;
     if (!type) return null;

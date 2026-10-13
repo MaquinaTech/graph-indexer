@@ -16,6 +16,7 @@ import { confidenceLabel } from '../index/resolver.mjs';
 import { dataDir } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
 import { sigArity } from '../parse/arity.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
@@ -162,7 +163,7 @@ export class CodeIntel {
                 ORDER BY (s.end_line - s.start_line) ASC LIMIT 1`, file.replace(/^\.\//, ''), Number(line), Number(line));
             return { matches: rows.map(r => this.sym(r.id)), how: 'location' };
         }
-        m = /^(.+?\.[A-Za-z0-9]+)[:#](.+)$/.exec(t);
+        m = /^([^:#]+?\.[A-Za-z0-9]+)[:#](.+)$/.exec(t);
         if (m) {
             const [, file, q] = m;
             const rows = this.store.all(`SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? AND (s.qname = ? OR s.name = ? OR s.qname LIKE ?) ORDER BY s.qname = ? DESC, s.start_line LIMIT ?`,
@@ -379,7 +380,7 @@ export class CodeIntel {
             const ids = [...family];
             for (const { path: p } of this.store.all(`SELECT DISTINCT f.path FROM refs r JOIN files f ON f.id = r.file_id WHERE r.dst_id IN (${ids.map(() => '?').join(',')})`, ...ids)) files.add(p);
         } else files.add(sym.path);
-        const name = sym.name.replace(/[$]/g, '\\$');
+        const name = escapeRegExp(sym.name);
         const lit = new RegExp(`(['"\`])(?:[\\w.]*\\.)?${name}\\1`);
         const title = /^\s*(?:describe|it|test|context|suite)(?:\.\w+)?\s*\(/;
         const out = [];
@@ -463,7 +464,7 @@ export class CodeIntel {
             return { total: rows.length, plausible, typeNames: [] };
         }
         const names = [...typeNames];
-        const wordRe = new RegExp(`\\b(${names.map(n => n.replace(/[$]/g, '\\$')).join('|')})\\b`);
+        const wordRe = new RegExp(`\\b(${names.map(n => escapeRegExp(n)).join('|')})\\b`);
         const lower = names.map(n => n.toLowerCase());
         const mentions = new Map();
         const plausible = rows.filter(r => {

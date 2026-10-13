@@ -4,6 +4,7 @@
  * index binds to that one definition. The contrast is the point of the tool, shown instead of told.
  */
 import { textSearch } from './textsearch.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const CALLABLE = ['function', 'method'];
 
@@ -32,7 +33,7 @@ export async function pickShowcase(intel, { candidates = 8 } = {}) {
         .slice(0, candidates);
     let best = null;
     for (const r of rows) {
-        const g = await textSearch(intel, { pattern: `\\b${r.name.replace(/[$]/g, '\\$')}\\b`, limit: 1 });
+        const g = await textSearch(intel, { pattern: `\\b${escapeRegExp(r.name)}\\b`, limit: 1 });
         if (g.error || !g.total) continue;
         const ex = { sym: intel.sym(r.id), defs: homonyms.get(r.name), uses: r.uses, useFiles: r.files, grepLines: g.total, grepFiles: g.files };
         const score = (x) => Math.min(x.uses, 40) * Math.log2(x.grepLines / x.uses);
