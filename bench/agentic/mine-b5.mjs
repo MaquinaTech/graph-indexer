@@ -22,6 +22,7 @@
  * Every candidate that passes rules 1–2 is logged with the rule that dropped it (WORK/mine/b5-<name>.log.json).
  *
  *   node bench/agentic/mine-b5.mjs --name sqlglot [--since 2026-06-15] [--max 30] [--scope all|package] [--jobs 6]
+ *   node bench/agentic/mine-b5.mjs --name X --repo DIR --src PREFIX --tests-re RE --count   (rules 1–2 only, no tests run)
  *
  * Writes bench/agentic/tasks/b5-<name>.json (kind "fresh", bench "b5"): the grade's FAIL_TO_PASS and
  * PASS_TO_PASS checks decide "solved", as in B3; RIPPLE (R, kind info) counts the silent errors left.
@@ -34,7 +35,7 @@ import { argv, git, tryGit, sh, writeJson, readJson, HERE, WORK } from './lib.mj
 import { runTests, runFiles } from './pytests.mjs';
 import { REPOS } from './repos.mjs';
 
-const { opt } = argv();
+const { opt, flag } = argv();
 const name = opt('--name');
 const R = REPOS[name];
 // a repository with its own virtualenv: the miner's runs, and later the task's checks, use it
@@ -95,6 +96,14 @@ function candidates() {
         res.push({ sha, parent, date, subject, src, testFiles, tests, ripples });
     }
     return res;
+}
+
+// --count: only rules 1–2, from git alone (no test runs, nothing written): to size up a repository
+if (flag('--count')) {
+    const cands = candidates();
+    console.log(`${name}: ${cands.length} commits pass rules 1–2 since ${since}`);
+    for (const c of cands) console.log(`  ${c.sha.slice(0, 8)}  ${c.src.length} files, ${c.ripples.length} ripples  ${c.subject.slice(0, 80)}`);
+    process.exit(0);
 }
 
 const wt = path.join(WORK, 'mine', name);
