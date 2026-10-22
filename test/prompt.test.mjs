@@ -50,7 +50,7 @@ test('a type and a member named apart resolve together, with implementations and
     const text = promptContext(intel, '¿Qué código llama a `execute` de `RefreshPort`?');
     assert.match(text, /RefreshPort\.execute \(method, src\/Port\.kt:4\)/);
     assert.match(text, /implemented by: RefreshUseCase/);
-    assert.match(text, /src\/Use\.kt:9 in Controller\.post/);
+    assert.match(text, /src\/Use\.kt:9 in Controller\.post: refresh\.execute\(\)/, 'each call with its code');
     assert.doesNotMatch(text, /Use\.kt:10/, 'other.execute() is OtherPort, not RefreshPort');
     assert.match(text, /This list is complete/);
     assert.doesNotMatch(text, /one level up/, 'no path asked for');

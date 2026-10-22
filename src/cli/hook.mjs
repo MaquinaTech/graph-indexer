@@ -40,7 +40,7 @@ import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hook
 
 const MAX_CONTEXT = 1500;
 // a resolved request replaces the searches the agent would otherwise make, so it may say more
-const MAX_PROMPT_CONTEXT = 3500;
+const MAX_PROMPT_CONTEXT = 5000;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write', 'apply_patch', 'replace', 'write_file']);
 const GREP_TOOLS = new Set(['Grep', 'grep', 'search_file_content', 'grep_search']);
 const READ_TOOLS = new Set(['Read', 'read_file', 'read', 'view']);

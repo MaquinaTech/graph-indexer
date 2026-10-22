@@ -79,6 +79,11 @@ function targets(intel, names) {
 const where = (s) => `${s.path}:${s.start_line}`;
 // the file name only, for the lines the agent reads rather than opens (implementations, callers one level up)
 const brief = (p, line) => `${String(p).split('/').pop()}:${line}`;
+// the code on a line, so a call site can be judged without opening its file
+const code = (intel, p, line) => {
+    const text = intel.fileLines(p)?.[line - 1]?.trim();
+    return text ? `: ${text.length > 100 ? text.slice(0, 99) + '…' : text}` : '';
+};
 
 function describe(intel, sym, wantPaths) {
     const lines = [`${sym.qname} (${sym.kind}, ${where(sym)})`];
@@ -90,7 +95,7 @@ function describe(intel, sym, wantPaths) {
         const r = intel.references(sym.id, { family: false });
         const uses = r ? [...r.groups.values()].flat().filter(x => !x.is_test && x.kind !== 'import') : [];
         lines.push(`  used in ${uses.length} place${uses.length === 1 ? '' : 's'} in production code${uses.length ? ':' : '.'}`);
-        for (const x of uses.slice(0, 6)) lines.push(`    ${x.path}:${x.line} in ${x.src_qname ?? '(top level)'} (${x.kind})`);
+        for (const x of uses.slice(0, 6)) lines.push(`    ${x.path}:${x.line} in ${x.src_qname ?? '(top level)'} (${x.kind})${code(intel, x.path, x.line)}`);
         if (uses.length > 6) lines.push(`    … ${uses.length - 6} more`);
         return lines;
     }
@@ -106,13 +111,15 @@ function describe(intel, sym, wantPaths) {
     const tests = all.filter(x => x.is_test);
     const tag = (x) => (x.confidence === 'exact' ? '' : ` [${x.confidence}]`) + (x.via ? ' (via an implementation)' : '');
     lines.push(`  ${prod.length} call${prod.length === 1 ? '' : 's'} in production code${tests.length ? `, ${tests.length} in tests (${new Set(tests.map(t => t.path)).size} file(s))` : ''}:`);
-    for (const x of prod.slice(0, MAX_REFS)) lines.push(`    ${x.path}:${x.line} in ${x.src_qname ?? '(top level)'}${tag(x)}`);
+    for (const x of prod.slice(0, MAX_REFS)) lines.push(`    ${x.path}:${x.line} in ${x.src_qname ?? '(top level)'}${tag(x)}${code(intel, x.path, x.line)}`);
     if (prod.length > MAX_REFS) lines.push(`    … ${prod.length - MAX_REFS} more`);
     const isTest = (p) => /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.\w+$|Test\.\w+$/.test(p);
     const plausible = (r.unbound?.plausible ?? []).filter(p => !isTest(p.path));
-    lines.push(plausible.length
-        ? `  Possibly missing: ${plausible.length} same-name call(s) with a receiver of unknown type in files that mention it: ${plausible.slice(0, 4).map(p => `${p.path}:${p.line}`).join(', ')}.`
-        : '  This list is complete: no other call with this name is left unresolved where it could be this one.');
+    if (plausible.length) {
+        lines.push(`  Possibly one of these too: same-name calls whose receiver type is unknown, in files that mention it (judge by the receiver):`);
+        for (const p of plausible.slice(0, 4)) lines.push(`    ${p.path}:${p.line}${code(intel, p.path, p.line)}`);
+    }
+    lines.push(`  ${plausible.length ? 'Apart from those, this' : 'This'} list is complete and exact: calls through other types that share the name are already left out, so a text search would only add those.`);
     if (wantPaths && prod.length) {
         const seen = new Set();
         const hops = [];
@@ -140,5 +147,5 @@ export function promptContext(intel, prompt) {
     if (!found.length) return null;
     const wantPaths = PATHS.test(String(prompt));
     const blocks = found.map(s => describe(intel, s, wantPaths).join('\n'));
-    return `graph-indexer, for the code this request names (from the index, exact unless marked):\n${blocks.join('\n')}`;
+    return `graph-indexer resolved the code this request names, from the parsed code (exact unless marked). Answer from it; search only for what it does not show:\n${blocks.join('\n')}`;
 }
