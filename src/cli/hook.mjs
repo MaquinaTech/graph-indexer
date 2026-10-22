@@ -17,6 +17,10 @@
  *   session-start   one line saying the index exists (builds it in the background if missing), plus
  *                   the lookup rules when the repository's instruction files do not carry them
  *   subagent-start  the line and the lookup rules, for subagents that do not read CLAUDE.md/AGENTS.md
+ *   prompt          (UserPromptSubmit) the code names the request mentions, resolved before the first
+ *                   turn: definition, implementations, uses with their enclosing functions and whether
+ *                   the list is complete, and one more level of callers when it asks for paths or impact
+ *                   (src/cli/prompt.mjs)
  *
  * Staying quiet until the agent is crawling matters: context added to every search made "where is
  * X" questions dearer in other projects' measurements. Fail-open by design: any error, timeout or
@@ -35,6 +39,8 @@ import { findRepoRoot, dataDir, DATA_DIR_NAME, readRepoFile } from '../util/path
 import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hooks report on code files only
 
 const MAX_CONTEXT = 1500;
+// a resolved request replaces the searches the agent would otherwise make, so it may say more
+const MAX_PROMPT_CONTEXT = 3500;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write', 'apply_patch', 'replace', 'write_file']);
 const GREP_TOOLS = new Set(['Grep', 'grep', 'search_file_content', 'grep_search']);
 const READ_TOOLS = new Set(['Read', 'read_file', 'read', 'view']);
@@ -348,6 +354,16 @@ function shellEdits(root, state) {
     return changed;
 }
 
+async function beforePrompt(input, acquire) {
+    const prompt = input.prompt ?? input.user_prompt ?? '';
+    if (!prompt) return null;
+    const { promptNames, promptContext } = await import('./prompt.mjs');
+    if (!promptNames(prompt).length) return null; // nothing to resolve: do not open the index
+    const ix = await acquire();
+    if (!ix) return null;
+    try { return promptContext(ix.intel, prompt); } finally { ix.release(); }
+}
+
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
 const RULES = `How to look code up in this repository (graph-indexer):
 - Several things at once: several tool calls in one message, or one search with alternatives — not one search per turn.
@@ -402,8 +418,12 @@ export async function handleHook(event, input, { root, acquire }) {
     } else if (event === 'session-start' || event === 'subagent-start') {
         name ??= event === 'session-start' ? 'SessionStart' : 'SubagentStart';
         text = await sessionLine(root, { rules: event === 'subagent-start', acquire });
+    } else if (event === 'prompt') {
+        name ??= 'UserPromptSubmit';
+        text = await beforePrompt(input, acquire);
     }
-    return format(name, text, input, event === 'post-tool' ? MAX_CONTEXT : 2500);
+    const max = event === 'post-tool' ? MAX_CONTEXT : event === 'prompt' ? MAX_PROMPT_CONTEXT : 2500;
+    return format(name, text, input, max);
 }
 
 /**
