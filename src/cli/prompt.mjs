@@ -84,6 +84,11 @@ const code = (intel, p, line) => {
     const text = intel.fileLines(p)?.[line - 1]?.trim();
     return text ? `: ${text.length > 100 ? text.slice(0, 99) + '…' : text}` : '';
 };
+// where a type is named in production code, imports aside: for a port, where it is injected, built and implemented
+const typeUses = (intel, type) => {
+    const r = intel.references(type.id, { family: false });
+    return r ? [...r.groups.values()].flat().filter(x => !x.is_test && x.kind !== 'import') : [];
+};
 
 function describe(intel, sym, wantPaths) {
     const lines = [`${sym.qname} (${sym.kind}, ${where(sym)})`];
@@ -92,8 +97,7 @@ function describe(intel, sym, wantPaths) {
             WHERE r.dst_id = ? AND r.kind = 'inherit' ORDER BY f.is_test, f.path LIMIT 8`, sym.id);
         if (subs.length) lines.push(`  implemented or extended by: ${subs.map(s => `${s.qname} (${brief(s.path, s.start_line)})`).join(', ')}`);
         // where the type is used: a port built by a lambda or a factory shows up here, not among its subtypes
-        const r = intel.references(sym.id, { family: false });
-        const uses = r ? [...r.groups.values()].flat().filter(x => !x.is_test && x.kind !== 'import') : [];
+        const uses = typeUses(intel, sym);
         lines.push(`  used in ${uses.length} place${uses.length === 1 ? '' : 's'} in production code${uses.length ? ':' : '.'}`);
         for (const x of uses.slice(0, 6)) lines.push(`    ${x.path}:${x.line} in ${x.src_qname ?? '(top level)'} (${x.kind})${code(intel, x.path, x.line)}`);
         if (uses.length > 6) lines.push(`    … ${uses.length - 6} more`);
@@ -120,6 +124,16 @@ function describe(intel, sym, wantPaths) {
         for (const p of plausible.slice(0, 4)) lines.push(`    ${p.path}:${p.line}${code(intel, p.path, p.line)}`);
     }
     lines.push(`  ${plausible.length ? 'Apart from those, this' : 'This'} list is complete and exact: calls through other types that share the name are already left out, so a text search would only add those.`);
+    // a method of a port: the classes that hold the port and the wiring that builds it, which is what a check by its type name looks for
+    const owner = intel.store.get('SELECT p.id, p.qname, p.kind FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?', sym.id);
+    if (owner && TYPE.has(owner.kind)) {
+        const uses = typeUses(intel, owner);
+        if (uses.length) {
+            lines.push(`  ${owner.qname} itself, every reference in production code apart from imports (where it is injected, built or implemented):`);
+            for (const x of uses.slice(0, MAX_REFS)) lines.push(`    ${brief(x.path, x.line)} in ${x.src_qname ?? '(top level)'} (${x.kind})${code(intel, x.path, x.line)}`);
+            if (uses.length > MAX_REFS) lines.push(`    … ${uses.length - MAX_REFS} more`);
+        }
+    }
     if (wantPaths && prod.length) {
         const seen = new Set();
         const hops = [];

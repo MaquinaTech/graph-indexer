@@ -53,6 +53,8 @@ test('a type and a member named apart resolve together, with implementations and
     assert.match(text, /src\/Use\.kt:9 in Controller\.post: refresh\.execute\(\)/, 'each call with its code');
     assert.doesNotMatch(text, /Use\.kt:10/, 'other.execute() is OtherPort, not RefreshPort');
     assert.match(text, /This list is complete/);
+    assert.match(text, /RefreshPort itself, every reference in production code/);
+    assert.match(text, /Use\.kt:7 in Controller\.refresh \(type\): class Controller\(private val refresh: RefreshPort/, 'where the port is injected');
     assert.doesNotMatch(text, /one level up/, 'no path asked for');
 });
 
