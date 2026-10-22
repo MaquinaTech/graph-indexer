@@ -446,8 +446,35 @@ function spawnResident(root, event) {
     } catch { /* optional */ }
 }
 
+/**
+ * A prompt naming code in a checkout whose index is still being built (a new worktree: the session's
+ * start launched the build a moment ago) waits for it, up to this long, instead of saying nothing:
+ * the request that starts a task is the one that most needs the context. A whole index takes
+ * 1.5–7 s on 400–1,600 files.
+ */
+const PROMPT_WAIT_MS = 8000;
+
+/** True when the index is missing, or a resident was launched for it within the last minute. */
+function building(root) {
+    if (!hasIndex(root)) return true;
+    try { return Date.now() - fs.statSync(path.join(root, DATA_DIR_NAME, 'resident.started')).mtimeMs < 60_000; } catch { return false; }
+}
+
+/** Wait for the resident that builds the index to listen, then ask it; null if it does not in time. */
+async function awaitResident(root, request, { version, askResident, until }) {
+    spawnResident(root, 'session-start'); // in case nothing builds it yet: at most once a minute
+    while (Date.now() < until - 300) {
+        if (await askResident(root, { op: 'ping' }, { version, connectMs: 200, totalMs: 300 })) {
+            return askResident(root, request, { version, totalMs: Math.max(300, until - Date.now()) });
+        }
+        await new Promise(r => setTimeout(r, 200));
+    }
+    return null;
+}
+
 export async function runHook(event, { repo = null, version = null } = {}) {
-    const deadlineMs = event === 'post-tool' ? 4000 : 3000;
+    const prompt = event === 'prompt';
+    const deadlineMs = event === 'post-tool' ? 4000 : prompt ? PROMPT_WAIT_MS + 1000 : 3000;
     const timer = setTimeout(() => process.exit(0), deadlineMs); // fail open: never hold the agent up
     try {
         const input = await readStdin();
@@ -455,7 +482,14 @@ export async function runHook(event, { repo = null, version = null } = {}) {
         // the repository added to it)
         const root = findRepoRoot(repo || input.cwd || process.cwd());
         const { askResident, residentRequired } = await import('./resident.mjs');
-        const reply = await askResident(root, { op: 'hook', event, input }, { version, totalMs: 2000 });
+        const request = { op: 'hook', event, input };
+        let reply = await askResident(root, request, { version, totalMs: prompt ? PROMPT_WAIT_MS : 2000 });
+        if (!reply && prompt && process.env.GRAPH_INDEXER_RESIDENT !== '0' && building(root)) {
+            const { promptNames } = await import('./prompt.mjs');
+            if (promptNames(input.prompt ?? input.user_prompt ?? '').length) {
+                reply = await awaitResident(root, request, { version, askResident, until: Date.now() + PROMPT_WAIT_MS });
+            }
+        }
         let out = null;
         if (reply) out = reply.out;
         else if (!residentRequired()) {

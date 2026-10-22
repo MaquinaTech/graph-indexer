@@ -74,6 +74,33 @@ test('daemon: hooks and CLI queries through the resident give the same output as
     }
 });
 
+test('prompt hook: on a new checkout it waits for the index the session start is building', async () => {
+    const root = makeRepo({
+        'src/Port.kt': 'package probe\n\nfun interface RefreshPort {\n    fun execute()\n}\n',
+        'src/Use.kt': 'package probe\n\nclass Controller(private val refresh: RefreshPort) {\n    fun post() { refresh.execute() }\n}\n',
+    });
+    const env = { ...process.env };
+    delete env.GRAPH_INDEXER_RESIDENT;
+    const run = (event, payload) => new Promise((resolve) => {
+        const c = spawn(process.execPath, [BIN, 'hook', event], { env, stdio: ['pipe', 'pipe', 'ignore'] });
+        let out = '';
+        c.stdout.on('data', (d) => { out += d; });
+        c.on('close', () => resolve(out));
+        c.stdin.end(JSON.stringify({ cwd: root, session_id: `prompt-wait-${process.pid}`, ...payload }));
+    });
+    try {
+        assert.ok(!fs.existsSync(path.join(root, '.graph-indexer', 'index.db')), 'no index yet');
+        await run('session-start', { hook_event_name: 'SessionStart', source: 'startup' }); // launches the build and returns
+        const out = await run('prompt', { hook_event_name: 'UserPromptSubmit', prompt: 'Who calls `execute` of `RefreshPort`?' });
+        assert.match(JSON.parse(out).hookSpecificOutput.additionalContext, /src\/Use\.kt:4 in Controller\.post/);
+    } finally {
+        const resident = await askResident(root, { op: 'ping' }, { version: VERSION });
+        if (resident) process.kill(resident.pid, 'SIGTERM');
+        await sleep(300);
+        rmrf(root);
+    }
+});
+
 test("the Claude Code plugin's hook client finds the same socket and relays through any resident version", async () => {
     const root = makeRepo({ 'a.js': 'export const a = 1;\n' });
     const long = path.join(root, 'x'.repeat(90));

@@ -107,6 +107,8 @@ async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
         wanted: () => fs.existsSync(intel.dbPath),
         handle: async (req) => {
             if (req.op === 'hook') {
+                // `serve` answers while its index is still being built; the prompt hook says a list is complete, so it waits
+                if (req.event === 'prompt') await intel.ready;
                 const { handleHook } = await import('../src/cli/hook.mjs');
                 return handleHook(String(req.event ?? ''), req.input ?? {}, { root: intel.root, acquire: hold });
             }
