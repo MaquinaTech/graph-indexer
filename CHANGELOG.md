@@ -4,6 +4,24 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Kotlin `fun interface`** ([#5](https://github.com/MaquinaTech/graph-indexer/issues/5)). The vendored grammar
+  (`fwcd/tree-sitter-kotlin` 0.3.8) could not parse a SAM interface (`fun interface Port { fun execute() }`).
+  The interface was missing, and its method became a top-level function. Calls through it were then bound to
+  another method with the same name, while `refs` still reported the list as complete.
+- **The Kotlin grammar is now built from `fwcd/tree-sitter-kotlin` 5b7b9b7.** That commit adds `fun interface`
+  ([fwcd/tree-sitter-kotlin#169](https://github.com/fwcd/tree-sitter-kotlin/pull/169)) and is in no release yet.
+  It was built with `tree-sitter build --wasm` (tree-sitter-cli 0.25.10, the runtime's version).
+  - Measured on a 442-file Kotlin/Spring service: the 44 `fun interface` declarations and their methods are now
+    indexed.
+  - Resolved references go from 7,434 to 7,835, and exact ones from 5,325 to 5,545.
+  - No file loses a symbol. The one with one fewer had a local `val` taken for a property after a parse error
+    that the new grammar no longer makes.
+  - The grammar manifest is part of the index fingerprint, so existing indexes are rebuilt.
+
 ## [3.0.0] — 2026-09-23
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.
