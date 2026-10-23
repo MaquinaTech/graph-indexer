@@ -7,15 +7,26 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
+import { withinRoot } from '../util/paths.mjs';
+import { gitSync } from '../util/git.mjs';
 
 const MAX_FILE_BYTES = 1_500_000;
+// a caller's pattern gets this much matching time per search (reading files does not count): one
+// with catastrophic backtracking (`(a+)+$`) is stopped instead of blocking the server
+const REGEX_BUDGET_MS = 5000;
+const SCAN = new vm.Script(`(() => {
+    if (!re.test(text)) return null;
+    const lines = text.split(/\\r?\\n/), hits = [];
+    for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) hits.push(i);
+    return { lines, hits };
+})()`);
 const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.graph-indexer|dist|build|out|target|coverage|__pycache__|\.venv|venv|\.next|\.nuxt|\.cache|vendor)\//;
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|playground)\//i;
 const COMMENT_LINE = /^\s*(\/\/|#(?![!\[])|\*|\/\*|<!--|--\s|;;|%)/;
 
 function listFiles(root) {
-    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 30 });
+    const r = gitSync(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { maxBuffer: 1 << 30 });
     if (r.status === 0) return r.stdout.split('\0').filter(Boolean).filter(p => !SKIP_DIRS.test(p));
     const out = [];
     const stack = [''];
@@ -98,25 +109,32 @@ export async function textSearch(intel, { pattern, path: prefix = null, literal 
     const indexed = new Map(intel.store.all('SELECT id, path, is_test FROM files').map(f => [f.path, f]));
     const matches = [];
     let total = 0, nfiles = 0;
+    const ctx = vm.createContext({ re, text: '' });
+    let budget = REGEX_BUDGET_MS;
     for (const rel of files) {
         let text;
         try {
+            if (!withinRoot(root, rel)) continue;
             const st = fs.statSync(path.join(root, rel));
             if (!st.isFile() || st.size > MAX_FILE_BYTES) continue;
             text = fs.readFileSync(path.join(root, rel), 'utf8');
         } catch { continue; }
-        if (!re.test(text)) continue;
         if (text.indexOf('\0') >= 0 && text.indexOf('\0') < 8000) continue; // binary
-        const lines = text.split(/\r?\n/);
-        let any = false;
-        for (let i = 0; i < lines.length; i++) {
-            if (!re.test(lines[i])) continue;
-            any = true;
-            total++;
-            const f = indexed.get(rel);
-            matches.push({ path: rel, line: i + 1, text: lines[i], fileId: f?.id ?? null, isTest: !!f?.is_test, code: !!f });
+        ctx.text = text;
+        let scan;
+        const t0 = performance.now();
+        try { scan = SCAN.runInContext(ctx, { timeout: Math.max(1, Math.ceil(budget)) }); } catch (e) {
+            if (e.code !== 'ERR_SCRIPT_EXECUTION_TIMEOUT') throw e;
+            return { error: `The regular expression took more than ${REGEX_BUDGET_MS / 1000} s (catastrophic backtracking?). Simplify it, or pass literal: true to search for the text as is.` };
         }
-        if (any) nfiles++;
+        budget -= performance.now() - t0;
+        if (!scan?.hits.length) continue;
+        nfiles++;
+        const f = indexed.get(rel);
+        for (const i of scan.hits) {
+            total++;
+            matches.push({ path: rel, line: i + 1, text: scan.lines[i], fileId: f?.id ?? null, isTest: !!f?.is_test, code: !!f });
+        }
     }
     const ident = identifierOf(pattern, literal);
     // annotate: enclosing definition, and what an identifier match refers to

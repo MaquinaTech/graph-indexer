@@ -44,13 +44,23 @@ export function socketPath(root) {
     return path.join(os.tmpdir(), `graph-indexer-${process.getuid?.() ?? 'user'}`, `${hash}.sock`);
 }
 
-/** A per-user directory in the temp dir must belong to us and be closed to everyone else. */
+const mine = (st) => (process.getuid ? st.uid === process.getuid() : true);
+
+/**
+ * The socket's directory must be a real directory of ours (not a link the repository committed);
+ * a per-user directory in the temp dir must also be closed to everyone else.
+ */
 function privateDir(dir, root) {
-    if (WIN || dir === path.join(path.resolve(root), DATA_DIR_NAME)) return true;
+    if (WIN) return true;
     try {
         const st = fs.lstatSync(dir);
-        return st.isDirectory() && (process.getuid ? st.uid === process.getuid() : true) && (st.mode & 0o077) === 0;
+        return st.isDirectory() && mine(st) && (dir === path.join(path.resolve(root), DATA_DIR_NAME) || (st.mode & 0o077) === 0);
     } catch { return false; }
+}
+
+/** A socket of ours, not a file or a listener someone else put there. */
+function ownSocket(file) {
+    try { const st = fs.lstatSync(file); return st.isSocket() && mine(st); } catch { return false; }
 }
 
 const disabled = () => process.env.GRAPH_INDEXER_RESIDENT === '0';
@@ -64,7 +74,7 @@ export const residentRequired = () => process.env.GRAPH_INDEXER_RESIDENT === 're
 export function askResident(root, request, { version, connectMs = 250, totalMs = 5000 } = {}) {
     if (disabled()) return Promise.resolve(null);
     const file = socketPath(root);
-    if (!WIN && (!fs.existsSync(file) || !privateDir(path.dirname(file), root))) return Promise.resolve(null);
+    if (!WIN && (!ownSocket(file) || !privateDir(path.dirname(file), root))) return Promise.resolve(null);
     return new Promise((resolve) => {
         let done = false, connected = false, buf = '';
         const sock = net.createConnection(file);

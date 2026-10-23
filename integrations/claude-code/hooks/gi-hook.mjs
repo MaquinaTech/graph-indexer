@@ -43,11 +43,12 @@ export function socketPath(root) {
 
 function trusted(file, root) {
     if (WIN) return true;
-    const dir = path.dirname(file);
-    if (dir === path.join(path.resolve(root), '.graph-indexer')) return fs.existsSync(file);
+    const mine = (st) => !process.getuid || st.uid === process.getuid();
     try {
-        const st = fs.lstatSync(dir);
-        return fs.existsSync(file) && st.isDirectory() && (!process.getuid || st.uid === process.getuid()) && (st.mode & 0o077) === 0;
+        const sock = fs.lstatSync(file), dir = fs.lstatSync(path.dirname(file));
+        const inRepo = path.dirname(file) === path.join(path.resolve(root), '.graph-indexer');
+        // the socket and its directory are ours, not links or listeners planted by the repository or another user
+        return sock.isSocket() && mine(sock) && dir.isDirectory() && mine(dir) && (inRepo || (dir.mode & 0o077) === 0);
     } catch { return false; }
 }
 
@@ -85,8 +86,11 @@ async function main() {
     const root = findRepoRoot(input.cwd || process.cwd());
     const reply = await ask(root, { op: 'hook', event, input }, 2500);
     if (reply) { if (reply.out) process.stdout.write(reply.out + '\n'); return; }
-    // no resident yet: the full hook through npx (it starts one for the next calls)
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', 'graph-indexer@3', 'hook', event], { stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
+    // no resident yet: the full hook through npx (it starts one for the next calls); --prefix keeps
+    // npx from running a graph-indexer that the repository ships in its own node_modules
+    // (on Windows npx.cmd needs a shell, so the home directory is quoted for cmd.exe)
+    const home = WIN ? `"${os.homedir()}"` : os.homedir();
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', '--prefix', home, 'graph-indexer@3', 'hook', event], { stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
     child.on('error', () => { /* fail open */ });
     child.stdin.on('error', () => { /* fail open */ });
     child.stdin.end(raw);

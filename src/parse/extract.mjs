@@ -334,9 +334,16 @@ export async function extractFile(spec, source, relPath) {
     }
 }
 
+// query time can grow super-linearly with the syntax (60,000 chained calls in a 360 KB file take
+// minutes): such a file is given up after this long instead of stalling the whole index
+const QUERY_BUDGET_MS = 15_000;
+
 function extractFromTree(spec, query, tree, source, relPath) {
     const root = tree.rootNode;
-    const matches = query.matches(root);
+    const deadline = Date.now() + QUERY_BUDGET_MS;
+    let gaveUp = false;
+    const matches = query.matches(root, { progressCallback: () => (gaveUp = Date.now() > deadline) });
+    if (gaveUp) throw new Error(`gave up after ${QUERY_BUDGET_MS / 1000} s of queries (pathological syntax)`);
 
     const defs = [];          // { node, nameNode, kind, owner }
     const rawRefs = [];       // { node, nameNode, kind, recvNode }

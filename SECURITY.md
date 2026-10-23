@@ -33,13 +33,24 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
   (`node:sqlite`, `node:fs`, `node:child_process`, …) and the vendored WebAssembly runtime.
 - **No code execution.** Source files are parsed into syntax trees; the indexed code is never
   imported, evaluated or run. The only subprocesses are read-only git commands
-  (`git rev-parse`, `git ls-files`, `git diff`, `git log`) run in the indexed repository with
-  fixed arguments; no tool input is passed to them.
+  (`git rev-parse`, `git ls-files`, `git diff`, `git log`, `git show`) run in the indexed repository
+  with fixed arguments. The only tool input they take is the `base` revision of `check_changes`,
+  which is refused when git could read it as an option. Every git call switches off what the
+  repository's own git config could run: `core.fsmonitor`, hooks, signature verification,
+  clean/smudge/process filters, `diff.external` and textconv drivers.
+- **No code from the repository through npx.** Every `npx` command graph-indexer runs or writes into
+  an agent's configuration passes `--prefix`, so a `node_modules/graph-indexer` that the repository
+  ships is never run in place of the published package.
 - **Stays inside the repository.** Only files listed by git (or found by a `.gitignore`-aware
   walk) under the repository root are indexed. Symlinks are followed only when their target
   resolves inside the repository, so a link to a file elsewhere on the machine is never read,
   indexed or served. Paths given to the tools (`read_code "file.ts:42"`, `outline`,
-  `change_impact`) are looked up in the index, never opened directly from disk.
+  `change_impact`) are resolved (`..` and symbolic links) and must stay inside the repository;
+  `.git/` and `.graph-indexer/` are never served. Manifests (`package.json`, `tsconfig.json`,
+  `go.mod`) are read only as small regular files inside the repository.
+- **Bounded work.** A regular expression given to `search_text` runs under a 5 s budget, and a file
+  whose syntax makes the structural queries super-linear is given up after 15 s, so neither can
+  block the server.
 - **Read-only tools.** All MCP tools are read-only (`readOnlyHint: true`) and never modify
   the repository.
 - **stdio transport.** The MCP server talks to the local client over stdin/stdout. It does not
@@ -51,9 +62,15 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
   both sides check before using it. It answers the same read-only queries as the CLI.
   `GRAPH_INDEXER_RESIDENT=0` disables it.
 - **Local artifacts.** The index is a SQLite database in `<repo>/.graph-indexer/` (git-ignored by
-  `init`). It contains excerpts of your source code — treat it with the same sensitivity as the
+  `init`, mode 0700; a `.graph-indexer` that is a symbolic link is refused). It contains excerpts of your source code — treat it with the same sensitivity as the
   repository itself and do not commit or share it. Deleting the directory is always safe; it is
   rebuilt on the next run.
+
+## Runtime
+
+graph-indexer runs in the Node.js the user installs. It requires a release that includes the
+October 2026 Node.js security fixes (22.23.4+, 24.22.1+ or 26.12.1+; CVE-2026-111497 and others).
+Keep Node.js updated to the latest patch release of a supported line.
 
 ## Operational guidance
 

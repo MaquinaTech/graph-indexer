@@ -161,13 +161,13 @@ test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; De
         assert.equal(r.status, 0, r.stderr);
         const kilo = JSON.parse(fs.readFileSync(path.join(dir, 'kilo.json'), 'utf8'));
         assert.equal(kilo.model, 'x', 'keeps the existing Kilo config');
-        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', 'graph-indexer@3', 'serve'], enabled: true });
+        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', '--prefix', '/', 'graph-indexer@3', 'serve'], enabled: true });
         assert.ok(!fs.existsSync(path.join(dir, 'opencode.json')), 'an existing kilo.json is used instead');
         const junie = JSON.parse(fs.readFileSync(path.join(dir, '.junie/mcp/mcp.json'), 'utf8'));
-        assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', 'graph-indexer@3', 'serve']);
+        assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', '--prefix', '/', 'graph-indexer@3', 'serve']);
         const zed = JSON.parse(fs.readFileSync(path.join(dir, '.zed/settings.json'), 'utf8'));
         assert.equal(zed.tab_size, 2);
-        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', 'graph-indexer@3', 'serve'], env: {} });
+        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', '--prefix', '/', 'graph-indexer@3', 'serve'], env: {} });
         assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /graph-indexer:start/);
         assert.ok(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).hooks.PostToolUse, 'Devin runs the Claude Code hooks');
         assert.match(r.stdout, /Devin: reads AGENTS\.md and the Claude Code hooks/);

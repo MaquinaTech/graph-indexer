@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { gitSync } from '../util/git.mjs';
 import { specForPath } from '../parse/languages.mjs';
 
 export const MAX_FILE_BYTES = 1_500_000;
@@ -24,14 +24,12 @@ const SKIP_DIRS = new Set([
 const GENERATED_FILE = /(\.min\.(js|css|mjs)$|\.bundle\.js$|[.-]bundle\.[cm]?js$|\.chunk\.js$|\.map$|\.pb\.go$|_pb2(_grpc)?\.py$|\.pb\.(cc|h)$|\.generated\.\w+$|\.g\.dart$|\.designer\.cs$|(^|\/)generated\/|\.d\.ts\.map$)/i;
 
 function isGitRepo(root) {
-    const r = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf8' });
+    const r = gitSync(root, ['rev-parse', '--is-inside-work-tree']);
     return r.status === 0 && r.stdout.trim() === 'true';
 }
 
 function gitListFiles(root) {
-    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
-        cwd: root, encoding: 'utf8', maxBuffer: 1 << 30,
-    });
+    const r = gitSync(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { maxBuffer: 1 << 30 });
     if (r.status !== 0) return null;
     return r.stdout.split('\0').filter(Boolean);
 }

@@ -19,8 +19,9 @@ import { spawn } from 'node:child_process';
 
 const PROTOCOL = 1;
 const WIN = process.platform === 'win32';
-// how to start a resident when none answers (rewritten by `init --local` and installed binaries)
-const DAEMON = ['npx', '-y', 'graph-indexer@3', 'daemon'];
+// how to start a resident when none answers (rewritten by `init --local` and installed binaries);
+// --prefix keeps npx from running a graph-indexer that the repository ships in its own node_modules
+const DAEMON = ['npx', '-y', '--prefix', os.homedir(), 'graph-indexer@3', 'daemon'];
 // OpenCode tool ids → the tool names graph-indexer's hook understands
 const TOOLS = { read: 'Read', grep: 'Grep', bash: 'Bash', edit: 'Edit', write: 'Write' };
 
@@ -46,12 +47,12 @@ function socketPath(root) {
 
 function trusted(file, root) {
     if (WIN) return true;
-    if (!fs.existsSync(file)) return false;
-    const dir = path.dirname(file);
-    if (dir === path.join(path.resolve(root), '.graph-indexer')) return true;
+    const mine = (st) => !process.getuid || st.uid === process.getuid();
     try {
-        const st = fs.lstatSync(dir);
-        return st.isDirectory() && (!process.getuid || st.uid === process.getuid()) && (st.mode & 0o077) === 0;
+        const sock = fs.lstatSync(file), dir = fs.lstatSync(path.dirname(file));
+        const inRepo = path.dirname(file) === path.join(path.resolve(root), '.graph-indexer');
+        // the socket and its directory are ours, not links or listeners planted by the repository or another user
+        return sock.isSocket() && mine(sock) && dir.isDirectory() && mine(dir) && (inRepo || (dir.mode & 0o077) === 0);
     } catch { return false; }
 }
 
@@ -107,7 +108,11 @@ export const GraphIndexer = async ({ directory, worktree } = {}) => {
                 if (!reply) {
                     if (!started) {
                         started = true;
-                        const child = spawn(DAEMON[0], [...DAEMON.slice(1), '--repo', root], { detached: true, stdio: 'ignore', windowsHide: true, shell: WIN });
+                        // cmd.exe (npx.cmd needs a shell on Windows) would run `&`, `|`… in a path: quote
+                        // every argument, and give up on one that a quote cannot hold
+                        const args = [...DAEMON.slice(1), '--repo', root];
+                        if (WIN && args.some(a => /["%\r\n]/.test(a))) return;
+                        const child = spawn(DAEMON[0], WIN ? args.map(a => `"${a}"`) : args, { detached: true, stdio: 'ignore', windowsHide: true, shell: WIN });
                         child.on('error', () => { /* optional */ });
                         child.unref();
                     }

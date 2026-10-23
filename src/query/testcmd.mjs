@@ -6,16 +6,24 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRepoFile } from '../util/paths.mjs';
 
-function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
+function readJson(root, rel) { try { return JSON.parse(readRepoFile(root, rel)); } catch { return null; } }
 const exists = (root, rel) => fs.existsSync(path.join(root, rel));
+// commands are pasted into a shell as they are: a file named `t$(cmd).test.ts` (repository content)
+// must reach the test runner as a name, never run as a command substitution
+const plain = (s) => /^[\w./@+=:,-]+$/.test(s);
+/** One shell word: as is when plain, else single-quoted. */
+const q = (s) => (plain(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+// a name that would read as an option, or a test identifier that is not a plain word, gets no command
+const shellSafe = (s) => !s.startsWith('-') && !/[\0\r\n]/.test(s);
 
 /** Nearest package.json above a file (monorepos have one per package). */
 function nearestPackage(root, rel) {
     let dir = path.posix.dirname(rel);
     for (;;) {
-        const p = path.join(root, dir === '.' ? '' : dir, 'package.json');
-        if (fs.existsSync(p)) return { dir: dir === '.' ? '' : dir, pkg: readJson(p) ?? {} };
+        const p = path.posix.join(dir === '.' ? '' : dir, 'package.json');
+        if (exists(root, p)) return { dir: dir === '.' ? '' : dir, pkg: readJson(root, p) ?? {} };
         if (dir === '.' || dir === '' || dir === '/') return null;
         dir = path.posix.dirname(dir);
     }
@@ -23,7 +31,7 @@ function nearestPackage(root, rel) {
 
 function jsRunner(root, rel) {
     const near = nearestPackage(root, rel);
-    const top = readJson(path.join(root, 'package.json')) ?? {};
+    const top = readJson(root, 'package.json') ?? {};
     const pkgs = [near?.pkg, top].filter(Boolean);
     const deps = Object.assign({}, ...pkgs.map(p => ({ ...p.dependencies, ...p.devDependencies })));
     const scripts = pkgs.map(p => p.scripts?.test ?? '').join(' ');
@@ -38,7 +46,7 @@ function jsRunner(root, rel) {
 
 function pyRunner(root) {
     if (exists(root, 'tests/runtests.py')) return { kind: 'django' };
-    const pyproject = (() => { try { return fs.readFileSync(path.join(root, 'pyproject.toml'), 'utf8'); } catch { return ''; } })();
+    const pyproject = readRepoFile(root, 'pyproject.toml') ?? '';
     if (exists(root, 'pytest.ini') || exists(root, 'conftest.py') || /\[tool\.pytest/.test(pyproject) || exists(root, 'tox.ini')) return { kind: 'pytest' };
     return { kind: 'unittest' };
 }
@@ -51,7 +59,7 @@ function pyRunner(root) {
 export function testCommands(root, files) {
     const groups = new Map();
     const add = (key, f) => (groups.get(key) ?? groups.set(key, []).get(key)).push(f);
-    for (const f of files) {
+    for (const f of files.filter(shellSafe)) {
         const ext = path.posix.extname(f);
         if (/\.[cm]?[jt]sx?$/.test(ext)) add(`js:${jsRunner(root, f)}`, f);
         else if (ext === '.py') add('py', f);
@@ -64,19 +72,20 @@ export function testCommands(root, files) {
     }
     const out = [];
     for (const [key, fs_] of groups) {
-        if (key.startsWith('js:')) out.push(`${key.slice(3)} ${fs_.join(' ')}`);
+        if (key.startsWith('js:')) out.push(`${key.slice(3)} ${fs_.map(q).join(' ')}`);
         else if (key === 'py') {
             const r = pyRunner(root);
-            if (r.kind === 'django') out.push(`python tests/runtests.py ${[...new Set(fs_.map(f => f.replace(/^tests\//, '').replace(/\/[^/]*$/, '').replace(/\//g, '.')))].join(' ')}`);
-            else if (r.kind === 'pytest') out.push(`python -m pytest -q ${fs_.join(' ')}`);
-            else out.push(`python -m unittest ${fs_.map(f => f.replace(/\.py$/, '').replace(/\//g, '.')).join(' ')}`);
-        } else if (key === 'go') out.push(`go test ${[...new Set(fs_.map(f => './' + path.posix.dirname(f)))].join(' ')}`);
+            if (r.kind === 'django') out.push(`python tests/runtests.py ${[...new Set(fs_.map(f => f.replace(/^tests\//, '').replace(/\/[^/]*$/, '').replace(/\//g, '.')))].map(q).join(' ')}`);
+            else if (r.kind === 'pytest') out.push(`python -m pytest -q ${fs_.map(q).join(' ')}`);
+            else out.push(`python -m unittest ${fs_.map(f => q(f.replace(/\.py$/, '').replace(/\//g, '.'))).join(' ')}`);
+        } else if (key === 'go') out.push(`go test ${[...new Set(fs_.map(f => './' + path.posix.dirname(f)))].map(q).join(' ')}`);
         else if (key === 'rs') out.push('cargo test');
         else if (key === 'jvm') {
-            const classes = [...new Set(fs_.map(f => path.posix.basename(f).replace(/\.\w+$/, '')))].join(',');
+            const classes = [...new Set(fs_.map(f => path.posix.basename(f).replace(/\.\w+$/, '')).filter(c => /^\w+$/.test(c)))].join(',');
+            if (!classes) continue;
             out.push(exists(root, 'pom.xml') ? `mvn -q test -Dtest=${classes}` : `./gradlew test ${classes.split(',').map(c => `--tests '*${c}'`).join(' ')}`);
-        } else if (key === 'rb') out.push(exists(root, '.rspec') || fs_.some(f => f.endsWith('_spec.rb')) ? `bundle exec rspec ${fs_.join(' ')}` : `bundle exec ruby -Itest ${fs_[0]}`);
-        else if (key === 'php') out.push(`vendor/bin/phpunit ${fs_.join(' ')}`);
+        } else if (key === 'rb') out.push(exists(root, '.rspec') || fs_.some(f => f.endsWith('_spec.rb')) ? `bundle exec rspec ${fs_.map(q).join(' ')}` : `bundle exec ruby -Itest ${q(fs_[0])}`);
+        else if (key === 'php') out.push(`vendor/bin/phpunit ${fs_.map(q).join(' ')}`);
         else if (key === 'cs') out.push('dotnet test');
     }
     return out;
@@ -90,6 +99,8 @@ export function testCommands(root, files) {
  */
 export function testCaseCommands(root, cases) {
     const out = [];
+    const word = (s) => /^\w+$/.test(s);
+    cases = cases.filter(c => shellSafe(c.path) && plain(c.path) && word(c.name) && (!c.cls || word(c.cls)));
     const py = cases.filter(c => c.path.endsWith('.py'));
     if (py.length) {
         const r = pyRunner(root);

@@ -308,3 +308,24 @@ test('multi-language receiver typing', async (t) => {
     assert.deepEqual(at('jv/Item.java:Item.total', 'jv/Cart.java'), [8, 9], 'java');
     assert.deepEqual(at('jv/Cart.java:Cart.run', 'jv/Cart.java'), [11], 'java var');
 });
+
+test('a field assigned an element of itself (`self.impl = self.impl[0]`) does not loop the resolver', async () => {
+    const r = makeRepo({
+        'bench.py': [
+            'class Case:',
+            '    def __init__(self, impl):',
+            '        self.impl = impl',
+            '    def setup(self):',
+            '        self.impl = self.impl[0]',
+            '    def run(self, obj):',
+            '        return self.impl(obj).key',
+            '',
+        ].join('\n'),
+    });
+    const ci = new CodeIntel({ root: r });
+    try {
+        await ci.open();
+        const s = ci.store.get("SELECT s.id FROM symbols s WHERE s.qname = 'Case.run'");
+        assert.ok(s, 'indexed');
+    } finally { ci.close(); rmrf(r); }
+});

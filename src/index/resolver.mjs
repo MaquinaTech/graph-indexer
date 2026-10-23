@@ -16,8 +16,12 @@
 import path from 'node:path';
 import { normalizeType } from '../parse/extract.mjs';
 import { fits, sigArity } from '../parse/arity.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
+// element accesses one descriptor may stack (`xs[i][j]`…): a field assigned an element of itself
+// (`self.impl = self.impl[0]`) would add one on every lookup, with no end
+const MAX_ELEM = 8;
 const VALUE_TYPED_KINDS = new Set(['variable', 'constant', 'field', 'property']);
 const CALLABLE_KINDS = new Set(['function', 'method', 'constructor', 'macro']);
 const MEMBER_HOLDERS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'object', 'impl', 'module']);
@@ -100,7 +104,7 @@ function paramType(param) {
  */
 export function callbackParamTypeText(sig, name, i, j) {
     if (!sig) return null;
-    const m = new RegExp(`(?:^|[^\\w$])${name.replace(/[$]/g, '\\$')}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
     const list = m ? bracketed(sig, m.index + m[0].length - 1) : null;
     let type = list ? paramType(splitTopLevel(list.inner)[i] ?? '') : null;
     if (!type) return null;
@@ -376,7 +380,10 @@ export class Resolver {
      */
     typeFromString(str, fileId, elem = 0) {
         if (!str) return null;
-        if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) return this.resolveRecvType(str + '[]'.repeat(elem), fileId, null);
+        if (str.startsWith('call:') || str.startsWith('cb:') || str.includes('#')) {
+            const desc = str + '[]'.repeat(elem);
+            return desc.split('[]').length - 1 > MAX_ELEM ? null : this.resolveRecvType(desc, fileId, null);
+        }
         let s = str;
         for (let i = 0; i < elem; i++) {
             if (!s.endsWith('[]') && !s.endsWith('{}')) {

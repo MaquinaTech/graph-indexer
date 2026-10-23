@@ -9,7 +9,7 @@
 
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=007acc&style=for-the-badge" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/dt/graph-indexer?color=4caf50&style=for-the-badge" alt="NPM Downloads"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D22.5-brightgreen?style=for-the-badge&logo=nodedotjs" alt="Node.js 22.5+"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22.23.4%2B%20%7C%2024.22.1%2B%20%7C%2026.12.1%2B-brightgreen?style=for-the-badge&logo=nodedotjs" alt="Node.js 22.23.4+, 24.22.1+ or 26.12.1+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
 </div>
 
@@ -40,13 +40,17 @@ instead of reading whole files and grepping.
 
 ## Quick start
 
-Requires **Node.js 22.5+** (for the built-in `node:sqlite`).
+Requires **Node.js 22.23.4+, 24.22.1+ or 26.12.1+** (the built-in `node:sqlite`, and the October 2026
+Node.js security releases, which fix CVE-2026-111497).
 
 ```bash
 cd your-repo
-npx graph-indexer init      # wires the MCP server into the agents it detects
-npx graph-indexer index     # optional: build the index now (the server also does it on start)
+npx -y --prefix / graph-indexer@3 init    # wires the MCP server into the agents it detects
+npx -y --prefix / graph-indexer@3 index   # optional: build the index now (the server also does it on start)
 ```
+
+`--prefix /` makes npx run the published package even in a repository that ships its own
+`node_modules/graph-indexer`.
 
 `init` writes project-level MCP configuration for the agents it finds (`.mcp.json` for Claude
 Code, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `opencode.json` for
@@ -70,7 +74,7 @@ Any MCP client can run the server over stdio:
 ```json
 {
   "mcpServers": {
-    "graph-indexer": { "command": "npx", "args": ["-y", "graph-indexer@3", "serve", "--repo", "/path/to/repo"] }
+    "graph-indexer": { "command": "npx", "args": ["-y", "--prefix", "/", "graph-indexer@3", "serve", "--repo", "/path/to/repo"] }
   }
 }
 ```
@@ -81,7 +85,7 @@ VS Code uses `"servers"` instead of `"mcpServers"` and `"type": "stdio"`. Codex 
 ```toml
 [mcp_servers.graph-indexer]
 command = "npx"
-args = ["-y", "graph-indexer@3", "serve", "--repo", "/path/to/repo"]
+args = ["-y", "--prefix", "/", "graph-indexer@3", "serve", "--repo", "/path/to/repo"]
 ```
 
 Without `--repo` the server indexes the git repository containing its working directory
@@ -276,7 +280,7 @@ Version 3 is a rewrite; see the [changelog](CHANGELOG.md). In short: the tools c
 `check_changes`, `outline`), the
 embedding, Ollama, reranker and daemon options are gone (search is lexical plus graph and needs
 no model), grammars are bundled instead of installed on first use, and Node.js 22.5+ is required.
-Re-run `npx graph-indexer init` to update agent configuration; old `.graph-indexer/` contents are
+Re-run `npx -y --prefix / graph-indexer@3 init` to update agent configuration; old `.graph-indexer/` contents are
 replaced automatically.
 
 ## License

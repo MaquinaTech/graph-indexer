@@ -4,6 +4,58 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [3.0.1] — 2026-10-23
+
+A security release. Upgrading is recommended for everyone; nothing else changes.
+
+### Security
+
+- **Node.js 22.23.4+, 24.22.1+ or 26.12.1+** is now required (`engines`). These are the October
+  2026 Node.js security releases, which fix CVE-2026-111497 (out-of-bounds write in the Brotli
+  decoder, remote code execution) and nine other vulnerabilities in TLS, DNS, HTTP keep-alive,
+  `crypto.randomUUID()` and the Permission Model. graph-indexer does not decompress Brotli itself,
+  but it runs inside the Node.js process the user has installed.
+- **npx no longer runs a copy of graph-indexer from the repository.** Started from a repository
+  that ships `node_modules/graph-indexer` (3.x) with its `.bin` entry, `npx -y graph-indexer@3`
+  ran that code instead of the published package: the Claude Code plugin's hooks and MCP server,
+  the OpenCode / Kilo Code plugin and the configurations written by `init` did, on opening the
+  repository. Every npx command now passes `--prefix` so only the published package runs. Re-run
+  `npx -y --prefix / graph-indexer@3 init` to rewrite existing configurations.
+- **`check_changes` refuses a `base` that git would read as an option.** `base: "--output=<file>"`
+  made `git diff` create or truncate any file the user can write. A revision must not start with
+  `-` or contain whitespace.
+- **`read_code` reads only files inside the repository.** `../../etc/hosts` and a tracked symbolic
+  link to a file elsewhere were read and served. Paths are now resolved (`..` and links) and must
+  stay under the root; `.git/` and `.graph-indexer/` are not served. `search_text` and
+  `check_changes` skip links out of the repository too.
+- **`search_text` stops a regular expression that backtracks catastrophically** (`(a+)+$`) after
+  5 s and says so, instead of blocking the server and every other request.
+- **The suggested test commands quote every file name** (a test file named `t$(cmd).test.ts`
+  reaches the runner as a name, not as a command substitution), since agents run those commands
+  as they are; test names that are not plain identifiers get no command.
+- **git runs nothing that the indexed repository's own config names**: `core.fsmonitor`, hooks
+  (`core.hooksPath`), signature verification (`log.showSignature`), clean/smudge/process filters,
+  `diff.external` and textconv drivers are switched off on every git call, for repositories copied
+  together with their `.git` directory. Required filters such as Git LFS's no longer fail the diff.
+- **A `.graph-indexer` committed as a symbolic link is refused** instead of having the index (which
+  contains excerpts of the source) written wherever it points. The directory is created with mode
+  0700. The hook clients only talk to a socket, and a socket directory, owned by the user.
+- **Manifests are read only as small regular files inside the repository**: a `tsconfig.json`,
+  `package.json` or `go.mod` linked to `/dev/zero` no longer hangs the indexer.
+- **A file whose syntax makes queries super-linear** (tens of thousands of chained calls) is given
+  up after 15 s instead of stalling the index.
+- **A field assigned an element of itself** (`self.impl = self.impl[0]`) no longer overflows the
+  indexer's stack.
+- **Names are escaped as regular expressions** wherever they are matched in text, not only `$`, and
+  a `file:name` target no longer backtracks polynomially.
+- **`init` does not write through links the repository committed** (`CLAUDE.md` → `~/.zshrc`,
+  `.claude` → `~/.claude`); it stops and names the file.
+- **Per-session hook state** lives in a per-user directory with mode 0700 and is written
+  atomically, so another user of a shared temp directory cannot read it or redirect the write.
+- On Windows, the hook clients quote the arguments they hand to `cmd.exe`.
+
+---
+
 ## [3.0.0] — 2026-09-23
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.

@@ -12,6 +12,7 @@ import { checkChanges } from '../query/check.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
 import fs from 'node:fs';
+import { withinRoot } from '../util/paths.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const VALUE_KINDS = new Set(['field', 'property', 'variable', 'constant']);
@@ -421,7 +422,7 @@ async function toolRead(intel, { targets = [], target = null, full = false, max_
 }
 
 function isFile(intel, rel) {
-    try { return fs.statSync(path.join(intel.root, rel)).isFile(); } catch { return false; }
+    try { return withinRoot(intel.root, rel) && fs.statSync(path.join(intel.root, rel)).isFile(); } catch { return false; }
 }
 
 async function readOne(intel, raw, { full, maxLines, seen }) {
