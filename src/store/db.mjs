@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -102,6 +102,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
   tokenize = 'porter unicode61 remove_diacritics 2',
   content = '', contentless_delete = 1
 );
+-- semantic channel (optional, src/search/vectors.mjs): one int8 vector per definition, filled lazily
+CREATE TABLE IF NOT EXISTS vectors (
+  symbol_id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL,
+  scale REAL NOT NULL,
+  v BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vectors_file ON vectors(file_id);
+CREATE TABLE IF NOT EXISTS vec_files (file_id INTEGER PRIMARY KEY, hash TEXT NOT NULL);
+-- documentation sections (Markdown headings), apart from code so prose never shifts code's BM25 statistics
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+  name, body,
+  tokenize = 'porter unicode61 remove_diacritics 2',
+  content = '', contentless_delete = 1
+);
 -- one document per file (rowid = files.id): file-level relevance for hierarchical ranking
 CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
   path, body,
@@ -156,9 +171,10 @@ export class Store {
     /** Drop every indexed fact but keep the database (the index is a cache of the source tree). */
     reset() {
         this.tx(() => {
-            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields']) this.db.exec(`DELETE FROM ${t}`);
+            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields', 'vectors', 'vec_files']) this.db.exec(`DELETE FROM ${t}`);
             this.db.exec("INSERT INTO fts(fts) VALUES ('delete-all')");
             this.db.exec("INSERT INTO file_fts(file_fts) VALUES ('delete-all')");
+            this.db.exec("INSERT INTO doc_fts(doc_fts) VALUES ('delete-all')");
         });
     }
 

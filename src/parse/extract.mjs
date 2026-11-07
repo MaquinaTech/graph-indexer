@@ -325,6 +325,7 @@ function typeNarrowings(root, source) {
  * @returns {{ symbols: object[], refs: object[], imports: object[], errors: number }}
  */
 export async function extractFile(spec, source, relPath) {
+    if (spec.extract) return spec.extract(source, relPath);
     const { query, parser } = await prepareLanguage(spec);
     // a language may rewrite its source first, keeping every position (Rust macro arguments)
     if (spec.rewriteSource) source = spec.rewriteSource(source, (s) => parser.parse(s));

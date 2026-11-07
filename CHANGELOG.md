@@ -8,6 +8,31 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Added
 
+- **Several queries in one call.**
+  - `search_code` and `explore` take `queries: [...]` (up to 6) besides `query`, and the CLI takes
+    `--or` once per extra query.
+  - The results of each query are fused by reciprocal rank (k = 60), so an agent that does not know
+    which of three names the code uses asks once instead of three times.
+- **Documentation is indexed.**
+  - Each Markdown heading (`.md`, `.mdx`, `.markdown`) is a `section` definition, named by its heading
+    path (`Guide › Install`) and spanning to the next heading of the same or a higher level.
+    `read_code` reads a section by its name.
+  - Sections are kept in an index of their own and are searched only when the query asks for docs,
+    design, the reason for something or a guide (or with `docs: true`). Code queries never see them:
+    symbol search MRR@10 0.761 against 0.763 before, localization unchanged (file Acc@1 0.550).
+  - `check_changes` and the hooks still report on code files only.
+- **Optional semantic search (opt-in).**
+  - `graph-indexer semantic install` downloads a static code embedding model
+    (minishlab/potion-code-16M-v2, MIT, 32 MB, pinned revision, SHA-256 checked) into
+    `~/.cache/graph-indexer/models`. With `GRAPH_INDEXER_SEMANTIC=1` search adds a fourth channel,
+    by meaning, to the name, concept and file channels.
+  - It runs in plain JavaScript, with no native code and no network after the install. Vectors are
+    stored in the index as int8 and computed lazily, file by file, so an edit re-embeds only that file.
+  - It is off by default because it does not help everywhere. Over the 377 search queries, top-5
+    success rises from 0.841 to 0.859, and from 0.674 to 0.728 on queries written in words. On
+    localizing 169 real commits it costs a little: file Acc@1 0.533–0.538 against 0.550 at the chosen
+    weights, 0.485 at twice and four times them. So the default stays lexical and graph-based.
+  - [docs/BENCHMARKS.md](docs/BENCHMARKS.md#3-symbol-search).
 - **`explore` reads issues.**
   - When the query reads like an issue (a long text, code spans or blocks), definitions are ranked
     by where the issue's names meet (`src/query/issue.mjs`).

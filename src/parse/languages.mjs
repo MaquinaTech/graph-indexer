@@ -13,8 +13,14 @@ import { c, cpp } from './lang/native.mjs';
 import { ruby, php, bash } from './lang/scripting.mjs';
 import { scala, css } from './lang/misc.mjs';
 import { vue, svelte } from './lang/sfc.mjs';
+import { markdown } from './lang/markdown.mjs';
 
-export const LANGUAGES = [javascript, typescript, tsx, vue, svelte, python, go, java, kotlin, scala, csharp, rust, c, cpp, ruby, php, bash, css];
+export const LANGUAGES = [javascript, typescript, tsx, vue, svelte, python, go, java, kotlin, scala, csharp, rust, c, cpp, ruby, php, bash, css, markdown];
+
+/** A code language (parsed with a grammar), not documentation. */
+export function isCodeSpec(spec) { return !!spec && !spec.docs; }
+/** The spec of a code file at this path, or null (documentation and unknown files). */
+export function codeSpecForPath(p) { const s = specForPath(p); return s && !s.docs ? s : null; }
 
 const byExt = new Map();
 for (const spec of LANGUAGES) for (const ext of spec.extensions) byExt.set(ext, spec);

@@ -6,6 +6,7 @@
  */
 import path from 'node:path';
 import { analyzeQuery } from '../search/tokenize.mjs';
+import { MAX_QUERIES, WANTS_DOCS } from '../search/search.mjs';
 import { loc, clip, codeBlock, symHeader, confWord, matchingLines, plural } from './render.mjs';
 import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
@@ -38,6 +39,7 @@ export const TOOLS = [
             type: 'object',
             properties: {
                 query: { type: 'string', description: 'The task, question or bug in words, or the issue as written (title first); identifiers in it are looked up exactly.' },
+                queries: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'Other phrasings or likely names for the same need, searched with the query and fused.' },
                 symbols: { type: 'array', items: { type: 'string' }, description: 'Symbols to centre on (name, Class.method, path:Name).' },
                 path: { type: 'string', description: 'Only search under this path prefix, e.g. "src/auth/".' },
                 max_tokens: { type: 'integer', minimum: 500, maximum: 6000, default: 2000, description: 'Answer budget (default 2000).' },
@@ -52,11 +54,11 @@ export const TOOLS = [
             type: 'object',
             properties: {
                 query: { type: 'string', description: 'What you are looking for: a behaviour description or identifier(s).' },
+                queries: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'Several phrasings or guessed names for one need, in one call; rankings are fused.' },
                 path: { type: 'string', description: 'Only results under this path prefix, e.g. "src/auth/".' },
                 kind: { type: 'string', description: 'Only this symbol kind (function, method, class, interface, struct, enum, type, field…).' },
                 limit: { type: 'integer', minimum: 1, maximum: 30, default: 8, description: 'Max results (default 8).' },
             },
-            required: ['query'],
         },
     },
     {
@@ -329,15 +331,21 @@ function toolFiles(intel, { pattern, path: p = null, limit = 100 }) {
     return out.join('\n');
 }
 
-async function toolSearch(intel, { query, path: p = null, kind = null, limit = 8 }) {
-    if (!query || !String(query).trim()) return 'Provide a query: a behaviour description or an identifier.';
-    const { results, total } = intel.search.search(String(query), { limit: Math.min(Math.max(1, limit), 30), path: p || null, kinds: kind ? [kind] : null });
-    if (!results.length) return `No matches for "${query}"${p ? ` under ${p}` : ''}. Try other words for the behaviour, an identifier fragment, or outline for a map of the repository.`;
+function queryList(query, queries) {
+    const extra = Array.isArray(queries) ? queries : queries ? [queries] : [];
+    return [...new Set([query, ...extra].map(q => String(q ?? '').trim()).filter(Boolean))].slice(0, MAX_QUERIES);
+}
+
+async function toolSearch(intel, { query, queries = null, path: p = null, kind = null, limit = 8 }) {
+    const qs = queryList(query, queries);
+    if (!qs.length) return 'Provide a query: a behaviour description or an identifier.';
+    const shown = qs.length > 1 ? qs.map(q => `"${clip(q, 50)}"`).join(' + ') : `"${clip(qs[0], 80)}"`;
+    const { results, total } = intel.search.searchMany(qs, { limit: Math.min(Math.max(1, limit), 30), path: p || null, kinds: kind ? [kind] : null });
+    if (!results.length) return `No matches for ${shown}${p ? ` under ${p}` : ''}. Try other words for the behaviour, an identifier fragment, or outline for a map of the repository.`;
     const syms = results.map(r => intel.sym(r.id)).filter(Boolean);
     await intel.revalidate([...new Set(syms.map(s => s.path))]);
-    const a = analyzeQuery(query);
-    const terms = [...new Set([...a.terms, ...a.identifiers.map(x => x.toLowerCase())])];
-    const out = [`${plural(syms.length, 'result')} for "${clip(query, 80)}"${total > syms.length ? ` (of ${total} candidates)` : ''}:`];
+    const terms = [...new Set(qs.flatMap(q => { const a = analyzeQuery(q); return [...a.terms, ...a.identifiers.map(x => x.toLowerCase())]; }))];
+    const out = [`${plural(syms.length, 'result')} for ${shown}${total > syms.length ? ` (of ${total} candidates)` : ''}:`];
     syms.forEach((s, i) => {
         out.push(`${i + 1}. ${s.qname} — ${s.kind}${s.is_test ? ', test' : ''} · ${loc(s)}`);
         if (s.sig) out.push(`   ${clip(s.sig, 180)}`);
@@ -1060,7 +1068,7 @@ const CALLER_KINDS = ['call', 'new', 'value', 'decorator'];
  * query that name a definition, then the search results for the query (library code before tests and
  * examples, callables and types before plain values). Each comes with why it was picked.
  */
-function exploreSeeds(intel, { query, symbols, path: p }) {
+function exploreSeeds(intel, { query, queries = [query], symbols, path: p }) {
     const seeds = [], ids = new Set(), missing = [];
     const add = (s, why) => { if (s && !ids.has(s.id)) { ids.add(s.id); seeds.push({ s, why }); } };
     for (const t of symbols) {
@@ -1089,11 +1097,12 @@ function exploreSeeds(intel, { query, symbols, path: p }) {
             if (/^[A-Z][A-Z0-9_]*$/.test(id)) m = m.filter(x => !(VALUE_KINDS.has(x.kind) && x.parent_id != null && largeTable(intel, x.parent_id)));
             if (m.length) add(m[0], 'named in the query');
         }
-        const { results } = intel.search.search(String(query), { limit: 16, path: p || null });
+        const { results } = intel.search.searchMany(queries.length ? queries : [query], { limit: 16, path: p || null });
         const wantTests = /\btests?\b|\bspec\b/i.test(query);
         const wantStyles = /\b(css|scss|less|styles?|stylesheet|selector)\b/i.test(query);
+        const wantDocs = WANTS_DOCS.test(query);
         const found = results.map(r => intel.sym(r.id)).filter(Boolean)
-            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test) && (wantStyles || s.lang !== 'css'));
+            .filter(s => s.kind !== 'parameter' && (wantTests || !s.is_test) && (wantStyles || s.lang !== 'css') && (wantDocs || s.kind !== 'section'));
         // stable re-order: rank keeps search order within each tier
         const tier = (s) => pathRank(s.path) * 2 + (VALUE_KINDS.has(s.kind) ? 1 : 0);
         found.map((s, i) => ({ s, i })).sort((x, y) => tier(x.s) - tier(y.s) || x.i - y.i).forEach(({ s }) => add(s, 'search'));
@@ -1138,12 +1147,13 @@ function exploreCallers(intel, s) {
 
 const isTestPath = (intel, file) => Boolean(intel.store.get('SELECT is_test FROM files WHERE path = ?', file)?.is_test);
 
-async function toolExplore(intel, { query = '', symbols = [], path: p = null, max_tokens = 2000 }) {
-    const q = String(query ?? '').trim();
+async function toolExplore(intel, { query = '', queries = null, symbols = [], path: p = null, max_tokens = 2000 }) {
+    const qs = queryList(query, queries);
+    const q = qs[0] ?? '';
     const named = (Array.isArray(symbols) ? symbols : String(symbols).split(/[\s,]+/)).map(t => String(t).trim()).filter(Boolean);
     if (!q && !named.length) return 'Provide a query (the task, question or bug in words) and/or symbols to centre on.';
     const budget = Math.round(Math.min(Math.max(500, Number(max_tokens) || 2000), 6000) * EXPLORE_CHARS_PER_TOKEN);
-    const { seeds, missing } = exploreSeeds(intel, { query: q, symbols: named, path: p });
+    const { seeds, missing } = exploreSeeds(intel, { query: q, queries: qs, symbols: named, path: p });
     if (!seeds.length) {
         const what = q ? `"${clip(q, 80)}"${p ? ` under ${p}` : ''}` : named.map(t => `"${t}"`).join(', ');
         return `Nothing in the index matches ${what}. Try other words for the behaviour, an identifier, or ${tn('outline')} for a map of the repository.`;

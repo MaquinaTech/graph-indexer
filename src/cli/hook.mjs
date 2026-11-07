@@ -32,7 +32,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findRepoRoot, dataDir, DATA_DIR_NAME } from '../util/paths.mjs';
-import { specForPath } from '../parse/languages.mjs';
+import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hooks report on code files only
 
 const MAX_CONTEXT = 1500;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write', 'apply_patch', 'replace', 'write_file']);

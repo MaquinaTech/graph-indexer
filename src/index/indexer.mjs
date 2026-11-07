@@ -154,7 +154,7 @@ export class Indexer {
                 for (const rel of removed) {
                     const f = s.get('SELECT id FROM files WHERE path = ?', rel);
                     if (!f) continue;
-                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); }
+                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', r.id); }
                     s.run('DELETE FROM file_fts WHERE rowid = ?', f.id);
                     for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, f.id);
                     s.run('DELETE FROM files WHERE id = ?', f.id);
@@ -270,7 +270,7 @@ export class Indexer {
         if (prev) {
             fileId = prev.id;
             oldSyms = s.all('SELECT id, qname, kind, ordinal FROM symbols WHERE file_id = ?', fileId);
-            for (const o of oldSyms) s.run('DELETE FROM fts WHERE rowid = ?', o.id);
+            for (const o of oldSyms) { s.run('DELETE FROM fts WHERE rowid = ?', o.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', o.id); }
             s.run('DELETE FROM file_fts WHERE rowid = ?', fileId);
             for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
             s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, indexed_at = ? WHERE id = ?',
@@ -309,8 +309,16 @@ export class Indexer {
             if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
             this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine });
         }
-        // FTS documents
-        for (let i = 0; i < symbols.length; i++) {
+        // FTS documents; documentation goes to its own table and has no file document
+        if (spec.docs) {
+            for (let i = 0; i < symbols.length; i++) {
+                const sym = symbols[i];
+                const a = lines[sym.startLine - 1] ?? 0;
+                const b = sym.endLine >= lines.length ? source.length : lines[sym.endLine];
+                s.run('INSERT INTO doc_fts (rowid, name, body) VALUES (?, ?, ?)', ids[i], tokenString(sym.qname.replace(/ › /g, ' ')), codeTokens(source.slice(a, b), { maxTokens: BODY_TOKEN_CAP }).join(' '));
+            }
+        }
+        for (let i = 0; i < symbols.length && !spec.docs; i++) {
             const sym = symbols[i];
             let body;
             if (TYPE_KINDS.has(sym.kind)) {
@@ -331,7 +339,7 @@ export class Indexer {
                 ids[i], tokenString(sym.name), tokenString(sym.qname), tokenString(sym.sig ?? ''), tokenString(sym.doc ?? ''), pathTokens, body);
         }
         // file document (hierarchical ranking: which files talk about the query at all)
-        s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
+        if (!spec.docs) s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
         // refs (unresolved for now)
         for (const r of refs) {
             s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, argc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',

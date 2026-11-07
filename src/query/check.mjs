@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { specForPath, isConstructor } from '../parse/languages.mjs';
+import { codeSpecForPath as specForPath, isConstructor } from '../parse/languages.mjs'; // documentation is not checked
 import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
