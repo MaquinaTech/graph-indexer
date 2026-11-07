@@ -6,16 +6,22 @@
  * fallback). Reports rank-1, success@5 and MRR@10, split into tuning vs held-out queries, and
  * compares per query with the v2 baseline (bench/baseline-v2.json) when present.
  *
- *   node bench/eval-search.mjs [--fixtures a,b] [--rebuild] [--verbose] [--json out.json]
+ * With --zvec <zg>, zvec-grep's default hybrid search is scored on the same queries over its own index
+ * of a copy of each fixture (bench/zvec-client.mjs; a hit counts as the symbol it is, or the
+ * symbols it spans, in graph-indexer's index of the same files, with the same strict rule).
+ *
+ *   node bench/eval-search.mjs [--fixtures a,b] [--rebuild] [--verbose] [--json out.json] [--zvec <zg> …]
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { Store } from '../src/store/db.mjs';
 import { Indexer } from '../src/index/indexer.mjs';
 import { SearchEngine, DEFAULT_WEIGHTS } from '../src/search/search.mjs';
 import { computeCentrality } from '../src/index/graph.mjs';
+import { zvecOptions, startZvec, rankHits } from './zvec-client.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -26,6 +32,7 @@ const DBDIR = path.resolve(opt('--db-dir', path.join(os.tmpdir(), 'graph-indexer
 const verbose = args.includes('--verbose');
 const rebuild = args.includes('--rebuild');
 const baseline = fs.existsSync(path.join(here, 'baseline-v2.json')) ? JSON.parse(fs.readFileSync(path.join(here, 'baseline-v2.json'), 'utf8')) : null;
+const ZV = zvecOptions(args, DBDIR);
 const weights = opt('--weights', null) ? { ...DEFAULT_WEIGHTS, ...JSON.parse(opt('--weights')) } : DEFAULT_WEIGHTS;
 
 /**
@@ -58,21 +65,43 @@ export async function openFixture(fx, { rebuild: rb = false } = {}) {
     return { store, ix, sync: r, ms: Date.now() - t0 };
 }
 
+/** A copy of the fixture's files for zvec, which writes its index into the workspace root. */
+function zvecCopy(fx) {
+    const dst = path.join(DBDIR, 'zvec', fx);
+    if (rebuild) fs.rmSync(dst, { recursive: true, force: true });
+    if (!fs.existsSync(dst)) {
+        fs.mkdirSync(dst, { recursive: true });
+        const r = spawnSync('sh', ['-c', 'git -C "$1" archive HEAD | tar -x -C "$2"', 'sh', path.join(FIXDIR, fx), dst], { encoding: 'utf8' });
+        if (r.status !== 0) throw new Error(`copying ${fx} for zvec failed: ${r.stderr}`);
+    }
+    return dst;
+}
+
+const rankOf = (hits) => { const first = hits.indexOf(true); return { r1: hits[0] ? 1 : 0, s5: first >= 0 && first < 5 ? 1 : 0, rr: first >= 0 && first < 10 ? 1 / (first + 1) : 0 }; };
+
 async function main() {
     const pooled = { tune: [], held: [] };
     const report = {};
+    const zv = ZV ? await startZvec(ZV) : null;
     for (const fx of FIXTURES) {
         const suite = await import(path.join(here, 'suites', fx + '.mjs'));
         const { store, ix, sync, ms } = await openFixture(fx, { rebuild });
         const cen = computeCentrality(store);
         const engine = new SearchEngine(ix, { weights, centrality: () => cen });
         const rows = [];
+        const zroot = zv && zvecCopy(fx);
+        if (zv) { const z = await zv.index(zroot); console.log(`${fx.padEnd(11)} zvec index (${zv.embedding}) ${z.ms} ms  ${z.summary}`); }
         for (const q of suite.QUERIES) {
             const { results } = engine.search(q.query, { limit: 10 });
             const syms = results.map(r => store.get('SELECT s.name, s.qname, s.kind, f.path, s.visibility = \'default\' AS isDefault FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?', r.id));
             const hits = syms.map(s => strictHit(s, q.expected_names || []));
             const first = hits.indexOf(true);
             const row = { id: q.id, q: q.query, d: q.difficulty, held: !!q.heldOut, r1: hits[0] ? 1 : 0, s5: first >= 0 && first < 5 ? 1 : 0, rr: first >= 0 ? 1 / (first + 1) : 0, top1: syms[0] ? `${syms[0].qname} @ ${syms[0].path}` : '-', exp: q.expected_names };
+            if (zv) {
+                const { ids } = rankHits(store, await zv.search(zroot, q.query));
+                const zs = ids.slice(0, 10).map(id => store.get('SELECT s.name, s.qname, s.kind, f.path, s.visibility = \'default\' AS isDefault FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?', id));
+                row.zvec = rankOf(zs.map(s => strictHit(s, q.expected_names || [])));
+            }
             const base = baseline?.[fx]?.rows?.find(b => b.id === q.id);
             if (base) row.base = { r1: base.r1, s5: base.s5, rr: base.rr };
             rows.push(row);
@@ -83,6 +112,7 @@ async function main() {
         const b = baseline?.[fx];
         report[fx] = { all, sem, sym, index: { files: sync.total, ms } };
         console.log(`${fx.padEnd(11)} n=${String(all.n).padStart(3)}  r1 ${f2(all.r1)} (v2 ${b ? f2(b.all.r1) : '-'})  s@5 ${f2(all.s5)} (v2 ${b ? f2(b.all.s5) : '-'})  MRR ${f2(all.mrr)} (v2 ${b ? f2(b.all.mrr) : '-'})  | sym r1 ${f2(sym.r1)} (v2 ${b ? f2(b.symbolic.r1) : '-'})  sem r1 ${f2(sem.r1)} s@5 ${f2(sem.s5)} (v2 ${b ? f2(b.semantic.r1) + '/' + f2(b.semantic.s5) : '-'})  [index ${ms}ms]`);
+        if (zv) console.log(`${''.padEnd(11)} zvec  r1 ${f2(avgZ(rows, 'r1'))}  s@5 ${f2(avgZ(rows, 's5'))}  MRR ${f2(avgZ(rows, 'rr'))}  (graph-indexer r1 ${f2(all.r1)}  s@5 ${f2(all.s5)}  MRR ${f2(all.mrr)})`);
         if (verbose) for (const r of rows) if (r.r1 !== 1 || (r.base && r.base.r1 > r.r1)) console.log(`     ${r.held ? 'H' : ' '} ${r.r1 ? '✓' : r.s5 ? '~' : '✗'} ${r.id.padEnd(8)} ${r.d.padEnd(8)} ${JSON.stringify(r.q).slice(0, 70).padEnd(72)} exp=${r.exp.join('|')}  top1=${r.top1}${r.base ? `  v2:${r.base.r1 ? 'r1' : r.base.s5 ? 's5' : 'miss'}` : ''}`);
         store.close();
     }
@@ -91,11 +121,14 @@ async function main() {
         const withBase = rs.filter(r => r.base);
         console.log(`${label.padEnd(9)} n=${rs.length}  r1 ${f3(avg(rs, 'r1'))}  s@5 ${f3(avg(rs, 's5'))}  MRR ${f3(avg(rs, 'rr'))} | sym(${sym.length}) r1 ${f3(avg(sym, 'r1'))} s@5 ${f3(avg(sym, 's5'))} | sem(${sem.length}) r1 ${f3(avg(sem, 'r1'))} s@5 ${f3(avg(sem, 's5'))}` +
             (withBase.length ? `   || v2 on same queries: r1 ${f3(avgB(withBase, 'r1'))} s@5 ${f3(avgB(withBase, 's5'))} MRR ${f3(avgB(withBase, 'rr'))}` : ''));
+        if (zv) console.log(`${''.padEnd(9)} zvec        r1 ${f3(avgZ(rs, 'r1'))}  s@5 ${f3(avgZ(rs, 's5'))}  MRR ${f3(avgZ(rs, 'rr'))} | sym(${sym.length}) r1 ${f3(avgZ(sym, 'r1'))} s@5 ${f3(avgZ(sym, 's5'))} | sem(${sem.length}) r1 ${f3(avgZ(sem, 'r1'))} s@5 ${f3(avgZ(sem, 's5'))}`);
     }
+    if (zv) { zv.stop(); if (zv.proxy) console.log(`zvec embeddings: ${zv.proxy.inputs} texts in ${zv.proxy.requests} requests, ${zv.proxy.errors} errors`); }
     if (opt('--json', null)) fs.writeFileSync(opt('--json'), JSON.stringify({ report, pooled }, null, 1));
 }
 
 function avg(rs, k) { return rs.length ? rs.reduce((s, r) => s + r[k], 0) / rs.length : 0; }
+function avgZ(rs, k) { return rs.length ? rs.reduce((s, r) => s + r.zvec[k], 0) / rs.length : 0; }
 function avgB(rs, k) { return rs.length ? rs.reduce((s, r) => s + r.base[k], 0) / rs.length : 0; }
 function f2(x) { return x.toFixed(2); }
 function f3(x) { return x.toFixed(3); }

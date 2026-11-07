@@ -42,14 +42,14 @@
  *             project's .claude/settings.json (edit check, definition rescue, crawl-gated context)
  *   cc+v2     the same session with graph-indexer 2.x as its `init` installed it: its MCP server over
  *             its own index, and CLAUDE.md importing its assembled prompt suite (bench/agentic/v2.mjs)
- *   cc+codegraph, cc+cbm, cc+serena  the same session with CodeGraph, codebase-memory-mcp or Serena, each installed as its
+ *   cc+codegraph, cc+cbm, cc+serena, cc+zvec  the same session with CodeGraph, codebase-memory-mcp, Serena or zvec-grep, each installed as its
  *             own installer does it for Claude Code (bench/agentic/competitors.mjs)
  *
  * When running in a harness without MCP (sub-agents, plain shells) graph-indexer is used through
  * its CLI, which prints exactly what the MCP tools return.
  */
 
-export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper', 'cc+gi+hooks', 'cc+v2', 'cc+codegraph', 'cc+cbm', 'cc+serena', 'cc+serena-prompt'];
+export const ARM_NAMES = ['grep', 'gi', 'grep+gi', 'grep+gi+', 'grep+gi2', 'gi2', 'grep+gi3', 'gi3', 'grep+rules', 'grep+gi4', 'grep+gi5', 'grep+gi6', 'grep+gi7', 'ask-grep', 'ask-explore', 'ask-helper', 'mcp', 'mcp+hooks', 'cc', 'cc+gi', 'cc+gi+helper', 'cc+gi+hooks', 'cc+v2', 'cc+codegraph', 'cc+cbm', 'cc+serena', 'cc+serena-prompt', 'cc+zvec'];
 
 /**
  * Arms that answer a delegated question: the sub-agent type to launch, and whether the message
@@ -80,6 +80,7 @@ export const SESSION_ARMS = {
     'cc+codegraph': { index: false, helper: false, competitor: 'codegraph' },
     'cc+cbm': { index: false, helper: false, competitor: 'cbm' },
     'cc+serena': { index: false, helper: false, competitor: 'serena' },
+    'cc+zvec': { index: false, helper: false, competitor: 'zvec' },
     // a control: Serena's system prompt with no Serena
     'cc+serena-prompt': { index: false, helper: false, competitor: 'serena-prompt' },
 };

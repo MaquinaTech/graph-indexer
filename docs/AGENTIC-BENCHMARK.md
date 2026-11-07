@@ -424,6 +424,68 @@ Three `arena1b` sessions were stopped by a SIGTERM at the same minute, unfinishe
 discarded and re-run from scratch (`runs/arena1b/discarded.tsv`). In `arena1` no run was
 discarded.
 
+### Against zvec-grep 0.3.0, with its own benchmark's questions (zp1, pilot): 24 tasks, 72 runs
+
+Claude Code with Haiku 5.5, in the repository, one run per task and arm:
+
+- `cc`: Claude Code alone;
+- `cc+gi`: graph-indexer as `init --no-helper` installs it;
+- `cc+zvec`: zvec-grep 0.3.0 as `zg --install --target claude --yes` installs it (its MCP server
+  with the `agent` toolset, its permission and its CLAUDE.md block), each checkout indexed with
+  `zg --index` beforehand.
+
+zvec-grep's embeddings came from Qwen3-Embedding-0.6B on this Mac
+([`bench/embed-server.py`](../bench/embed-server.py), loopback only), through its catalog's
+`qwen/text-embedding-v4` remote slot. A loopback proxy adds the Qwen3 query instruction to query
+embeddings and nothing to documents. zvec-grep's own default remote model is Qwen's hosted
+text-embedding-v4; that is the closest local model.
+
+Two task sets:
+
+- **11 code questions on nestjs** (`qa-nestjs-r7`: call sites, callers, subclasses), graded by
+  the TypeScript compiler;
+- **13 of the 20 SWE-QA-Bench questions zvec-grep publishes for its own Claude Code comparison**
+  (`tasks/swe-qa-zvec.json`, mined by [`mine-swe-qa.mjs`](../bench/agentic/mine-swe-qa.mjs) at
+  zvec-grep commit `407a385`), graded the way zvec-grep grades them:
+  - a blind judge (Sonnet 5.5, told neither the arm nor the tools) scores each answer against the
+    reference on five criteria, 1–20 each, with zvec-grep's judge prompt word for word;
+  - "solved" means correctness of 16 or more.
+
+  The 13 are the questions on requests, streamlink, sqlfluff, pylint, conan and xarray. The other
+  seven (django, sympy, matplotlib, astropy, reflex) were left out before any run, because
+  embedding those repositories locally would have taken too long.
+
+| task set | arm | solved | mean score | cost | tool calls | grep calls | sessions that called the tool |
+|---|---|---|---|---|---|---|---|
+| nestjs (compiler) | `cc` | 11 / 11 | 1.000 | $0.058 | 4.7 | 3.2 | |
+| | `cc+gi` | 11 / 11 | 1.000 | **$0.049** | **3.9** | **1.2** | 11 / 11 |
+| | `cc+zvec` | 10 / 11 | 0.992 | $0.067 | 5.1 | 3.7 | 0 / 11 |
+| SWE-QA (judge) | `cc` | 7 / 13 | **0.738** | **$0.136** | 9.5 | 6.3 | |
+| | `cc+gi` | 7 / 13 | 0.690 | $0.143 | **8.5** | **3.7** | 13 / 13 |
+| | `cc+zvec` | 5 / 13 | 0.685 | $0.153 | 9.0 | 6.1 | 3 / 13 |
+
+(Cost is the total over the set's runs.)
+
+- **On the call-site questions** Haiku 5.5 answers all of them with grep alone. graph-indexer
+  does the same at 0.85 of the cost, with 1.2 greps instead of 3.2. With zvec-grep installed the
+  agent never called it on these questions, missed one caller, and cost 1.16.
+- **On zvec-grep's own SWE-QA questions no arm beats Claude Code alone.** graph-indexer and
+  zvec-grep score within 0.005 of each other, and both are below `cc` by about 0.05. With 13
+  tasks and one run, that is within the judge's noise: on conan-39 the three arms scored 0.86,
+  0.35 and 0.28 for answers of similar content. Paired against `cc`, Δ score is −0.03 (−0.08…0.01)
+  for graph-indexer and −0.03 (−0.09…0.01) for zvec-grep, over all 24 tasks.
+- **Adoption.** The agent called graph-indexer in all 24 sessions and zvec-grep in 3 of 24.
+  zvec-grep's server was connected in every session, and the calls it got returned the right
+  code. This pilot is not a reproduction of zvec-grep's own comparison (other model, other
+  setup) and is not evidence against it.
+- **What this does not show.** Haiku 5.5, one run per task, 24 tasks: a pilot, not a verdict on
+  either tool in sessions. The offline comparison (docs/BENCHMARKS.md, "zvec-grep 0.3.0") measures
+  the retrieval itself, on 377 queries and 169 commits.
+- **Two zvec-grep notes from the runs.** zg's embedding client gives up on a request after 60 s,
+  so with a slow local model it ran with `ZVEC_GREP_EMBEDDING_CONCURRENCY=1`. That changes how
+  fast it indexes, not what it returns. On pylint, zg could not index 2 of 3,891 files (UTF-32 test
+  data); it exits with an error but serves searches from the rest, which is what the runs used.
+
 ### Measurement correction and where the cost goes
 
 Transcripts keep a streamed message's usage from its first snapshot, and the model's reasoning is

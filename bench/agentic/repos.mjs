@@ -151,5 +151,14 @@ export const REPOS = {
         srcPrefix: 'haystack/',
         testRe: '^test/',
         testHint: 'from the repository root, `pytest test/core/pipeline/test_pipeline.py` runs one test file (pytest, pytest-asyncio and the core dependencies are installed; torch, transformers and the converters\' libraries are not).',
-    },
+    },    // zvec-grep's SWE-QA questions (tasks/swe-qa-zvec.json, mine-swe-qa.mjs): questions only, no tests run
+    ...Object.fromEntries([
+        ['reflex', 'reflex-dev/reflex'], ['sqlfluff', 'sqlfluff/sqlfluff'], ['conan', 'conan-io/conan'], ['pylint', 'pylint-dev/pylint'],
+        ['sympy', 'sympy/sympy'], ['xarray', 'pydata/xarray'], ['astropy', 'astropy/astropy'], ['matplotlib', 'matplotlib/matplotlib'],
+        ['streamlink', 'streamlink/streamlink'], ['django', 'django/django'], ['requests', 'psf/requests'],
+    ].map(([name, gh]) => [`sweqa-${name}`, {
+        source: path.join(WORK, 'repos', `sweqa-${name}`),
+        fetch: `git clone --filter=blob:none https://github.com/${gh}.git ${path.join(WORK, 'repos', `sweqa-${name}`)}`,
+        language: 'python',
+    }])),
 };

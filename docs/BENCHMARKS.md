@@ -540,6 +540,92 @@ graph-indexer cost 0.65 / 0.74 / 0.87 of CodeGraph on questions, refactors and i
 and answered all 11 questions exactly against 9–10. The larger answers above do not make its
 sessions dearer: on code questions its arm is the cheapest of the five.
 
+### zvec-grep 0.3.0 (2026-11-06)
+
+[zvec-grep](https://github.com/zvec-ai/zvec-grep) is a semantic grep: hybrid BM25 + vector search
+over chunks of code and documents. It has no references or call graph, so the questions of
+section 1 do not apply to it; there an agent with zvec-grep is left with grep (precision 0.128
+against graph-indexer's 0.997 on nestjs). What it does is search, and that is measured here on
+graph-indexer's two search benchmarks (sections 2 and 3), with zg's default `--hybrid` search
+through its own CLI ([`bench/zvec-client.mjs`](../bench/zvec-client.mjs)).
+
+```bash
+npm pack @zvec/zvec-grep-darwin-arm64@0.3.0 && tar -xzf zvec-zvec-grep-darwin-arm64-0.3.0.tgz   # checked against package/checksums.json
+~/MLXServer/.venv/bin/python -I bench/embed-server.py --port 47812                              # Qwen3-Embedding-0.6B (MLX, 8-bit) on loopback
+Z="--zvec bench/arena/.tools/zvec/bin/zg --zvec-upstream http://127.0.0.1:47812/v1/embeddings"
+ZVEC_GREP_EMBEDDING_CONCURRENCY=1 node bench/eval-search.mjs $Z [--zvec-code-only]
+ZVEC_GREP_EMBEDDING_CONCURRENCY=1 node bench/eval-localize.mjs --n 40 $Z [--zvec-code-only]
+node bench/eval-search.mjs --zvec bench/arena/.tools/zvec/bin/zg --zvec-embedding local/potion-code-16m-v2
+```
+
+- **Embeddings.** zvec-grep's default local model is Qwen3-Embedding-0.6B (a GGUF it runs with
+  llama.cpp). The same model ran here in MLX (`mlx-community/Qwen3-Embedding-0.6B-8bit` at a
+  pinned revision, served on this Mac by `bench/embed-server.py`), reached through zg's
+  OpenAI-format remote slot and a loopback proxy that adds Qwen3's query instruction to queries
+  and nothing to documents, as zg does for its local Qwen3. That is why the logs name the slot,
+  `qwen/text-embedding-v4`; nothing left the Mac. The 8-bit weights are not zg's GGUF, so its own
+  setup may score slightly differently. A second run used `local/potion-code-16m-v2`, the static
+  model in zg's catalog.
+- **Code only.** zg also indexes documents and plain text. `--zvec-code-only` passes
+  `--category code`, which only helps it on these code questions; both are reported.
+- **Scoring.** zg answers with `path:start-end` chunks. Its first 30 are mapped to the symbols
+  they span in graph-indexer's index of the same snapshot (a chunk counts for the symbols at least
+  half inside it, or the innermost symbol holding it), and scored exactly as graph-indexer.
+- **Runs.** 26,264 texts embedded in 3,553 requests for search, 0 errors. zg's embedding client
+  gives up on a request after 60 s, which two processes sharing the model on this M2 exceeded, so
+  the runs used `ZVEC_GREP_EMBEDDING_CONCURRENCY=1`. Index times are therefore not comparable
+  (from 20 to 66 minutes per localization fixture with Qwen3 on the M2, 1–2 minutes with potion)
+  and are not reported as a result.
+
+**Symbol search** (377 queries, section 3):
+
+| queries | n | graph-indexer r1 / s@5 / MRR | zvec Qwen3 | zvec Qwen3, code only | zvec potion |
+|---|---|---|---|---|---|
+| all | 377 | **0.703 / 0.841 / 0.761** | 0.549 / 0.690 / 0.611 | 0.581 / 0.708 / 0.639 | 0.517 / 0.703 / 0.596 |
+| without nvm (Bash) | 335 | **0.690 / 0.833 / 0.751** | 0.615 / 0.767 / 0.679 | 0.651 / 0.791 / 0.711 | 0.570 / 0.728 / 0.638 |
+| held-out | 169 | **0.734 / 0.846 / 0.779** | 0.544 / 0.663 / 0.599 | 0.568 / 0.686 / 0.623 | |
+| behaviour described in words | 92 | **0.478 / 0.674 / 0.566** | 0.326 / 0.565 / 0.422 | 0.424 / 0.620 / 0.501 | |
+
+Per fixture, MRR@10 (graph-indexer / zvec Qwen3 / zvec Qwen3 code only): axios 0.76 / 0.69 /
+0.72, express 0.83 / 0.54 / 0.57, **gin 0.88 / 0.90 / 0.91**, spring 0.86 / 0.81 / 0.86,
+serde-json 0.68 / 0.65 / 0.63, cJSON 0.69 / 0.61 / 0.66, nvm 0.85 / 0.07 / 0.07,
+**fastapi 0.63 / 0.59 / 0.68**, nestjs 0.68 / 0.67 / 0.67. zg does not split Bash into symbols,
+so nvm's results are whole-file chunks that rarely name the function asked for; the second row
+leaves nvm out.
+
+**Localization** (169 real commits, section 2):
+
+| fixture | system | file Acc@1 | file Acc@5 | fn Acc@5 | fn Acc@10 | fn MRR@10 |
+|---|---|---|---|---|---|---|
+| express-js | graph-indexer | **0.722** | **0.917** | **0.893** | **0.929** | **0.810** |
+| | zvec Qwen3 / code only | 0.167 / 0.444 | 0.806 / 0.889 | 0.464 / 0.429 | 0.571 / 0.536 | 0.305 / 0.313 |
+| gin | graph-indexer | 0.625 | **0.925** | **0.500** | 0.528 | 0.396 |
+| | zvec Qwen3 / code only | 0.450 / **0.650** | 0.775 / 0.825 | 0.472 / 0.472 | 0.528 / 0.528 | **0.415** / 0.401 |
+| fastapi | graph-indexer | **0.769** | **0.923** | 0.667 | 0.778 | 0.405 |
+| | zvec Qwen3 / code only | 0.308 / 0.615 | 0.615 / 0.846 | **0.778** / **0.778** | 0.778 / 0.778 | 0.583 / **0.639** |
+| nestjs *(held out)* | graph-indexer | **0.450** | **0.675** | **0.324** | **0.459** | **0.274** |
+| | zvec Qwen3 / code only | 0.275 / 0.275 | 0.500 / 0.500 | 0.297 / 0.297 | 0.432 / 0.432 | 0.221 / 0.221 |
+| axios *(held out)* | graph-indexer | **0.350** | **0.650** | **0.438** | **0.688** | **0.335** |
+| | zvec Qwen3 / code only | 0.250 / 0.250 | 0.525 / 0.550 | 0.438 / 0.406 | 0.563 / 0.531 | 0.322 / 0.319 |
+| **all** | **graph-indexer** | **0.550** | **0.799** | **0.528** | **0.641** | **0.433** |
+| | grep (ranked, section 2) | 0.485 | 0.769 | 0.514 | 0.627 | 0.374 |
+| | zvec Qwen3 | 0.290 | 0.645 | 0.437 | 0.535 | 0.332 |
+| | zvec Qwen3, code only | 0.420 | 0.698 | 0.423 | 0.521 | 0.333 |
+| | zvec potion | 0.308 | 0.633 | 0.437 | 0.535 | 0.335 |
+
+**Where zvec-grep wins.** On gin it ranks better in symbol search (MRR 0.91 against 0.88),
+puts the changed file first more often (0.650 against 0.625) and ranks the changed functions a
+little higher (MRR 0.415 against 0.396). On fastapi, with code only, it
+finds the changed functions better (MRR 0.639 against 0.405, Acc@5 0.778 against 0.667) and edges
+graph-indexer in symbol search (0.68 against 0.63). Those are its two best fixtures. Everywhere
+else, and on every total, graph-indexer is ahead. Over all commits zvec-grep is also below the
+ranked grep baseline, which ranks whole files where zg ranks chunks: on commit subjects the file
+that changed is more often found by its words than by a chunk's meaning.
+
+What an agent does with each one in a session is in
+[AGENTIC-BENCHMARK.md](AGENTIC-BENCHMARK.md#against-zvec-grep-030-with-its-own-benchmarks-questions-zp1-pilot-24-tasks-72-runs):
+in a one-repetition pilot with Haiku 5.5 on 24 tasks, neither tool beat Claude Code alone.
+
 ## Dependency injection (NestJS)
 
 `@Inject(TOKEN)` hands a class whatever a module registered as `{ provide: TOKEN, useClass |
@@ -690,7 +776,7 @@ Metrics: file Acc@k (a changed file among the first k distinct files), function 
 over changed functions (commits touching no function are excluded from function metrics).
 
 **Results** (169 commits; the file-level channel's weight was selected on express-js, gin and
-fastapi only; nestjs and axios are held out):
+fastapi only; nestjs and axios are held out; rerun 2026-11-06 with the current version):
 
 | fixture | commits | system | file Acc@1 | file Acc@5 | fn Acc@5 | fn Acc@10 | fn MRR@10 |
 |---|---|---|---|---|---|---|---|
@@ -700,16 +786,16 @@ fastapi only; nestjs and axios are held out):
 | gin | 40 | graph-indexer | 0.625 | 0.925 | 0.500 | 0.528 | 0.396 |
 | | | grep | 0.600 | 0.875 | 0.583 | 0.639 | 0.461 |
 | | | BM25 | 0.450 | 0.850 | 0.417 | 0.528 | 0.309 |
-| fastapi | 13 | graph-indexer | 0.692 | 0.923 | 0.667 | 0.778 | 0.405 |
+| fastapi | 13 | graph-indexer | 0.769 | 0.923 | 0.667 | 0.778 | 0.405 |
 | | | grep | 0.308 | 0.846 | 0.556 | 0.667 | 0.295 |
 | | | BM25 | 0.462 | 0.846 | 0.556 | 0.556 | 0.254 |
-| nestjs *(held out)* | 40 | graph-indexer | 0.450 | 0.675 | 0.324 | 0.432 | 0.271 |
+| nestjs *(held out)* | 40 | graph-indexer | 0.450 | 0.675 | 0.324 | 0.459 | 0.274 |
 | | | grep | 0.325 | 0.625 | 0.162 | 0.297 | 0.103 |
 | | | BM25 | 0.300 | 0.575 | 0.243 | 0.324 | 0.164 |
-| axios *(held out)* | 40 | graph-indexer | 0.350 | 0.675 | 0.438 | 0.688 | 0.335 |
+| axios *(held out)* | 40 | graph-indexer | 0.350 | 0.650 | 0.438 | 0.688 | 0.335 |
 | | | grep | 0.325 | 0.675 | 0.531 | 0.719 | 0.386 |
 | | | BM25 | 0.250 | 0.575 | 0.156 | 0.313 | 0.154 |
-| **all** | **169** | **graph-indexer** | **0.544** | **0.805** | **0.528** | **0.634** | **0.432** |
+| **all** | **169** | **graph-indexer** | **0.550** | **0.799** | **0.528** | **0.641** | **0.433** |
 | | | grep | 0.485 | 0.769 | 0.514 | 0.627 | 0.374 |
 | | | BM25 | 0.373 | 0.722 | 0.401 | 0.500 | 0.290 |
 
@@ -752,6 +838,30 @@ The file-level channel added last trades some top-5 recall on the semantic queri
 split (0.706 → 0.608) for better rank-1 and better localization; overall MRR rose from 0.755 to
 0.761. Later changes moved a few tuning-split queries down (MRR 0.752 → 0.747, all
 queries 0.761 → 0.759); the held-out split did not change.
+
+### Documentation sections and the semantic channel (2026-11-06)
+
+Two later additions, measured on the same 377 queries and the 169 commits of section 2:
+
+| configuration | rank-1 | success@5 | MRR@10 | queries in words, success@5 | localization file Acc@1 |
+|---|---|---|---|---|---|
+| before both | 0.706 | 0.841 | 0.763 | 0.674 | 0.550 |
+| Markdown sections indexed (the default now) | 0.703 | 0.841 | 0.761 | 0.674 | 0.550 |
+| + semantic channel, chosen weights (`GRAPH_INDEXER_SEMANTIC=1`) | 0.695 | **0.859** | 0.761 | **0.728** | 0.533–0.538 |
+| + semantic channel, weights ×2 / ×4 | | | | | 0.485 |
+
+- **Sections.** Indexed with the symbols, Markdown headings cost symbol search 0.018 of MRR. Kept in
+  an index of their own and searched only for questions about docs, design or reasons, they cost
+  0.002, and localization does not change. (A first run seemed to show a localization loss; it
+  came from the benchmark counting `.md` files as source, which changed which commits qualify.
+  `eval-localize.mjs` now leaves documentation out.)
+- **Semantic channel.** A static model (potion-code-16M-v2, 256 dimensions) over each definition's
+  name, signature, doc comment and first 60 lines, fused with the other channels by weight. It
+  finds what the words of a description mean when no name shares them, so success@5 on those
+  queries rises by 0.054. On commit subjects it pulls up definitions that are about the same topic
+  but not the ones changed: localization falls a little at the chosen weights and by 0.065 at
+  higher ones. Ranking only the candidates the lexical channels found, or embedding only the
+  signature and doc line, did not help either. It stays opt-in.
 
 ## 4. Agents with and without graph-indexer
 

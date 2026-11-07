@@ -102,7 +102,7 @@ that one definition (`npx graph-indexer demo` shows it again).
 | ORM models | look up a model (`find_references`, `explore`; `npx graph-indexer models`) | its table, the migrations that touch it, and for Prisma the client calls (`prisma.user.findMany`) that only the generated client types — Prisma, Django, SQLAlchemy/SQLModel, TypeORM |
 | `read_code` | read symbols, line ranges or files — several per call — without searching for what they use | code with line numbers, then where each name it uses is defined (file:line and signature); who uses a symbol and which tests reference it; a long file's outline |
 | `search_text` | grep any text across the repository (code, config, docs) | grep lines with the enclosing definition and, for identifiers, the definition each match refers to; where the definition is when the search missed it |
-| `search_code` | find where a behaviour or identifier lives (natural language or names) | ranked symbols with location, signature, doc line and matching lines |
+| `search_code` | find where a behaviour or identifier lives (natural language or names); `queries: [...]` asks for several phrasings at once | ranked symbols with location, signature, doc line and matching lines; for a question about docs, design or the reason for something, the Markdown sections that answer it |
 | `find_references` | see every use before renaming or changing a signature | uses grouped by file, enclosing function, confidence, calls through base types marked |
 | `call_graph` | trace callers and callees across files | a tree with locations and confidence |
 | `change_impact` | get the blast radius of a change, or of your uncommitted diff | transitive dependents by distance, tests to run, co-changed files, risk |
@@ -140,6 +140,12 @@ often changed together (git): context.go (14/42), context_test.go (10/42), …
 risk: medium (9 dependents, 1 test files)
 ```
 
+**Search by meaning (optional).** `npx graph-indexer semantic install` downloads a 32 MB static code
+embedding model (potion-code-16M-v2, MIT, pinned and checksummed); with `GRAPH_INDEXER_SEMANTIC=1`
+search also ranks definitions by meaning, in plain JavaScript and without network access. It helps
+queries written in words (top-5 success 0.674 → 0.728) and not the localization of real commits,
+so it is off by default ([measurements](docs/BENCHMARKS.md#3-symbol-search)).
+
 Every reference carries a confidence: **exact/high** means it was bound through a scope,
 import or inferred receiver type; **likely/possible** means only the name matched. Footers
 report same-name call sites that could not be bound, so an agent knows when to double-check
@@ -176,13 +182,21 @@ rolled back to the parent commit first.
 
 | | file Acc@1 | file Acc@5 | function Acc@5 | function MRR@10 |
 |---|---|---|---|---|
-| graph-indexer `search_code` | **0.544** | **0.805** | **0.528** | **0.432** |
+| graph-indexer `search_code` | **0.550** | **0.799** | **0.528** | **0.433** |
 | grep, files ranked by idf-weighted hits | 0.485 | 0.769 | 0.514 | 0.374 |
 | BM25 over the same index | 0.373 | 0.722 | 0.401 | 0.290 |
 
 **Symbol search.** 377 hand-written queries over nine repositories in eight languages, scored
 strictly at symbol level: rank-1 0.703 and MRR 0.760, against 0.552 and 0.646 for graph-indexer
 2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
+
+**Against zvec-grep 0.3.0** (hybrid BM25 + vector search, with its default embedding model,
+Qwen3-Embedding-0.6B, run on the same Mac): on the same 377 queries its best setting, code only,
+reaches rank-1 0.581 and MRR 0.639 (graph-indexer 0.703 and 0.761); on the 169 commits it puts
+the changed file first in 0.420 of them (graph-indexer 0.550, ranked grep 0.485). It is ahead on
+two repositories, gin and fastapi. It has no references or callers. In a one-repetition pilot of
+agent sessions (Haiku 5.5, 24 tasks, 13 of them from zvec-grep's own benchmark) neither tool beat
+Claude Code alone. [Details](docs/BENCHMARKS.md#zvec-grep-030-2026-11-06).
 
 **Against 2.x.** In real Claude Code sessions on nestjs and Twenty (40 tasks, 120 runs), 3.0
 cost 0.43 of 2.x on code questions and 0.46 on refactors, with a quarter to a third of the

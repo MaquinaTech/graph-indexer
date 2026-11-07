@@ -15,6 +15,10 @@
  *   v2             (--v2 <dir>) graph-indexer 2.x's search_code through its own MCP server, over its
  *                  own index of the same snapshot (top 20, no score floor); a chunk it returns counts
  *                  as the functions it spans, in order (a whole class spans its methods)
+ *   zvec           (--zvec <zg>) zvec-grep's default hybrid search over its own index of the same
+ *                  snapshot (its own worktree, updated incrementally like ours; top 30); a hit counts
+ *                  as the functions it spans (bench/zvec-client.mjs, which documents the embedding
+ *                  options --zvec-embedding, --zvec-upstream, --zvec-ca, --zvec-code-only)
  * Metrics: file Acc@1/@5 (a changed file among the first k distinct files), function Acc@5/@10
  * and MRR@10 over changed functions/methods.
  *
@@ -33,6 +37,7 @@ import { computeCentrality } from '../src/index/graph.mjs';
 import { specForPath } from '../src/parse/languages.mjs';
 import { FIXTURES } from './fixtures.mjs';
 import { startV2, buildIndexV2 } from './v2-client.mjs';
+import { zvecOptions, startZvec, rankHits } from './zvec-client.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -43,6 +48,7 @@ const FIXDIR = path.resolve(opt('--fixture-dir', path.join(here, '../test/fixtur
 const WORK = path.resolve(opt('--work-dir', path.join(os.tmpdir(), 'gi-localize')));
 const verbose = args.includes('--verbose');
 const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.homedir()));
+const ZV = zvecOptions(args, WORK);
 const WEIGHTS = opt('--weights', null) ? { ...DEFAULT_WEIGHTS, ...JSON.parse(opt('--weights')) } : DEFAULT_WEIGHTS;
 
 const NOISE_SUBJECT = /^(merge|revert|release|bump|chore|docs?|test|tests|ci|build|style|lint|format|typo|deps|prepare|version|v?\d+\.\d+)\b/i;
@@ -59,7 +65,7 @@ const tryGit = (cwd, ...a) => { try { return git(cwd, ...a); } catch { return nu
 
 function isSource(p) {
     const spec = specForPath(p);
-    return !!spec && spec.id !== 'css' && !spec.testFile?.test(p) && !NON_SOURCE.test(p) && !/\.d\.[cm]?ts$/.test(p);
+    return !!spec && spec.id !== 'css' && !spec.docs && !spec.testFile?.test(p) && !NON_SOURCE.test(p) && !/\.d\.[cm]?ts$/.test(p);
 }
 
 /** Clean a commit subject into an issue-like query. */
@@ -193,6 +199,14 @@ async function runFixture(fx) {
     for (const s of ['', '-wal', '-shm']) fs.rmSync(dbPath + s, { force: true });
     const store = new Store(dbPath);
     const ix = new Indexer({ root: wt, store });
+    const zwt = path.join(WORK, fx + '-zvec');
+    let zv = null, zvIndexMs = 0;
+    if (ZV) {
+        tryGit(repo, 'worktree', 'remove', '--force', zwt);
+        fs.rmSync(zwt, { recursive: true, force: true });
+        git(repo, 'worktree', 'add', '-q', '--detach', zwt, commits[commits.length - 1].parent);
+        zv = await startZvec(ZV);
+    }
     const systems = {
         'graph-indexer': (q) => new SearchEngine(ix, { weights: WEIGHTS, centrality: () => cen }).search(q, { limit: 100 }).results.map(r => r.id),
         'bm25': (q) => new SearchEngine(ix, { weights: Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map(k => [k, k === 'bm25' ? 1 : 0])), perFileCap: 100 }).search(q, { limit: 100 }).results.map(r => r.id),
@@ -209,6 +223,12 @@ async function runFixture(fx) {
         for (const [name, fn] of Object.entries(systems)) {
             const ids = fn(c.query);
             row[name] = score(filesOf(store, ids), ids, c, goldSyms);
+        }
+        if (zv) {
+            git(zwt, 'checkout', '-q', '--detach', c.parent);
+            zvIndexMs += (await zv.index(zwt)).ms;
+            const { files, ids } = rankHits(store, await zv.search(zwt, c.query), ['function', 'method', 'constructor']);
+            row.zvec = score(files, ids, c, goldSyms);
         }
         if (v2Root) {
             buildIndexV2(v2Root, wt);
@@ -229,10 +249,15 @@ async function runFixture(fx) {
     }
     store.close();
     tryGit(repo, 'worktree', 'remove', '--force', wt);
+    if (zv) {
+        zv.stop();
+        tryGit(repo, 'worktree', 'remove', '--force', zwt);
+        console.log(`  zvec: ${zv.embedding}, indexing ${(zvIndexMs / 1000).toFixed(1)} s in all${zv.proxy ? `, ${zv.proxy.inputs} texts embedded in ${zv.proxy.requests} requests, ${zv.proxy.errors} errors` : ''}`);
+    }
     return { fx, rows, ms: Date.now() - t0 };
 }
 
-const SYSTEMS = ['graph-indexer', 'bm25', 'grep', ...(v2Root ? ['v2'] : [])];
+const SYSTEMS = ['graph-indexer', 'bm25', 'grep', ...(v2Root ? ['v2'] : []), ...(ZV ? ['zvec'] : [])];
 function aggregate(rows) {
     const out = {};
     for (const s of SYSTEMS) {

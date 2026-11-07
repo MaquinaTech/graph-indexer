@@ -4,7 +4,7 @@
  * The held-out split is evaluated and printed for every accepted step but never used for
  * selection, so the reported held-out numbers stay an honest generalisation estimate.
  *
- *   node bench/tune-weights.mjs [--passes 2]
+ *   node bench/tune-weights.mjs [--passes 2] [--only sem,semNL]   (--only: tune just these weights)
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import { openFixture, strictHit } from './eval-search.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = 'axios,express-js,gin,spring,rust,cjson,nvm,fastapi,nestjs'.split(',');
 const passes = Number(process.argv[process.argv.indexOf('--passes') + 1] || 2);
+const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1].split(',') : null;
 
 const loaded = [];
 for (const fx of FIXTURES) {
@@ -50,7 +51,7 @@ let bestObj = objective(bestM);
 console.log('start   ', fmt(bestM));
 const factors = [0, 0.5, 0.75, 1.33, 2];
 for (let p = 0; p < passes; p++) {
-    for (const k of Object.keys(best)) {
+    for (const k of only ?? Object.keys(best)) {
         for (const f of factors) {
             const cand = { ...best, [k]: best[k] === 0 ? (f === 0 ? 0 : 0.1 * f) : +(best[k] * f).toFixed(4) };
             if (cand[k] === best[k]) continue;

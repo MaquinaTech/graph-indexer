@@ -20,6 +20,15 @@
  *              (`serena prompts print-cc-system-prompt-override`, passed with --system-prompt); the
  *              project's symbols are put in its LSP cache beforehand (`serena project index`)
  *
+ *   zvec       zvec-grep 0.3.0 (the darwin-arm64 npm platform package, checked against its checksums.json,
+ *              in bench/arena/.tools/zvec): `zg --install --target claude --yes` writes user-scope files
+ *              (the stdio MCP server, the permission for its tools, a CLAUDE.md block); it runs once
+ *              against a scratch HOME and its files are put in the project's scope. The repository is
+ *              indexed with `zg --index` beforehand, with the embedding model of the run (ZVEC_EMBEDDING:
+ *              default its catalog's qwen/text-embedding-v4 slot pointed at ZVEC_ENDPOINT, the bench's
+ *              loopback proxy to the local Qwen3-Embedding-0.6B server, bench/zvec-client.mjs proxy),
+ *              and the workspace is granted Remote Embedding the way `zg --auth grant` does it
+ *
  *   serena-prompt  a control: Serena's recommended system prompt alone, with no Serena (no MCP
  *              server, hooks or index) — what the prompt does by itself
  *
@@ -31,6 +40,10 @@ import path from 'node:path';
 import { sh, WORK, GI_ROOT } from './lib.mjs';
 
 const TOOLS = path.join(GI_ROOT, 'bench', 'arena', '.tools');
+const ZVEC_HOME = path.join(WORK, 'tools', 'zvec-home');
+const ZVEC_EMBEDDING = process.env.ZVEC_EMBEDDING || 'qwen/text-embedding-v4';
+const ZVEC_ENDPOINT = process.env.ZVEC_ENDPOINT || 'http://127.0.0.1:47811/v1/embeddings';
+const zvecRemote = () => ZVEC_EMBEDDING.startsWith('qwen/');
 const SERENA_BIN = path.join(WORK, 'tools', 'serena-venv', 'bin');
 
 export const COMPETITORS = {
@@ -56,6 +69,14 @@ export const COMPETITORS = {
         // its own settings home (no dashboard window per session; nothing else changed)
         env: {},
     },
+    zvec: {
+        label: 'zvec-grep 0.3.0',
+        server: 'zvec_grep',
+        exclude: ['.zvec-grep/'],
+        bin: path.join(TOOLS, 'zvec', 'bin', 'zg'),
+        // its own state and model cache; the proxy holds the server key, zg only a placeholder
+        env: { ZVEC_GREP_HOME: ZVEC_HOME, ZVEC_GREP_MODEL_CACHE: path.join(WORK, 'tools', 'zvec-models'), NO_COLOR: '1' },
+    },
     'serena-prompt': {
         label: "Serena 1.7.0's system prompt, without Serena",
         server: null,
@@ -76,7 +97,7 @@ export function pathDir(name) {
     fs.mkdirSync(dir, { recursive: true });
     const links = name === 'serena-prompt' ? []
         : name === 'serena' ? [['serena', c.bin], ['serena-hooks', path.join(SERENA_BIN, 'serena-hooks')], ['uv', path.join(SERENA_BIN, 'uv')], ['uvx', path.join(SERENA_BIN, 'uvx')]]
-        : [[name === 'cbm' ? 'codebase-memory-mcp' : 'codegraph', c.bin]];
+        : [[name === 'cbm' ? 'codebase-memory-mcp' : name === 'zvec' ? 'zg' : 'codegraph', c.bin]];
     for (const [n, target] of links) if (!fs.existsSync(path.join(dir, n))) fs.symlinkSync(target, path.join(dir, n));
     return dir;
 }
@@ -121,6 +142,22 @@ function cbmInstalled() {
     return { home, bin: path.join(root, 'bin', 'codebase-memory-mcp') };
 }
 
+/** What zvec-grep's installer writes for Claude Code, captured once from a scratch HOME (its daemon stopped after). */
+function zvecInstalled() {
+    const root = path.join(WORK, 'tools', 'zvec-install');
+    const home = path.join(root, 'home');
+    if (!fs.existsSync(path.join(home, '.claude', 'CLAUDE.md'))) {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+        fs.writeFileSync(path.join(home, '.claude.json'), '{}\n');
+        const env = { ...process.env, HOME: home, ZVEC_GREP_HOME: path.join(root, 'state'), PATH: `${path.dirname(COMPETITORS.zvec.bin)}${path.delimiter}${process.env.PATH}` };
+        const r = sh(`${JSON.stringify(COMPETITORS.zvec.bin)} --install --target claude --yes`, { env });
+        sh(`${JSON.stringify(COMPETITORS.zvec.bin)} --server off`, { env });
+        if (r.code !== 0) throw new Error(`zvec-grep install failed: ${(r.stderr || r.stdout).slice(-400)}`);
+    }
+    return { home };
+}
+
 const copyDir = (from, to) => { if (fs.existsSync(from)) fs.cpSync(from, to, { recursive: true }); };
 
 /**
@@ -140,6 +177,40 @@ export function installCompetitor(name, checkout) {
         if (r.code !== 0) throw new Error(`codegraph init failed: ${r.stderr.slice(-400)}`);
         const mcp = JSON.parse(fs.readFileSync(path.join(checkout, '.mcp.json'), 'utf8'));
         return { mcpServers: mcp.mcpServers, allowed: ['mcp__codegraph'], indexMs: r.ms };
+    }
+    if (name === 'zvec') {
+        const { home } = zvecInstalled();
+        const remote = zvecRemote() ? ['--endpoint', ZVEC_ENDPOINT, '--api-key', 'via-bench-proxy'] : [];
+        const zenv = { ...env, ...(zvecRemote() ? { ZVEC_GREP_API_KEY: 'via-bench-proxy' } : {}) };
+        // the bench proxy embeds documents while the checkout is indexed, queries afterwards
+        const proxyMode = (m) => { if (zvecRemote()) sh(`curl -sf -X POST --data ${m} ${JSON.stringify(new URL('/bench/mode', ZVEC_ENDPOINT).href)}`); };
+        proxyMode('document');
+        let r;
+        try { r = sh(`${JSON.stringify(c.bin)} --index ${JSON.stringify(checkout)} --embedding ${ZVEC_EMBEDDING} --mode direct --color never ${remote.map(a => JSON.stringify(a)).join(' ')}${zvecRemote() ? ' --allow-remote' : ''}`, { cwd: checkout, env: zenv, timeout: 7_200_000 }); } finally { proxyMode('query'); }
+        if (r.code !== 0) {
+            // zg reports files it cannot index (pylint's UTF-32 test data, say) and exits 1, yet
+            // serves searches from the rest; a user would be left with the same index
+            const out = `${r.stdout}\n${r.stderr}`;
+            const failed = Number(out.match(/indexing completed with (\d+) failed files?/)?.[1] ?? NaN);
+            // of the checkout's files (a rerun processes only the files that failed before)
+            const total = sh('git ls-files | wc -l', { cwd: checkout }).stdout.trim() * 1;
+            if (!(failed <= Math.max(1, total * 0.01))) throw new Error(`zg --index failed: ${out.slice(-600)}`);
+            console.error(`zg --index: ${failed} of ${total} files could not be indexed; the rest is searchable`);
+        }
+        const indexMs = r.ms;
+        if (zvecRemote()) {
+            r = sh(`${JSON.stringify(c.bin)} --auth grant ${JSON.stringify(checkout)} --capability embedding --scope workspace --embedding ${ZVEC_EMBEDDING} --endpoint ${JSON.stringify(ZVEC_ENDPOINT)} --color never`, { cwd: checkout, env: zenv });
+            if (r.code !== 0) throw new Error(`zg --auth grant failed: ${(r.stderr || r.stdout).slice(-600)}`);
+        }
+        // the installer's CLAUDE.md block and permission, in the project's scope
+        const block = fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8').trim();
+        const md = path.join(checkout, 'CLAUDE.md');
+        const old = fs.existsSync(md) ? fs.readFileSync(md, 'utf8') : '';
+        if (!old.includes('ZVEC_GREP_START')) fs.writeFileSync(md, (old ? old.replace(/\n*$/, '\n\n') : '') + block + '\n');
+        const user = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
+        const servers = {};
+        for (const [k, s] of Object.entries(user.mcpServers ?? {})) servers[k] = { ...s, command: c.bin, env: { ...(s.env ?? {}), ...c.env, ...(zvecRemote() ? { ZVEC_GREP_API_KEY: 'via-bench-proxy' } : {}) } };
+        return { mcpServers: servers, allowed: ['mcp__zvec_grep'], indexMs };
     }
     if (name === 'serena-prompt') {
         const sp = sh(`${JSON.stringify(c.bin)} prompts print-cc-system-prompt-override`, { env });
