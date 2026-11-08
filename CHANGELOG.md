@@ -239,6 +239,49 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
   imports; tree-sitter-python does not know the soft keyword yet.
 - **The `init --hooks` test** no longer depends on graph-indexer being installed globally on the
   machine that runs it.
+- **Rust: methods belong to the impl of the type their file sees.** A workspace can have several
+  types of one name (ripgrep has four `RegexMatcher`s, one per crate); the methods of every
+  `impl RegexMatcher` were members of all four, so `RegexMatcher::new` in the printer crate bound
+  to the test helper's. An impl's owner is now the type its own file resolves under that name, or
+  one of the same Cargo package. ripgrep's `RegexMatcher::new` goes from 0 of 96 uses to all 96.
+- **Rust: `impl Trait for &'a mut T`** made the methods' owner the text `&'a mut T`, so `self`
+  inside them had no type (serde_json's whole `Deserializer`).
+- **Rust: a bare name is never a method.** A parameter or local `path` passed as an argument was
+  bound to a method `path` declared in an `impl` block of the same file; a macro (`suffix!`) to a
+  method through `use super::*`. Methods with a receiver are no longer items of their module (Rust
+  and Go).
+- **Rust: 2018 module paths.** `mod runtime; pub use runtime::Runtime;` names the child module,
+  not an external crate, so `use tokio::runtime::Runtime` resolved to nothing in tokio's own tests.
+- **Rust: types the index did not follow**:
+  - tuples: `let (tx, rx) = channel()` with `-> (Sender<T>, Receiver<T>)`, `for (i, x) in
+    xs.iter().enumerate()`, and the fields of a tuple struct (`self.0`);
+  - wrappers built in place: `Arc::new(x)`, `Box::pin(f)`, `Pin::new(&mut x)`, `Rc::clone(&x)`;
+  - a crate's own `Mutex`, `RwLock` or `Semaphore` is that type, not a transparent wrapper;
+  - type parameters stand for their bound: `fn f<R: Read>(r: &mut R)`, `R::decode(r)`, a field
+    `formatter: F` in `impl<W, F: Formatter>`, `where` clauses;
+  - patterns: `Value::Object(map) =>` and `if let Self::Number(n) = …` bind the variant's field,
+    `other =>` the matched value, `if let Some(x)` / `Ok(x)` the wrapped value;
+  - `Self::new()`, and sequential shadowing (`let x = a; let x = x.to_map();`) with block,
+    match-arm and `if let` scopes, so a name rebound elsewhere in the function no longer erases
+    both types;
+  - `clone()`, `unwrap()`, `get_mut()`, `upgrade()` and the like keep the value only when its own
+    type has no method of that name (tokio's `Weak::upgrade` returns a sender);
+  - longer path calls (`grep::regex::RegexMatcherBuilder::new()`) and associated types
+    (`type Value = …;` inside an impl is not the crate's `Value`).
+- **Java: overloads of one arity bind by argument types.** Calls record the types their arguments
+  show (literals, typed locals and fields, `new`, casts, array elements, `"a" + x`), and among
+  overloads taking that many arguments the resolver keeps those the types fit, exact matches
+  before widening and boxing: `append('-')` is `append(char)`, not `append(String)`.
+- **Java: a single-type import from a library package** (`import java.io.UncheckedIOException;`)
+  is the library's type, not a same-name class elsewhere in the repository.
+- **Java: `Outer.this.m()`**, `new Node(…)` inside `Node` (the class, not its constructor), and
+  nested types named through their outer one (`Token.TokenType.EOF`, `Map.Kind.valueOf(…)`).
+- **Go: constants and variables declared with a type** (`ByCid SortOpt = "cid"`) carry it, so a
+  local assigned one (`s := ByCid; s.IsValid()`) is typed.
+- **Python: names inside tuples and sets** (`(InvalidSchema, "x")` in a parametrize list) are uses.
+- **Bench: `eval-graph-rust.mjs` reads inactive code from rust-analyzer 1.9x**, which reports it through
+  pull diagnostics and as `inactive_code`: with 1.99 the oracle saw no inactive line, so uses in
+  `#[cfg]`-disabled files and items counted against graph-indexer (tokio: 20,195 inactive lines).
 - **Indexing no longer overflows the stack on a field assigned an element of itself**
   (`self.impl = self.impl[0]`, in SQLAlchemy's `test/perf`): each lookup added one element access
   to the type, without end, and the whole index failed. A type now stacks at most 8 element

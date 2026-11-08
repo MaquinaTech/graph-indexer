@@ -108,10 +108,12 @@ export class ModuleResolver {
         // Rust crates of the repository (a workspace's members, or one package): the name other
         // crates, tests and examples use for each library (`serde_json::Value`, `tokio::sync`)
         this.rustCrates = new Map();
+        this.rustPackages = [];
         for (const rel of this.#findManifests('Cargo.toml')) {
             let text;
             try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { continue; }
             const dir = path.posix.dirname(rel), at = (p) => (dir === '.' ? p : `${dir}/${p}`);
+            if (/^\[package\]\s*$/m.test(text)) this.rustPackages.push(dir);
             const table = (name) => { const m = new RegExp(`^\\[${name}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, 'm').exec(text); return m?.[1] ?? ''; };
             const key = (body, k) => new RegExp(`^\\s*${k}\\s*=\\s*"([^"]+)"`, 'm').exec(body)?.[1];
             const pkg = key(table('package'), 'name'), lib = table('lib');
@@ -366,6 +368,8 @@ export class ModuleResolver {
             if (!segs.length) return { file: lib };
             baseDir = path.posix.dirname(lib);
         }
+        // a child module of this one (2018 paths: `mod runtime; pub use runtime::Runtime;`)
+        else if (['.rs', '/mod.rs'].some(e => this.files.has(path.posix.join(this.#rustModDir(fromFile), segs[0]) + e))) baseDir = this.#rustModDir(fromFile);
         else return null; // external crate
         for (let n = segs.length; n > 0; n--) {
             const p = path.posix.join(baseDir, ...segs.slice(0, n));
@@ -376,6 +380,13 @@ export class ModuleResolver {
         if (this.files.has(baseDir + '.rs') && !['lib.rs', 'main.rs', 'mod.rs'].some(f => this.files.has(path.posix.join(baseDir, f)))) return { file: baseDir + '.rs' };
         const lib = ['lib.rs', 'main.rs', 'mod.rs'].map(f => path.posix.join(baseDir, f)).find(f => this.files.has(f));
         return lib ? { file: lib } : null;
+    }
+
+    /** The directory of the Cargo package a file belongs to (its nearest `Cargo.toml` with a `[package]`), or null. */
+    rustPackageOf(file) {
+        let best = null;
+        for (const d of this.rustPackages ?? []) if ((d === '.' || file.startsWith(d + '/')) && (best == null || d.length > best.length)) best = d;
+        return best;
     }
 
     #rustCrateRoot(fromFile) {

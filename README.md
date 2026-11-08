@@ -175,8 +175,10 @@ own `findReferences` (import lines and declarations excluded):
 do not. Against the compiler's full rename set (sibling overrides included) recall is 0.925. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.* The same measurement against the Go type checker (gin, caddy, nats-server) gives
-precision 0.992–1.000 and recall 0.972–0.981, and against the Java compiler (spring-petclinic,
-jsoup, Commons Collections) 0.955–0.994 and 0.861–0.989; grep's precision there is 0.02–0.61.
+precision 0.992–1.000 and recall 0.972–0.981, against the Java compiler (spring-petclinic,
+jsoup, Commons Collections) 0.961–0.994 and 0.883–0.989, against pyright (six Python
+repositories) 0.895–0.998 and 0.927–0.998, and against rust-analyzer (serde_json, ripgrep, tokio)
+0.968–0.990 and 0.799–0.942; grep's precision there is 0.01–0.61.
 In the server of Twenty, an open-source CRM monorepo (28,512 files), precision is 0.999 and
 recall 0.924; grep's precision is 0.009 and 2.x's 0.052.
 
@@ -267,7 +269,7 @@ differs, and is stated rather than implied:
 
 | Level | Languages | What it means |
 |---|---|---|
-| **Verified** | TypeScript/TSX, Go, Java, Python, Rust | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.955–0.994 / 0.861–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.871–0.998 / 0.929–0.998 against pyright (fastapi, flask, requests, httpx, rich, click), Rust 0.930–0.955 / 0.582–0.841 against rust-analyzer (serde_json, ripgrep, tokio) |
+| **Verified** | TypeScript/TSX, Go, Java, Python, Rust | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.961–0.994 / 0.883–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.895–0.998 / 0.927–0.998 against pyright (fastapi, flask, requests, httpx, rich, click), Rust 0.968–0.990 / 0.799–0.942 against rust-analyzer (serde_json, ripgrep, tokio) |
 | **Resolved** | JavaScript, C#, Vue and Svelte components (`<script>` as TypeScript; template tags as uses of the components imported) | scopes, imports and receiver types inferred from declarations, annotations and constructors; no compiler oracle yet |
 | **Scoped** | Kotlin, Scala, C, C++, Ruby, PHP | scopes, imports/includes and packages; less type inference, so more calls stay unbound or by name |
 | **Symbols** | Bash, CSS/SCSS/Less | definitions, outlines and search; references by name |

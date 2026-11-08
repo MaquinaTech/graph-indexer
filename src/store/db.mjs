@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS refs (
   dst_id INTEGER,
   conf REAL NOT NULL DEFAULT 0,
   ncand INTEGER NOT NULL DEFAULT 0,
-  argc INTEGER -- arguments of a call or construction (-1: a spread makes it a lower bound), else NULL
+  argc INTEGER, -- arguments of a call or construction (-1: a spread makes it a lower bound), else NULL
+  arg_types TEXT -- their static types where the language overloads by type (JSON: "int", "String", "?" unknown), else NULL
 );
 CREATE INDEX IF NOT EXISTS refs_file ON refs(file_id);
 CREATE INDEX IF NOT EXISTS refs_dst ON refs(dst_id);

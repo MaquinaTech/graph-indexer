@@ -430,3 +430,54 @@ test('a field assigned an element of itself (`self.impl = self.impl[0]`) does no
         assert.ok(s, 'indexed');
     } finally { ci.close(); rmrf(r); }
 });
+
+test('python: a call or value no import brings is not bound across modules; names in tuples are uses', async (t) => {
+    const root = makeRepo({
+        'pkg/__init__.py': '',
+        'pkg/errors.py': 'class InvalidSchema(Exception):\n    pass\ndef helper():\n    return 1\n',
+        'pkg/other.py': [
+            'from .errors import InvalidSchema',                 // 1
+            'CASES = ((InvalidSchema, "x"), {InvalidSchema})',   // 2
+            'def run():',                                        // 3
+            '    return helper()',                               // 4  NameError at run time: not errors.helper
+            '',
+        ].join('\n'),
+        'pkg/star.py': 'from somelib import *\ndef go():\n    return helper()\n', // a star import from outside may define it
+    });
+    const intel = new CodeIntel({ root });
+    await intel.open();
+    t.after(() => { intel.close(); rmrf(root); });
+    const refs = (q, file) => {
+        const s = intel.findSymbols(q).matches[0];
+        return [...intel.references(s.id).groups.values()].flat().filter(r => r.path === file && r.kind !== 'import').map(r => r.line);
+    };
+    assert.deepEqual(refs('InvalidSchema', 'pkg/other.py'), [2, 2]);
+    assert.deepEqual(refs('helper', 'pkg/other.py'), []);
+    assert.deepEqual(refs('helper', 'pkg/star.py'), [3]);
+});
+
+test('go: constants and variables declared with a type carry it', async (t) => {
+    const root = makeRepo({
+        'go.mod': 'module example.com/m\n\ngo 1.22\n',
+        'sort.go': [
+            'package m',                                         // 1
+            'type SortOpt string',                               // 2
+            'const (',                                           // 3
+            '    ByCid SortOpt = "cid"',                         // 4
+            ')',                                                 // 5
+            'func (s SortOpt) IsValid() bool { return true }',   // 6
+            'type Other struct{}',                               // 7
+            'func (o Other) IsValid() bool { return false }',    // 8
+            'func f() bool {',                                   // 9
+            '    s := ByCid',                                    // 10
+            '    return s.IsValid()',                            // 11
+            '}',
+            '',
+        ].join('\n'),
+    });
+    const intel = new CodeIntel({ root });
+    await intel.open();
+    t.after(() => { intel.close(); rmrf(root); });
+    const s = intel.findSymbols('SortOpt.IsValid').matches[0];
+    assert.deepEqual([...intel.references(s.id).groups.values()].flat().filter(r => r.kind === 'call').map(r => r.line), [11]);
+});

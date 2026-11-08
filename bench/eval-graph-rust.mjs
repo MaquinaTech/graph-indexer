@@ -69,6 +69,12 @@ const raConfig = opt('--features', null) ? { cargo: { features: opt('--features'
 const child = spawn(server, [], { cwd: root, stdio: ['pipe', 'pipe', 'ignore'] });
 let buf = Buffer.alloc(0), nextId = 0, quiescent = false;
 const pending = new Map(), inactive = new Map(); // file → Set of inactive lines
+// `inactive-code` until rust-analyzer 1.9x, `inactive_code` since; pushed, or pulled (textDocument/diagnostic)
+const addInactive = (rel, diagnostics) => {
+    const lines = inactive.get(rel) ?? new Set();
+    for (const d of diagnostics ?? []) if (d.code === 'inactive-code' || d.code === 'inactive_code') for (let l = d.range.start.line + 1; l <= d.range.end.line + 1; l++) lines.add(l);
+    inactive.set(rel, lines);
+};
 const send = (msg) => { const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', ...msg })); child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`); child.stdin.write(body); };
 const request = (method, params) => new Promise((resolve, reject) => { const id = ++nextId; pending.set(id, { resolve, reject }); send({ id, method, params }); });
 const notify = (method, params) => send({ method, params });
@@ -93,8 +99,7 @@ child.stdout.on('data', (d) => {
         } else if (msg.method === 'textDocument/publishDiagnostics') {
             const rel = path.relative(root, fileURLToPath(msg.params.uri)).split(path.sep).join('/');
             const lines = new Set();
-            for (const d of msg.params.diagnostics ?? []) if (d.code === 'inactive-code') for (let l = d.range.start.line + 1; l <= d.range.end.line + 1; l++) lines.add(l);
-            inactive.set(rel, lines);
+            addInactive(rel, msg.params.diagnostics);
         }
     }
 });
@@ -103,7 +108,7 @@ const init = await request('initialize', {
     processId: process.pid, rootUri, workspaceFolders: [{ uri: rootUri, name: fixture }],
     capabilities: {
         workspace: { configuration: true, workspaceFolders: true },
-        textDocument: { references: {}, publishDiagnostics: {} },
+        textDocument: { references: {}, publishDiagnostics: {}, diagnostic: {} },
         window: { workDoneProgress: true },
         experimental: { serverStatusNotification: true },
     },
@@ -125,7 +130,14 @@ function open(rel) {
 // every workspace file is opened once, so that rust-analyzer reports its inactive code
 const t0 = Date.now();
 for (const f of rsFiles) open(f);
-await until(() => rsFiles.every(f => inactive.has(f)), 300_000);
+if (init?.capabilities?.diagnosticProvider) {
+    // a server with pull diagnostics answers for each file when asked
+    await until(() => quiescent, 600_000);
+    for (const f of rsFiles) {
+        const r = await request('textDocument/diagnostic', { textDocument: { uri: pathToFileURL(path.join(root, f)).href } }).catch(() => null);
+        addInactive(f, r?.items);
+    }
+} else await until(() => rsFiles.every(f => inactive.has(f)), 300_000);
 const inactiveLines = [...inactive.values()].reduce((n, s) => n + s.size, 0);
 // a file outside the module tree (`#[cfg(feature = "x")] mod m;` with x off) has no answer either:
 // rust-analyzer gives it no parent module, or a parent that is itself outside

@@ -35,6 +35,8 @@ ${UNION_TYPES}
 (argument_list (identifier) @name) @ref.value
 (keyword_argument value: (identifier) @name) @ref.value
 (list (identifier) @name) @ref.value
+(tuple (identifier) @name) @ref.value
+(set (identifier) @name) @ref.value
 (pair value: (identifier) @name) @ref.value
 (assignment right: (identifier) @name) @ref.value
 (return_statement (identifier) @name) @ref.value

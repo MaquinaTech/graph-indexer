@@ -138,6 +138,43 @@ export function sigArity(sig, name) {
     return done ? { min, max } : null;
 }
 
+/**
+ * Parameter types read from a stored Java-like signature (`final void append(char c, int[] xs)`):
+ * the text before each parameter's name, `...` kept as a trailing `...`. Null when unreadable.
+ */
+export function sigParamTypes(sig, name) {
+    if (!sig) return null;
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    if (!m) return null;
+    const out = [];
+    let depth = 0, cur = '';
+    const param = (p) => {
+        p = p.replace(/@\w+(\([^)]*\))?\s*/g, '').replace(/\bfinal\s+/g, '').trim();
+        if (!p) return;
+        const k = p.search(/[\w$]+\s*$/);
+        out.push(k > 0 ? p.slice(0, k).trim() : p);
+    };
+    for (let i = m.index + m[0].length; i < sig.length; i++) {
+        const ch = sig[i];
+        if (ch === ')' && depth === 0) { param(cur); return out; }
+        if ('([{<'.includes(ch)) depth++;
+        else if (')]}>'.includes(ch)) depth--;
+        if (ch === ',' && depth === 0) { param(cur); cur = ''; } else cur += ch;
+    }
+    return null;
+}
+
+/** A Java type as overloads compare it: `final List<String>` → `List`, `java.net.URL` → `URL`, arrays kept (`int[]`). */
+export function simpleParamType(t) {
+    if (!t) return null;
+    let s = String(t).replace(/@\w+(\([^)]*\))?\s*/g, '').replace(/\bfinal\s+/g, '').trim();
+    let dims = '';
+    s = s.replace(/(\s*\[\s*\])+$/, (m) => { dims = '[]'.repeat((m.match(/\[/g) ?? []).length); return ''; });
+    if (/\.\.\.$/.test(s)) { s = s.slice(0, -3); dims += '[]'; }
+    s = s.replace(/<.*>$/s, '').trim().split('.').pop();
+    return /^[A-Za-z_$][\w$]*$/.test(s) ? s + dims : null;
+}
+
 /** Does a call passing `a` arguments fit a definition accepting `r`? */
 export function fits(a, r) {
     if (!a || !r) return true;

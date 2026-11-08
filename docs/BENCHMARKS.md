@@ -203,8 +203,10 @@ up to 200 symbols per repository.
 | | after | **0.994** | 0.989 | **0.973** | | |
 | jsoup (200 · 188) | before | 0.767 | 0.862 | 0.550 | 0.090 | 0.337 |
 | | after | **0.960** | **0.916** | **0.798** | | |
+| | now | **0.992** | **0.943** | **0.846** | | |
 | commons-collections (200) | before | 0.878 | 0.791 | 0.725 | 0.015 | 0.097 |
 | | after | **0.955** | **0.861** | **0.805** | | |
+| | now | **0.961** | **0.883** | **0.825** | | |
 
 (dispatch oracle, micro averages. In jsoup twelve enum constants with bodies became classes, which
 the oracle does not sample: 188 symbols after.) Java was the weakest language measured; the
@@ -226,8 +228,16 @@ faults were general:
   field inherited from a base class in another file types its receiver; an argument is a variable,
   never the method of the same name.
 
-**What is still missed.** Overloads that take the same number of arguments (telling them apart
-needs the argument types), calls through a library interface, and lambdas typed only by the
+"Now" is 2026-11-09 (spring-petclinic unchanged): calls record the types their arguments show
+(literals, typed locals and fields, `new`, casts, array elements, `"a" + x`), and among the
+overloads of one arity the resolver keeps those the types fit, an exact type before a widening or
+boxing (`append('-')` is `append(char)`); a single-type import from a library package (`import
+java.io.UncheckedIOException;`) is no longer a same-name class of the repository; and
+`Outer.this.m()`, `new Node(…)` inside `Node` and nested types named through their outer class
+(`Token.TokenType.EOF`) are uses.
+
+**What is still missed.** Overloads that take the same number of arguments of types the source
+does not show (a method's result, another class's constant), calls through a library interface, and lambdas typed only by the
 functional interface they are passed to. The dispatch oracle, like TypeScript's, also counts a
 `super.m()` call as reaching every override of `m`, while the index knows it binds statically
 to the parent's `m`; those count as missed here.
@@ -285,6 +295,14 @@ What changed:
   keys, generic arguments (`Union[A, B]`), `__all__` entries, `TypeVar(bound="A")`, `Class.attr`,
   submodule chains (`import flask; flask.json.dumps`), and `self.x` under a property `x` of a base
   class, which was taken for a new field.
+
+**2026-11-09.** A call or value a module neither defines nor imports is a `NameError` in Python;
+it was bound by name to a definition anywhere in the repository. It no longer is (unless a star
+import from outside the index may have brought the name; types are still looked up, since an
+annotation may name a type imported only under `TYPE_CHECKING`), and names inside tuples and sets
+are uses (`(InvalidSchema, "x")` in a parametrize list). flask: precision 0.871 → 0.895 (recall
+0.929 → 0.927); requests: recall 0.967 → 0.987; click: exact sets 0.910 → 0.917; the other three
+unchanged.
 
 "Now" is 2026-10-11, after three more fixes found on flask and click: an absolute import resolves
 only from an import root (`import json as _json` inside `flask/json/` had been bound to that
@@ -365,6 +383,50 @@ arguments are not plain Rust (`select!`, `matches!` with patterns). As elsewhere
 and do not produce wrong answers. The extras that remain are mostly calls through a primitive or a
 generic parameter (`f64::to_bits(self)`, `R::byte_offset(self)`) bound by name to a repository
 method with that name.
+
+**Second round (2026-11-09, rust-analyzer 1.99.1).** rust-analyzer 1.9x reports inactive code
+through pull diagnostics (`textDocument/diagnostic`) and as `inactive_code`; the oracle listened
+for pushed `inactive-code` only, saw no inactive line, and counted the uses in `#[cfg]`-disabled
+items and files (tokio's `rt_unstable_metrics.rs`, 20,195 lines in all) as graph-indexer's false
+positives. It now reads both. The samples are the frozen ones of `bench/rust-samples/`; the
+symbols that sit in inactive code drop out of them (8 of serde_json's). "Before" is the build
+above, measured again with this oracle; on ripgrep and tokio it reproduces the "after" rows:
+
+```bash
+node bench/eval-graph-rust.mjs --fixture tokio --fixture-dir DIR --features full --n 150 --sample bench/rust-samples/tokio.txt
+```
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| serde_json (142 symbols) | before | 0.955 | 0.841 | 0.807 |
+| | now | **0.968** | **0.925** | **0.866** |
+| ripgrep (150) | before | 0.941 | 0.768 | 0.880 |
+| | now | **0.990** | **0.942** | **0.907** |
+| tokio (150) | before | 0.929 | 0.582 | 0.613 |
+| | now | **0.975** | **0.799** | **0.733** |
+
+What the debug output showed, fixed in this order:
+
+- **Every `impl RegexMatcher` was a member of every `RegexMatcher`.** ripgrep has four, one per
+  crate; methods declared in impl blocks were matched to a type by its name alone, so
+  `RegexMatcher::new` in the printer crate bound to the test helper's (0 of 96 uses found). An
+  impl's owner is now the type its own file resolves under that name, or one of the same Cargo
+  package. `impl Trait for &'a mut T` had made the owner the text `&'a mut T`.
+- **A bare name was taken for a method**: a parameter `path` passed as an argument bound to the
+  method `path` of an impl block in the same file, and `suffix!` to a method through `use
+  super::*`. Methods are no items of their module.
+- **`mod runtime; pub use runtime::Runtime;`** (a 2018 path through a child module) was read as an
+  external crate, so nothing in tokio's tests reached `Runtime`.
+- **Types the extraction did not follow**: tuples (`let (tx, rx) = channel()`, `for (i, x) in
+  xs.iter().enumerate()`, `self.0`), wrappers built in place (`Arc::new(x)`, `Pin::new(&mut x)`), a
+  crate's own `Mutex` (not a transparent wrapper), type parameters (`R: Read`, a field `formatter:
+  F` under `impl<W, F: Formatter>`), enum patterns (`Value::Object(map) =>`, `other =>`, `if let
+  Some(x)`), `Self::new()`, sequential shadowing with block and match-arm scopes, and methods such
+  as `upgrade()` or `get_mut()` that keep the value only when its type has no method of that name.
+
+What remains: calls through a trait path (`ser::SerializeSeq::serialize_element(self, v)`),
+two trait impls of one method name on one type (`impl From<f32>` and `impl From<f64>` for
+`Value`), and receivers typed only by a trait object or an iterator adapter.
 
 ### A product monorepo: Twenty
 
