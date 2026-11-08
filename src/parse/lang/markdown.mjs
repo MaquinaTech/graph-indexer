@@ -12,7 +12,9 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /** Heading text without inline markup: `code`, **bold**, [links](…), <tags>. */
 function plain(s) {
-    return s.replace(/<[^>]+>/g, '').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_~]/g, '').replace(/\s+/g, ' ').trim();
+    let t = s;
+    for (let prev; prev !== t;) { prev = t; t = t.replace(/<[^>]*>/g, ''); }
+    return t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[`*_~]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 export function extractMarkdown(source) {

@@ -71,7 +71,10 @@ function zvecCopy(fx) {
     if (rebuild) fs.rmSync(dst, { recursive: true, force: true });
     if (!fs.existsSync(dst)) {
         fs.mkdirSync(dst, { recursive: true });
-        const r = spawnSync('sh', ['-c', 'git -C "$1" archive HEAD | tar -x -C "$2"', 'sh', path.join(FIXDIR, fx), dst], { encoding: 'utf8' });
+        const tarFile = `${dst}.tar`;
+        const a = spawnSync('git', ['-C', path.join(FIXDIR, fx), 'archive', '-o', tarFile, 'HEAD'], { encoding: 'utf8' });
+        const r = a.status === 0 ? spawnSync('tar', ['-x', '-f', tarFile, '-C', dst], { encoding: 'utf8' }) : a;
+        fs.rmSync(tarFile, { force: true });
         if (r.status !== 0) throw new Error(`copying ${fx} for zvec failed: ${r.stderr}`);
     }
     return dst;

@@ -56,7 +56,8 @@ function moduleDeps(root, mods) {
         const dir = path.join(root, m);
         const pom = read(path.join(dir, 'pom.xml'));
         if (pom != null) {
-            const body = pom.replace(/<!--[\s\S]*?-->/g, '');
+            let body = pom;
+            for (let prev; prev !== body;) { prev = body; body = body.replace(/<!--[\s\S]*?-->/g, ''); }
             const own = /<artifactId>\s*([^<\s]+)\s*<\/artifactId>/.exec(body.replace(/<parent>[\s\S]*?<\/parent>/, ''))?.[1];
             const ds = [...(body.match(/<dependencies>[\s\S]*?<\/dependencies>/g) ?? []).join('\n').matchAll(/<artifactId>\s*([^<\s]+)\s*<\/artifactId>/g)].map(x => x[1]);
             info.set(m, { names: [own, path.posix.basename(m)].filter(Boolean), deps: ds });

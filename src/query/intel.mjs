@@ -215,7 +215,7 @@ export class CodeIntel {
      */
     filesWithParseErrors(word, { lang = null, max = 50 } = {}) {
         if (!word || !/^[\w$]+$/.test(word)) return [];
-        const re = new RegExp(`(?<![\\w$])${word.replace(/\$/g, '\\$')}(?![\\w$])`);
+        const re = new RegExp(`(?<![\\w$])${escapeRegExp(word)}(?![\\w$])`);
         const rows = this.store.all(`SELECT path, parse_error_lines FROM files WHERE parse_errors > 0${lang ? ' AND lang = ?' : ''} ORDER BY is_test, path LIMIT 5000`, ...(lang ? [lang] : []));
         const out = [];
         for (const r of rows) {

@@ -1,0 +1,8 @@
+# graph-indexer has no npm dependencies (tree-sitter and its grammars are vendored);
+# Dependabot keeps the pinned GitHub Actions current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

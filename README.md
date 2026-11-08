@@ -66,6 +66,12 @@ same context to their tool output. Flags: `--agents claude,cursor,vscode,gemini,
 `--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,
 `--no-instructions`, `--no-helper`.
 
+In Claude Code (2.1.275 or later), the plugin installs in one step:
+
+```text
+/plugin install graph-indexer --marketplace MaquinaTech/graph-indexer
+```
+
 <details>
 <summary>Manual configuration</summary>
 
