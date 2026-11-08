@@ -1,0 +1,3 @@
+[
+  "mypy/test/testcheck.py::TypeCheckSuite.check-python312.test::testTypeVarTupleCapturedByParamSpec_no_verbose_reveal"
+]

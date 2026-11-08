@@ -94,11 +94,19 @@ Without `--repo` the server indexes the git repository containing its working di
 
 ## The tools
 
+`npx graph-indexer init` ends with an example from your own repository: a method that shares its
+name with other definitions, what grep returns for that name, and the calls the index binds to
+that one definition (`npx graph-indexer demo` shows it again).
+
 | Tool | Use it to | Typical reply |
 |---|---|---|
+| `explore` | start a task or bug in code you have not read, in one call | the most relevant definitions with their code, who calls them, overrides and subclasses, where the names they use are defined and the tests to run with the command — inside a token budget, naming what it left out |
+| `explore` + routes | ask about an endpoint ("what happens on POST /owners/42/edit") | the handler the framework registers for it — FastAPI, Flask, NestJS, Spring, Express/Fastify/Koa/Hono, Gin/Echo/chi; `npx graph-indexer routes` lists them all |
+| dependency injection | look up a NestJS or Spring class, interface or token (`find_references`, `explore`) | what an injection point receives — NestJS: the `provide: TOKEN, useClass/useFactory/…` or `ClientsModule` registration of an `@Inject(TOKEN)`; Spring: the bean of an `@Autowired`/constructor/`@Bean` parameter, chosen by `@Qualifier`, `@Primary` and name, Feign, Spring Data and MyBatis proxies named as such — and where a provider is injected, which neither the type checker nor grep for the type connects; `npx graph-indexer inject` lists them all |
+| ORM models | look up a model (`find_references`, `explore`; `npx graph-indexer models`) | its table, the migrations that touch it, and for Prisma the client calls (`prisma.user.findMany`) that only the generated client types — Prisma, Django, SQLAlchemy/SQLModel, TypeORM |
 | `read_code` | read symbols, line ranges or files — several per call — without searching for what they use | code with line numbers, then where each name it uses is defined (file:line and signature); who uses a symbol and which tests reference it; a long file's outline |
 | `search_text` | grep any text across the repository (code, config, docs) | grep lines with the enclosing definition and, for identifiers, the definition each match refers to; where the definition is when the search missed it |
-| `search_code` | find where a behaviour or identifier lives (natural language or names) | ranked symbols with location, signature, doc line and matching lines |
+| `search_code` | find where a behaviour or identifier lives (natural language or names); `queries: [...]` asks for several phrasings at once | ranked symbols with location, signature, doc line and matching lines; for a question about docs, design or the reason for something, the Markdown sections that answer it |
 | `find_references` | see every use before renaming or changing a signature | uses grouped by file, enclosing function, confidence, calls through base types marked |
 | `call_graph` | trace callers and callees across files | a tree with locations and confidence |
 | `change_impact` | get the blast radius of a change, or of your uncommitted diff | transitive dependents by distance, tests to run, co-changed files, risk |
@@ -136,6 +144,12 @@ often changed together (git): context.go (14/42), context_test.go (10/42), …
 risk: medium (9 dependents, 1 test files)
 ```
 
+**Search by meaning (optional).** `npx graph-indexer semantic install` downloads a 32 MB static code
+embedding model (potion-code-16M-v2, MIT, pinned and checksummed); with `GRAPH_INDEXER_SEMANTIC=1`
+search also ranks definitions by meaning, in plain JavaScript and without network access. It helps
+queries written in words (top-5 success 0.674 → 0.728) and not the localization of real commits,
+so it is off by default ([measurements](docs/BENCHMARKS.md#3-symbol-search)).
+
 Every reference carries a confidence: **exact/high** means it was bound through a scope,
 import or inferred receiver type; **likely/possible** means only the name matched. Footers
 report same-name call sites that could not be bound, so an agent knows when to double-check
@@ -161,8 +175,10 @@ own `findReferences` (import lines and declarations excluded):
 do not. Against the compiler's full rename set (sibling overrides included) recall is 0.925. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.* The same measurement against the Go type checker (gin, caddy, nats-server) gives
-precision 0.992–1.000 and recall 0.972–0.981, and against the Java compiler (spring-petclinic,
-jsoup, Commons Collections) 0.955–0.994 and 0.861–0.989; grep's precision there is 0.02–0.61.
+precision 0.992–1.000 and recall 0.972–0.981, against the Java compiler (spring-petclinic,
+jsoup, Commons Collections) 0.961–0.994 and 0.883–0.989, against pyright (six Python
+repositories) 0.895–0.998 and 0.927–0.998, and against rust-analyzer (serde_json, ripgrep, tokio)
+0.968–0.990 and 0.799–0.942; grep's precision there is 0.01–0.61.
 In the server of Twenty, an open-source CRM monorepo (28,512 files), precision is 0.999 and
 recall 0.924; grep's precision is 0.009 and 2.x's 0.052.
 
@@ -172,13 +188,21 @@ rolled back to the parent commit first.
 
 | | file Acc@1 | file Acc@5 | function Acc@5 | function MRR@10 |
 |---|---|---|---|---|
-| graph-indexer `search_code` | **0.544** | **0.805** | **0.528** | **0.432** |
+| graph-indexer `search_code` | **0.550** | **0.799** | **0.528** | **0.433** |
 | grep, files ranked by idf-weighted hits | 0.485 | 0.769 | 0.514 | 0.374 |
 | BM25 over the same index | 0.373 | 0.722 | 0.401 | 0.290 |
 
 **Symbol search.** 377 hand-written queries over nine repositories in eight languages, scored
 strictly at symbol level: rank-1 0.703 and MRR 0.760, against 0.552 and 0.646 for graph-indexer
 2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
+
+**Against zvec-grep 0.3.0** (hybrid BM25 + vector search, with its default embedding model,
+Qwen3-Embedding-0.6B, run on the same Mac): on the same 377 queries its best setting, code only,
+reaches rank-1 0.581 and MRR 0.639 (graph-indexer 0.703 and 0.761); on the 169 commits it puts
+the changed file first in 0.420 of them (graph-indexer 0.550, ranked grep 0.485). It is ahead on
+two repositories, gin and fastapi. It has no references or callers. In a one-repetition pilot of
+agent sessions (Haiku 5.5, 24 tasks, 13 of them from zvec-grep's own benchmark) neither tool beat
+Claude Code alone. [Details](docs/BENCHMARKS.md#zvec-grep-030-2026-11-06).
 
 **Against 2.x.** In real Claude Code sessions on nestjs and Twenty (40 tasks, 120 runs), 3.0
 cost 0.43 of 2.x on code questions and 0.46 on refactors, with a quarter to a third of the
@@ -240,9 +264,32 @@ files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30
 
 ## Languages
 
-JavaScript, TypeScript/TSX, Python, Go, Java, Kotlin, Scala, C#, Rust, C, C++, Ruby, PHP, Bash
-and CSS/SCSS/Less. Reference binding and type inference are deepest for TypeScript/JavaScript,
-Python, Go, Java, C# and Rust.
+Every language gets definitions, outlines, search and edit checks. How far references are bound
+differs, and is stated rather than implied:
+
+| Level | Languages | What it means |
+|---|---|---|
+| **Verified** | TypeScript/TSX, Go, Java, Python, Rust | references measured against the language's own compiler or type checker on three or more real repositories ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)): TypeScript 0.997 precision / 0.962 recall (nestjs), Go ≥ 0.992 / ≥ 0.972 (gin, caddy, nats-server), Java 0.961–0.994 / 0.883–0.989 (spring-petclinic, jsoup, Commons Collections), Python 0.895–0.998 / 0.927–0.998 against pyright (fastapi, flask, requests, httpx, rich, click), Rust 0.968–0.990 / 0.799–0.942 against rust-analyzer (serde_json, ripgrep, tokio) |
+| **Resolved** | JavaScript, C#, Vue and Svelte components (`<script>` as TypeScript; template tags as uses of the components imported) | scopes, imports and receiver types inferred from declarations, annotations and constructors; no compiler oracle yet |
+| **Scoped** | Kotlin, Scala, C, C++, Ruby, PHP | scopes, imports/includes and packages; less type inference, so more calls stay unbound or by name |
+| **Symbols** | Bash, CSS/SCSS/Less | definitions, outlines and search; references by name |
+
+Each answer marks how a reference was bound (`exact`, `likely`, `possible`) and says when a list is
+complete, whatever the level.
+
+How much of the code the parser reads, measured on public repositories (68,000 files in 46
+repositories: the fixtures, the agent benchmark's repositories, okhttp, kotlinx.coroutines,
+nowinandroid, Exposed, spring-boot, cats, Play and Jellyfin):
+
+| | files with a region the parser cannot read |
+|---|---|
+| TypeScript, TSX, JavaScript, Python, Java, Kotlin, Scala, C#, Rust, Go, Ruby, PHP | 0–0.2% (test data with deliberate syntax errors, `typeof import()` in type arguments, Python 3.15 unpacking comprehensions) |
+| Bash | 4% (zsh completion scripts) |
+| C, C++ | 39% of files, 15% of lines: macros inside declarations (`void (CJSON_CDECL *fn)(…)`); the functions themselves are kept |
+| SCSS, Less | about half of the files: they are read with the CSS grammar, which does not know nesting, `#{…}` or mixins |
+
+Where a symbol's name occurs in code the parser could not read, `find_references` and
+`call_graph` say so and name the lines, instead of reporting the list as complete.
 
 ## Command line
 

@@ -260,7 +260,7 @@ export function parseTranscript(file, { arm = null, repo = null, own = [], work 
     if (work) {
         // path characters only (shell variables included: `${arm}`), so quotes, escapes and
         // punctuation around a path are not taken for part of it
-        const under = new RegExp(`${work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:runs|wt|results|graded|repos)(?:/[\\w.+@%=\${}/-]*)?`, 'g');
+        const under = new RegExp(`${work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(?:runs|wt|results|graded|repos)(?:/[\\w.+@%=\\x24{}/-]*)?`, 'g');
         const mine = own.filter(Boolean).map(o => o.replace(/\/+$/, ''));
         for (const t of tools) {
             const text = t.name === 'Bash' ? t.cmd : JSON.stringify(t.input);

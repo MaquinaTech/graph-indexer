@@ -1,0 +1,4 @@
+[
+  "tests/test_optimizer.py::TestOptimizer::test_canonicalize_internal_names",
+  "tests/test_optimizer.py::TestOptimizer::test_qualify_columns"
+]

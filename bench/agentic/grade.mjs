@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
+import { argv, readJson, writeJson, appendJsonl, loadTasks, sh, sandboxed, git, tryGit, WORK, GI_ROOT } from './lib.mjs';
 import { parseTranscript, RESULT_CHARS_PER_TOKEN } from './transcript.mjs';
 
 /** Parse "path:LINE" answers (tolerates bullets, backticks, "./" and absolute checkout paths). */
@@ -63,16 +63,77 @@ export function scoreSets(answer, gold) {
     return { tp, answered, optionalHits, gold: required.length, precision: p, recall: r, f1, missed: gold.items.filter((g, i) => !g.optional && !used.has(i)).map(g => `${g.path}:${g.line ?? g.start}`) };
 }
 
+/**
+ * zvec-grep's SWE-QA judge (rust/benchmarks/swe-qa-bench/zg_bench/swe_qa/judge.py at the commit in
+ * mine-swe-qa.mjs), word for word: five rubric scores of 1–20 against the reference answer.
+ */
+export function judgePrompt({ question, reference, candidate }) {
+    return `You are a strict evaluator. Score the candidate only against the supplied question and reference answer.
+
+Score each dimension as an integer from 1 through 20:
+- correctness: factual agreement with the reference; penalize errors.
+- completeness: coverage of the reference's important points; penalize omissions.
+- relevance: focus on the question; penalize tangents.
+- clarity: precision and ease of understanding.
+- coherence: logical organization and consistency of the explanation.
+
+Scores 16-20 are reserved for excellent answers. When uncertain, choose the lower score. Treat the reference as judge-only evidence, not text to reproduce.
+
+Question:
+${question}
+
+Reference answer:
+${reference}
+
+Candidate answer:
+${candidate}
+
+Return only one strict JSON object with exactly these five integer fields and no markdown:
+{"correctness": 1, "completeness": 1, "relevance": 1, "clarity": 1, "coherence": 1}
+`;
+}
+export const JUDGE_KEYS = ['correctness', 'completeness', 'relevance', 'clarity', 'coherence'];
+// the judge: a model the agents are not, told nothing about the arm; GI_JUDGE_MODEL overrides it
+export const JUDGE_MODEL = process.env.GI_JUDGE_MODEL || 'claude-sonnet-5-5';
+
+/** One blind judgement through the claude CLI (no tools, no project settings, a neutral directory). */
+export function judge({ question, reference, candidate }) {
+    const cwd = fs.mkdtempSync(path.join(WORK, 'judge-'));
+    try {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const r = sh(`claude -p --model ${JUDGE_MODEL} --output-format json --tools "" --setting-sources "" --strict-mcp-config --no-session-persistence --system-prompt "You grade answers. Reply with the JSON object asked for and nothing else."`,
+                { cwd, input: judgePrompt({ question, reference, candidate }), timeout: 600_000 });
+            let text = '';
+            try { text = JSON.parse(r.stdout).result ?? ''; } catch { continue; }
+            const m = text.match(/\{[^{}]*\}/);
+            if (!m) continue;
+            let v; try { v = JSON.parse(m[0]); } catch { continue; }
+            if (!JUDGE_KEYS.every(k => Number.isInteger(v[k]) && v[k] >= 1 && v[k] <= 20)) continue;
+            const total = JUDGE_KEYS.reduce((a, k) => a + v[k], 0);
+            return { scores: Object.fromEntries(JUDGE_KEYS.map(k => [k, v[k]])), total, model: JUDGE_MODEL };
+        }
+        return null;
+    } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
+}
+
 function gradeQa(task, meta) {
     // answers of graded runs are kept under WORK/graded (see gradeRun)
     const file = [path.join(meta.runDir, 'answer.txt'), path.join(WORK, 'graded', meta.giLabel, meta.runId, 'answer.txt')].find(f => fs.existsSync(f)) ?? path.join(meta.runDir, 'answer.txt');
     if (!fs.existsSync(file)) return { solved: false, score: 0, error: 'no answer file' };
+    if (task.gold.type === 'reference') {
+        const candidate = fs.readFileSync(file, 'utf8').trim();
+        if (!candidate) return { solved: false, score: 0, error: 'empty answer' };
+        const j = judge({ question: task.statement, reference: task.gold.reference, candidate });
+        if (!j) return { solved: false, score: null, error: 'judge gave no valid scores' };
+        // score: the five rubric scores as a fraction of 100; "solved": an excellent correctness (16+)
+        return { solved: j.scores.correctness >= 16, score: j.total / 100, judge: j, answerChars: candidate.length };
+    }
     const { items, bad } = parseAnswer(fs.readFileSync(file, 'utf8'), meta.checkout + '/');
     const s = scoreSets(items, task.gold);
     return { solved: s.f1 === 1, score: s.f1, ...s, unparsed: bad.length };
 }
 
-function gradeEdit(task, meta) {
+export function gradeEdit(task, meta) {
     const g = task.grade ?? {};
     const cwd = meta.checkout;
     const out = { checks: [] };
@@ -99,7 +160,8 @@ function gradeEdit(task, meta) {
         if (r.code !== 0) return { ...out, solved: false, score: 0 };
     }
     for (const c of g.checks ?? []) {
-        const r = sh(c.cmd.replaceAll('{GI}', GI_ROOT), { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
+        // the checks run the repository's code (tests, builds): sandboxed (lib.mjs)
+        const r = sh(sandboxed(c.cmd.replaceAll('{GI}', GI_ROOT), { checkout: cwd }), { cwd, timeout: (c.timeoutSec ?? 900) * 1000, env: c.env ?? {} });
         const ok = c.expect === 'fail' ? r.code !== 0 : r.code === 0;
         out.checks.push({ name: c.name, kind: c.kind ?? 'test', ok, code: r.code, ms: r.ms, tail: (r.stdout + r.stderr).slice(-600) });
     }

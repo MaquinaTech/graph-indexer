@@ -59,8 +59,8 @@ export function paramArity(def, { method = false, lang = '', isStatic = false, d
         if (t === 'keyword_separator') { keywordOnly = true; continue; }
         if (SKIP_PARAM.test(t)) continue;
         const text = p.text;
-        // the receiver: Python self/cls (not for staticmethods), TS `this: T`
-        if (first && py && method && !isStatic && !decorators.some(d => /staticmethod/.test(d)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
+        // the receiver: Python self/cls (a classmethod's cls too, though it counts as static), TS `this: T`
+        if (first && py && method && !decorators.some(d => /staticmethod/.test(d)) && (!isStatic || /^cls\b/.test(text)) && /^(self|cls)\b/.test(text)) { first = false; continue; }
         first = false;
         if (/^this\s*[:?]/.test(text)) continue;
         if (VARIADIC.test(t) || /^(\.\.\.|\*\*?)/.test(text) || /^params\s/.test(text) || /\bvararg\b/.test(text) || /\.\.\.\s*\w*$/.test(text) && lang === 'go') { max = Infinity; continue; }
@@ -136,6 +136,43 @@ export function sigArity(sig, name) {
         if (ch === ',' && depth === 0) { param(cur); cur = ''; } else cur += ch;
     }
     return done ? { min, max } : null;
+}
+
+/**
+ * Parameter types read from a stored Java-like signature (`final void append(char c, int[] xs)`):
+ * the text before each parameter's name, `...` kept as a trailing `...`. Null when unreadable.
+ */
+export function sigParamTypes(sig, name) {
+    if (!sig) return null;
+    const m = new RegExp(`(?:^|[^\\w$])${escapeRegExp(name)}\\s*(?:<[^()]*>)?\\s*\\(`).exec(sig);
+    if (!m) return null;
+    const out = [];
+    let depth = 0, cur = '';
+    const param = (p) => {
+        p = p.replace(/@\w+(\([^)]*\))?\s*/g, '').replace(/\bfinal\s+/g, '').trim();
+        if (!p) return;
+        const k = p.search(/[\w$]+\s*$/);
+        out.push(k > 0 ? p.slice(0, k).trim() : p);
+    };
+    for (let i = m.index + m[0].length; i < sig.length; i++) {
+        const ch = sig[i];
+        if (ch === ')' && depth === 0) { param(cur); return out; }
+        if ('([{<'.includes(ch)) depth++;
+        else if (')]}>'.includes(ch)) depth--;
+        if (ch === ',' && depth === 0) { param(cur); cur = ''; } else cur += ch;
+    }
+    return null;
+}
+
+/** A Java type as overloads compare it: `final List<String>` → `List`, `java.net.URL` → `URL`, arrays kept (`int[]`). */
+export function simpleParamType(t) {
+    if (!t) return null;
+    let s = String(t).replace(/@\w+(\([^)]*\))?\s*/g, '').replace(/\bfinal\s+/g, '').trim();
+    let dims = '';
+    s = s.replace(/(\s*\[\s*\])+$/, (m) => { dims = '[]'.repeat((m.match(/\[/g) ?? []).length); return ''; });
+    if (/\.\.\.$/.test(s)) { s = s.slice(0, -3); dims += '[]'; }
+    s = s.replace(/<.*>$/s, '').trim().split('.').pop();
+    return /^[A-Za-z_$][\w$]*$/.test(s) ? s + dims : null;
 }
 
 /** Does a call passing `a` arguments fit a definition accepting `r`? */

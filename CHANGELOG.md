@@ -4,6 +4,356 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Several queries in one call.**
+  - `search_code` and `explore` take `queries: [...]` (up to 6) besides `query`, and the CLI takes
+    `--or` once per extra query.
+  - The results of each query are fused by reciprocal rank (k = 60), so an agent that does not know
+    which of three names the code uses asks once instead of three times.
+- **Documentation is indexed.**
+  - Each Markdown heading (`.md`, `.mdx`, `.markdown`) is a `section` definition, named by its heading
+    path (`Guide › Install`) and spanning to the next heading of the same or a higher level.
+    `read_code` reads a section by its name.
+  - Sections are kept in an index of their own and are searched only when the query asks for docs,
+    design, the reason for something or a guide (or with `docs: true`). Code queries never see them:
+    symbol search MRR@10 0.761 against 0.763 before, localization unchanged (file Acc@1 0.550).
+  - `check_changes` and the hooks still report on code files only.
+- **Optional semantic search (opt-in).**
+  - `graph-indexer semantic install` downloads a static code embedding model
+    (minishlab/potion-code-16M-v2, MIT, 32 MB, pinned revision, SHA-256 checked) into
+    `~/.cache/graph-indexer/models`. With `GRAPH_INDEXER_SEMANTIC=1` search adds a fourth channel,
+    by meaning, to the name, concept and file channels.
+  - It runs in plain JavaScript, with no native code and no network after the install. Vectors are
+    stored in the index as int8 and computed lazily, file by file, so an edit re-embeds only that file.
+  - It is off by default because it does not help everywhere. Over the 377 search queries, top-5
+    success rises from 0.841 to 0.859, and from 0.674 to 0.728 on queries written in words. On
+    localizing 169 real commits it costs a little: file Acc@1 0.533–0.538 against 0.550 at the chosen
+    weights, 0.485 at twice and four times them. So the default stays lexical and graph-based.
+  - [docs/BENCHMARKS.md](docs/BENCHMARKS.md#3-symbol-search).
+- **`explore` reads issues.**
+  - When the query reads like an issue (a long text, code spans or blocks), definitions are ranked
+    by where the issue's names meet (`src/query/issue.mjs`).
+  - Names are matched by their words, so `DATE_DIFF`, `DateDiff` and `_date_diff_sql` are one
+    term, and title terms weigh more.
+  - A word in capitals that only names an entry of a table with 100 or more members (a token enum)
+    is no longer looked up as a definition.
+  - Offline, over 50 fresh issues ([`bench/agentic/localize.mjs`](bench/agentic/localize.mjs)):
+    explore shows the code the fix changes in 25 issues instead of 12, given either the issue or the
+    one-line keyword query agents write.
+  - In real sessions this did not make fixing issues cheaper: cost 1.12 (1.01–1.25) and 1.03
+    (0.96–1.12) of Claude Code alone in the pilots `issue1p` and `issue2`.
+  - `init`'s instructions now suggest the issue's names and terms as the query.
+  - [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#issues-as-written-explore-offline-and-in-real-sessions-issue1p-issue2-47-tasks-94-runs).
+- **`check_changes` with `by_name: true` lists, apart, the test files that name a changed module in
+  a string**, such as `transpile(sql, write="presto")` for `generators/presto.py`. They reach the
+  change through a dialect, plugin or backend lookup that no reference shows. It is off by default.
+  - Over 50 fresh issues, adding them takes the existing test files the gold fix affects from 11
+    of 15 detected to 14 of 15, and the developer's test files from 86 % to 94 %.
+  - The share of test files avoided falls from 88.5 % to 68.8 %.
+  - The gain came from sqlglot, where the rule was found. On SymPy, measured afterwards, it found
+    nothing more (1 of 2 affected files either way), so it stays opt-in. Neither setting reaches
+    the goal of 99 % of affected files.
+  - Measured with `localize.mjs select`, which runs the whole suite with and without the gold fix,
+    the way NameRTS measures test selection.
+- **B5, silent errors** (`bench/agentic/mine-b5.mjs`): tasks from real commits whose partial fix,
+  the changed definition without the updates its existing users needed, breaks tests elsewhere.
+  - The criterion was fixed before mining ([PLAN-IDE-AGENTE §4](docs/PLAN-IDE-AGENTE.md)).
+  - `validate-fresh` checks that RIPPLE passes with the real fix and fails with the partial one.
+  - 17 tasks with reviewed statements, from 8 repositories: sqlglot 6, haystack 3, sympy 2,
+    sqlalchemy 2, mypy 2, scrapy 1, xarray 1. The goal is 30.
+  - A test of RIPPLE that does not run with the partial fix (its module, a conftest or an import
+    no longer loads, or its file never finishes) now makes the task loud, as rule 3 says; the
+    miner used to count it as broken. `mine-b5.mjs --recheck` applied the rule again to every kept
+    task and withdrew 8, six of them already stated. A test missing while its file ran cleanly
+    does not exist without the rest of the fix and is dropped from RIPPLE instead.
+  - The miner stops when a repository has no virtualenv and `GI_PYTHON` is unset, and the test
+    runner takes pytest from `GI_PYTHON` when `GI_PYTEST` is unset. Without them every file
+    "crashed" under the system Python and read as loud.
+  - Test runs remove the result files that runs killed on their timeout left behind.
+  - A first pilot (Sonnet 5.5 against Haiku 5.5, 6 B5 tasks with 6 questions and 4 refactors,
+    128 runs; [AGENTIC-BENCHMARK](docs/AGENTIC-BENCHMARK.md)) found no silent error in either model
+    or arm: RIPPLE passed in all 48 B5 runs, so these tasks cannot show the B5 target. Haiku cost
+    about an eighth of Sonnet and solved the same; graph-indexer cost 1.22 (1.03–1.35) of no index
+    on B5 with Haiku and 1.00 with Sonnet.
+- **Bench: the repositories' code runs sandboxed.** Tests at mining, measuring and grading run
+  under `bench/agentic/sandbox.sb` (`sandboxed()` in `lib.mjs`):
+  - no network beyond localhost;
+  - no writes outside the checkout and temporary directories;
+  - no reads of credentials;
+  - it fails closed.
+- **Bench: test runs share the machine.** Parallel runs use only idle cores (`fairJobs`), and the
+  rule that drops slow tests uses CPU time instead of the wall clock.
+- **[docs/PLAN-IDE-AGENTE.md](docs/PLAN-IDE-AGENTE.md)**, the active plan: graph-indexer as the
+  agent's IDE and memory (exact references, the impact of an edit, verification), with B3 as a
+  no-regression check and a new bench of silent errors (B5).
+
+- **The arena's session axis** (`bench/agentic/competitors.mjs`, arms `cc+codegraph`, `cc+cbm`,
+  `cc+serena`, `cc+serena-prompt`): Claude Code sessions with CodeGraph 1.6.2,
+  codebase-memory-mcp 0.11.0 or Serena 1.7.0, each installed by its own installer or guide, next
+  to graph-indexer and to no tool. `session-round.mjs --in-repo` runs sessions in the repository
+  with the task as the prompt and the installed files committed first. `cleanup.mjs` frees a
+  graded round's worktrees and checkouts, and `session-round` runs it at the end. New
+  compiler-verified question set `qa-nestjs-r7`. Result (`arena1`, 170 runs, Sonnet 5.5): graph-indexer is the
+  only tool the agent called and the only arm that answered all 11 questions. Its cost against
+  CodeGraph was 0.65 / 0.74 / 0.87 (questions / refactors / issues), against codebase-memory-mcp
+  0.79 / 0.91 / 0.96, and against Serena 0.87 / 0.93 / 1.12. It loses to Serena on issues, where
+  Serena's system prompt, not its tools, carries the gain (control `arena1b`, 45 runs).
+  [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md#against-other-tools-in-real-sessions-arena1-34-tasks-170-runs).
+
+- **`explore`**: one call that opens a task. For a question, bug or feature in words and/or named
+  symbols it returns the most relevant definitions with their code (line numbers kept for
+  editing), their direct callers, overrides and subclasses, one shared card of where the names
+  that code uses are defined, and the tests that reach it with the command to run them — inside
+  `max_tokens` (default 2,000), naming what it left out. It composes the existing engine (search,
+  references, method families, tests) and loads up front alongside `find_references`. CLI:
+  `graph-indexer explore <task in words> [--symbols a,b] [--path P] [--max-tokens N]`. Not yet
+  measured in agent sessions ([docs/PLAN-REFERENCIA.md](docs/PLAN-REFERENCIA.md) §1.1–1.2).
+- **`init` ends with an answer about your repository** (`graph-indexer demo`): it builds the index
+  and picks a method that shares its name with other definitions, then shows what `grep -w` returns
+  for that name next to the calls the index binds to that one definition — on nestjs,
+  `NestApplicationContext.get`: 4,238 grep lines in 300 files against 129 calls in 67 files.
+  `--no-demo` skips it.
+- **HTTP routes and their handlers** (`graph-indexer routes [path | METHOD /path]`), the edge no
+  compiler sees: FastAPI and Flask decorators (with `APIRouter(prefix=…)` / `Blueprint(url_prefix=…)`
+  prefixes), NestJS controllers, Spring mappings (with the class's `@RequestMapping`), Express /
+  Fastify / Koa / Hono and Gin / Echo / chi / net/http registrations, whose handler argument is
+  bound through the index. Route parameters match in any syntax (`{id}`, `:id`, `<int:id>`).
+  `explore` follows a route in its question — "what happens on POST /owners/42/edit" — to the handler
+  and says the framework calls it.
+- **`graph-indexer report`**: a summary to paste into an issue — versions, index size, the share of
+  calls bound and exact per language, warm latencies — with no paths, names or code. A "wrong
+  answer" issue template asks for it and for the command that reproduces the problem.
+
+- **The arena** (`bench/arena/`): any code-intelligence tool with an MCP server is scored against
+  the same compiler and type-checker oracles and samples as graph-indexer (`eval-graph.mjs` and
+  `eval-graph-python.mjs` take `--systems`), with its answer size, plus cold index time and size
+  (`arena.mjs speed`). Tools are declared in a JSON file written from what their servers expose;
+  graph-indexer's own server entered that way matches its native scores within 0.007.
+  First results with CodeGraph 1.6.2 and codebase-memory-mcp 0.11.0 (`bench/arena/systems.json`):
+  on nestjs (TypeScript oracle) precision / recall 0.993 / 0.886 against 0.743 / 0.755 and
+  0.559 / 0.263; on fastapi (pyright) 0.997 / 0.826 against 0.652 / 0.363 and 0.929 / 0.571; cold
+  index 1.9 s against 3.0 s and 11.8 s on nestjs. graph-indexer's answers are the largest (310
+  tokens median against 80 and 96). Answers that name declarations instead of lines are read
+  as an agent reads them (the declaration's lines that contain the name as code).
+
+- **Rust checked against rust-analyzer** (`bench/eval-graph-rust.mjs`) on serde_json, ripgrep and
+  tokio, and fixed where it disagreed: calls inside macro arguments and items inside item macros
+  (`tri!(…)`, `assert_eq!(…)`, `cfg_rt! { … }`), the crates of a workspace used by name, modules in
+  the 2018 layout, `use a::b::module`, and paths walked module by module (`crate::T::new()`,
+  `super::f()`, `Enum::Variant`, `de::Trait`). On the same samples precision / recall went from
+  0.895 / 0.523 to 0.955 / 0.841 (serde_json), 0.914 / 0.555 to 0.941 / 0.768 (ripgrep) and
+  0.887 / 0.389 to 0.930 / 0.582 (tokio). Rust moves to the verified level. Every other oracle
+  (TypeScript, six Python, three Go, three Java repositories) gives the same scores as before.
+
+- **Python: three fixes found on flask and click.** An absolute import resolves only from an
+  import root (`import json` inside `flask/json/` is the standard library, not that package);
+  `import a.b` also binds `a`; names inside the subscripts of qualified generics
+  (`t.Optional[Command]`, `t.Callable[[Ctx], "Group"]`) are type references. click's recall
+  against pyright goes from 0.888 to 0.980, flask's from 0.909 to 0.929; no repository loses.
+
+- **Dependency injection (NestJS)**: what an `@Inject(TOKEN)` receives — the `provide: TOKEN,
+  useClass | useExisting | useFactory | useValue` or `ClientsModule` registration — is shown by
+  `find_references` (on the provider: where it is injected; on the token: who provides it) and
+  `explore` ("receives by injection"), and `graph-indexer inject [name]` lists every token. Checked
+  by hand on Twenty and nestjs: 45 provider claims for 40 injection points, none wrong; one
+  provider computed at run time is not found.
+
+- **Dependency injection (Spring)**: the bean an `@Autowired` / `@Inject` / `@Resource` field,
+  a component's constructor, a `@Bean` method's parameter or a Lombok `@RequiredArgsConstructor`
+  field receives — chosen by `@Qualifier`, `@Primary` and name as Spring does, within the
+  application the class belongs to (read from `pom.xml` / `build.gradle`); Feign clients, Spring
+  Data repositories and MyBatis mappers are named as proxies generated at run time. Shown by
+  `find_references` (on a bean: where it is injected, or where another bean wins; on an interface:
+  which bean fills each point), `explore` ("receives by injection") and `graph-indexer inject`.
+  Checked by an independent reading on spring-petclinic, piggymetrics, jhipster-sample-app and
+  mall: 312 injection points; the first reading found 3 wrong claims and 1 missed point, all fixed
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#dependency-injection-spring)).
+
+- **Vue and Svelte components.** `.vue` and `.svelte` files are indexed: the `<script>` as
+  TypeScript, and each template tag of a component the script imports (`<UserCard>`,
+  `<user-card>`) as a use of that component, so `find_references` on a component lists where it is
+  rendered. SvelteKit's `$lib` / `kit.alias` and `package.json` `imports` (`#/*`) resolve. On
+  open-webui 3,602 of 3,604 such tags are bound, every one to the file imported; on vue-vben-admin
+  1,178 of 1,179, the 207 direct imports all to the file imported and 80 of 80 sampled through
+  barrels and workspace packages correct
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#components-in-vue-and-svelte-templates)).
+
+- **ORM models: tables, migrations, Prisma's client.** Prisma `model` blocks, Django models,
+  SQLAlchemy / SQLModel tables and TypeORM entities, each with the table its ORM gives it, the
+  migration statements that name that table (SQL, Alembic `op.*`, TypeORM `queryRunner`, Django
+  operations and data migrations) and, for Prisma, the client calls that use the model
+  (`prisma.envelope.findFirst(…)`, typed only by the generated client). `find_references` on a
+  model (or a Prisma model's name) and `explore` show them; `graph-indexer models [name]` lists
+  them. Checked by an independent reading on documenso, full-stack-fastapi-template,
+  django-oscar and twenty: of 2,671 migration statements and 1,073 client calls claimed, none
+  wrong; the models and statements it found missing were added
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#orm-models-their-migrations-and-prismas-client)).
+
+### Changed
+
+- **Kotlin grammar built from `fwcd/tree-sitter-kotlin` d6af96d** (2026-10-31; still no release
+  after 0.3.8), with the procedure of 3.0.2, whose build of 5b7b9b7 was first reproduced byte for
+  byte. It reads Kotlin 2.x syntax that left ERROR regions before: guard conditions in `when`
+  (`is X if cond ->`), `..<`, `$$` strings, context parameters, binary literals, `suspend {}`
+  lambdas. On 3,147 files of okhttp, kotlinx.coroutines, nowinandroid, Exposed and the android
+  fixture, files with an unreadable region go from 107 to 2 (both templates with
+  `{{packageName}}`), symbols from 43,306 to 43,629 and references from 306,426 to 307,084. 334
+  members that error recovery had cut out of their class are back in it; the only 2 symbols that
+  disappear were local `val`s taken for properties after a parse error.
+- **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
+  runs in a pool of worker threads while the main thread writes earlier batches to SQLite; a file
+  the pool fails on is parsed again inline. The index written is identical (checked on nestjs:
+  symbols, references and imports). A full nestjs index on 4 CPUs: 3.3–3.8 s instead of 4.5–4.7 s.
+  Updates of fewer than 48 files parse inline as before; `GRAPH_INDEXER_WORKERS` sets the number of
+  threads (0 turns the pool off).
+
+### Fixed
+
+*What #5 showed for Kotlin, made general: answers no longer present what the index could not see as seen.*
+
+- **A qualified name whose owner declares nothing of that name is reported, not replaced.**
+  `refs RefreshPort.execute` used to answer with the uses of another type's `execute` (#5's
+  `OtherPort.execute`) under a "matches 2 definitions" note, and could add "Complete". It now says
+  that nothing indexed as `RefreshPort` declares `execute`, lists the definitions of that name, and
+  names the lines where `RefreshPort` appears in code the parser could not read. A qualifier that
+  names the file or a directory (`utils.helper`, `pkg.mod.func`) still finds the top-level definition.
+- **A call on a receiver declared as a type the index lacks is no longer bound by name.** A
+  parameter typed with a library type (`p: Admin` from kafkajs) or with a type in a file the parser
+  could not read was bound to the only member of that name in the repository, as "likely". The call
+  now stays unbound and shows under "Possibly missed" when its file mentions the type. Checked
+  against the TypeScript compiler: of the 207 bindings this removes in nestjs and Twenty, none was
+  correct (26 bound DOM methods to repository code, such as `TextDecoder.decode` to
+  `JwtWrapperService.decode`; the other 181 were calls into libraries). Type parameters and wrappers (`T`, `InstanceType<typeof X>`) keep the old fallback. The
+  compiler oracles (nestjs, Twenty, gin, spring-petclinic) give the same precision and recall.
+- **"Complete" is limited to what the parser read.** `find_references` and `call_graph` say
+  "Complete in the files the parser read" and list the lines where the name occurs in code the
+  parser could not read (an ERROR region, give or take a line), where a use can be missing or
+  bound to another definition.
+- **The index records which lines the parser could not read**, not just whether a file had an
+  error, and no longer counts a token the parser inserted to keep the structure (a TSX
+  `` styled.div<Props>`…` ``, which flagged 370 files of Twenty, loses nothing). Indexes are rebuilt.
+- **Python 3.15 lazy imports** (`lazy import x`, `lazy from m import y`, PEP 810) are read as
+  imports; tree-sitter-python does not know the soft keyword yet.
+- **The `init --hooks` test** no longer depends on graph-indexer being installed globally on the
+  machine that runs it.
+- **Rust: methods belong to the impl of the type their file sees.** A workspace can have several
+  types of one name (ripgrep has four `RegexMatcher`s, one per crate); the methods of every
+  `impl RegexMatcher` were members of all four, so `RegexMatcher::new` in the printer crate bound
+  to the test helper's. An impl's owner is now the type its own file resolves under that name, or
+  one of the same Cargo package. ripgrep's `RegexMatcher::new` goes from 0 of 96 uses to all 96.
+- **Rust: `impl Trait for &'a mut T`** made the methods' owner the text `&'a mut T`, so `self`
+  inside them had no type (serde_json's whole `Deserializer`).
+- **Rust: a bare name is never a method.** A parameter or local `path` passed as an argument was
+  bound to a method `path` declared in an `impl` block of the same file; a macro (`suffix!`) to a
+  method through `use super::*`. Methods with a receiver are no longer items of their module (Rust
+  and Go).
+- **Rust: 2018 module paths.** `mod runtime; pub use runtime::Runtime;` names the child module,
+  not an external crate, so `use tokio::runtime::Runtime` resolved to nothing in tokio's own tests.
+- **Rust: types the index did not follow**:
+  - tuples: `let (tx, rx) = channel()` with `-> (Sender<T>, Receiver<T>)`, `for (i, x) in
+    xs.iter().enumerate()`, and the fields of a tuple struct (`self.0`);
+  - wrappers built in place: `Arc::new(x)`, `Box::pin(f)`, `Pin::new(&mut x)`, `Rc::clone(&x)`;
+  - a crate's own `Mutex`, `RwLock` or `Semaphore` is that type, not a transparent wrapper;
+  - type parameters stand for their bound: `fn f<R: Read>(r: &mut R)`, `R::decode(r)`, a field
+    `formatter: F` in `impl<W, F: Formatter>`, `where` clauses;
+  - patterns: `Value::Object(map) =>` and `if let Self::Number(n) = …` bind the variant's field,
+    `other =>` the matched value, `if let Some(x)` / `Ok(x)` the wrapped value;
+  - `Self::new()`, and sequential shadowing (`let x = a; let x = x.to_map();`) with block,
+    match-arm and `if let` scopes, so a name rebound elsewhere in the function no longer erases
+    both types;
+  - `clone()`, `unwrap()`, `get_mut()`, `upgrade()` and the like keep the value only when its own
+    type has no method of that name (tokio's `Weak::upgrade` returns a sender);
+  - longer path calls (`grep::regex::RegexMatcherBuilder::new()`) and associated types
+    (`type Value = …;` inside an impl is not the crate's `Value`).
+- **Java: overloads of one arity bind by argument types.** Calls record the types their arguments
+  show (literals, typed locals and fields, `new`, casts, array elements, `"a" + x`), and among
+  overloads taking that many arguments the resolver keeps those the types fit, exact matches
+  before widening and boxing: `append('-')` is `append(char)`, not `append(String)`.
+- **Java: a single-type import from a library package** (`import java.io.UncheckedIOException;`)
+  is the library's type, not a same-name class elsewhere in the repository.
+- **Java: `Outer.this.m()`**, `new Node(…)` inside `Node` (the class, not its constructor), and
+  nested types named through their outer one (`Token.TokenType.EOF`, `Map.Kind.valueOf(…)`).
+- **Go: constants and variables declared with a type** (`ByCid SortOpt = "cid"`) carry it, so a
+  local assigned one (`s := ByCid; s.IsValid()`) is typed.
+- **Python: names inside tuples and sets** (`(InvalidSchema, "x")` in a parametrize list) are uses.
+- **Bench: `eval-graph-rust.mjs` reads inactive code from rust-analyzer 1.9x**, which reports it through
+  pull diagnostics and as `inactive_code`: with 1.99 the oracle saw no inactive line, so uses in
+  `#[cfg]`-disabled files and items counted against graph-indexer (tokio: 20,195 inactive lines).
+- **Indexing no longer overflows the stack on a field assigned an element of itself**
+  (`self.impl = self.impl[0]`, in SQLAlchemy's `test/perf`): each lookup added one element access
+  to the type, without end, and the whole index failed. A type now stacks at most 8 element
+  accesses. The four reference oracles give identical results.
+- **Names built into regular expressions are escaped in full** (`src/util/regex.mjs`), not only
+  their `$`; the location query `file.ext:name` no longer backtracks polynomially on long input.
+  Identifiers are matched as before: the four reference oracles give identical results.
+- **`check` no longer says "overridden, so not reached" of a subclass whose own version uses the
+  changed one.** Examples are `TRANSFORMS = {**MySQLGenerator.TRANSFORMS, …}` and `super().m()`.
+  - Such subclasses, and their subclasses, are now listed as running the changed code, with their
+    tests.
+  - `change_impact` and the symbol facts count them too.
+  - On sqlglot-1a782c55, `check` had missed `test_singlestore.py`, which the fix breaks.
+- **`check` no longer flags calls to a Python `@classmethod`** as not fitting ("takes 2 arguments"):
+  its `cls` was counted because a classmethod is marked static. On the 50 gold fixes of the fresh
+  issues it now reports no problems.
+- **Bench:** sqlglot's test hint gave `unittest discover tests`, which fails to import the suite;
+  it now gives `discover -s tests -t .`.
+
+- **Hooks follow work done in the shell.** On Sonnet 5.5 the B3 sessions read files with
+  chained `cd repo; sed -n a,bp f; sed -n …` commands and edited them with Python heredocs and
+  `sed -i`; the post-tool hook recognised only a single read after `cd DIR &&`, and checked edits
+  only after the edit tool. It now splits a shell line into its commands (outside quotes and
+  heredoc bodies, paths resolved against a `cd`) and resolves every read in it, and after any
+  other shell command runs the edit checker on the source files that command changed (working-tree
+  files whose modification time moved). Replaying the b3h3 pilot's `cc+gi+hooks` runs: context on
+  50 of 191 calls instead of 33. Measured in sessions (b3h4, 15 issues, Sonnet 5.5): the hooks
+  named 256 definitions and followed shell edits in 14 of 15 sessions, the agent still never
+  called graph-indexer, and the arm cost 1.07 (1.01–1.12) of working without it — a loss.
+
+- **TypeScript default exports.** `export { default as X } from './x'` now follows to x's default
+  export; an anonymous `export default function () {}` counts as exported; a default import binds
+  to the module's own definition or default export before anything the module itself imports
+  under the importer's name. Found on vue-vben-admin; the TypeScript, Python, Go and Java oracles
+  give the same scores as before.
+
+- **Claude Code 2.1.296 saw no graph-indexer tools.** It speaks MCP 2026-07-28, where every result
+  states `resultType: "complete"`; graph-indexer's results did not, so the server connected, its
+  instructions arrived, and `tools/list` was ignored — no tool, not even a deferred one. Results of
+  that protocol version now carry it (checked in a real session: the nine tools are listed and
+  `explore` answers). With it, the per-tool `anthropic/alwaysLoad` mark works again: `explore` and
+  `find_references` load up front (about 1,100 tokens with the instructions, against 3,000 for
+  marking the whole server).
+
+- **Python references, measured against pyright** on six repositories
+  ([docs/BENCHMARKS.md](docs/BENCHMARKS.md), `bench/eval-graph-python.mjs`): recall rises on all six
+  (httpx 0.832 → 0.946, rich 0.867 → 0.971, fastapi 0.986 → 0.998) and precision on five (httpx
+  0.910 → 0.998). `from pkg import submodule; submodule.X` no longer finds what `pkg/__init__.py`
+  re-exports as X; names re-exported from an uninstalled package are external instead of bound to a
+  same-name definition; untyped parameters and other locals shadow repository names; functions
+  nested in a function are no longer reached from outside it; `return name`, `A | B` unions,
+  `except` clauses, dictionary keys, generic arguments, `__all__`, `TypeVar(bound=…)`, `Class.attr`
+  and submodule chains are uses; `self.x` under a base class's property `x` is that property.
+  TypeScript (nestjs) and Java (spring-petclinic) are unchanged or better.
+- **References in JavaScript/TypeScript modules**: a value read the extractor left unscoped (a
+  lambda parameter, a block-scoped `const`) was bound by name, at 0.6 confidence, to a top-level
+  name of another module (`cases.filter(c => …)` → `export const c` elsewhere). An ES module sees
+  another module's names only through an import, so such reads no longer bind across modules.
+  Reference accuracy on nestjs against the TypeScript compiler is unchanged (dispatch oracle,
+  399 symbols: precision 0.998, recall 0.937).
+- **Agent benchmark, mined Python issues (B3).** Sessions ran tests with the system Python
+  (no pytest) while grading used a virtualenv: they now get the grading virtualenv first on their
+  `PATH`, and the preflight checks it inside a session. `unittest` outcomes are recorded by a result
+  object instead of read from verbose text, which missed tests whose subtests fail. Mining puts SQL
+  fixtures in the hidden tests (and runs the modules that read them), runs each state twice to drop
+  flaky tests, and `validate-fresh.mjs` checks every task through the grader (base fails, the real
+  fix solves it three times). The fourth round's 11 tasks pass it unchanged.
+- **"Defined elsewhere" card**: an unbound call no longer matches a constant or variable by name
+  (`Math.max(…)` listed a `const max` from another file).
+
+---
+
 ## [3.0.2] — 2026-11-08
 
 Kotlin `fun interface` support, contributed by [@jhernandez-movicoders](https://github.com/jhernandez-movicoders)

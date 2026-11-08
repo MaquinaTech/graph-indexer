@@ -1,0 +1,12 @@
+[
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_binary_block_extension[fallback]",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_binary_block_extension[filename]",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_binary_block_extension[mime_type]",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_concurrent_runs_are_isolated_by_per_run_store",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_id_less_parallel_calls_do_not_collide",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_mixed_result_offloads_every_block_to_its_own_entry",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_pointer_contains_reference_size_and_preview",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookBehavior::test_policy_sizes_result_by_its_base64_payload",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookWithTextOnlyStore::test_image_and_file_results_stay_in_context",
+  "test/hooks/tool_result_offloading/test_hooks.py::TestToolResultOffloadHookWithTextOnlyStore::test_text_results_are_offloaded"
+]

@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 11;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS files (
   lines INTEGER NOT NULL,
   package TEXT,
   is_test INTEGER NOT NULL DEFAULT 0,
-  parse_errors INTEGER NOT NULL DEFAULT 0,
+  parse_errors INTEGER NOT NULL DEFAULT 0, -- regions the parser could not read (ERROR nodes)
+  parse_error_lines TEXT,                   -- their [start, end] lines as JSON, the first 100
   indexed_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS symbols (
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS refs (
   dst_id INTEGER,
   conf REAL NOT NULL DEFAULT 0,
   ncand INTEGER NOT NULL DEFAULT 0,
-  argc INTEGER -- arguments of a call or construction (-1: a spread makes it a lower bound), else NULL
+  argc INTEGER, -- arguments of a call or construction (-1: a spread makes it a lower bound), else NULL
+  arg_types TEXT -- their static types where the language overloads by type (JSON: "int", "String", "?" unknown), else NULL
 );
 CREATE INDEX IF NOT EXISTS refs_file ON refs(file_id);
 CREATE INDEX IF NOT EXISTS refs_dst ON refs(dst_id);
@@ -99,6 +101,21 @@ CREATE INDEX IF NOT EXISTS fields_file ON fields(file_id);
 CREATE INDEX IF NOT EXISTS fields_owner ON fields(owner_qname);
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
   name, qname, sig, doc, path, body,
+  tokenize = 'porter unicode61 remove_diacritics 2',
+  content = '', contentless_delete = 1
+);
+-- semantic channel (optional, src/search/vectors.mjs): one int8 vector per definition, filled lazily
+CREATE TABLE IF NOT EXISTS vectors (
+  symbol_id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL,
+  scale REAL NOT NULL,
+  v BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vectors_file ON vectors(file_id);
+CREATE TABLE IF NOT EXISTS vec_files (file_id INTEGER PRIMARY KEY, hash TEXT NOT NULL);
+-- documentation sections (Markdown headings), apart from code so prose never shifts code's BM25 statistics
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+  name, body,
   tokenize = 'porter unicode61 remove_diacritics 2',
   content = '', contentless_delete = 1
 );
@@ -156,9 +173,10 @@ export class Store {
     /** Drop every indexed fact but keep the database (the index is a cache of the source tree). */
     reset() {
         this.tx(() => {
-            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields']) this.db.exec(`DELETE FROM ${t}`);
+            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields', 'vectors', 'vec_files']) this.db.exec(`DELETE FROM ${t}`);
             this.db.exec("INSERT INTO fts(fts) VALUES ('delete-all')");
             this.db.exec("INSERT INTO file_fts(file_fts) VALUES ('delete-all')");
+            this.db.exec("INSERT INTO doc_fts(doc_fts) VALUES ('delete-all')");
         });
     }
 

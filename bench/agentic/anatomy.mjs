@@ -46,7 +46,7 @@ rows = rows.filter(r => r.agent && (r.rep ?? 1) >= 1 && !r.agent.leaks?.length);
 // --tasks a,b,c: only these tasks (to compare arms on the tasks they all ran)
 if (opt('--tasks')) { const only = new Set(list('--tasks')); rows = rows.filter(r => only.has(r.taskId)); }
 const tasks = new Map(loadTasks().map(t => [t.id, t]));
-const suiteOf = (r) => r.family === 'qa' ? 'B1' : r.kind === 'fresh' ? 'B3' : 'B2';
+const suiteOf = (r) => r.family === 'qa' ? 'B1' : tasks.get(r.taskId)?.bench === 'b5' ? 'B5' : r.kind === 'fresh' ? 'B3' : 'B2';
 
 function transcriptOf(r) {
     const tsv = path.join(WORK, 'runs', r.giLabel, 'agents.tsv');

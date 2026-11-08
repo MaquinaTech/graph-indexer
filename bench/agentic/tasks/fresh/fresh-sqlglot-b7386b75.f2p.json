@@ -1,0 +1,5 @@
+[
+  "tests/test_optimizer.py::TestOptimizer::test_canonicalize_internal_names",
+  "tests/test_optimizer.py::TestOptimizer::test_eliminate_subqueries",
+  "tests/test_optimizer.py::TestOptimizer::test_scope"
+]

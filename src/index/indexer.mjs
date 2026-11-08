@@ -19,6 +19,7 @@ import { extractFile } from '../parse/extract.mjs';
 import { specForPath, LANGUAGES } from '../parse/languages.mjs';
 import { tokenString, codeTokens } from '../search/tokenize.mjs';
 import { indexFingerprint } from './fingerprint.mjs';
+import { ParsePool, poolSize } from './parsepool.mjs';
 
 const SPECS = Object.fromEntries(LANGUAGES.map(l => [l.id, l]));
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
@@ -80,6 +81,7 @@ export class Indexer {
         for (const r of s.all('SELECT file_id, owner_qname, name, type FROM fields')) (fields.get(r.file_id) ?? fields.set(r.file_id, []).get(r.file_id)).push(r);
         for (const [fid, rows] of fields) this.table.setFieldTypes(fid, rows);
         this.modules = new ModuleResolver(this.root, files.map(f => f.path));
+        this.resolver.modules = this.modules;
         this.loaded = true;
     }
 
@@ -152,7 +154,7 @@ export class Indexer {
                 for (const rel of removed) {
                     const f = s.get('SELECT id FROM files WHERE path = ?', rel);
                     if (!f) continue;
-                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); }
+                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', r.id); }
                     s.run('DELETE FROM file_fts WHERE rowid = ?', f.id);
                     for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, f.id);
                     s.run('DELETE FROM files WHERE id = ?', f.id);
@@ -162,17 +164,20 @@ export class Indexer {
             });
         }
 
-        // parse changed/new files (async extraction), write in batches
+        // parse changed/new files, write in batches; with many files a pool of threads parses the
+        // next batch while this one is written
         if (toParse.length || removed.length) s.setMeta('resolve_pending', '1');
         const BATCH = 200;
-        let done = 0;
-        for (let i = 0; i < toParse.length; i += BATCH) {
-            const batch = toParse.slice(i, i + BATCH);
-            const parsed = [];
+        const threads = poolSize(toParse.length);
+        const pool = threads ? new ParsePool(threads) : null;
+        // a file the parser could not read at all is one unreadable region, so no answer calls it complete
+        const failed = (e, rel, source) => { this.log(`parse failed for ${rel}: ${e.message}`); return { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1, errorLines: [[1, source.split('\n').length]] }; };
+        // read and hash a batch now; its extraction starts now with the pool, or when awaited without
+        const start = (batch) => {
+            const items = [];
             for (const item of batch) {
-                const abs = path.join(this.root, item.rel);
                 let source;
-                try { source = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+                try { source = fs.readFileSync(path.join(this.root, item.rel), 'utf8'); } catch { continue; }
                 const hash = sha1(source);
                 if (item.prev && item.prev.hash === hash) {
                     s.run('UPDATE files SET size = ?, mtime_ms = ? WHERE id = ?', item.st.size, Math.floor(item.st.mtimeMs), item.prev.id);
@@ -181,26 +186,48 @@ export class Indexer {
                 }
                 const spec = specForPath(item.rel);
                 if (!spec) continue;
-                let extraction;
-                if (looksMinified(source)) extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 0 };
-                else {
-                    try { extraction = await extractFile(spec, source, item.rel); }
-                    catch (e) { this.log(`parse failed for ${item.rel}: ${e.message}`); extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1 }; }
-                }
-                parsed.push({ ...item, source, hash, spec, extraction });
+                const minified = looksMinified(source);
+                const inline = () => extractFile(spec, source, item.rel).catch(e => failed(e, item.rel, source));
+                const job = minified ? null : pool ? pool.extract(item.rel, source).catch(inline) : null;
+                items.push({ ...item, source, hash, spec, minified, job });
             }
-            s.tx(() => {
-                for (const p of parsed) {
-                    const r = this.#writeFile(p);
-                    touchedFileIds.push(r.fileId);
-                    removedSymIds.push(...r.removedIds);
-                    for (const n of r.addedNames) addedNames.add(n);
-                    if (p.prev) changed++; else added++;
+            return items;
+        };
+        let done = 0;
+        try {
+            // with the pool, a few batches are in flight so no thread waits; sources held stay bounded
+            const ahead = pool ? 4 : 0;
+            const queued = [];
+            let started = 0;
+            const fill = () => { while (started < toParse.length && queued.length <= ahead) { queued.push(start(toParse.slice(started, started + BATCH))); started += BATCH; } };
+            for (let i = 0; i < toParse.length; i += BATCH) {
+                fill();
+                const items = queued.shift();
+                fill();
+                const parsed = [];
+                for (const it of items) {
+                    let extraction;
+                    if (it.minified) extraction = { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 0 };
+                    else if (it.job) extraction = await it.job;
+                    else {
+                        try { extraction = await extractFile(it.spec, it.source, it.rel); }
+                        catch (e) { extraction = failed(e, it.rel, it.source); }
+                    }
+                    parsed.push({ rel: it.rel, st: it.st, prev: it.prev, source: it.source, hash: it.hash, spec: it.spec, extraction });
                 }
-            });
-            done += batch.length;
-            onProgress?.(done, toParse.length);
-        }
+                s.tx(() => {
+                    for (const p of parsed) {
+                        const r = this.#writeFile(p);
+                        touchedFileIds.push(r.fileId);
+                        removedSymIds.push(...r.removedIds);
+                        for (const n of r.addedNames) addedNames.add(n);
+                        if (p.prev) changed++; else added++;
+                    }
+                });
+                done += Math.min(BATCH, toParse.length - i);
+                onProgress?.(done, toParse.length);
+            }
+        } finally { await pool?.close(); }
 
         // resolve: refs of touched files + refs that pointed at removed symbols + refs that may bind to new names
         this.resolver.resetMemo();
@@ -235,7 +262,7 @@ export class Indexer {
 
     #writeFile({ rel, st, prev, source, hash, spec, extraction }) {
         const s = this.store;
-        const { symbols, refs, imports, fields, fileInfo, errors } = extraction;
+        const { symbols, refs, imports, fields, fileInfo, errors, errorLines } = extraction;
         const lines = lineStarts(source);
         const isTest = spec.testFile?.test(rel) ? 1 : 0;
         const pkg = fileInfo?.package ?? null;
@@ -244,15 +271,15 @@ export class Indexer {
         if (prev) {
             fileId = prev.id;
             oldSyms = s.all('SELECT id, qname, kind, ordinal FROM symbols WHERE file_id = ?', fileId);
-            for (const o of oldSyms) s.run('DELETE FROM fts WHERE rowid = ?', o.id);
+            for (const o of oldSyms) { s.run('DELETE FROM fts WHERE rowid = ?', o.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', o.id); }
             s.run('DELETE FROM file_fts WHERE rowid = ?', fileId);
             for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
-            s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, indexed_at = ? WHERE id = ?',
-                spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now(), fileId);
+            s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, parse_error_lines = ?, indexed_at = ? WHERE id = ?',
+                spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now(), fileId);
             this.table.removeFile(fileId);
         } else {
-            const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now());
+            const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, parse_error_lines, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now());
             fileId = Number(r.lastInsertRowid);
         }
         this.table.addFile({ id: fileId, path: rel, lang: spec.id, package: pkg, isTest: !!isTest });
@@ -283,8 +310,16 @@ export class Indexer {
             if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
             this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine });
         }
-        // FTS documents
-        for (let i = 0; i < symbols.length; i++) {
+        // FTS documents; documentation goes to its own table and has no file document
+        if (spec.docs) {
+            for (let i = 0; i < symbols.length; i++) {
+                const sym = symbols[i];
+                const a = lines[sym.startLine - 1] ?? 0;
+                const b = sym.endLine >= lines.length ? source.length : lines[sym.endLine];
+                s.run('INSERT INTO doc_fts (rowid, name, body) VALUES (?, ?, ?)', ids[i], tokenString(sym.qname.replace(/ › /g, ' ')), codeTokens(source.slice(a, b), { maxTokens: BODY_TOKEN_CAP }).join(' '));
+            }
+        }
+        for (let i = 0; i < symbols.length && !spec.docs; i++) {
             const sym = symbols[i];
             let body;
             if (TYPE_KINDS.has(sym.kind)) {
@@ -305,16 +340,16 @@ export class Indexer {
                 ids[i], tokenString(sym.name), tokenString(sym.qname), tokenString(sym.sig ?? ''), tokenString(sym.doc ?? ''), pathTokens, body);
         }
         // file document (hierarchical ranking: which files talk about the query at all)
-        s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
+        if (!spec.docs) s.run('INSERT INTO file_fts (rowid, path, body) VALUES (?, ?, ?)', fileId, pathTokens, codeTokens(source, { maxTokens: FILE_TOKEN_CAP }).join(' '));
         // refs (unresolved for now)
         for (const r of refs) {
-            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, argc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                fileId, r.symIdx >= 0 ? ids[r.symIdx] : null, r.name, r.kind, r.line, r.col, r.recv || null, r.recvType || null, r.argc ?? null);
+            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, argc, arg_types) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                fileId, r.symIdx >= 0 ? ids[r.symIdx] : null, r.name, r.kind, r.line, r.col, r.recv || null, r.recvType || null, r.argc ?? null, r.argTypes ? JSON.stringify(r.argTypes) : null);
         }
         // imports (module resolution needs only the file list)
         const impRows = [];
         for (const imp of imports) {
-            const target = this.modules.resolve(spec.id, rel, imp.source);
+            const target = this.modules.resolveImport(spec.id, rel, imp);
             let targetFileId = null;
             if (target?.file) targetFileId = s.get('SELECT id FROM files WHERE path = ?', target.file)?.id ?? null;
             const row = { source: imp.source ?? null, imported: imp.imported ?? null, local: imp.local ?? null, reexport: imp.reexport ?? null, wildcard: imp.wildcard ? 1 : 0, line: imp.line ?? null, target_file_id: targetFileId, target_dir: target?.dir ?? null };
@@ -446,7 +481,7 @@ export class Indexer {
         s.tx(() => {
             for (let i = 0; i < refIds.length; i += 900) {
                 const chunk = refIds.slice(i, i + 900);
-                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type, argc FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type, argc, arg_types FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
                 for (const r of rows) {
                     const res = this.resolver.resolve(r);
                     if (res.id == null && (r.kind === 'value' || r.kind === 'read' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }

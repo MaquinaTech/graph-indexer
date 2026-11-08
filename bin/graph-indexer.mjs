@@ -6,7 +6,8 @@
  *   graph-indexer index   [--repo DIR]                build / update the index and print stats
  *   graph-indexer init    [--repo DIR] [--agents …]   wire the MCP server into your coding agents
  *   graph-indexer status  [--repo DIR]
- *   graph-indexer search   <query>  [--path P] [--kind K] [--limit N]
+ *   graph-indexer explore  <task in words> [--symbols a,b] [--path P] [--max-tokens N]
+ *   graph-indexer search   <query>  [--or QUERY]… [--path P] [--kind K] [--limit N]
  *   graph-indexer read     <target>… [--full]           symbols, file:START-END ranges or files, with the
  *                                                        definitions each one uses
  *   graph-indexer symbol   <name>…  [--no-code]
@@ -15,6 +16,7 @@
  *   graph-indexer impact   [--symbols a,b] [--files x,y] [--diff] [--depth N]
  *   graph-indexer outline  [path]   [--focus TEXT] [--max-tokens N]
  *   graph-indexer files    <text|glob> [--path P]
+ *   graph-indexer demo                             grep versus exact uses, on this repository
  *
  * The query commands print exactly what the MCP tools return, so humans (and agents limited to a
  * shell) get the same answers.
@@ -33,6 +35,8 @@ let cmd = aliasOf[invokedAs] ?? null;
 if (!cmd && argv.length && !argv[0].startsWith('-')) { const c = argv.shift(); cmd = aliasOf[c] ?? c; }
 
 function flag(name) { const i = argv.indexOf(name); if (i < 0) return false; argv.splice(i, 1); return true; }
+/** Every value of a repeatable option (`--or a --or b`). */
+function opts(name) { const out = []; let v; while ((v = opt(name)) != null) out.push(v); return out; }
 function opt(name, dflt = null) {
     const i = argv.indexOf(name);
     if (i < 0) return dflt;
@@ -120,13 +124,21 @@ async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
 const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI coding agents (MCP)
 
 Usage:
-  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper]
+  graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper] [--no-demo]
   graph-indexer serve [--repo DIR]          start the MCP server on stdio
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
-  graph-indexer search <query> [--path P] [--kind K] [--limit N]
+  graph-indexer explore <task in words> [--or QUERY]… [--symbols a,b] [--path P] [--max-tokens N]
+                                                   relevant code, callers, definitions used and tests
+  graph-indexer search <query> [--or QUERY]… [--path P] [--kind K] [--limit N]
+                                                   --or: other phrasings of the same need, fused
   graph-indexer grep <regex> [--path P] [--literal|-F] [-i] [--limit N]
   graph-indexer files <text|glob> [--path P] [--limit N]    find files by path or name
+  graph-indexer demo                               a method that shares its name: grep versus its exact uses
+  graph-indexer report                             summary to paste into an issue (no paths, names or code)
+  graph-indexer routes [path | METHOD /path]       HTTP routes and their handlers
+  graph-indexer inject [token | class]             dependency injection: tokens, providers, injection points
+  graph-indexer models [name | table]              ORM models: table, migrations, Prisma client calls
   graph-indexer read <target>… [--full] [--max-lines N]   symbols (Class.method), ranges (file:10-80) or files,
                                                    with where each name they use is defined
   graph-indexer symbol <name>… [--no-code]         one or several definitions
@@ -136,6 +148,8 @@ Usage:
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
   graph-indexer hook post-tool|session-start|subagent-start   agent hook (JSON on stdin)
+  graph-indexer semantic install|status        optional static code-embedding model (32 MB, MIT) for
+                                                   search in words; used with GRAPH_INDEXER_SEMANTIC=1
   graph-indexer daemon [--idle-minutes N]           keep the index open for hooks and CLI queries
                                                    (the hooks start it; the MCP server does the same)
 
@@ -170,6 +184,17 @@ async function main() {
             for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, stop);
             return;
         }
+        case 'semantic': {
+            const { installModel, modelDir, semanticEnabled, MODEL } = await import('../src/search/semantic.mjs');
+            const sub = argv.shift() ?? 'status';
+            if (sub === 'install') {
+                const dir = await installModel({ log });
+                process.stdout.write(`${MODEL.repo}@${MODEL.revision.slice(0, 12)} (${MODEL.license}) installed in ${dir}\nTurn the semantic channel on with GRAPH_INDEXER_SEMANTIC=1.\n`);
+            } else {
+                process.stdout.write(JSON.stringify({ model: MODEL.repo, revision: MODEL.revision, dir: modelDir(), installed: fs.existsSync(path.join(modelDir(), 'model.safetensors')), enabled: semanticEnabled() }, null, 2) + '\n');
+            }
+            return;
+        }
         case 'index': {
             const t0 = Date.now();
             const intel = await openIntel();
@@ -191,9 +216,13 @@ async function main() {
             await runInit({ argv, opt, flag, log, version: pkg.version, repo: repoArg });
             return;
         }
+        case 'explore': {
+            const symbols = (opt('--symbols') ?? '').split(',').filter(Boolean); const pathF = opt('--path'); const maxTokens = Number(opt('--max-tokens', 2000)); const queries = opts('--or');
+            return runTool('explore', { query: argv.join(' '), queries, symbols, path: pathF, max_tokens: maxTokens });
+        }
         case 'search': {
-            const pathF = opt('--path'); const kind = opt('--kind'); const limit = Number(opt('--limit', 8));
-            return runTool('search_code', { query: argv.join(' '), path: pathF, kind, limit });
+            const pathF = opt('--path'); const kind = opt('--kind'); const limit = Number(opt('--limit', 8)); const queries = opts('--or');
+            return runTool('search_code', { query: argv.join(' '), queries, path: pathF, kind, limit });
         }
         case 'grep': {
             const pathF = opt('--path'); const literal = flag('--literal') || flag('-F'); const ic = flag('-i') || flag('--ignore-case'); const limit = Number(opt('--limit', 60));
@@ -233,6 +262,18 @@ async function main() {
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');
             return runTool('check_changes', { files, base });
+        }
+        case 'demo': return runTool('demo', {});
+        case 'routes': return runTool('routes', { filter: argv.join(' ') });
+        case 'inject': return runTool('inject', { filter: argv.join(' ') });
+        case 'models': return runTool('models', { filter: argv.join(' ') });
+        case 'report': {
+            // for bug reports: sizes, languages, binding rates and latencies — no paths, names or code
+            const intel = await openIntel({ quiet: true });
+            const { reportText } = await import('../src/query/report.mjs');
+            process.stdout.write(await reportText(intel, { version: pkg.version }) + '\n');
+            intel.close();
+            return;
         }
         case 'files': {
             const pathF = opt('--path'); const limit = Number(opt('--limit', 100));

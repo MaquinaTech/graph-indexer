@@ -82,10 +82,10 @@
     },
     "kotlin": {
       "repo": "https://github.com/fwcd/tree-sitter-kotlin",
-      "commit": "5b7b9b73fbe1e41b7d49bb5a8f3c66ac3d022540",
-      "built": "tree-sitter build --wasm (tree-sitter-cli 0.25.10, emscripten/emsdk:4.0.4): `fun interface` support (fwcd/tree-sitter-kotlin#169) is in no release yet, the latest being 0.3.8",
-      "sha256": "dd32fe54b2e19cc26943750b6186fb97ed297f8d4563a384b856d993fb097050",
-      "bytes": 5396390,
+      "commit": "d6af96d2e23ef0a8ff5ab512864378cf08fba311",
+      "built": "tree-sitter build --wasm (tree-sitter-cli 0.25.10, emscripten/emsdk:4.0.4): Kotlin 2.x syntax (guard conditions, `..<`, `$$` strings, context parameters) and `fun interface` are in no release yet, the latest being 0.3.8",
+      "sha256": "90689092295c4e11d21f2c4f1b9ffce1a3c68f7ce6d4de57c365cd0fc888c7ee",
+      "bytes": 6078823,
       "license": "MIT"
     },
     "php": {

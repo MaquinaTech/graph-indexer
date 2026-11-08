@@ -1,0 +1,4 @@
+[
+  "sympy/logic/tests/test_inference.py::::test_issue_27733",
+  "sympy/logic/tests/test_inference.py::::test_issue_27733_second_fix"
+]

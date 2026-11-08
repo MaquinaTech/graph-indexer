@@ -1,0 +1,3 @@
+[
+  "tests/test_optimizer.py::TestOptimizer::test_annotate_funcs"
+]

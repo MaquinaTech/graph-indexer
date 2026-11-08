@@ -1,0 +1,3 @@
+[
+  "tests/dialects/test_spark.py::TestSpark::test_explode_map"
+]

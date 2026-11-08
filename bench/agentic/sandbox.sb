@@ -1,0 +1,33 @@
+;; Sandbox for third-party code the benchmarks run (tests, builds of mined repositories):
+;; no network beyond localhost, writes only to the checkout and temporary directories, and no
+;; reads of credentials. Parameters: CHECKOUT, HOME, CACHE (a writable cache directory).
+(version 1)
+(allow default)
+(deny network*)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+(allow network-bind (local ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
+(deny file-write*)
+(allow file-write*
+    (subpath (param "CHECKOUT"))
+    (subpath (param "CACHE"))
+    (subpath "/private/tmp")
+    (subpath "/private/var/folders")
+    (subpath "/dev"))
+(deny file-read*
+    (subpath (string-append (param "HOME") "/.ssh"))
+    (subpath (string-append (param "HOME") "/.aws"))
+    (subpath (string-append (param "HOME") "/.gnupg"))
+    (subpath (string-append (param "HOME") "/.config"))
+    (subpath (string-append (param "HOME") "/.claude"))
+    (subpath (string-append (param "HOME") "/.docker"))
+    (subpath (string-append (param "HOME") "/.kube"))
+    (subpath (string-append (param "HOME") "/Library/Keychains"))
+    (subpath (string-append (param "HOME") "/Library/Application Support"))
+    (literal (string-append (param "HOME") "/.netrc"))
+    (literal (string-append (param "HOME") "/.npmrc"))
+    (literal (string-append (param "HOME") "/.pypirc"))
+    (literal (string-append (param "HOME") "/.git-credentials"))
+    (literal (string-append (param "HOME") "/.zsh_history"))
+    (literal (string-append (param "HOME") "/.bash_history")))

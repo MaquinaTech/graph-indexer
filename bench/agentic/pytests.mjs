@@ -11,38 +11,87 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { argv, sh } from './lib.mjs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { argv, sh, sandboxed, fairJobs } from './lib.mjs';
 
-const PYTEST = process.env.GI_PYTEST ?? (fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
-const PYTHON = process.env.GI_PYTHON ?? 'python3';
+// read when a run starts: a repository can bring its own virtualenv (REPOS[repo].python, passed as
+// GI_PYTHON / GI_PYTEST by the miner and by the task's checks); GI_PYTHON alone means its pytest
+const pytestCmd = () => process.env.GI_PYTEST ?? (process.env.GI_PYTHON ? `${process.env.GI_PYTHON} -m pytest`
+    : fs.existsSync('/root/.local/bin/pytest') ? '/root/.local/bin/pytest' : 'python3 -m pytest');
+const pythonCmd = () => process.env.GI_PYTHON ?? 'python3';
 
 const modOf = (f) => f.replace(/\.py$/, '').replace(/\//g, '.');
-const fileOfMod = (m) => m.replace(/\./g, '/') + '.py';
 
-/** unittest: `python -m unittest -v` lines "test_x (pkg.mod.Class.test_x) ... ok". */
+/**
+ * unittest: a result object records each test's outcome as it happens, so output a test prints
+ * cannot hide its status. Ids: `tests/test_x.py::Class::test_name`; a module that fails to import
+ * is `tests/test_x.py::<import>`.
+ */
+const UNITTEST_DRIVER = `
+import json, sys, unittest
+out = {}
+def tid(t):
+    if type(t).__name__ == '_FailedTest':
+        return t._testMethodName.replace('.', '/') + '.py::<import>'
+    return type(t).__module__.replace('.', '/') + '.py::' + type(t).__name__ + '::' + getattr(t, '_testMethodName', str(t))
+class Result(unittest.TextTestResult):
+    def addSuccess(self, t): super().addSuccess(t); out.setdefault(tid(t), 'pass')
+    def addFailure(self, t, e): super().addFailure(t, e); out[tid(t)] = 'fail'
+    def addError(self, t, e):
+        super().addError(t, e)
+        if isinstance(t, unittest.TestCase): out[tid(t)] = 'fail'
+    def addSkip(self, t, r): super().addSkip(t, r); out[tid(t)] = 'skip'
+    def addExpectedFailure(self, t, e): super().addExpectedFailure(t, e); out[tid(t)] = 'pass'
+    def addUnexpectedSuccess(self, t): super().addUnexpectedSuccess(t); out[tid(t)] = 'fail'
+    def addSubTest(self, t, st, e):
+        super().addSubTest(t, st, e)
+        if e is not None: out[tid(t)] = 'fail'
+# guarded: processes started with "spawn" (tests that use multiprocessing) import this file again
+if __name__ == '__main__':
+    suite = unittest.defaultTestLoader.loadTestsFromNames(sys.argv[2:])
+    unittest.TextTestRunner(resultclass=Result, verbosity=1, stream=sys.stdout).run(suite)
+    json.dump(out, open(sys.argv[1], 'w'))
+`;
+
 function runUnittest(cwd, targets, timeoutSec) {
-    const r = sh(`${PYTHON} -m unittest -v ${targets.join(' ')} 2>&1`, { cwd, timeout: timeoutSec * 1000 });
+    sweepDead();
+    const json = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.json`);
+    const driver = path.join(os.tmpdir(), `gi-unittest-${process.pid}-${Date.now()}.py`);
+    fs.writeFileSync(driver, UNITTEST_DRIVER);
+    // the driver runs as a file outside the checkout, with the checkout first on the path; it and
+    // the result file are removed whatever happens (a crash or timeout must not leave them behind)
+    let r;
+    try {
+        r = sh(sandboxed(`/usr/bin/time -p env PYTHONPATH=. ${pythonCmd()} ${driver} ${json} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
+    } finally { fs.rmSync(driver, { force: true }); }
     const out = new Map();
-    const re = /^(\w+) \(([\w.]+)\)(?:\n[^\n]*?)? \.\.\. (ok|FAIL|ERROR|skipped.*|expected failure|unexpected success)$/gm;
-    for (const m of r.stdout.matchAll(re)) {
-        const [, name, full, status] = m;
-        const parts = full.split('.');
-        const cls = parts[parts.length - 1] === name ? parts[parts.length - 2] : parts[parts.length - 1];
-        const mod = parts.slice(0, parts[parts.length - 1] === name ? -2 : -1).join('.');
-        out.set(`${fileOfMod(mod)}::${cls}::${name}`, status === 'ok' || status === 'expected failure' ? 'pass' : status.startsWith('skipped') ? 'skip' : 'fail');
+    try { for (const [id, s] of Object.entries(JSON.parse(fs.readFileSync(json, 'utf8')))) out.set(id, s); } catch { /* timed out or crashed: no outcomes */ }
+    fs.rmSync(json, { force: true });
+    return { outcomes: out, code: r.code, ms: r.ms, cpuMs: cpuMs(r.stdout), tail: r.stdout.slice(-1500) };
+}
+
+/**
+ * A run killed on its timeout (the grader stops the whole process group) leaves its result file
+ * behind: before each run, remove those of processes that no longer exist.
+ */
+function sweepDead() {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+        const m = /^gi-(?:pytest|unittest|files)-(\d+)-/.exec(f);
+        if (!m || Number(m[1]) === process.pid) continue;
+        try { process.kill(Number(m[1]), 0); } catch (e) { if (e.code === 'ESRCH') fs.rmSync(path.join(os.tmpdir(), f), { force: true }); }
     }
-    // a module that fails to import reports one error for the whole module
-    for (const m of r.stdout.matchAll(/^ERROR: ([\w.]+) \(unittest\.loader\._FailedTest\.\1\)/gm)) out.set(`${fileOfMod(m[1])}::<import>`, 'fail');
-    return { outcomes: out, code: r.code, ms: r.ms, tail: r.stdout.slice(-1500) };
 }
 
 /** pytest: junit XML per test case. */
 function runPytest(cwd, targets, timeoutSec) {
+    sweepDead();
     const xml = path.join(os.tmpdir(), `gi-pytest-${process.pid}-${Date.now()}.xml`);
-    const r = sh(`${PYTEST} -q -p no:cacheprovider -o addopts= --junitxml=${xml} ${targets.join(' ')} 2>&1`, { cwd, timeout: timeoutSec * 1000 });
+    const r = sh(sandboxed(`/usr/bin/time -p ${pytestCmd()} -q -p no:cacheprovider -o addopts= --junitxml=${xml} ${targets.join(' ')} 2>&1`, { checkout: cwd }), { cwd, timeout: timeoutSec * 1000 });
     const out = new Map();
     let text = '';
-    try { text = fs.readFileSync(xml, 'utf8'); fs.rmSync(xml, { force: true }); } catch { /* no report */ }
+    try { text = fs.readFileSync(xml, 'utf8'); } catch { /* no report */ }
+    fs.rmSync(xml, { force: true });
     for (const m of text.matchAll(/<testcase ([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
         const attrs = Object.fromEntries([...m[1].matchAll(/(\w+)="([^"]*)"/g)].map(a => [a[1], a[2]]));
         const body = m[3] ?? '';
@@ -56,12 +105,51 @@ function runPytest(cwd, targets, timeoutSec) {
         }
         out.set(`${file ?? attrs.classname}::${cls}::${attrs.name}`, status);
     }
-    return { outcomes: out, code: r.code, ms: r.ms, tail: r.stdout.slice(-1500) };
+    return { outcomes: out, code: r.code, ms: r.ms, cpuMs: cpuMs(r.stdout), tail: r.stdout.slice(-1500) };
+}
+
+/**
+ * CPU time (user + sys) the run took, from `time -p`: unlike the wall clock it does not grow when
+ * other processes load the machine, so a "too slow" rule on it gives the same verdict at any load.
+ */
+function cpuMs(out) {
+    const u = /^user\s+([\d.,]+)$/m.exec(out), s = /^sys\s+([\d.,]+)$/m.exec(out);
+    return u && s ? Math.round((Number(u[1]) + Number(s[1])) * 1000) : null;
 }
 
 export function runTests(cwd, runner, files, { timeoutSec = 600 } = {}) {
     if (runner === 'unittest') return runUnittest(cwd, files.map(modOf), timeoutSec);
     return runPytest(cwd, files, timeoutSec);
+}
+
+/**
+ * Many test files, each in its own process, up to `jobs` at a time (fewer when the machine is
+ * busy; re-checked before each file): a whole suite in a fraction of the time, and a file that
+ * crashes or times out costs only its own outcomes (`<file>::<run>` = fail).
+ */
+export async function runFiles(cwd, runner, files, { jobs = 6, timeoutSec = 600 } = {}) {
+    const out = {};
+    let running = 0;
+    let i = 0;
+    await Promise.all(Array.from({ length: jobs }, async (_, w) => {
+        while (i < files.length) {
+            // workers beyond what the idle cores allow wait (worker 0 always runs)
+            if (w > 0 && running >= fairJobs(jobs)) { await new Promise(r => setTimeout(r, 2000)); continue; }
+            const f = files[i++];
+            running++;
+            const json = path.join(os.tmpdir(), `gi-files-${process.pid}-${i}-${Date.now()}.json`);
+            await new Promise((resolve) => {
+                const p = spawn(process.execPath, [fileURLToPath(import.meta.url), '--runner', runner, '--files', f, '--json', json, '--timeout', String(timeoutSec)], { cwd, stdio: 'ignore' });
+                p.on('close', resolve);
+            });
+            let o = {};
+            try { o = JSON.parse(fs.readFileSync(json, 'utf8')); } catch { /* crashed or timed out */ }
+            fs.rmSync(json, { force: true });
+            Object.assign(out, Object.keys(o).length ? o : { [`${f}::<run>`]: 'fail' });
+            running--;
+        }
+    }));
+    return out;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -74,13 +162,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         const files = [...new Set(ids.map(id => id.split('::')[0]))];
         const r = runTests(cwd, runner, files, { timeoutSec: Number(opt('--timeout', 900)) });
         const bad = ids.filter(id => r.outcomes.get(id) !== 'pass');
-        console.log(`${ids.length - bad.length}/${ids.length} expected tests passed in ${(r.ms / 1000).toFixed(1)} s`);
         for (const id of bad.slice(0, 20)) console.log(`  ${r.outcomes.get(id) ?? 'missing'}: ${id}`);
         if (bad.length && ![...r.outcomes.keys()].length) console.log(r.tail);
+        // the count comes last: graders keep the tail of the output
+        console.log(`${ids.length - bad.length}/${ids.length} expected tests passed in ${(r.ms / 1000).toFixed(1)} s`);
         process.exitCode = bad.length ? 1 : 0;
     } else {
         const files = opt('--files', '').split(',').filter(Boolean);
-        const r = runTests(cwd, runner, files);
+        const r = runTests(cwd, runner, files, { timeoutSec: Number(opt('--timeout', 600)) });
         const obj = Object.fromEntries(r.outcomes);
         if (opt('--json')) fs.writeFileSync(opt('--json'), JSON.stringify(obj, null, 1));
         const counts = {};

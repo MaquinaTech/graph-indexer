@@ -1,0 +1,14 @@
+[
+  "test/tools/test_component_tool.py::TestComponentTool::test_component_tool_with_multiple_mapped_docstrings",
+  "test/tools/test_component_tool.py::TestComponentTool::test_component_tool_with_super_component_docstrings",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_basic",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_dataclass",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_dynamic_input_types",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_inputs_from_state",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_inputs_from_state_different_names",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_list_input",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_list_of_documents",
+  "test/tools/test_component_tool.py::TestComponentTool::test_from_component_with_nested_dataclass",
+  "test/tools/test_pipeline_tool.py::TestPipelineTool::test_auto_generated_tool_params",
+  "test/tools/test_pipeline_tool.py::TestPipelineTool::test_auto_generated_tool_params_no_mappings"
+]

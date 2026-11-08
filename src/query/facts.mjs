@@ -219,10 +219,11 @@ export function factsForRange(intel, file, from, to, { max = 6, shown = new Set(
                 if (fam.up.length) parts.push(`overrides ${fam.up.slice(0, 2).map(u => `${short(u)} (${loc(u)})`).join(', ')}`);
                 if (inh.override.length) parts.push(`overridden in ${inh.override.length} subclass${inh.override.length > 1 ? 'es' : ''}: ${inh.override.slice(0, 4).map(o => `${o.name} (${o.path})`).join(', ')}${inh.override.length > 4 ? ', …' : ''}`);
                 if (inh.inherit.length) parts.push(`inherited unchanged by ${inh.inherit.length}: ${inh.inherit.slice(0, 5).map(o => o.name).join(', ')}${inh.inherit.length > 5 ? ', …' : ''}`);
-                if (parts.length && (fam.up.length || inh.override.length || inh.inherit.length >= 1)) {
+                if (inh.extend.length) parts.push(`extended (their version uses this one) by ${inh.extend.length}: ${inh.extend.slice(0, 5).map(o => o.name).join(', ')}${inh.extend.length > 5 ? ', …' : ''}`);
+                if (parts.length && (fam.up.length || inh.override.length || inh.inherit.length >= 1 || inh.extend.length)) {
                     const downIds = fam.down.map(d => d.id);
                     push({ kind: 'overrides', tier: 'exact', key: `ovr:${s.id}`, targets: [...fam.up.map(u => u.id), ...downIds],
-                        text: `${s.qname}: ${parts.join('; ')}` }, inh.override.length || inh.inherit.length ? 4 : 2);
+                        text: `${s.qname}: ${parts.join('; ')}` }, inh.override.length || inh.inherit.length || inh.extend.length ? 4 : 2);
                 }
             }
             // decorators

@@ -1,0 +1,5 @@
+[
+  "tests/dialects/test_dialect.py::TestDialect::test_decimal_literals",
+  "tests/dialects/test_dialect.py::TestDialect::test_spark2_negative_scale_decimal_literals",
+  "tests/dialects/test_hive.py::TestHive::test_cast"
+]

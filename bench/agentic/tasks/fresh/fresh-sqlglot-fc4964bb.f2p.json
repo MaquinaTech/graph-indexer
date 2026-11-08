@@ -1,0 +1,6 @@
+[
+  "tests/dialects/test_mysql.py::TestMySQL::test_alter_mixed_actions",
+  "tests/dialects/test_mysql.py::TestMySQL::test_ddl",
+  "tests/dialects/test_postgres.py::TestPostgres::test_alter_mixed_actions",
+  "tests/dialects/test_postgres.py::TestPostgres::test_ddl"
+]

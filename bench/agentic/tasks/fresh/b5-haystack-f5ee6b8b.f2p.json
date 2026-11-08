@@ -1,0 +1,12 @@
+[
+  "test/dataclasses/test_chat_message.py::TestContentParts::test_tool_call_result_to_dict_mixed_content",
+  "test/skill_stores/file_system/test_skill_store.py::TestFileSystemSkillStore::test_read_skill_file_image_returns_image_content",
+  "test/skill_stores/file_system/test_skill_store.py::TestFileSystemSkillStore::test_read_skill_file_pdf_returns_file_content",
+  "test/skill_stores/file_system/test_skill_store.py::TestFileSystemSkillStore::test_read_skill_file_unsupported_binary_raises",
+  "test/tools/skills/test_skill_toolset.py::TestSkillToolset::test_read_skill_file_in_agent_loop_yields_expected_tool_message_parts",
+  "test/tools/skills/test_skill_toolset.py::TestSkillToolset::test_read_skill_file_returns_image_as_content_part",
+  "test/tools/skills/test_skill_toolset.py::TestSkillToolset::test_read_skill_file_returns_pdf_as_content_part",
+  "test/tools/test_parameters_schema_utils.py::::test_create_parameters_schema_haystack_dataclasses[ChatMessage-A chat message-expected_schema5-expected_defs_schema5]",
+  "test/tools/test_parameters_schema_utils.py::::test_create_parameters_schema_haystack_dataclasses[ToolCallResult-A tool call result-expected_schema4-expected_defs_schema4]",
+  "test/tools/test_parameters_schema_utils.py::::test_create_parameters_schema_haystack_dataclasses[list-A list of chat messages-expected_schema7-expected_defs_schema7]"
+]

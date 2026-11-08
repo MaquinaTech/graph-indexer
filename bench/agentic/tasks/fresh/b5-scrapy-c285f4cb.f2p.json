@@ -1,0 +1,6 @@
+[
+  "tests/test_engine.py::TestCloseSpiderOnStartup::test_deferred_crawl",
+  "tests/test_engine.py::TestCloseSpiderOnStartup::test_pipeline",
+  "tests/test_engine.py::TestCloseSpiderOnStartup::test_spider_opened",
+  "tests/test_engine.py::TestCloseSpiderOnStartup::test_startup_wins_over_spider_opened"
+]

@@ -108,7 +108,7 @@ function inTypeContext(node) {
     }
     return false;
 }
-const CHAIN_RE = /^[A-Za-z_$@][\w$]*(?:\(\)|\[\])*(?:\.[A-Za-z_$][\w$]*(?:\(\)|\[\])*){0,7}$/;
+const CHAIN_RE = /^[A-Za-z_$@][\w$]*(?:\(\)|\[\])*(?:\.(?:[A-Za-z_$][\w$]*|\d+)(?:\(\)|\[\])*){0,7}$/;
 
 /**
  * `a.b(x).c[i]` → `a.b().c[]`: argument lists and subscripts collapsed, operators normalised
@@ -165,7 +165,8 @@ function castHead(node) {
 function receiverDescriptor(node, spec) {
     if (!node) return '';
     for (let i = 0; i < 6 && node.namedChildCount >= 1; i++) {
-        if (PASS_THROUGH.has(node.type)) node = node.namedChildren[0];
+        // `&mut x` is x (its first named child is the `mut`)
+        if (PASS_THROUGH.has(node.type)) node = node.childForFieldName('value') ?? node.namedChildren.find(c => c.type !== 'mutable_specifier') ?? node.namedChildren[0];
         else if (node.type === 'unary_expression' && node.childForFieldName('operator')?.text === '&') node = node.childForFieldName('operand') ?? node.namedChildren[0]; // Go &T{}
         else break;
     }
@@ -188,7 +189,7 @@ function receiverDescriptor(node, spec) {
         return tt ? 'as ' + tt : '?';
     }
     if (spec.receiverDescriptor) {
-        const d = spec.receiverDescriptor(node);
+        const d = spec.receiverDescriptor(node, (n) => receiverDescriptor(n, spec));
         if (d !== undefined) return d;
     }
     // a chain that starts with a cast: `val.(Module).CaddyModule().ID`, `(x as Foo).bar()` → `(T).a().b`
@@ -324,8 +325,25 @@ function typeNarrowings(root, source) {
  * Extract symbols/refs/imports for one file.
  * @returns {{ symbols: object[], refs: object[], imports: object[], errors: number }}
  */
+/**
+ * The text a language's grammar parses. A language may rewrite its source first into an equivalent
+ * of the same length (`spec.rewriteSource`: Rust macro arguments, syntax a grammar does not know
+ * yet), so every position still points at the file.
+ */
+export function rewrittenSource(spec, parser, source) {
+    return spec.rewriteSource ? spec.rewriteSource(source, (s) => parser.parse(s)) : source;
+}
+
+/** Parse a file's text as extraction does (`rewrittenSource`). */
+export function parseSource(spec, parser, source) {
+    return parser.parse(rewrittenSource(spec, parser, source));
+}
+
 export async function extractFile(spec, source, relPath) {
+    if (spec.extract) return spec.extract(source, relPath);
     const { query, parser } = await prepareLanguage(spec);
+    // a language may rewrite its source first, keeping every position (Rust macro arguments)
+    source = rewrittenSource(spec, parser, source);
     const tree = parser.parse(source);
     try {
         return extractFromTree(spec, query, tree, source, relPath);
@@ -339,6 +357,8 @@ export async function extractFile(spec, source, relPath) {
 const QUERY_BUDGET_MS = 15_000;
 
 function extractFromTree(spec, query, tree, source, relPath) {
+    // a language may adjust its spec to the file (a Rust file whose own crate defines `Mutex`)
+    if (spec.specForSource) spec = spec.specForSource(source) ?? spec;
     const root = tree.rootNode;
     const deadline = Date.now() + QUERY_BUDGET_MS;
     let gaveUp = false;
@@ -357,12 +377,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const scopeNodes = [];    // anonymous functions / lambdas / comprehensions: lexical scopes
     const retNodes = [];      // returned expressions (return-type inference)
     const cbSites = [];       // functions passed as call arguments (callback parameter types)
+    const tupleFields = [];   // { owner: struct node, list: its positional fields } (Rust `struct S(A, B)`)
 
     for (const m of matches) {
         let role = null, kind = null, main = null, nameNode = null, recvNode = null, ownerNode = null, typeNode = null;
         let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, bindEach = null, srcNode = null;
-        let bindKey = null, bindOf = null;
-        let cbFn = null, cbArg = null;
+        let bindKey = null, bindOf = null, bindLocal = false;
+        let cbFn = null, cbArg = null, bindTuple = null, tupleOwner = null, tupleVariant = null, bindVariant = null;
         for (const c of m.captures) {
             const n = c.name;
             if (n === 'name') nameNode = c.node;
@@ -385,15 +406,52 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
             else if (n === 'bind.each') bindEach = c.node;
             else if (n === 'bind.key') bindKey = c.node.text;
+            else if (n === 'bind.local') bindLocal = true;
             else if (n === 'bind.of') bindOf = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
+            else if (n === 'scope.block') { role = 'scope'; main = c.node; main.__block = true; }
             else if (n === 'ret') { role = 'ret'; main = c.node; }
             else if (n === 'cb') { role = 'cb'; main = c.node; }
             else if (n === 'cb.fn') cbFn = c.node;
             else if (n === 'cb.arg') cbArg = c.node;
+            else if (n === 'bind.tuple') bindTuple = c.node;
+            else if (n === 'tuple.owner') tupleOwner = c.node;
+            else if (n === 'tuple.variant') tupleVariant = c.node;
+            else if (n === 'bind.variant') bindVariant = c.node;
+            else if (n === 'tuple.fields') { role = 'tuple'; main = c.node; }
+        }
+        if (role === 'tuple') {
+            // a tuple struct's fields are `0`, `1`…; an enum variant's are `Variant.0`… of the enum
+            if (tupleOwner) tupleFields.push({ owner: tupleOwner.parent, list: main, prefix: '' });
+            else if (tupleVariant) tupleFields.push({ owner: tupleVariant.parent?.parent?.parent, list: main, prefix: tupleVariant.text + '.' });
+            continue;
+        }
+        // `Value::Object(map)` / `Self::Number(n)` in a match arm or `if let`: each name is that
+        // variant's field at its position
+        if (role === 'bind' && bindVariant) {
+            const path = bindVariant.childForFieldName('type');
+            const owner = path?.type === 'scoped_identifier' ? path.childForFieldName('path')?.text.split('::').pop() : null;
+            const variant = path?.childForFieldName('name')?.text;
+            if (owner && variant && /^[A-Z]/.test(owner)) {
+                bindVariant.namedChildren.filter(c => c.id !== path.id).forEach((el, i) => {
+                    const id = el.type === 'identifier' ? el : (el.type === 'mut_pattern' || el.type === 'ref_pattern') ? el.namedChildren.find(x => x.type === 'identifier') : null;
+                    if (id) binds.push({ node: main, name: id.text, variant: { owner, field: `${variant}.${i}` } });
+                });
+            }
+            continue;
+        }
+        // `let (a, mut b) = e`: each name is the element of e at its position (`e.0`, `e.1`)
+        if (role === 'bind' && bindTuple && bindExpr) {
+            const expr = receiverDescriptor(bindExpr, spec);
+            bindTuple.namedChildren.forEach((el, i) => {
+                const id = el.type === 'identifier' ? el : (el.type === 'mut_pattern' || el.type === 'ref_pattern') ? el.namedChildren.find(x => x.type === 'identifier') : null;
+                const d = id && memberOfDescriptor(expr, String(i));
+                if (d) binds.push({ node: main, name: id.text, expr: d });
+            });
+            continue;
         }
         if (role === 'cb') { if (cbFn && cbArg) cbSites.push({ call: main, fn: cbFn, arg: cbArg }); continue; }
-        if (role === 'scope') { scopeNodes.push(main); continue; }
+        if (role === 'scope') { scopeNodes.push({ node: main, block: !!main.__block }); continue; }
         if (role === 'ret') { retNodes.push(main); continue; }
         if (role === 'def' && nameNode) {
             // several patterns may match one definition (with/without return type, owner); merge them
@@ -412,6 +470,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const prev = seenRef.get(nameNode.id);
             if (prev !== undefined) {
                 if ((REF_PRIORITY[kind] ?? 0) > (REF_PRIORITY[rawRefs[prev].kind] ?? 0)) rawRefs[prev] = { node: main, nameNode, kind, recvNode: recvNode ?? rawRefs[prev].recvNode };
+                // the same reference seen with its qualifier (`de::Deserializer` after `Deserializer`)
+                else if (kind === rawRefs[prev].kind && recvNode && !rawRefs[prev].recvNode) rawRefs[prev] = { ...rawRefs[prev], node: main, recvNode };
                 continue;
             }
             seenRef.set(nameNode.id, rawRefs.length);
@@ -431,12 +491,12 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 else if (bindOf) { const t = normalizeType(bindOf.text, spec); expr = t ? `(${t}).${bindKey}` : null; }
                 else expr = memberOfDescriptor(expr, bindKey);
             }
-            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar,
+            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar, local: bindLocal,
                 expr, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
                 each: bindEach ? elementsDescriptor(bindEach, spec) : null };
             const prev = bindSites.get(key);
             if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
-            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; }
+            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; p.local ||= rec.local; }
         }
     }
 
@@ -549,7 +609,10 @@ function extractFromTree(spec, query, tree, source, relPath) {
     // ── lexical scopes: callables and types, plus anonymous functions (closures, lambdas) ──
     const scopes = [];        // { start, end, sym (owning symbol or -1), parent }
     for (let i = 0; i < symbols.length; i++) if (!VALUE_KINDS.has(symbols[i].kind)) scopes.push({ start: symbols[i].startIndex, end: symbols[i].endIndex, sym: i });
-    for (const n of scopeNodes) {
+    for (const { node: n, block } of scopeNodes) {
+        // a block of a language with block scoping (Rust: `{ … }`, a match arm, an `if let`) holds its
+        // own locals but returns for the function around it
+        if (block) { scopes.push({ start: n.startIndex, end: n.endIndex, sym: -1, block: true }); continue; }
         // `const f = () => …` / `m: function () {}`: the closure is the body of that symbol
         const own = n.parent ? byNodeId.get(n.parent.id) : undefined;
         scopes.push({ start: n.startIndex, end: n.endIndex, sym: own ?? -1 });
@@ -621,8 +684,31 @@ function extractFromTree(spec, query, tree, source, relPath) {
             if (pat?.type === 'identifier') binds.push({ node: arg, name: pat.text, cb: { recv, method, i, j } });
         });
     }
-    const setLocal = (scope, name, val) => {
+    // the type `this`/`self` denotes inside a symbol: its class, or the receiver type of an
+    // out-of-body method (Rust impl blocks, Go receivers) — { idx: class symbol or -1, name }
+    const classByName = new Map();
+    const selfType = (encl) => {
+        const cls = classOf(encl, symbols);
+        if (cls >= 0) return { idx: cls, name: symbols[cls].qname };
+        for (let i = encl; i >= 0; i = symbols[i].parentIdx) {
+            const o = symbols[i].owner;
+            if (!o) continue;
+            if (!classByName.has(o)) classByName.set(o, symbols.findIndex(x => x.name === o && CLASS_KINDS.has(x.kind)));
+            const j = classByName.get(o);
+            return { idx: j, name: j >= 0 ? symbols[j].qname : o };
+        }
+        return null;
+    };
+    // where a language rebinds a name in sequence (Rust `let x = …; let x = x.y();`), every binding
+    // of a scope is kept with where it starts to hold: a `let` after its statement, a pattern of a
+    // match arm, `if let` or `for` over that construct's own scope
+    const sequential = new Map();   // `${scope}:${name}` -> binding records by position
+    const setLocalAt = (scope, name, val) => {
         const k = scope + ':' + name;
+        if (spec.shadowing) {
+            const list = sequential.get(k) ?? sequential.set(k, []).get(k);
+            list.push(val);
+        }
         const prev = localTypes.get(k);
         if (!prev) localTypes.set(k, val);
         else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true, end: Math.min(prev.end, val.end) });
@@ -631,19 +717,36 @@ function extractFromTree(spec, query, tree, source, relPath) {
     for (const b of binds) {
         const ctx = { ...ctxAt(b.node.startIndex), pos: b.node.startIndex };
         const end = b.node.endIndex; // the local is in effect from here on
+        const from = spec.shadowing && b.node.type !== 'let_declaration' && b.node.type !== 'parameter' ? b.node.startIndex : end;
+        const setLocal = (scope, name, val) => setLocalAt(scope, name, { ...val, from });
+        if (b.variant) {
+            const owner = b.variant.owner === 'Self' ? selfType(ctx.sym)?.name : b.variant.owner;
+            if (owner) setLocal(ctx.scope, b.name, { type: owner + '#' + b.variant.field, ctx, end });
+            continue;
+        }
         const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
-        const type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
-        if (type) setLocal(ctx.scope, b.name, { type, ctx, end });
+        let type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
+        // a type parameter stands for its bound (`r: &mut R` with `R: Read`)
+        if (type && spec.typeParamBound && /^[A-Z][\w$]*$/.test(type)) { const bound = spec.typeParamBound(b.node, type); if (bound) type = typeText(bound) ?? type; }
+        if (type) setLocal(ctx.scope, b.name, { type, ctx, end, raw: b.type ?? b.new ?? typed });
         else if (b.type && /^\{[^]*\}$/.test(b.type.trim())) setLocal(ctx.scope, b.name, { inline: b.type.trim(), ctx, end }); // `x: { a: A; … }`
         else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx, end });
         else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx, end });
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx, end });
         else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx, end });
         else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx, end });
-        else if (b.type || (b.expr && b.expr !== 'null')) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
+        else if (b.type || (b.expr && b.expr !== 'null') || b.local) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
     }
     const lookupLocal = (ctx, name) => {
         for (let k = ctx.scope; ; k = scopes[k].parent) {
+            const seq = spec.shadowing && ctx.pos != null ? sequential.get(k + ':' + name) : null;
+            if (seq) {
+                let best = null;
+                for (const s of seq) if (s.from <= ctx.pos && (!best || s.from >= best.from)) best = s;
+                if (best) return best.opaque ? null : best;
+                if (k < 0) break;
+                continue; // bound later in this scope: an outer binding holds here
+            }
             const v = localTypes.get(k + ':' + name);
             if (v) return v.conflict || v.opaque ? null : v;
             if (k < 0) break;
@@ -707,23 +810,14 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (v.each) return eachOf(inferType(v.each, v.ctx, depth + 1));
         return null;
     };
-    const SEG_RE = /^([A-Za-z_$@][\w$]*)((?:\(\)|\[\])*)$/;
-    // the type `this`/`self` denotes inside a symbol: its class, or the receiver type of an
-    // out-of-body method (Rust impl blocks, Go receivers) — { idx: class symbol or -1, name }
-    const classByName = new Map();
-    const selfType = (encl) => {
-        const cls = classOf(encl, symbols);
-        if (cls >= 0) return { idx: cls, name: symbols[cls].qname };
-        for (let i = encl; i >= 0; i = symbols[i].parentIdx) {
-            const o = symbols[i].owner;
-            if (!o) continue;
-            if (!classByName.has(o)) classByName.set(o, symbols.findIndex(x => x.name === o && CLASS_KINDS.has(x.kind)));
-            const j = classByName.get(o);
-            return { idx: j, name: j >= 0 ? symbols[j].qname : o };
-        }
-        return null;
-    };
+    const SEG_RE = /^([A-Za-z_$@][\w$]*|\d+)((?:\(\)|\[\])*)$/;
 
+    /** The bound a type parameter `name` has where `pos` is (see spec.typeParamBound), as a type string. */
+    const boundAt = (pos, name) => {
+        if (!spec.typeParamBound || pos == null || !/^[A-Z][\w$]*$/.test(name)) return null;
+        const b = spec.typeParamBound(root.descendantForIndex(pos), name);
+        return b ? typeText(b) : null;
+    };
     /** Static type of an expression descriptor evaluated in `ctx`, as far as this file tells. */
     const inferType = (desc, ctx, depth = 0) => {
         if (!desc || depth > 5 || desc === '?' || desc === 'super' || desc === 'null') return null;
@@ -751,12 +845,19 @@ function extractFromTree(spec, query, tree, source, relPath) {
         let t = null, i = 1;
         const first = segs[0];
         if (cast) { t = cast; i = 0; }
+        else if (first.name === 'Self' && spec.shadowing && !first.ops.length) {
+            // `Self::new()` (Rust): the enclosing type
+            const st = selfType(ctx.sym);
+            if (!st) return null;
+            t = st.name;
+        }
         else if (first.name === 'this') {
             const st = selfType(ctx.sym);
             if (!st) return null;
             if (segs.length === 1) return first.ops.length ? null : st.name;
             const nt = ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, 'this.' + segs[1].name) : null;
-            const ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
+            let ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
+            if (ft) ft = boundAt(ctx.pos, ft) ?? ft; // `formatter: F` in `impl<W, F: Formatter>`
             t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
             i = 2;
         } else {
@@ -772,22 +873,41 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 // a field the class inherits (declared in a base, maybe in another file): the resolver's to find
                 if (!t && /^[a-z_]/.test(first.name) && !isDeclared(ctx, first.name)) t = applyOps(symbols[classOf(ctx.sym, symbols)].qname + '#' + first.name, first.ops);
             }
+            // a type parameter, in a path (`R::read(x)`) or as a value's type: its bound
+            if (!t && !v && !first.ops.length && /^[A-Z]/.test(first.name)) t = boundAt(ctx.pos, first.name);
+            // a unit struct used as a value (`Arc::new(Sender)`) is of its own type (Rust)
+            // (as a receiver, `Limb::as_cast(t)`, the name is a path the resolver walks)
+            if (!t && !v && spec.shadowing && !ctx.receiver && segs.length === 1 && !first.ops.length && /^[A-Z][a-z]/.test(first.name)) t = first.name;
             // `Type.staticField…`: a capitalised root that is not a local names a type
             if (!t && !v && segs.length > 1 && !first.ops.length && /^[A-Z]/.test(first.name)) t = first.name;
             // `b := Form`: a package-level variable, maybe of another file of the package; its type is
             // the resolver's to find (a Go name is never both a type and a value)
             else if (!t && !v && segs.length === 1 && !first.ops.length && spec.packageValues && !isDeclared(ctx, first.name)) t = first.name;
-            // `pkg.New()` / `utils.makeFoo()`: a call through a module or import alias returns the callee's type
-            else if (!t && !v && segs.length > 1 && !first.ops.length && segs[1].ops[0] === '()') {
-                t = applyOps('call:' + first.name + '.' + segs[1].name, segs[1].ops.slice(1));
-                i = 2;
+            // `pkg.New()` / `utils.makeFoo()`: a call through a module or import alias returns the callee's type;
+            // so does one through a longer path (`grep::regex::RegexMatcherBuilder::new()`, `pkg.sub.make()`)
+            else if (!t && !v && segs.length > 1 && !first.ops.length) {
+                let k = 1;
+                while (k < segs.length - 1 && !segs[k].ops.length) k++;
+                if (segs[k].ops[0] === '()' && (k === 1 || spec.pathCalls)) {
+                    t = applyOps('call:' + segs.slice(0, k + 1).map(x => x.name).join('.'), segs[k].ops.slice(1));
+                    i = k + 1;
+                }
             }
         }
         for (; i < segs.length && t; i++) {
             const seg = segs[i];
             const call = seg.ops[0] === '()';
-            if (call && spec.identityMethods?.has(seg.name)) { t = applyOps(t, seg.ops.slice(1)); continue; }
+            // `Outer.this.m()` (Java, Kotlin, C#… inner classes): the enclosing instance of Outer
+            if (i === 1 && seg.name === 'this' && !seg.ops.length && !deferred(t)) continue;
+            if (call && spec.identityMethods?.has(seg.name)) {
+                // `x.clone()`, `opt.unwrap()`: the same value — unless x's own type defines that method
+                // (a repository type's `upgrade`), which only the resolver can tell: `T#~upgrade`
+                t = applyOps(t === '!' || /(\[\]|\{\})$/.test(t) ? t : t + '#~' + seg.name, seg.ops.slice(1));
+                continue;
+            }
             if (t === '!') return '!';
+            // `pair.0` of a tuple type `(A,B)` (see normalizeType)
+            if (t.startsWith('(') && /^\d+$/.test(seg.name)) { t = applyOps(tupleElement(t, Number(seg.name)), seg.ops); continue; }
             if (!deferred(t) && t.endsWith('[]')) {
                 // `list.get(0)`, `xs.first()`: collection accessors hand back an element
                 if (call && spec.elementMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2), seg.ops.slice(1)); continue; }
@@ -831,6 +951,18 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const [clsIdx, fname] = [Number(k.slice(0, k.indexOf(':'))), k.slice(k.indexOf(':') + 1)];
         inferredFields.push({ owner: symbols[clsIdx].qname, name: fname, type });
     }
+    // positional fields of a tuple struct (`struct Override(Gitignore)`): `self.0` is a Gitignore
+    for (const { owner, list, prefix } of tupleFields) {
+        const idx = byNodeId.get(owner?.id);
+        if (idx === undefined) continue;
+        let k = 0;
+        for (let i = 0; i < list.childCount; i++) {
+            if (list.fieldNameForChild(i) !== 'type') continue;
+            const type = typeText(list.child(i).text);
+            if (type && type !== '!') inferredFields.push({ owner: symbols[idx].qname, name: prefix + k, type });
+            k++;
+        }
+    }
     // module-level values typed by their initialiser (`export const api = new ApiClient()`), so
     // importers can reach the members of such singletons
     for (let i = 0; i < symbols.length; i++) {
@@ -842,7 +974,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
     // undeclared return types: all `return` expressions of a callable agree on one type
     const returns = new Map(); // symIdx -> [types]
     for (const n of retNodes) {
-        const k = scopeAt(n.startIndex);
+        let k = scopeAt(n.startIndex);
+        while (k >= 0 && scopes[k].block) k = scopes[k].parent;
         const owner = k >= 0 ? scopes[k].sym : -1;
         if (owner < 0 || symbols[owner].type || !CALLABLE_KINDS.has(symbols[owner].kind)) continue;
         const desc = receiverDescriptor(n, spec);
@@ -855,9 +988,24 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (uniq.size === 1 && !uniq.has(null)) symbols[owner].type = types[0];
     }
 
+    /** Static types of a call's arguments, as far as literals, typed locals, casts and constructions tell (spec.argType). */
+    const argTypesOf = (call, ctx) => {
+        const list = call.childForFieldName('arguments') ?? call.namedChildren.find(c => c.type === 'argument_list');
+        const args = list?.namedChildren.filter(c => !/comment/.test(c.type)) ?? [];
+        // a local's declared type, else a field's of an enclosing class in this file (`replacementChar`)
+        const fieldType = (name) => {
+            for (let c = classOf(ctx.sym, symbols), g = 0; c >= 0 && g < 8; c = symbols[c].parentIdx >= 0 ? classOf(symbols[c].parentIdx, symbols) : -1, g++) {
+                const f = symbols.find(s => s.parentIdx === c && s.name === name && VALUE_KINDS.has(s.kind));
+                if (f) return f.type ?? null;
+            }
+            return null;
+        };
+        const out = args.map(n => spec.argType(n, (name) => { const v = lookupLocal(ctx, name); return v ? v.raw ?? null : isDeclared(ctx, name) ? null : fieldType(name); }) ?? '?');
+        return out.some(t => t !== '?') ? out : null;
+    };
     const inferReceiverType = (recv, ctx) => {
         if (!recv || recv === 'this') return null;
-        const t = inferType(recv, ctx);
+        const t = inferType(recv, { ...ctx, receiver: true });
         return t && !deferred(t) && /(\[\]|\{\})$/.test(t) ? '!' : t; // a collection's own methods are the language's
     };
 
@@ -879,13 +1027,17 @@ function extractFromTree(spec, query, tree, source, relPath) {
         // a value or a call by the name of a local (`stack := stack(3); log(stack)`, `check := func…;
         // check()`) is the local, in languages where no local stands for repository code (Go: no
         // imports bind locals)
-        if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues : kind === 'call' && spec.packageValues) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
+        // `localNames`: the same for any local, untyped parameters included (Python: `def send(self,
+        // request): … request` is the parameter, never a function named `request` elsewhere)
+        if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues || spec.localNames : kind === 'call' && (spec.packageValues || spec.localNames)) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
         const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
         // arguments passed: tells overloads apart where each one is a method of its own
         const a = spec.distinctOverloads && (kind === 'call' || kind === 'new') ? callArgc(r.node) : null;
-        refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl, argc: a ? (a.open ? -1 : a.n) : null });
+        // and, where overloads differ by type (`append(char)` / `append(String)`), what each argument is
+        const argTypes = a && !a.open && a.n > 0 && spec.argType ? argTypesOf(r.node, { ...ctx, pos: r.nameNode.startIndex }) : null;
+        refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl, argc: a ? (a.open ? -1 : a.n) : null, argTypes });
     }
 
     // inheritance: attach base names to the enclosing class symbol
@@ -906,7 +1058,27 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const extra = spec.fileInfo ? spec.fileInfo(root, source) : null;
 
     for (const s of symbols) { delete s.startIndex; delete s.endIndex; delete s.lexParent; }
-    return { symbols, refs, imports, fields: inferredFields, fileInfo: extra, errors: root.hasError ? 1 : 0 };
+    return { symbols, refs, imports, fields: inferredFields, fileInfo: extra, ...errorRegions(root) };
+}
+
+/**
+ * Regions the parser could not read (ERROR nodes), and their lines (the first 100). A MISSING node is not counted: the parser
+ * inserted a token and kept the structure (tsx `styled.div<T>\`…\`` gets a MISSING `!` and loses
+ * nothing), while an ERROR node is source left out of the tree, where declarations can be lost.
+ */
+function errorRegions(root) {
+    const errorLines = [];
+    let errors = 0;
+    const visit = (node) => {
+        if (node.type === 'ERROR') {
+            errors++;
+            if (errorLines.length < 100) errorLines.push([node.startPosition.row + 1, node.endPosition.row + 1]);
+            return;
+        }
+        for (let i = 0; i < node.childCount; i++) { const c = node.child(i); if (c.hasError) visit(c); }
+    };
+    if (root.hasError) visit(root);
+    return { errors, errorLines };
 }
 
 const NULLISH_TYPES = new Set(['null', 'undefined', 'None', 'void', 'nil', 'never', 'NoneType', 'Nothing', 'Unit']);
@@ -925,6 +1097,12 @@ function splitTop(s, sep) {
     }
     out.push(s.slice(start));
     return out;
+}
+
+/** Element `i` of a tuple type string `(A,B)`, or null (`?`, out of range). */
+export function tupleElement(t, i) {
+    const els = t.slice(1, -1).split(',');
+    return els[i] && els[i] !== '?' ? els[i] : null;
 }
 
 const arrayOf = (e) => (e && !/(\[\]|\{\})$/.test(e) ? e + '[]' : null);
@@ -952,7 +1130,12 @@ export function normalizeType(t, spec, depth = 0) {
     }
     if (splitTop(s, '&').length > 1 || splitTop(s, ',').length > 1) return null; // intersections / tuples
     let m;
-    if ((m = /^\((.*)\)$/s.exec(s))) return normalizeType(m[1], spec, depth + 1);
+    if ((m = /^\((.*)\)$/s.exec(s))) {
+        // a tuple, where the language has them (Rust `(Sender<T>, Receiver<T>)`): `(A,B)`, `?` for an element it cannot type
+        const els = splitTop(m[1], ',').map(x => x.trim()).filter(Boolean);
+        if (spec?.tupleTypes && els.length > 1) return '(' + els.map(x => { const n = normalizeType(x, spec, depth + 1); return n && !/[(),]/.test(n) ? n : '?'; }).join(',') + ')';
+        return normalizeType(m[1], spec, depth + 1);
+    }
     if ((m = /^(.+?)\s*\[\s*\]$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));      // T[]
     if ((m = /^([A-Za-z_$][\w$.]*)\{\}$/.exec(s))) return mapOf(normalizeType(m[1], spec, depth + 1));  // a map of T, as normalised
     if ((m = /^\[\s*\]\s*(.+)$/s.exec(s))) return arrayOf(normalizeType(m[1], spec, depth + 1));        // Go []T

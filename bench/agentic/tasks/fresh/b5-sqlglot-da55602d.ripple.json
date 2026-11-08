@@ -1,0 +1,4 @@
+[
+  "tests/dialects/test_exasol.py::TestExasol::test_json",
+  "tests/dialects/test_snowflake.py::TestSnowflake::test_snowflake"
+]

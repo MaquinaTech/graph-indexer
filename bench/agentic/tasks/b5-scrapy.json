@@ -1,0 +1,83 @@
+[
+  {
+    "id": "b5-scrapy-c285f4cb",
+    "family": "edit",
+    "kind": "fresh",
+    "bench": "b5",
+    "repo": "scrapy",
+    "base": "508bd7faec44975ac774aeff8bb5f4a3f57a0be5",
+    "statement": "# Raising `CloseSpider` while the spider is starting crashes the crawl instead of closing the spider\n\nA pipeline sometimes finds out in its `open_spider` method that the crawl must not run, for example because a database it needs is missing. Raising `CloseSpider` from there should close the spider with that reason, the same as raising it from a callback. Today the exception escapes the crawl.\n\n## What happens\n\n```python\nimport scrapy\nfrom scrapy.crawler import CrawlerProcess\nfrom scrapy.exceptions import CloseSpider\n\nclass ClosingPipeline:\n    def open_spider(self):\n        raise CloseSpider(\"pipeline_reason\")\n\nclass S(scrapy.Spider):\n    name = \"s\"\n\nprocess = CrawlerProcess(settings={\"ITEM_PIPELINES\": {ClosingPipeline: 1}})\ncrawler = process.create_crawler(S)\nprocess.crawl(crawler)\nprocess.start()\nprint(\"RESULT finish_reason:\", crawler.stats.get_value(\"finish_reason\"))\n```\n\nOutput at the current base (excerpt):\n\n```\nRESULT finish_reason: None\n...\n2026-10-13 17:06:36 [scrapy.core.engine] INFO: Spider closed (shutdown)\n...\nTraceback (most recent call last):\n    raise CloseSpider(\"pipeline_reason\")\nscrapy.exceptions.CloseSpider: \n```\n\nA `spider_opened` signal handler that raises `CloseSpider(\"signal_reason\")` has the same problem in a milder form: the spider finishes with reason `finished`, and the exception is only logged as an error (`Error caught on signal handler`).\n\n## What is expected\n\n1. A `CloseSpider` raised by a pipeline's `open_spider` method closes the spider with that reason: `finish_reason` is `pipeline_reason`, the log says `Spider closed (pipeline_reason)`, the `spider_closed` signal is sent once with `reason=\"pipeline_reason\"`, and no traceback is logged.\n2. In that case `crawler.crawl_async()` returns normally instead of raising. `crawler.crawl()`, which returns a Deferred, also fires without a failure and leaves `finish_reason` as `pipeline_reason`.\n3. A `CloseSpider` raised by a `spider_opened` signal handler closes the spider with its reason: with `CloseSpider(\"signal_reason\")`, `finish_reason` is `signal_reason`.\n4. If both a pipeline's `open_spider` method and a `spider_opened` handler raise `CloseSpider` during the same startup, the reason from the pipeline (`pipeline_reason`) is the one that counts.",
+    "testHint": "from the repository root, `pytest tests/test_http_response.py` runs one test file (pytest, pytest-twisted and the test requirements are installed; the FTP tests are not).",
+    "grade": {
+      "testPatch": "diff --git a/tests/test_engine.py b/tests/test_engine.py\nindex 8a3bcec..53eb4a1 100644\n--- a/tests/test_engine.py\n+++ b/tests/test_engine.py\n@@ -29,7 +29,9 @@ from tests.utils.engine import (\n )\n \n if TYPE_CHECKING:\n-    from collections.abc import AsyncIterator\n+    from collections.abc import AsyncIterator, Generator\n+\n+    from twisted.internet.defer import Deferred\n \n     from tests.mockserver.http import MockServer\n \n@@ -230,3 +232,51 @@ async def test_request_scheduled_signal():\n         f\"{scheduler.enqueued!r} != [{keep_request!r}]\"\n     )\n     crawler.signals.disconnect(signal_handler, signals.request_scheduled)\n+\n+\n+class ClosingPipeline:\n+    def open_spider(self):\n+        raise CloseSpider(\"pipeline_reason\")\n+\n+\n+class TestCloseSpiderOnStartup:\n+    @coroutine_test\n+    async def test_pipeline(self, caplog: pytest.LogCaptureFixture) -> None:\n+        closed: list[str] = []\n+\n+        def spider_closed(reason: str) -> None:\n+            closed.append(reason)\n+\n+        crawler = get_crawler(DefaultSpider, {\"ITEM_PIPELINES\": {ClosingPipeline: 1}})\n+        crawler.signals.connect(spider_closed, signals.spider_closed)\n+        with caplog.at_level(logging.INFO):\n+            await crawler.crawl_async()\n+        assert crawler.stats.get_value(\"finish_reason\") == \"pipeline_reason\"\n+        assert closed == [\"pipeline_reason\"]\n+        assert \"Traceback\" not in caplog.text\n+\n+    @coroutine_test\n+    async def test_spider_opened(self) -> None:\n+        def spider_opened(spider: Spider) -> None:\n+            raise CloseSpider(\"signal_reason\")\n+\n+        crawler = get_crawler(DefaultSpider)\n+        crawler.signals.connect(spider_opened, signals.spider_opened)\n+        await crawler.crawl_async()\n+        assert crawler.stats.get_value(\"finish_reason\") == \"signal_reason\"\n+\n+    @coroutine_test\n+    async def test_startup_wins_over_spider_opened(self) -> None:\n+        def spider_opened(spider: Spider) -> None:\n+            raise CloseSpider(\"signal_reason\")\n+\n+        crawler = get_crawler(DefaultSpider, {\"ITEM_PIPELINES\": {ClosingPipeline: 1}})\n+        crawler.signals.connect(spider_opened, signals.spider_opened)\n+        await crawler.crawl_async()\n+        assert crawler.stats.get_value(\"finish_reason\") == \"pipeline_reason\"\n+\n+    @inline_callbacks_test\n+    def test_deferred_crawl(self) -> Generator[Deferred[Any], Any, None]:\n+        crawler = get_crawler(DefaultSpider, {\"ITEM_PIPELINES\": {ClosingPipeline: 1}})\n+        yield crawler.crawl()\n+        assert crawler.stats.get_value(\"finish_reason\") == \"pipeline_reason\"\n",
+      "checks": [
+        {
+          "name": "FAIL_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-scrapy-c285f4cb.f2p.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python -m pytest"
+          }
+        },
+        {
+          "name": "PASS_TO_PASS",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-scrapy-c285f4cb.p2p.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python -m pytest"
+          }
+        },
+        {
+          "name": "RIPPLE",
+          "cmd": "node {GI}/bench/agentic/pytests.mjs --runner pytest --expect-pass {GI}/bench/agentic/tasks/fresh/b5-scrapy-c285f4cb.ripple.json",
+          "timeoutSec": 900,
+          "env": {
+            "GI_PYTHON": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python",
+            "GI_PYTEST": "/Users/nicolaslopezdelermalopez/.gi-agentic/venv-scrapy/bin/python -m pytest"
+          },
+          "kind": "info"
+        }
+      ]
+    },
+    "gold": {
+      "files": [
+        "scrapy/core/engine.py",
+        "scrapy/crawler.py",
+        "scrapy/exceptions.py"
+      ],
+      "patch": "diff --git a/scrapy/core/engine.py b/scrapy/core/engine.py\nindex b63d136..104daf3 100644\n--- a/scrapy/core/engine.py\n+++ b/scrapy/core/engine.py\n@@ -248,7 +248,7 @@ class ExecutionEngine:\n         )\n         return deferred_from_coro(self.close_async())\n \n-    async def close_async(self) -> None:\n+    async def close_async(self, *, reason: str = \"shutdown\") -> None:\n         \"\"\"\n         Gracefully close the execution engine.\n         If it has already been started, stop it. In all cases, close the spider and the downloader.\n@@ -256,9 +256,7 @@ class ExecutionEngine:\n         if self.running:\n             await self.stop_async()  # will also close spider and downloader\n         elif self.spider is not None:\n-            await self.close_spider_async(\n-                reason=\"shutdown\"\n-            )  # will also close downloader\n+            await self.close_spider_async(reason=reason)  # will also close downloader\n         elif hasattr(self, \"downloader\"):\n             self.downloader.close()\n \n@@ -557,10 +555,20 @@ class ExecutionEngine:\n         nextcall = CallLaterOnce(self._start_scheduled_requests)\n         scheduler = build_from_crawler(self.scheduler_cls, self.crawler)\n         self._slot = _Slot(close_if_idle, nextcall, scheduler)\n-        self._start = await self.scraper.spidermw.process_start()\n-        if hasattr(scheduler, \"open\") and (d := scheduler.open(self.crawler.spider)):\n-            await maybe_deferred_to_future(d)\n-        await self.scraper.open_spider_async()\n+        # A component that fails to start can ask for the spider to be closed.\n+        # The rest of the startup runs anyway, so that components that are\n+        # started also get stopped, and the request is honored once the spider\n+        # is open.\n+        close_spider_exc: CloseSpider | None = None\n+        try:\n+            self._start = await self.scraper.spidermw.process_start()\n+            if hasattr(scheduler, \"open\") and (\n+                d := scheduler.open(self.crawler.spider)\n+            ):\n+                await maybe_deferred_to_future(d)\n+            await self.scraper.open_spider_async()\n+        except CloseSpider as exc:\n+            close_spider_exc = exc\n         stats = self.crawler.stats\n         if argument_is_required(stats.open_spider, \"spider\"):\n             warnings.warn(\n@@ -572,9 +580,14 @@ class ExecutionEngine:\n             stats.open_spider(spider=self.crawler.spider)\n         else:\n             stats.open_spider()\n-        await self.signals.send_catch_log_async(\n-            signals.spider_opened, spider=self.crawler.spider\n+        results = await self.signals.send_catch_log_async(\n+            signals.spider_opened, spider=self.crawler.spider, dont_log=CloseSpider\n         )\n+        for _, result in results:\n+            if isinstance(result, CloseSpider):\n+                close_spider_exc = close_spider_exc or result\n+        if close_spider_exc is not None:\n+            raise close_spider_exc\n \n     def _spider_idle(self) -> None:\n         \"\"\"\ndiff --git a/scrapy/crawler.py b/scrapy/crawler.py\nindex 44c4ffd..f0cfba6 100644\n--- a/scrapy/crawler.py\n+++ b/scrapy/crawler.py\n@@ -15,7 +15,7 @@ from twisted.internet.defer import Deferred, DeferredList, inlineCallbacks\n from scrapy import Spider\n from scrapy.addons import AddonManager\n from scrapy.core.engine import ExecutionEngine\n-from scrapy.exceptions import ScrapyDeprecationWarning\n+from scrapy.exceptions import CloseSpider, ScrapyDeprecationWarning\n from scrapy.extension import ExtensionManager\n from scrapy.settings import SETTINGS_PRIORITIES, Settings, overridden_settings\n from scrapy.signalmanager import SignalManager\n@@ -270,8 +270,12 @@ class Crawler:\n             self._apply_settings()\n             self._update_root_log_handler()\n             self.engine = self._create_engine()\n-            yield deferred_from_coro(self.engine.open_spider_async())\n-            yield deferred_from_coro(self.engine.start_async())\n+            try:\n+                yield deferred_from_coro(self.engine.open_spider_async())\n+            except CloseSpider as exc:\n+                yield deferred_from_coro(self.engine.close_async(reason=exc.reason))\n+            else:\n+                yield deferred_from_coro(self.engine.start_async())\n         except Exception:\n             self.crawling = False\n             if self._engine is not None:\n@@ -300,8 +304,12 @@ class Crawler:\n             self._apply_settings()\n             self._update_root_log_handler()\n             self.engine = self._create_engine()\n-            await self.engine.open_spider_async()\n-            await self.engine.start_async()\n+            try:\n+                await self.engine.open_spider_async()\n+            except CloseSpider as exc:\n+                await self.engine.close_async(reason=exc.reason)\n+            else:\n+                await self.engine.start_async()\n         except Exception:\n             self.crawling = False\n             if self._engine is not None:\ndiff --git a/scrapy/exceptions.py b/scrapy/exceptions.py\nindex fa5bc1c..cd2560d 100644\n--- a/scrapy/exceptions.py\n+++ b/scrapy/exceptions.py\n@@ -56,12 +56,11 @@ class DontCloseSpider(Exception):\n \n \n class CloseSpider(Exception):\n-    \"\"\"Raised from a :ref:`spider callback <topics-spiders>` or from\n-    :meth:`~scrapy.Spider.start` to request the spider to be closed/stopped.\n+    \"\"\"Raised from a :ref:`spider callback <topics-spiders>`, or while the\n+    spider is starting, to request the spider to be closed/stopped.\n \n     .. versionchanged:: VERSION\n-       Raising it from :meth:`~scrapy.Spider.start` closes the spider, instead\n-       of being reported as a start error.\n+       Added support for raising it while the spider is starting.\n \n     *reason* is a string with the reason for closing.\n \n",
+      "partial": [
+        "scrapy/core/engine.py"
+      ],
+      "ripple": [
+        "scrapy/crawler.py"
+      ]
+    },
+    "meta": {
+      "sha": "c285f4cb18c310f131e2ce8912a950d533837180",
+      "date": "2026-08-10",
+      "subject": "Support CloseSpider during spider startup (#7905)",
+      "tests": [
+        "tests/test_engine.py"
+      ],
+      "testFiles": [
+        "tests/test_engine.py"
+      ],
+      "ripples": [
+        {
+          "name": "close_async",
+          "a": "scrapy/core/engine.py",
+          "b": "scrapy/crawler.py"
+        }
+      ],
+      "f2p": 4,
+      "p2p": 10,
+      "ripple": 4,
+      "flaky": 0,
+      "suite": 147,
+      "commitMessage": "Support CloseSpider during spider startup (#7905)"
+    }
+  }
+]

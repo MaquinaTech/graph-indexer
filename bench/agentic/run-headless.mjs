@@ -31,6 +31,12 @@
  * checks that it has what the arm needs — the Agent tool, the graph-indexer server connected, the
  * helper among the sub-agents it can start — before anything is spent on the runs themselves.
  *
+ * Every shell command a session runs goes through Claude Code's own sandbox (`sandboxSettings`,
+ * passed with --settings): fail-closed, no network but localhost, writes only in the run directory,
+ * the checkout and the temporary directory, no reads of the home directory beyond the work area.
+ * --preflight checks it: a write to the home directory, a connection out and a read of a home file
+ * must all fail.
+ *
  * It streams each transcript to <transcripts>/<agent id>.jsonl and registers the agent id in
  * runs/<label>/agents.tsv. Grade afterwards with
  *   node bench/agentic/grade-batch.mjs --gi LABEL --agents <ids> --transcripts <dir>
@@ -38,19 +44,24 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { argv, WORK } from './lib.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { argv, loadTasks, WORK } from './lib.mjs';
+import { REPOS } from './repos.mjs';
 import { giBin } from './prepare.mjs';
 import { usesIndex, SESSION_ARMS } from './arms.mjs';
 import { HELPER_NAME } from '../../src/cli/helper.mjs';
 import { serverV2 } from './v2.mjs';
+import { sessionEnv } from './competitors.mjs';
 
 const { opt, list, flag } = argv();
 const label = opt('--gi');
 if (!label) throw new Error('--gi LABEL is required');
 const dir = path.resolve(opt('--transcripts', path.join(WORK, 'transcripts', label)));
 const claude = opt('--claude-bin', 'claude');
-const model = opt('--model', null);
+// every measured session runs on one model, pinned rather than the CLI's default (which has
+// changed between rounds); --model overrides it
+const model = opt('--model', 'claude-sonnet-5-5');
 const concurrency = Math.max(1, Number(opt('--concurrency', 3)));
 const dry = flag('--dry-run');
 const preflight = flag('--preflight');
@@ -67,37 +78,85 @@ const runs = fs.readdirSync(runsDir).filter(r => fs.existsSync(path.join(runsDir
     .map(r => JSON.parse(fs.readFileSync(path.join(runsDir, r, 'meta.json'), 'utf8')));
 fs.mkdirSync(dir, { recursive: true });
 
+// agents run the tests with the Python that grades them: the virtualenv of the task's repository
+// (REPOS[repo].python) or else GI_PYTHON's; its bin/ comes first on the sessions' PATH
+const taskRepo = new Map(loadTasks().map(t => [t.id, t.repo]));
+const pythonOf = (meta) => REPOS[taskRepo.get(meta.taskId)]?.python ?? process.env.GI_PYTHON ?? null;
+const envFor = (meta) => {
+    const py = pythonOf(meta);
+    const extra = REPOS[taskRepo.get(meta.taskId)]?.env ?? {};
+    if (!py) return { ...process.env, ...extra };
+    const bin = path.dirname(py);
+    return { ...process.env, ...extra, GI_PYTHON: py, GI_PYTEST: `${py} -m pytest`, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VIRTUAL_ENV: path.dirname(bin) };
+};
+if (!dry) for (const m of runs.filter(m => /^(fresh|b5)-/.test(m.taskId))) {
+    if (!pythonOf(m)) throw new Error('mined Python tasks need GI_PYTHON (the virtualenv python that grades them), so agents and grading share one environment');
+    const r = spawnSync('python3', ['-c', 'import pytest'], { env: envFor(m), encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`python3 on the sessions' PATH cannot import pytest: ${r.stderr.trim().split('\n').pop()}`);
+}
+
+/**
+ * Claude Code's own sandbox for every shell command a session runs (the repository's tests, a
+ * build, anything the agent starts), fail-closed: no network but localhost, writes only in the run
+ * directory, the checkout and the temporary directory, no reads of the home directory beyond what
+ * the tests need (the work area, Node, git's settings), no way out (allowUnsandboxedCommands
+ * false ignores `dangerouslyDisableSandbox`), and no start at all if the sandbox cannot start.
+ * Claude Code's file tools and MCP servers run outside it (graph-indexer's server is ours).
+ */
+export function sandboxSettings(meta) {
+    const home = os.homedir();
+    return {
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+        autoAllowBashIfSandboxed: true,
+        excludedCommands: [],
+        network: { allowedDomains: [], strictAllowlist: true, allowLocalBinding: true },
+        filesystem: {
+            allowWrite: [meta.runDir, meta.checkout],
+            denyRead: [home],
+            allowRead: [meta.runDir, meta.checkout, WORK, path.dirname(path.dirname(process.execPath)), path.join(home, '.gitconfig'), path.join(home, '.config', 'git')],
+        },
+    };
+}
+
 /** The command line for one run, and the config files it needs (written next to the run). */
 function commandFor(meta, { bin = giBin(label), prompt = null, budget = null } = {}) {
+    // in the repository (prepare.mjs --in-repo) the instructions are the prompt, as a user's request is
+    if (meta.inRepo && !prompt) prompt = fs.readFileSync(path.join(meta.runDir, 'INSTRUCTIONS.md'), 'utf8');
     prompt ??= `Your task instructions are in ${path.join(meta.runDir, 'INSTRUCTIONS.md')} — read that file first and follow it exactly. The repository is at ${meta.checkout}. When you have finished, reply with the single word DONE.`;
     const session = SESSION_ARMS[meta.arm];
     if (session) {
         const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits',
-            '--allowedTools', session.index ? 'Bash,mcp__graph-indexer' : 'Bash', '--disallowedTools', 'WebSearch,WebFetch',
-            '--add-dir', meta.checkout, '--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config',
+            '--allowedTools', ['Bash', ...(session.index ? ['mcp__graph-indexer'] : []), ...(meta.competitor?.allowed ?? [])].join(','), '--disallowedTools', 'WebSearch,WebFetch',
+            '--add-dir', meta.inRepo ? meta.runDir : meta.checkout, '--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config',
             '--setting-sources', 'project,local'];
         if (model) args.push('--model', model);
+        // a tool whose setup replaces Claude Code's system prompt (Serena's recommended override)
+        if (meta.competitor?.systemPrompt) args.push('--system-prompt', fs.readFileSync(path.join(meta.runDir, meta.competitor.systemPrompt), 'utf8'));
         if (budget ?? maxBudget) args.push('--max-budget-usd', String(budget ?? maxBudget));
+        args.push('--settings', path.join(meta.runDir, 'sandbox.json'));
         const servers = session.v2 ? { 'graph-indexer': serverV2(meta.checkout) }
-            : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } : {};
-        return { args, files: { 'mcp.json': { mcpServers: servers } } };
+            : session.index ? { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } }
+            : meta.competitor ? meta.competitor.mcpServers : {};
+        return { args, files: { 'mcp.json': { mcpServers: servers }, 'sandbox.json': { sandbox: sandboxSettings(meta) } } };
     }
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions',
         '--tools', 'Read,Grep,Glob,Bash,Edit,Write', '--add-dir', meta.checkout];
     if (model) args.push('--model', model);
-    const files = {};
+    const files = { 'settings.json': { sandbox: sandboxSettings(meta) } };
+    args.push('--settings', path.join(meta.runDir, 'settings.json'));
     if (meta.arm === 'mcp' || meta.arm === 'mcp+hooks') {
         files['mcp.json'] = { mcpServers: { 'graph-indexer': { command: process.execPath, args: [bin, 'serve', '--repo', meta.checkout] } } };
         args.push('--mcp-config', path.join(meta.runDir, 'mcp.json'), '--strict-mcp-config');
     }
     if (meta.arm === 'mcp+hooks') {
         const hook = (event) => ({ type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} hook ${event} --repo ${JSON.stringify(meta.checkout)}`, timeout: 10 });
-        files['settings.json'] = { hooks: {
+        files['settings.json'].hooks = {
             PostToolUse: [{ matcher: 'Edit|Write|MultiEdit|Grep|Bash|Read', hooks: [hook('post-tool')] }],
             SessionStart: [{ hooks: [hook('session-start')] }],
             SubagentStart: [{ hooks: [hook('subagent-start')] }],
-        } };
-        args.push('--settings', path.join(meta.runDir, 'settings.json'));
+        };
     }
     return { args, files };
 }
@@ -107,7 +166,8 @@ function launch(meta, args, files, file) {
     for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(meta.runDir, name), JSON.stringify(content, null, 2) + '\n');
     const out = fs.createWriteStream(file);
     return new Promise((resolve) => {
-        const child = spawn(claude, args, { cwd: meta.runDir, stdio: ['ignore', 'pipe', 'pipe'] });
+        const competitor = SESSION_ARMS[meta.arm]?.competitor;
+        const child = spawn(claude, args, { cwd: meta.inRepo ? meta.checkout : meta.runDir, stdio: ['ignore', 'pipe', 'pipe'], env: competitor ? sessionEnv(competitor, envFor(meta)) : envFor(meta) });
         child.stdout.pipe(out);
         let err = '';
         child.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
@@ -138,10 +198,18 @@ async function preflightArms() {
     for (const [arm, meta] of firstOf) {
         const session = SESSION_ARMS[arm];
         // the sub-agents a session can start are listed in its Agent tool, which the model reads
+        // a mined Python task: the session's own shell must find the grading Python first
+        const pyBin = /^(fresh|b5)-/.test(meta.taskId) && pythonOf(meta);
+        // the sandbox: a write to the home directory, a connection out and a read of a home file must all fail
+        const probe = path.join(os.homedir(), '.gi-sandbox-probe');
+        const sandboxProbe = `(touch ${probe} && echo WRITE-OPEN || echo WRITE-BLOCKED); (curl -sS -m 5 https://example.com >/dev/null 2>&1 && echo NET-OPEN || echo NET-BLOCKED); (head -c1 ${path.join(os.homedir(), '.zshrc')} >/dev/null 2>&1 && echo READ-OPEN || echo READ-BLOCKED)`;
+        const command = pyBin ? `python3 -c "import pytest, sys; print(sys.executable)"; ${sandboxProbe}` : sandboxProbe;
         const { args, files } = commandFor(meta, { bin: usesIndex(arm) ? giBin(label) : null, budget: 0.5,
-            prompt: 'Without using any tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.' });
+            prompt: `Run this Bash command once, exactly as written: ${command} — then, without using any other tool, reply with the names of the sub-agent types your Agent tool can start, comma-separated, and nothing else.` });
         const file = path.join(dir, `preflight-${arm.replace(/[^\w.+-]/g, '_')}-${Date.now().toString(36)}.jsonl`);
         const code = await launch(meta, args, files, file);
+        const leaked = fs.existsSync(probe);
+        fs.rmSync(probe, { force: true });
         const events = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
         const init = events.find(e => e.type === 'system' && e.subtype === 'init');
         const result = events.find(e => e.type === 'result');
@@ -155,6 +223,17 @@ async function preflightArms() {
             ['web tools off', !tools.some(t => t === 'WebSearch' || t === 'WebFetch'), ''],
         ];
         if (session) checks.push(['sub-agents (Agent tool)', tools.includes('Agent') || tools.includes('Task'), '']);
+        const out = events.filter(e => e.type === 'user').flatMap(e => e.message?.content ?? []).filter(c => c.type === 'tool_result')
+            .map(c => (Array.isArray(c.content) ? c.content.map(x => x.text ?? '').join('') : String(c.content ?? ''))).join('\n');
+        checks.push(['shell sandboxed (no home write, no network, no home read)', !leaked && ['WRITE', 'NET', 'READ'].every(k => out.includes(`${k}-BLOCKED`)),
+            ['WRITE', 'NET', 'READ'].map(k => (out.includes(`${k}-BLOCKED`) ? `${k.toLowerCase()} blocked` : out.includes(`${k}-OPEN`) ? `${k.toLowerCase()} OPEN` : `${k.toLowerCase()} ?`)).join(', ')]);
+        if (pyBin) checks.push(['tests run with the grading Python', out.includes(pyBin) || out.includes(path.dirname(pyBin)), out.trim().split('\n').find(l => l.includes('python'))?.slice(0, 160) ?? 'no command output']);
+        if (meta.competitor && Object.keys(meta.competitor.mcpServers).length) {
+            const name = Object.keys(meta.competitor.mcpServers)[0];
+            const srv = servers.find(s => s.name === name);
+            checks.push([`${name} server`, srv?.status === 'connected', srv ? srv.status : 'absent'],
+                [`${name} tools`, tools.some(t => t.startsWith(`mcp__${name}__`)), `${tools.filter(t => t.startsWith(`mcp__${name}__`)).length} tools`]);
+        }
         if (usesIndex(arm)) {
             const gi = servers.find(s => s.name === 'graph-indexer');
             checks.push(['graph-indexer server', gi?.status === 'connected', gi ? gi.status : 'absent'],
@@ -162,8 +241,15 @@ async function preflightArms() {
         }
         // the helper is there when the session lists it (init event) or the model names it (its Agent tool lists it)
         const offered = agents.includes(HELPER_NAME) || reply.includes(HELPER_NAME);
+        // the SessionStart hook ran when its output (the index line) is in the stream
+        // the project's hooks ran: Claude Code reports each one (hook_response) with its exit code
+        if (session?.hooks) { const h = events.find(e => e.subtype === 'hook_response' && e.hook_event === 'SessionStart'); checks.push(['hooks ran on the repository (SessionStart)', h?.exit_code === 0 && /\S/.test(String(h?.output ?? h?.stdout ?? '')), h ? `exit ${h.exit_code}, ${String(h.output ?? h.stdout ?? '').trim() ? 'with the index line' : 'no output: not the indexed repository'}` : 'no hook_response']); }
         if (session?.helper) checks.push(['helper sub-agent offered', offered, init?.agents ? `agents: ${agents.join(', ')}` : '']);
         else if (session) checks.push(['no helper sub-agent', !offered, '']);
+        const limit = events.find(e => e.type === 'rate_limit_event')?.rate_limit_info;
+        const windows = Object.entries(limit?.unifiedWindows ?? {}).map(([k, w]) => [k, w.utilization]);
+        if (!windows.length && limit?.utilization != null) windows.push([limit.rateLimitType ?? '', limit.utilization]);
+        if (windows.length) { const [k, u] = windows.sort((a, b) => b[1] - a[1])[0]; checks.push(['usage limit has room', u < 0.9, `${k} at ${Math.round(u * 100)} %`]); }
         const bad = checks.filter(([, ok]) => !ok);
         failed += bad.length ? 1 : 0;
         console.log(`${arm}: ${bad.length ? 'NOT READY' : 'ready'}`);

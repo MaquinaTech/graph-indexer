@@ -1,0 +1,6 @@
+[
+  "tests/test_optimizer.py::TestOptimizer::test_case_sensitive_json_dot_access",
+  "tests/test_optimizer.py::TestOptimizer::test_optimize",
+  "tests/test_optimizer.py::TestOptimizer::test_pushdown_projection",
+  "tests/test_optimizer.py::TestOptimizer::test_qualify_columns"
+]

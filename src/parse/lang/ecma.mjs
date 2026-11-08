@@ -363,6 +363,8 @@ function isModuleLevel(node) {
 
 function isExported(defNode) {
     let n = defNode;
+    // `export default function () {…}` / `export default {…}`: the statement is the definition
+    if (n.type === 'export_statement') return true;
     if (n.type === 'variable_declarator') n = n.parent;
     const p = n.parent;
     if (p?.type === 'export_statement') return true;

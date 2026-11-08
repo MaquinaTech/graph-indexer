@@ -1,0 +1,15 @@
+[
+  "sympy/logic/tests/test_lra_theory.py::::test_backtracking_empty_history",
+  "sympy/logic/tests/test_lra_theory.py::::test_backtracking_multiple_variables",
+  "sympy/logic/tests/test_lra_theory.py::::test_backtracking_multiple_variables_multiple_backtracks",
+  "sympy/logic/tests/test_lra_theory.py::::test_backtracking_single_variable",
+  "sympy/logic/tests/test_lra_theory.py::::test_backtracking_single_variable_multiple_backtracks",
+  "sympy/logic/tests/test_lra_theory.py::::test_binrel_evaluation",
+  "sympy/logic/tests/test_lra_theory.py::::test_empty_cnf",
+  "sympy/logic/tests/test_lra_theory.py::::test_example_from_paper",
+  "sympy/logic/tests/test_lra_theory.py::::test_from_encoded_cnf",
+  "sympy/logic/tests/test_lra_theory.py::::test_negation",
+  "sympy/logic/tests/test_lra_theory.py::::test_pivot",
+  "sympy/logic/tests/test_lra_theory.py::::test_problem",
+  "sympy/logic/tests/test_lra_theory.py::::test_unhandled_input"
+]

@@ -1,0 +1,6 @@
+[
+  "tests/dialects/test_exasol.py::TestExasol::test_json",
+  "tests/dialects/test_snowflake.py::TestSnowflake::test_snowflake",
+  "tests/test_parser.py::TestParser::test_text_match_excludes_delimited_tokens",
+  "tests/test_transpile.py::TestTranspile::test_identity"
+]

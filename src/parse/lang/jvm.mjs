@@ -1,3 +1,4 @@
+import { simpleParamType } from '../arity.mjs';
 /** Java extraction spec (Kotlin/Scala live in their own modules). */
 
 const T = (cap) => `[(type_identifier) @${cap} (generic_type (type_identifier) @${cap}) (scoped_type_identifier (type_identifier) @${cap} .) (generic_type (scoped_type_identifier (type_identifier) @${cap} .))]`;
@@ -34,6 +35,9 @@ const JAVA_QUERY = `
 (method_invocation object: ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
 (field_access object: ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
 (method_reference . ((identifier) @name @ref.type (#match? @name "^[A-Z]\\w*[a-z]")))
+; a nested class named through its outer one: Token.TokenType.EOF, Document.QuirksMode.quirks
+(field_access object: (field_access object: (identifier) @recv field: (identifier) @name (#match? @name "^[A-Z]\\w*[a-z]")) @ref.type)
+(method_invocation object: (field_access object: (identifier) @recv field: (identifier) @name (#match? @name "^[A-Z]\\w*[a-z]")) @ref.type)
 (argument_list (identifier) @name) @ref.value
 
 (lambda_expression) @scope
@@ -63,6 +67,34 @@ function javaImport(node) {
     return [{ source: parts.join('.'), imported: name, local: name, static: isStatic }];
 }
 
+/** The static type of a call argument where the source says it (literals, typed locals, `new`, casts), else null. */
+function javaArgType(n, rawOfLocal) {
+    switch (n.type) {
+        case 'string_literal': case 'text_block': return 'String';
+        case 'character_literal': return 'char';
+        case 'decimal_integer_literal': case 'hex_integer_literal': case 'octal_integer_literal': case 'binary_integer_literal': return /[lL]$/.test(n.text) ? 'long' : 'int';
+        case 'decimal_floating_point_literal': case 'hex_floating_point_literal': return /[fF]$/.test(n.text) ? 'float' : 'double';
+        case 'true': case 'false': return 'boolean';
+        case 'null_literal': return '*';
+        case 'identifier': return simpleParamType(rawOfLocal(n.text));
+        case 'object_creation_expression': return simpleParamType(n.childForFieldName('type')?.text);
+        case 'cast_expression': return simpleParamType(n.childForFieldName('type')?.text);
+        case 'array_creation_expression': { const t = simpleParamType(n.childForFieldName('type')?.text); return t ? t + '[]'.repeat(Math.max(1, n.namedChildren.filter(c => c.type === 'dimensions_expr' || c.type === 'dimensions').length)) : null; }
+        case 'array_access': {
+            const arr = n.childForFieldName('array');
+            const t = arr?.type === 'identifier' ? simpleParamType(rawOfLocal(arr.text)) : null;
+            return t?.endsWith('[]') ? t.slice(0, -2) : null;
+        }
+        case 'parenthesized_expression': return n.namedChildren[0] ? javaArgType(n.namedChildren[0], rawOfLocal) : null;
+        case 'binary_expression': {
+            // `"a" + x` is a String
+            if (n.childForFieldName('operator')?.text === '+' && [n.childForFieldName('left'), n.childForFieldName('right')].some(c => c?.type === 'string_literal')) return 'String';
+            return null;
+        }
+        default: return null;
+    }
+}
+
 function modifiersText(node) {
     const m = node.namedChildren.find(c => c.type === 'modifiers');
     return m ? m.text : '';
@@ -76,6 +108,7 @@ function javaFileInfo(root) {
 export const java = {
     id: 'java',
     distinctOverloads: true, // each overload is a method of its own: calls bind by argument count
+    argType: javaArgType,    // … and, among overloads of one count, by the argument types the source shows
     localValues: true, // an argument named like a local or parameter is that variable
     nestedTypes: true, // `Token.Comment` names the class Comment nested in Token
     // an anonymous class (`new Transformer<>() {…}`) is `<anonymous>`, a subclass of what it instantiates

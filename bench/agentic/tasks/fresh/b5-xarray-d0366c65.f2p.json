@@ -1,0 +1,4 @@
+[
+  "xarray/tests/test_groupby.py::::test_dask_groupby_blockwise_interleaved_groups[mean]",
+  "xarray/tests/test_groupby.py::::test_dask_groupby_blockwise_interleaved_groups[median]"
+]

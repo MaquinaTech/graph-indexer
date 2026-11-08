@@ -14,6 +14,8 @@ const NAMED_KINDS = ['call', 'new', 'inherit', 'type', 'decorator'];
 // what the reader most often needs next: code it calls and types it uses; data (fields, constants,
 // enum members) comes after, its one-line definition is usually all there is to it
 const TARGET_WEIGHT = (kind) => (['field', 'property', 'variable', 'constant'].includes(kind) ? 0.35 : 1);
+// what a call or instantiation can bind to by name
+const CALLABLE_TARGETS = ['function', 'method', 'constructor', 'class', 'struct', 'macro', 'object', 'type'];
 const DEFINITION_KINDS = ['function', 'method', 'constructor', 'class', 'interface', 'struct', 'trait', 'enum', 'type', 'constant', 'macro', 'object', 'module'];
 
 /**
@@ -45,8 +47,9 @@ export function definitionsUsed(intel, file, from, to, { max = 10, skipIds = new
             const e = bound.get(r.dst_id) ?? bound.set(r.dst_id, { n: 0, score: 0, first: r.line }).get(r.dst_id);
             e.n++; e.score += w * Math.max(0.3, r.conf ?? 1);
         } else if (NAMED_KINDS.includes(r.kind)) {
-            const e = unbound.get(r.name) ?? unbound.set(r.name, { n: 0, score: 0, first: r.line }).get(r.name);
+            const e = unbound.get(r.name) ?? unbound.set(r.name, { n: 0, score: 0, first: r.line, called: false }).get(r.name);
             e.n++; e.score += w * 0.5;
+            if (r.kind === 'call' || r.kind === 'new') e.called = true;
         }
     }
     const inView = (s) => s.path === file && s.start_line >= from && s.end_line <= to;
@@ -66,6 +69,8 @@ export function definitionsUsed(intel, file, from, to, { max = 10, skipIds = new
         if (cands.length !== 1 || seen.has(cands[0].id) || skip.has(cands[0].id)) continue;
         const s = get.get(cands[0].id);
         if (!s || inView(s)) continue;
+        // `Math.max(…)` is not a call to a constant named `max`
+        if (e.called && !CALLABLE_TARGETS.includes(s.kind)) continue;
         seen.add(s.id);
         rows.push({ ...s, ...e, score: e.score * TARGET_WEIGHT(s.kind), byName: true });
     }

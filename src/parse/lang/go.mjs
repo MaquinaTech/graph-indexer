@@ -22,7 +22,9 @@ const QUERY = `
 (method_elem name: (field_identifier) @name) @def.method
 (field_declaration name: (field_identifier) @name type: ${TYPE_HEAD}) @def.field
 (field_declaration name: (field_identifier) @name) @def.field
+(const_spec name: (identifier) @name type: ${TYPE_HEAD}) @def.constant
 (const_spec name: (identifier) @name) @def.constant
+(var_spec name: (identifier) @name type: ${TYPE_HEAD}) @def.variable
 (var_spec name: (identifier) @name) @def.variable
 
 (call_expression function: (identifier) @name) @ref.call

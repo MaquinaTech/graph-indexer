@@ -25,6 +25,7 @@ import { CodeIntel } from '../../src/query/intel.mjs';
 import { createTsOracle } from './oracle-ts.mjs';
 import { argv, git, writeJson, GI_ROOT } from './lib.mjs';
 import { rng } from './stats.mjs';
+import { escapeRegExp } from '../../src/util/regex.mjs';
 
 const { opt } = argv();
 const repo = path.resolve(GI_ROOT, opt('--repo', 'test/fixtures/nestjs'));
@@ -64,7 +65,7 @@ function shuffle(arr) {
 
 /** Lines in scope where `.name(` appears (what a grep for the method call finds). */
 function grepCallLines(nm) {
-    const re = new RegExp(`[.?]${nm.replace(/\$/g, '\\$')}\\s*\\(`);
+    const re = new RegExp(`[.?]${escapeRegExp(nm)}\\s*\\(`);
     const hits = new Set();
     for (const f of tsFiles) {
         if (!inScope(f)) continue;
