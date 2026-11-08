@@ -21,7 +21,7 @@ import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
 // the exact release this plugin version runs through npx (never a range): keep it equal to package.json's version
-export const VERSION = '3.0.2';
+export const VERSION = '3.1.0';
 const WIN = process.platform === 'win32';
 
 export function findRepoRoot(start) {

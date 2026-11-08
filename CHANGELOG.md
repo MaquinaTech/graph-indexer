@@ -4,7 +4,7 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
-## [Unreleased]
+## [3.1.0] — 2026-11-08
 
 ### Added
 
