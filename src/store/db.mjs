@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS files (
   lines INTEGER NOT NULL,
   package TEXT,
   is_test INTEGER NOT NULL DEFAULT 0,
-  parse_errors INTEGER NOT NULL DEFAULT 0,
+  parse_errors INTEGER NOT NULL DEFAULT 0, -- regions the parser could not read (ERROR nodes)
+  parse_error_lines TEXT,                   -- their [start, end] lines as JSON, the first 100
   indexed_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS symbols (

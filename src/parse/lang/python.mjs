@@ -156,6 +156,10 @@ export const python = {
     // a bare name bound in the function (parameter, assignment, loop variable) is that local
     localNames: true,
     grammar: 'python',
+    // Python 3.15's lazy imports (PEP 810): `lazy` is a soft keyword before `import`/`from` at the
+    // start of a statement, which tree-sitter-python 0.25 does not know; blanked, the import
+    // statement is read as written (same length, so positions are unchanged)
+    rewriteSource: (src) => (src.includes('lazy') ? src.replace(/^([ \t]*)lazy(?=[ \t]+(?:import|from)[ \t])/gm, '$1    ') : src),
     extensions: ['.py', '.pyi'],
     family: 'python',
     query: QUERY,

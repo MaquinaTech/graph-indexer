@@ -275,6 +275,20 @@ differs, and is stated rather than implied:
 Each answer marks how a reference was bound (`exact`, `likely`, `possible`) and says when a list is
 complete, whatever the level.
 
+How much of the code the parser reads, measured on public repositories (68,000 files in 46
+repositories: the fixtures, the agent benchmark's repositories, okhttp, kotlinx.coroutines,
+nowinandroid, Exposed, spring-boot, cats, Play and Jellyfin):
+
+| | files with a region the parser cannot read |
+|---|---|
+| TypeScript, TSX, JavaScript, Python, Java, Kotlin, Scala, C#, Rust, Go, Ruby, PHP | 0–0.2% (test data with deliberate syntax errors, `typeof import()` in type arguments, Python 3.15 unpacking comprehensions) |
+| Bash | 4% (zsh completion scripts) |
+| C, C++ | 39% of files, 15% of lines: macros inside declarations (`void (CJSON_CDECL *fn)(…)`); the functions themselves are kept |
+| SCSS, Less | about half of the files: they are read with the CSS grammar, which does not know nesting, `#{…}` or mixins |
+
+Where a symbol's name occurs in code the parser could not read, `find_references` and
+`call_graph` say so and name the lines, instead of reporting the list as complete.
+
 ## Command line
 
 The CLI runs the same tools, which is handy for scripts and for checking what an agent sees:

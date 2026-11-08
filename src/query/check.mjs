@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { codeSpecForPath as specForPath, isConstructor } from '../parse/languages.mjs'; // documentation is not checked
-import { prepareLanguage, extractFile } from '../parse/extract.mjs';
+import { prepareLanguage, extractFile, parseSource } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
@@ -68,7 +68,7 @@ function changedFiles(root, base) {
 
 /** Parse a source text: tree + extracted symbols, each symbol with its definition node's arity. */
 async function analyse(spec, source, rel, tree = null) {
-    if (!tree) { const { parser } = await prepareLanguage(spec); tree = parser.parse(source); }
+    if (!tree) { const { parser } = await prepareLanguage(spec); tree = parseSource(spec, parser, source); }
     const ex = await extractFile(spec, source, rel);
     for (const s of ex.symbols) {
         if (!CALLABLE.has(s.kind) && !(s.kind === 'field' && /=>|function/.test(s.sig ?? ''))) continue;
@@ -193,7 +193,7 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
             const src = spec ? readRepoFile(root, rel, MAX_FILE_BYTES) : null;
             if (src !== null) {
                 const { parser } = await prepareLanguage(spec);
-                v = { tree: parser.parse(src), lines: src.split(/\r?\n/), src, spec };
+                v = { tree: parseSource(spec, parser, src), lines: src.split(/\r?\n/), src, spec };
             }
         } catch { v = null; }
         treeCache.set(rel, v);

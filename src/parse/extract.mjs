@@ -324,11 +324,25 @@ function typeNarrowings(root, source) {
  * Extract symbols/refs/imports for one file.
  * @returns {{ symbols: object[], refs: object[], imports: object[], errors: number }}
  */
+/**
+ * The text a language's grammar parses. A language may rewrite its source first into an equivalent
+ * of the same length (`spec.rewriteSource`: Rust macro arguments, syntax a grammar does not know
+ * yet), so every position still points at the file.
+ */
+export function rewrittenSource(spec, parser, source) {
+    return spec.rewriteSource ? spec.rewriteSource(source, (s) => parser.parse(s)) : source;
+}
+
+/** Parse a file's text as extraction does (`rewrittenSource`). */
+export function parseSource(spec, parser, source) {
+    return parser.parse(rewrittenSource(spec, parser, source));
+}
+
 export async function extractFile(spec, source, relPath) {
     if (spec.extract) return spec.extract(source, relPath);
     const { query, parser } = await prepareLanguage(spec);
     // a language may rewrite its source first, keeping every position (Rust macro arguments)
-    if (spec.rewriteSource) source = spec.rewriteSource(source, (s) => parser.parse(s));
+    source = rewrittenSource(spec, parser, source);
     const tree = parser.parse(source);
     try {
         return extractFromTree(spec, query, tree, source, relPath);
@@ -914,7 +928,27 @@ function extractFromTree(spec, query, tree, source, relPath) {
     const extra = spec.fileInfo ? spec.fileInfo(root, source) : null;
 
     for (const s of symbols) { delete s.startIndex; delete s.endIndex; delete s.lexParent; }
-    return { symbols, refs, imports, fields: inferredFields, fileInfo: extra, errors: root.hasError ? 1 : 0 };
+    return { symbols, refs, imports, fields: inferredFields, fileInfo: extra, ...errorRegions(root) };
+}
+
+/**
+ * Regions the parser could not read (ERROR nodes), and their lines (the first 100). A MISSING node is not counted: the parser
+ * inserted a token and kept the structure (tsx `styled.div<T>\`…\`` gets a MISSING `!` and loses
+ * nothing), while an ERROR node is source left out of the tree, where declarations can be lost.
+ */
+function errorRegions(root) {
+    const errorLines = [];
+    let errors = 0;
+    const visit = (node) => {
+        if (node.type === 'ERROR') {
+            errors++;
+            if (errorLines.length < 100) errorLines.push([node.startPosition.row + 1, node.endPosition.row + 1]);
+            return;
+        }
+        for (let i = 0; i < node.childCount; i++) { const c = node.child(i); if (c.hasError) visit(c); }
+    };
+    if (root.hasError) visit(root);
+    return { errors, errorLines };
 }
 
 const NULLISH_TYPES = new Set(['null', 'undefined', 'None', 'void', 'nil', 'never', 'NoneType', 'Nothing', 'Unit']);

@@ -173,9 +173,18 @@ export class CodeIntel {
         }
         const norm = t.replace(/::|#|->/g, '.');
         if (norm.includes('.')) {
-            const name = norm.split('.').pop();
-            const rows = this.store.all(`SELECT id, qname FROM symbols WHERE name = ?`, name).filter(r => r.qname === norm || r.qname.endsWith('.' + norm));
-            if (rows.length) return { matches: this.#rank(rows.map(r => r.id)).slice(0, limit).map(id => this.sym(id)), how: 'qualified' };
+            const qual = norm.split('.'), name = qual.pop();
+            const rows = this.store.all(`SELECT s.id, s.qname, f.path FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.name = ?`, name);
+            const exact = rows.filter(r => r.qname === norm || r.qname.endsWith('.' + norm));
+            if (exact.length) return { matches: this.#rank(exact.map(r => r.id)).slice(0, limit).map(id => this.sym(id)), how: 'qualified' };
+            // `module.func`, `pkg.mod.func`, `ns::Type::method`, `Foo.prototype.bar`: the owner named
+            // last before the name is one of the definition's enclosing names, its file or a directory
+            const owner = qual[qual.length - 1];
+            const inModule = rows.filter(r => r.qname.split('.').slice(0, -1).includes(owner) || r.path.replace(/\.[^./]+$/, '').split('/').includes(owner));
+            if (inModule.length) return { matches: this.#rank(inModule.map(r => r.id)).slice(0, limit).map(id => this.sym(id)), how: 'module' };
+            // the qualifier names nothing that declares `name`: answering with another owner's
+            // `name` would present the wrong definition's uses as the asked one's
+            if (rows.length) return { matches: [], how: 'qualifier-unknown', sameName: this.#rank(rows.map(r => r.id)).slice(0, limit).map(id => this.sym(id)) };
         }
         let rows = this.store.all('SELECT id FROM symbols WHERE name = ?', norm.split('.').pop());
         if (!rows.length) rows = this.store.all('SELECT id FROM symbols WHERE name_lc = ?', norm.split('.').pop().toLowerCase());
@@ -196,6 +205,32 @@ export class CodeIntel {
                 + (TYPE_KINDS.has(m?.kind) || CALLABLE.has(m?.kind) ? 0.3 : 0) + Math.log1p(m?.nrefs ?? 0) * 0.1;
         };
         return [...ids].sort((a, b) => score(b) - score(a) || a - b);
+    }
+
+    /**
+     * Where `word` occurs in code the parser could not read (an ERROR region, give or take a
+     * line): a declaration or a use of it there may be missing from the index or bound wrongly.
+     * The first such line per file.
+     * @returns {{ path: string, line: number }[]}
+     */
+    filesWithParseErrors(word, { lang = null, max = 50 } = {}) {
+        if (!word || !/^[\w$]+$/.test(word)) return [];
+        const re = new RegExp(`(?<![\\w$])${word.replace(/\$/g, '\\$')}(?![\\w$])`);
+        const rows = this.store.all(`SELECT path, parse_error_lines FROM files WHERE parse_errors > 0${lang ? ' AND lang = ?' : ''} ORDER BY is_test, path LIMIT 5000`, ...(lang ? [lang] : []));
+        const out = [];
+        for (const r of rows) {
+            let regions;
+            try { regions = JSON.parse(r.parse_error_lines ?? '[]'); } catch { regions = []; }
+            const lines = regions.length ? this.fileLines(r.path) : null;
+            if (!lines) continue;
+            hit: for (const [a, b] of regions) {
+                for (let ln = Math.max(1, a - 1); ln <= Math.min(lines.length, b + 1); ln++) {
+                    if (re.test(lines[ln - 1])) { out.push({ path: r.path, line: ln }); break hit; }
+                }
+            }
+            if (out.length >= max) break;
+        }
+        return out;
     }
 
     members(id) {

@@ -144,7 +144,9 @@ test('grep patterns are read from shell commands', () => {
 test('init --hooks merges Claude Code hooks idempotently and keeps foreign ones', () => {
     const dir = makeRepo({ '.claude/settings.json': '{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}]}}\n' });
     try {
-        for (let i = 0; i < 2; i++) spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--hooks', '--agents', 'claude'], { encoding: 'utf8' });
+        // a PATH without an installed graph-indexer, so the hooks run it through npx on any machine
+        const env = { ...process.env, PATH: ['/usr/bin', '/bin'].join(path.delimiter) };
+        for (let i = 0; i < 2; i++) spawnSync(process.execPath, [BIN, 'init', '--repo', dir, '--hooks', '--agents', 'claude'], { encoding: 'utf8', env });
         const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8'));
         const post = cfg.hooks.PostToolUse.flatMap(e => e.hooks.map(h => h.command));
         assert.equal(post.filter(c => c === 'echo mine').length, 1);

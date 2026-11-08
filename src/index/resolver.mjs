@@ -19,6 +19,9 @@ import { fits, sigArity } from '../parse/arity.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
+// generic wrappers whose members are those of their argument (`InstanceType<typeof Repl>`): a call on
+// one is not on a type the index lacks, so it keeps the by-name fallback
+const TYPE_WRAPPERS = new Set(['ReturnType', 'InstanceType', 'Awaited', 'Partial', 'Required', 'Readonly', 'NonNullable', 'Pick', 'Omit', 'Mocked', 'MockedObject', 'Type']);
 // element accesses one descriptor may stack (`xs[i][j]`…): a field assigned an element of itself
 // (`self.impl = self.impl[0]`) would add one on every lookup, with no end
 const MAX_ELEM = 8;
@@ -915,6 +918,13 @@ export class Resolver {
                 // interface / abstract receiver: the member may be declared only on implementations
                 return { id: null, conf: 0, ncand: 0 };
             }
+            if (this.#unknownDeclaredType(recvType)) {
+                // the receiver is declared as a type the index does not hold (a library type, or a
+                // declaration the parser could not read): another type's member of that name is not
+                // a guess, so the call stays unbound and is counted with the same-name candidates
+                const guess = kind === 'read' ? null : this.#anyMember(name, kind, fileId);
+                return { id: null, conf: 0, ncand: guess ? Math.max(1, guess.ncand) : 0 };
+            }
         }
         // receiver is an imported module / namespace / package alias
         const imp = this.#importFor(fileId, root) ?? this.#importFor(fileId, recv);
@@ -1053,6 +1063,16 @@ export class Resolver {
         if (ids.length < 2) return ids;
         const same = ids.filter(id => !!this.t.sym(id)?.isStatic === wantStatic);
         return same.length ? same : ids;
+    }
+
+    /**
+     * A receiver type written as a plain type name that no type in the index has. Short names and
+     * `TName` are left out: they are usually type parameters (`T`, `K`, `TItem`), whose calls reach
+     * the members of their bound.
+     */
+    #unknownDeclaredType(desc) {
+        if (!/^[A-Z][\w$]*$/.test(desc) || /^[A-Z][A-Z0-9]?$|^T[A-Z]\w*$/.test(desc) || TYPE_WRAPPERS.has(desc)) return false;
+        return !(this.t.byName.get(desc) ?? []).some(id => TYPE_KINDS.has(this.t.sym(id)?.kind));
     }
 
     /**

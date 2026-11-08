@@ -170,7 +170,8 @@ export class Indexer {
         const BATCH = 200;
         const threads = poolSize(toParse.length);
         const pool = threads ? new ParsePool(threads) : null;
-        const failed = (e, rel) => { this.log(`parse failed for ${rel}: ${e.message}`); return { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1 }; };
+        // a file the parser could not read at all is one unreadable region, so no answer calls it complete
+        const failed = (e, rel, source) => { this.log(`parse failed for ${rel}: ${e.message}`); return { symbols: [], refs: [], imports: [], fields: [], fileInfo: null, errors: 1, errorLines: [[1, source.split('\n').length]] }; };
         // read and hash a batch now; its extraction starts now with the pool, or when awaited without
         const start = (batch) => {
             const items = [];
@@ -186,7 +187,7 @@ export class Indexer {
                 const spec = specForPath(item.rel);
                 if (!spec) continue;
                 const minified = looksMinified(source);
-                const inline = () => extractFile(spec, source, item.rel).catch(e => failed(e, item.rel));
+                const inline = () => extractFile(spec, source, item.rel).catch(e => failed(e, item.rel, source));
                 const job = minified ? null : pool ? pool.extract(item.rel, source).catch(inline) : null;
                 items.push({ ...item, source, hash, spec, minified, job });
             }
@@ -210,7 +211,7 @@ export class Indexer {
                     else if (it.job) extraction = await it.job;
                     else {
                         try { extraction = await extractFile(it.spec, it.source, it.rel); }
-                        catch (e) { extraction = failed(e, it.rel); }
+                        catch (e) { extraction = failed(e, it.rel, it.source); }
                     }
                     parsed.push({ rel: it.rel, st: it.st, prev: it.prev, source: it.source, hash: it.hash, spec: it.spec, extraction });
                 }
@@ -261,7 +262,7 @@ export class Indexer {
 
     #writeFile({ rel, st, prev, source, hash, spec, extraction }) {
         const s = this.store;
-        const { symbols, refs, imports, fields, fileInfo, errors } = extraction;
+        const { symbols, refs, imports, fields, fileInfo, errors, errorLines } = extraction;
         const lines = lineStarts(source);
         const isTest = spec.testFile?.test(rel) ? 1 : 0;
         const pkg = fileInfo?.package ?? null;
@@ -273,12 +274,12 @@ export class Indexer {
             for (const o of oldSyms) { s.run('DELETE FROM fts WHERE rowid = ?', o.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', o.id); }
             s.run('DELETE FROM file_fts WHERE rowid = ?', fileId);
             for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
-            s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, indexed_at = ? WHERE id = ?',
-                spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now(), fileId);
+            s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, parse_error_lines = ?, indexed_at = ? WHERE id = ?',
+                spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now(), fileId);
             this.table.removeFile(fileId);
         } else {
-            const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, Date.now());
+            const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, parse_error_lines, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now());
             fileId = Number(r.lastInsertRowid);
         }
         this.table.addFile({ id: fileId, path: rel, lang: spec.id, package: pkg, isTest: !!isTest });

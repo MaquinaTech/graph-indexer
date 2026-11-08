@@ -208,9 +208,25 @@ function describe(r, max = 140) {
 
 /** Matches for a target, with overloads of one method collapsed (they are one definition to an agent). */
 function pickSymbol(intel, target) {
-    const { matches } = intel.findSymbols(target);
+    const { matches, sameName } = intel.findSymbols(target);
     const seen = new Set();
-    return matches.filter(m => { const k = `${m.file_id}|${m.qname}|${m.kind}|${m.is_static}`; return !seen.has(k) && seen.add(k); });
+    const out = matches.filter(m => { const k = `${m.file_id}|${m.qname}|${m.kind}|${m.is_static}`; return !seen.has(k) && seen.add(k); });
+    if (sameName) out.sameName = sameName; // `Owner.name` where no `Owner` declares `name` (see notFound)
+    return out;
+}
+
+/** Files of the symbol's language that mention its name but have regions the parser could not read. */
+function parseGaps(intel, s) {
+    return intel.filesWithParseErrors(s.name, { lang: s.lang, max: 20 });
+}
+
+/** Where uses of `s` may be missing because the parser could not read part of a file. */
+function parseGapNote(gaps, s, max = 5) {
+    if (!gaps.length) return [];
+    const one = gaps.length === 1;
+    return [`Not fully parsed: ${gaps.length}${gaps.length >= 20 ? '+' : ''} file${one ? '' : 's'} that mention${one ? 's' : ''} "${s.name}" ${one ? 'has' : 'have'} code the parser could not read, where uses can be missing or bound to another "${s.name}" — read ${one ? 'it' : 'them'}:`,
+        ...gaps.slice(0, max).map(g => `  ${g.path}:${g.line}`),
+        ...(gaps.length > max ? [`  … ${gaps.length - max} more`] : [])];
 }
 
 /** "other definitions" note: each alternative as a ready-to-use qualified target with its use count. */
@@ -225,7 +241,18 @@ function otherDefinitions(intel, matches, max = 5) {
 /** Which of several same-name definitions is shown: `Logger.error (static) in path:209`. */
 const shownAs = (s, matches) => `${s.qname}${s.is_static ? ' (static)' : ''} in ${matches.filter(m => m.path === s.path && m.qname === s.qname).length > 1 ? `${s.path}:${s.start_line}` : s.path}`;
 
-function notFound(intel, target) {
+function notFound(intel, target, matches = null) {
+    if (matches?.sameName?.length) {
+        const parts = String(target).trim().replace(/\(\)$/, '').replace(/::|#|->/g, '.').split('.');
+        const name = parts.pop(), owner = parts[parts.length - 1];
+        const out = [`No definition of "${name}" in "${owner}": nothing indexed as "${owner}" declares it, so the uses of another "${name}" are not shown in its place.`];
+        out.push(`Definitions named "${name}" (pass one as symbol):`);
+        for (const m of matches.sameName.slice(0, 8)) out.push(`  ${m.path}:${m.qname}  ${m.kind} line ${m.start_line} (${plural(refSummary(intel, m.id).n, 'ref')})`);
+        if (matches.sameName.length > 8) out.push(`  … ${matches.sameName.length - 8} more`);
+        const broken = intel.filesWithParseErrors(owner);
+        if (broken.length) out.push(`"${owner}" appears in ${plural(broken.length, 'file')} the parser could not fully read, so its declaration may be missing from the index: ${broken.slice(0, 5).map(b => `${b.path}:${b.line}`).join(', ')}${broken.length > 5 ? ', …' : ''}. Read ${broken.length === 1 ? 'it' : 'them'} directly.`);
+        return out.join('\n');
+    }
     const { results } = intel.search.search(String(target), { limit: 5 });
     const sugg = results.map(r => intel.sym(r.id)).filter(Boolean).map(s => `  ${symHeader(s)}`);
     return `No symbol named "${target}".` + (sugg.length ? `\nClosest matches:\n${sugg.join('\n')}` : `\nTry ${tn('search_code')} with a description of what it does.`);
@@ -508,7 +535,7 @@ async function readRange(intel, rel, a, b, { maxLines, seen }) {
 
 async function toolSymbol(intel, { symbol, include_code = true, max_lines = 200, seen = new Set() }) {
     const matches = pickSymbol(intel, symbol);
-    if (!matches.length) return notFound(intel, symbol);
+    if (!matches.length) return notFound(intel, symbol, matches);
     const s = matches[0];
     await intel.revalidate([s.path]);
     const fresh = intel.sym(s.id) ?? s;
@@ -589,7 +616,7 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         const pm = prismaModelsNamed(intel, symbol).filter(m => m.name === symbol || !matches.length);
         if (pm.length) return pm.map(m => modelText(m, { max: limit })).join('\n\n');
     }
-    if (!matches.length) return notFound(intel, symbol);
+    if (!matches.length) return notFound(intel, symbol, matches);
     const s = matches[0];
     const all = intel.references(s.id, { kinds: kind && kind !== 'all' ? [kind] : null, includeTests: include_tests });
     const inPath = pathFilter(p);
@@ -628,9 +655,11 @@ async function toolReferences(intel, { symbol, kind = 'all', include_tests = tru
         : 'No bound references. It may be unused, an entry point, invoked by a framework/reflection, or only called through dynamic receivers.');
     if (res.elsewhere?.length) out.push(`Other references named "${s.name}" resolve elsewhere: ${res.elsewhere.map(e => `${e.n} → ${e.qname} (${e.path})`).join(', ')}.`);
     out.push(...unboundNote(res.unbound, s));
+    const gaps = parseGaps(intel, s);
     if (CALLABLE_KINDS.has(s.kind) && (!kind || kind === 'all' || kind === 'call') && all.total && !res.unbound?.total) {
-        out.push(`Complete: every "${s.name}(…)" call in the indexed files is bound${res.elsewhere?.length ? ', here or to the definitions named above' : ' to this definition'}; none is left unresolved.`);
+        out.push(`Complete${gaps.length ? ' in the files the parser read' : ''}: every "${s.name}(…)" call in the indexed files is bound${res.elsewhere?.length ? ', here or to the definitions named above' : ' to this definition'}; none is left unresolved.`);
     }
+    out.push(...parseGapNote(gaps, s));
     out.push(...stringMentionNote(intel, s));
     out.push(...injectionNote(intel, s));
     const model = modelOf(intel, s.id);
@@ -792,7 +821,7 @@ function stringMentionNote(intel, s, max = 8) {
 
 async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, limit = 40, include_tests = true }) {
     const matches = pickSymbol(intel, symbol);
-    if (!matches.length) return notFound(intel, symbol);
+    if (!matches.length) return notFound(intel, symbol, matches);
     const s = matches[0];
     const out = [`Call graph of ${s.qname} (${s.kind}) ${loc(s)}`];
     if (direction === 'callers' || direction === 'both') {
@@ -850,8 +879,10 @@ async function toolCallGraph(intel, { symbol, direction = 'both', depth = 2, lim
         if (!lines.length) out.push('  (no bound callers — entry point, framework-invoked, or dynamic dispatch)');
         if (cut) out.push(`  … more callers not shown (raise limit or lower depth)`);
         const unbound = unboundNote(intel.unboundFor(s.id), s, 5);
+        const gaps = parseGaps(intel, s);
         if (unbound.length) out.push(...unbound.map(l => '  ' + l));
-        else if (!cut) out.push(`  Complete: every call the index binds is listed${depth > 1 ? ' at each level' : ''}, and no same-name call with a receiver of unknown type could reach ${s.name}.`);
+        else if (!cut) out.push(`  Complete${gaps.length ? ' in the files the parser read' : ''}: every call the index binds is listed${depth > 1 ? ' at each level' : ''}, and no same-name call with a receiver of unknown type could reach ${s.name}.`);
+        out.push(...parseGapNote(gaps, s).map(l => '  ' + l));
     }
     if (direction === 'callees' || direction === 'both') {
         out.push('callees:');

@@ -194,6 +194,15 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Changed
 
+- **Kotlin grammar built from `fwcd/tree-sitter-kotlin` d6af96d** (2026-10-31; still no release
+  after 0.3.8), with the procedure of 3.0.2, whose build of 5b7b9b7 was first reproduced byte for
+  byte. It reads Kotlin 2.x syntax that left ERROR regions before: guard conditions in `when`
+  (`is X if cond ->`), `..<`, `$$` strings, context parameters, binary literals, `suspend {}`
+  lambdas. On 3,147 files of okhttp, kotlinx.coroutines, nowinandroid, Exposed and the android
+  fixture, files with an unreadable region go from 107 to 2 (both templates with
+  `{{packageName}}`), symbols from 43,306 to 43,629 and references from 306,426 to 307,084. 334
+  members that error recovery had cut out of their class are back in it; the only 2 symbols that
+  disappear were local `val`s taken for properties after a parse error.
 - **Full and large updates parse on several threads.** Extraction (tree-sitter parse and queries)
   runs in a pool of worker threads while the main thread writes earlier batches to SQLite; a file
   the pool fails on is parsed again inline. The index written is identical (checked on nestjs:
@@ -203,6 +212,33 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ### Fixed
 
+*What #5 showed for Kotlin, made general: answers no longer present what the index could not see as seen.*
+
+- **A qualified name whose owner declares nothing of that name is reported, not replaced.**
+  `refs RefreshPort.execute` used to answer with the uses of another type's `execute` (#5's
+  `OtherPort.execute`) under a "matches 2 definitions" note, and could add "Complete". It now says
+  that nothing indexed as `RefreshPort` declares `execute`, lists the definitions of that name, and
+  names the lines where `RefreshPort` appears in code the parser could not read. A qualifier that
+  names the file or a directory (`utils.helper`, `pkg.mod.func`) still finds the top-level definition.
+- **A call on a receiver declared as a type the index lacks is no longer bound by name.** A
+  parameter typed with a library type (`p: Admin` from kafkajs) or with a type in a file the parser
+  could not read was bound to the only member of that name in the repository, as "likely". The call
+  now stays unbound and shows under "Possibly missed" when its file mentions the type. Checked
+  against the TypeScript compiler: of the 207 bindings this removes in nestjs and Twenty, none was
+  correct (26 bound DOM methods to repository code, such as `TextDecoder.decode` to
+  `JwtWrapperService.decode`; the other 181 were calls into libraries). Type parameters and wrappers (`T`, `InstanceType<typeof X>`) keep the old fallback. The
+  compiler oracles (nestjs, Twenty, gin, spring-petclinic) give the same precision and recall.
+- **"Complete" is limited to what the parser read.** `find_references` and `call_graph` say
+  "Complete in the files the parser read" and list the lines where the name occurs in code the
+  parser could not read (an ERROR region, give or take a line), where a use can be missing or
+  bound to another definition.
+- **The index records which lines the parser could not read**, not just whether a file had an
+  error, and no longer counts a token the parser inserted to keep the structure (a TSX
+  `` styled.div<Props>`…` ``, which flagged 370 files of Twenty, loses nothing). Indexes are rebuilt.
+- **Python 3.15 lazy imports** (`lazy import x`, `lazy from m import y`, PEP 810) are read as
+  imports; tree-sitter-python does not know the soft keyword yet.
+- **The `init --hooks` test** no longer depends on graph-indexer being installed globally on the
+  machine that runs it.
 - **Indexing no longer overflows the stack on a field assigned an element of itself**
   (`self.impl = self.impl[0]`, in SQLAlchemy's `test/perf`): each lookup added one element access
   to the type, without end, and the whole index failed. A type now stacks at most 8 element
