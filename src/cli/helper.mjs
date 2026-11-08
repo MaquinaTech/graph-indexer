@@ -4,7 +4,7 @@
  * index, and replies with the answer alone. The main agent delegates the question and gets back a
  * path:line list instead of the searches and reads behind it, and the lookup runs on a model that
  * costs a fraction per token. `init` writes it for Claude Code (.claude/agents/) and the Claude Code
- * plugin ships the same file (integrations/claude-code/agents/).
+ * plugin ships it too (integrations/claude-code/agents/, with only the frontmatter keys the plugin directory accepts).
  */
 
 export const HELPER_NAME = 'code-structure';
@@ -61,6 +61,20 @@ description: ${JSON.stringify(DESCRIPTION)}
 model: haiku
 disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 omitClaudeMd: true
+---
+${helperInstructions()}
+`;
+}
+
+/**
+ * The same sub-agent for the Claude Code plugin listed in the plugin directory, which accepts only
+ * a short list of frontmatter keys (name and description): the model and the tool limits are left
+ * to the session, and the instructions already say it does not change files.
+ */
+export function pluginAgentFile() {
+    return `---
+name: ${HELPER_NAME}
+description: ${JSON.stringify(DESCRIPTION)}
 ---
 ${helperInstructions()}
 `;

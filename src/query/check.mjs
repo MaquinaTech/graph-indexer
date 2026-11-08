@@ -21,12 +21,15 @@ import { prepareLanguage, extractFile } from '../parse/extract.mjs';
 import { paramArity, callAt, callArgc, fits, describeArity } from '../parse/arity.mjs';
 import { testCommands, testCaseCommands } from './testcmd.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
+import { readRepoFile, isRevision } from '../util/paths.mjs';
+import { MAX_FILE_BYTES } from '../index/discover.mjs';
+import { gitSync } from '../util/git.mjs';
 
 const CALLABLE = new Set(['function', 'method', 'constructor']);
 const MEMBER_KINDS = new Set(['class', 'interface', 'struct', 'trait', 'enum', 'object', 'impl', 'module', 'type']);
 
 function git(root, args) {
-    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
+    const r = gitSync(root, args, { maxBuffer: 1 << 28 });
     return r.status === 0 ? r.stdout : null;
 }
 
@@ -171,6 +174,7 @@ function testsNamingModules(intel, files) {
 
 export async function checkChanges(intel, { base = 'HEAD', files = null, tests = true, byName = false } = {}) {
     const root = intel.root;
+    if (!isRevision(base)) return { error: `Not a git revision: ${base}` };
     const changed = changedFiles(root, base);
     if (!changed) return { error: `git diff against ${base} failed — is this a git repository with that commit?` };
     // the edited files must be re-indexed now, whatever the file watcher has seen so far
@@ -186,8 +190,8 @@ export async function checkChanges(intel, { base = 'HEAD', files = null, tests =
         let v = null;
         const spec = specForPath(rel);
         try {
-            if (spec) {
-                const src = fs.readFileSync(path.join(root, rel), 'utf8');
+            const src = spec ? readRepoFile(root, rel, MAX_FILE_BYTES) : null;
+            if (src !== null) {
                 const { parser } = await prepareLanguage(spec);
                 v = { tree: parser.parse(src), lines: src.split(/\r?\n/), src, spec };
             }

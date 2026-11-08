@@ -409,3 +409,24 @@ test('python: import roots, packages bound by dotted imports, names inside quali
     assert.deepEqual(at('src/pkg/json/__init__.py:dumps', 'src/pkg/json/__init__.py'), [], 'import json is the standard library');
     assert.deepEqual(at('src/pkg/utils.py:open_file', 'tests/test_utils.py'), [3], 'import pkg.utils binds pkg');
 });
+
+test('a field assigned an element of itself (`self.impl = self.impl[0]`) does not loop the resolver', async () => {
+    const r = makeRepo({
+        'bench.py': [
+            'class Case:',
+            '    def __init__(self, impl):',
+            '        self.impl = impl',
+            '    def setup(self):',
+            '        self.impl = self.impl[0]',
+            '    def run(self, obj):',
+            '        return self.impl(obj).key',
+            '',
+        ].join('\n'),
+    });
+    const ci = new CodeIntel({ root: r });
+    try {
+        await ci.open();
+        const s = ci.store.get("SELECT s.id FROM symbols s WHERE s.qname = 'Case.run'");
+        assert.ok(s, 'indexed');
+    } finally { ci.close(); rmrf(r); }
+});

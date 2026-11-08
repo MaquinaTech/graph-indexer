@@ -273,6 +273,97 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 - **"Defined elsewhere" card**: an unbound call no longer matches a constant or variable by name
   (`Math.max(…)` listed a `const max` from another file).
 
+---
+
+## [3.0.2] — 2026-11-08
+
+Kotlin `fun interface` support, contributed by [@jhernandez-movicoders](https://github.com/jhernandez-movicoders)
+([#5](https://github.com/MaquinaTech/graph-indexer/issues/5), [#6](https://github.com/MaquinaTech/graph-indexer/pull/6)),
+and a Claude Code plugin that meets the plugin directory policy.
+
+### Fixed
+
+- **Kotlin `fun interface`** ([#5](https://github.com/MaquinaTech/graph-indexer/issues/5)). The vendored grammar
+  (`fwcd/tree-sitter-kotlin` 0.3.8) could not parse a SAM interface (`fun interface Port { fun execute() }`).
+  The interface was missing, and its method became a top-level function. Calls through it were then bound to
+  another method with the same name, while `refs` still reported the list as complete.
+- **The Kotlin grammar is now built from `fwcd/tree-sitter-kotlin` 5b7b9b7.** That commit adds `fun interface`
+  ([fwcd/tree-sitter-kotlin#169](https://github.com/fwcd/tree-sitter-kotlin/pull/169)) and is in no release yet.
+  It was built with `tree-sitter build --wasm` (tree-sitter-cli 0.25.10, the runtime's version).
+  - Measured on a 442-file Kotlin/Spring service: the 44 `fun interface` declarations and their methods are now
+    indexed.
+  - Resolved references go from 7,434 to 7,835, and exact ones from 5,325 to 5,545.
+  - No file loses a symbol. The one with one fewer had a local `val` taken for a property after a parse error
+    that the new grammar no longer makes.
+  - The grammar manifest is part of the index fingerprint, so existing indexes are rebuilt.
+
+### Changed
+
+- **The Claude Code plugin listed in the plugin directory is Markdown and JSON only.** The directory
+  accepts command hooks, local MCP servers and scripts only from verified organizations, so
+  `integrations/claude-code` now holds the `code-structure` sub-agent (with the `name` and `description`
+  frontmatter keys only), a `setup` skill that tells Claude how to connect the MCP server
+  (`claude mcp add graph-indexer -- npx -y --prefix / graph-indexer@3.0.2 serve`, with the user's
+  consent) and the manifest.
+- **The full plugin (MCP server, hooks, sub-agent) moved to `integrations/claude-code-local`** for manual
+  installs; `init --hooks` gives the same result without a plugin. Its launchers are pinned to the exact
+  release: the hook client ran `graph-indexer@3`, a range, and now runs `graph-indexer@3.0.2`. A test
+  keeps every pin equal to `package.json`.
+
+---
+
+## [3.0.1] — 2026-10-23
+
+A security release. Upgrading is recommended for everyone; nothing else changes.
+
+### Security
+
+- **Node.js 22.23.4+, 24.22.1+ or 26.12.1+** is now required (`engines`). These are the October
+  2026 Node.js security releases, which fix CVE-2026-111497 (out-of-bounds write in the Brotli
+  decoder, remote code execution) and nine other vulnerabilities in TLS, DNS, HTTP keep-alive,
+  `crypto.randomUUID()` and the Permission Model. graph-indexer does not decompress Brotli itself,
+  but it runs inside the Node.js process the user has installed.
+- **npx no longer runs a copy of graph-indexer from the repository.** Started from a repository
+  that ships `node_modules/graph-indexer` (3.x) with its `.bin` entry, `npx -y graph-indexer@3`
+  ran that code instead of the published package: the Claude Code plugin's hooks and MCP server,
+  the OpenCode / Kilo Code plugin and the configurations written by `init` did, on opening the
+  repository. Every npx command now passes `--prefix` so only the published package runs. Re-run
+  `npx -y --prefix / graph-indexer@3 init` to rewrite existing configurations.
+- **`check_changes` refuses a `base` that git would read as an option.** `base: "--output=<file>"`
+  made `git diff` create or truncate any file the user can write. A revision must not start with
+  `-` or contain whitespace.
+- **`read_code` reads only files inside the repository.** `../../etc/hosts` and a tracked symbolic
+  link to a file elsewhere were read and served. Paths are now resolved (`..` and links) and must
+  stay under the root; `.git/` and `.graph-indexer/` are not served. `search_text` and
+  `check_changes` skip links out of the repository too.
+- **`search_text` stops a regular expression that backtracks catastrophically** (`(a+)+$`) after
+  5 s and says so, instead of blocking the server and every other request.
+- **The suggested test commands quote every file name** (a test file named `t$(cmd).test.ts`
+  reaches the runner as a name, not as a command substitution), since agents run those commands
+  as they are; test names that are not plain identifiers get no command.
+- **git runs nothing that the indexed repository's own config names**: `core.fsmonitor`, hooks
+  (`core.hooksPath`), signature verification (`log.showSignature`), clean/smudge/process filters,
+  `diff.external` and textconv drivers are switched off on every git call, for repositories copied
+  together with their `.git` directory. Required filters such as Git LFS's no longer fail the diff.
+- **A `.graph-indexer` committed as a symbolic link is refused** instead of having the index (which
+  contains excerpts of the source) written wherever it points. The directory is created with mode
+  0700. The hook clients only talk to a socket, and a socket directory, owned by the user.
+- **Manifests are read only as small regular files inside the repository**: a `tsconfig.json`,
+  `package.json` or `go.mod` linked to `/dev/zero` no longer hangs the indexer.
+- **A file whose syntax makes queries super-linear** (tens of thousands of chained calls) is given
+  up after 15 s instead of stalling the index.
+- **A field assigned an element of itself** (`self.impl = self.impl[0]`) no longer overflows the
+  indexer's stack.
+- **Names are escaped as regular expressions** wherever they are matched in text, not only `$`, and
+  a `file:name` target no longer backtracks polynomially.
+- **`init` does not write through links the repository committed** (`CLAUDE.md` → `~/.zshrc`,
+  `.claude` → `~/.claude`); it stops and names the file.
+- **Per-session hook state** lives in a per-user directory with mode 0700 and is written
+  atomically, so another user of a shared temp directory cannot read it or redirect the write.
+- On Windows, the hook clients quote the arguments they hand to `cmd.exe`.
+
+---
+
 ## [3.0.0] — 2026-09-23
 
 A rewrite around one goal: give coding agents answers that are exact, current and small.

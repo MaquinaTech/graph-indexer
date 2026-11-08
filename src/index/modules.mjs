@@ -5,12 +5,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRepoFile } from '../util/paths.mjs';
 
 const ECMA_EXTS = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 
-function readJson(p) {
+function readJson(root, rel) {
     try {
-        const text = fs.readFileSync(p, 'utf8').replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1');
+        const text = readRepoFile(root, rel).replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, '').replace(/,(\s*[}\]])/g, '$1');
         return JSON.parse(text);
     } catch { return null; }
 }
@@ -53,7 +54,7 @@ export class ModuleResolver {
         this.packages = new Map();
         const pkgJsons = [...this.files].length ? this.#findManifests('package.json') : [];
         for (const rel of pkgJsons) {
-            const j = readJson(path.join(this.root, rel));
+            const j = readJson(this.root, rel);
             if (j?.name) this.packages.set(j.name, { dir: path.posix.dirname(rel), json: j });
         }
         // tsconfig paths and baseUrl, per project: a file resolves through the nearest tsconfig.json
@@ -99,7 +100,7 @@ export class ModuleResolver {
         this.goModules = [];
         for (const rel of this.#findManifests('go.mod')) {
             try {
-                const m = /^module\s+(\S+)/m.exec(fs.readFileSync(path.join(this.root, rel), 'utf8'));
+                const m = /^module\s+(\S+)/m.exec(readRepoFile(this.root, rel) ?? '');
                 if (m) this.goModules.push({ module: m[1], dir: path.posix.dirname(rel) });
             } catch { /* unreadable */ }
         }
@@ -134,7 +135,7 @@ export class ModuleResolver {
 
     /** compilerOptions of a tsconfig file, following relative `extends` (a child's paths replace its parent's). */
     #tsOptions(rel, depth = 0) {
-        const j = readJson(path.join(this.root, rel));
+        const j = readJson(this.root, rel);
         if (!j || depth > 5) return null;
         const dir = path.posix.dirname(rel);
         let out = { paths: null, pathsDir: null, baseUrl: null };

@@ -7,16 +7,16 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { Store } from '../store/db.mjs';
 import { Indexer } from '../index/indexer.mjs';
 import { SearchEngine } from '../search/search.mjs';
 import { computeCentrality, loadGraph } from '../index/graph.mjs';
 import { confidenceLabel } from '../index/resolver.mjs';
-import { dataDir } from '../util/paths.mjs';
+import { dataDir, withinRoot, isRevision } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
 import { sigArity } from '../parse/arity.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
+import { gitSync } from '../util/git.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
@@ -129,6 +129,7 @@ export class CodeIntel {
 
     // ── source access ────────────────────────────────────────────────────────────
     fileLines(rel) {
+        if (!withinRoot(this.root, rel)) return null;
         const abs = path.join(this.root, rel);
         let st;
         try { st = fs.statSync(abs); } catch { return null; }
@@ -588,7 +589,8 @@ export class CodeIntel {
     // ── impact ───────────────────────────────────────────────────────────────────
     /** Symbols overlapping the working-tree diff (git), as impact seeds. */
     diffSeeds(base = 'HEAD') {
-        const r = spawnSync('git', ['diff', '-U0', '--no-color', base, '--'], { cwd: this.root, encoding: 'utf8', maxBuffer: 1 << 28 });
+        if (!isRevision(base)) return { error: `Not a git revision: ${base}`, seeds: [], files: [] };
+        const r = gitSync(this.root, ['diff', '-U0', '--no-color', base, '--'], { maxBuffer: 1 << 28 });
         if (r.status !== 0) return { error: (r.stderr || 'git diff failed').trim(), seeds: [], files: [] };
         const changes = new Map();
         let file = null;
@@ -600,7 +602,7 @@ export class CodeIntel {
                 (changes.get(file) ?? changes.set(file, []).get(file)).push([start, Math.max(start, start + len - 1)]);
             }
         }
-        const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: this.root, encoding: 'utf8' });
+        const untracked = gitSync(this.root, ['ls-files', '--others', '--exclude-standard']);
         for (const f of (untracked.stdout || '').split('\n').filter(Boolean)) if (!changes.has(f)) changes.set(f, [[1, 1e9]]);
         const seeds = new Set();
         for (const [f, ranges] of changes) {
@@ -617,7 +619,7 @@ export class CodeIntel {
     /** Files that historically change together with the given files (git log, bounded). */
     coChange(files, { commits = 400, limit = 8 } = {}) {
         if (!this._cochange || this._cochangeAt < Date.now() - 600_000) {
-            const r = spawnSync('git', ['log', `-n${commits}`, '--name-only', '--pretty=format:%x00'], { cwd: this.root, encoding: 'utf8', maxBuffer: 1 << 28 });
+            const r = gitSync(this.root, ['log', `-n${commits}`, '--name-only', '--pretty=format:%x00'], { maxBuffer: 1 << 28 });
             const counts = new Map(); const pair = new Map();
             if (r.status === 0) {
                 for (const block of r.stdout.split('\0')) {

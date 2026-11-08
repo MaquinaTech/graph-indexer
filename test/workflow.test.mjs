@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { grepPattern, shellReads } from '../src/cli/hook.mjs';
-import { claudeAgentFile, helperInstructions } from '../src/cli/helper.mjs';
+import { claudeAgentFile, helperInstructions, pluginAgentFile } from '../src/cli/helper.mjs';
 import { makeRepo, writeFile, rmrf } from './helpers.mjs';
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'graph-indexer.mjs');
@@ -179,8 +179,10 @@ test('init writes the structural helper for Claude Code once, keeps a user file 
             spawnSync(process.execPath, [BIN, 'init', '--repo', skipped, '--agents', 'claude', '--no-helper'], { encoding: 'utf8' });
             assert.ok(!fs.existsSync(path.join(skipped, '.claude/agents')));
         } finally { rmrf(skipped); }
-        const plugin = path.join(path.dirname(BIN), '..', 'integrations', 'claude-code', 'agents', 'code-structure.md');
-        assert.equal(fs.readFileSync(plugin, 'utf8'), claudeAgentFile(), 'regenerate integrations/claude-code/agents/code-structure.md from src/cli/helper.mjs');
+        for (const [dir, want] of [['claude-code-local', claudeAgentFile()], ['claude-code', pluginAgentFile()]]) {
+            const plugin = path.join(path.dirname(BIN), '..', 'integrations', dir, 'agents', 'code-structure.md');
+            assert.equal(fs.readFileSync(plugin, 'utf8'), want, `regenerate integrations/${dir}/agents/code-structure.md from src/cli/helper.mjs`);
+        }
         // through a shell, the same instructions name the CLI's commands
         const cli = helperInstructions({ cli: '/x/gi' });
         assert.match(cli, /`\/x\/gi refs <Name> --kind inherit`/);
@@ -196,13 +198,13 @@ test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; De
         assert.equal(r.status, 0, r.stderr);
         const kilo = JSON.parse(fs.readFileSync(path.join(dir, 'kilo.json'), 'utf8'));
         assert.equal(kilo.model, 'x', 'keeps the existing Kilo config');
-        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', 'graph-indexer@3', 'serve'], enabled: true });
+        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', '--prefix', '/', 'graph-indexer@3', 'serve'], enabled: true });
         assert.ok(!fs.existsSync(path.join(dir, 'opencode.json')), 'an existing kilo.json is used instead');
         const junie = JSON.parse(fs.readFileSync(path.join(dir, '.junie/mcp/mcp.json'), 'utf8'));
-        assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', 'graph-indexer@3', 'serve']);
+        assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', '--prefix', '/', 'graph-indexer@3', 'serve']);
         const zed = JSON.parse(fs.readFileSync(path.join(dir, '.zed/settings.json'), 'utf8'));
         assert.equal(zed.tab_size, 2);
-        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', 'graph-indexer@3', 'serve'], env: {} });
+        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', '--prefix', '/', 'graph-indexer@3', 'serve'], env: {} });
         assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /graph-indexer:start/);
         assert.ok(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).hooks.PostToolUse, 'Devin runs the Claude Code hooks');
         assert.match(r.stdout, /Devin: reads AGENTS\.md and the Claude Code hooks/);

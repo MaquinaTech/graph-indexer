@@ -54,13 +54,17 @@ function readJson(p) {
     try { return JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\s*\/\/.*$/gm, '')); } catch { return null; }
 }
 
+// --prefix /: npx would otherwise run a graph-indexer 3.x found in the repository's own node_modules
+// (code the repository ships) instead of the published package
+const NPX_ARGS = ['-y', '--prefix', '/', 'graph-indexer@3'];
+
 function serverEntry(agent, { local }) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bin = path.resolve(here, '../../bin/graph-indexer.mjs');
     const repoArgs = agent.workspaceVar ? ['--repo', agent.workspaceVar] : [];
     const base = local
         ? { command: process.execPath, args: [bin, 'serve', ...repoArgs] }
-        : { command: 'npx', args: ['-y', 'graph-indexer@3', 'serve', ...repoArgs] };
+        : { command: 'npx', args: [...NPX_ARGS, 'serve', ...repoArgs] };
     if (agent.opencode) return { type: 'local', command: [base.command, ...base.args], enabled: true };
     if (agent.zed) return { ...base, env: {} };
     return agent.vscode ? { type: 'stdio', ...base } : base;
@@ -72,7 +76,24 @@ function configFile(agent, repo) {
     return agent.file;
 }
 
-function upsertBlock(file, dryRun) {
+/**
+ * Write `file` under `repo` without following a link the repository committed (`CLAUDE.md` →
+ * ~/.zshrc, `.claude` → ~/.claude): such a target is refused instead of written through.
+ */
+function writeInRepo(repo, file, content) {
+    const rootReal = fs.realpathSync(repo);
+    const inside = (p) => { const r = fs.realpathSync(p); return r === rootReal || r.startsWith(rootReal + path.sep); };
+    let dir = path.dirname(file);
+    while (!fs.existsSync(dir)) dir = path.dirname(dir);
+    let link = false;
+    try { link = fs.lstatSync(file).isSymbolicLink(); } catch { /* a new file */ }
+    if (link || !inside(dir)) throw new Error(`${path.relative(repo, file)} leads outside the repository (a symbolic link); not written`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (!inside(path.dirname(file))) throw new Error(`${path.relative(repo, file)} leads outside the repository (a symbolic link); not written`);
+    fs.writeFileSync(file, content);
+}
+
+function upsertBlock(repo, file, dryRun) {
     const exists = fs.existsSync(file);
     const text = exists ? fs.readFileSync(file, 'utf8') : '';
     let next;
@@ -82,7 +103,7 @@ function upsertBlock(file, dryRun) {
         next = (text.trimEnd() ? text.trimEnd() + '\n\n' : '') + SNIPPET + '\n';
     }
     if (next === text) return 'unchanged';
-    if (!dryRun) fs.writeFileSync(file, next);
+    if (!dryRun) writeInRepo(repo, file, next);
     return exists ? 'updated' : 'created';
 }
 
@@ -102,7 +123,7 @@ function cliCommand(local) {
     const bin = path.resolve(here, '../../bin/graph-indexer.mjs');
     if (local) return `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)}`;
     const installed = installedBin();
-    return installed ? JSON.stringify(installed) : 'npx -y graph-indexer@3';
+    return installed ? JSON.stringify(installed) : ['npx', ...NPX_ARGS].join(' ');
 }
 
 /** The command that starts graph-indexer, as an argv array (for the OpenCode/Kilo Code plugin). */
@@ -110,7 +131,7 @@ function cliArgv(local) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     if (local) return [process.execPath, path.resolve(here, '../../bin/graph-indexer.mjs')];
     const installed = installedBin();
-    return installed ? [installed] : ['npx', '-y', 'graph-indexer@3'];
+    return installed ? [installed] : ['npx', ...NPX_ARGS];
 }
 
 /**
@@ -130,8 +151,7 @@ function writeOpenCodePlugin(repo, local, dryRun) {
         const file = path.join(repo, rel);
         const same = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === src;
         if (!same && !dryRun) {
-            fs.mkdirSync(path.dirname(file), { recursive: true });
-            fs.writeFileSync(file, src);
+            writeInRepo(repo, file, src);
         }
         out.push(`${same ? 'already in' : 'written to'} ${rel}`);
     }
@@ -162,8 +182,7 @@ function upsertClaudeHooks(repo, local, dryRun) {
     }
     const changed = before !== JSON.stringify(cfg.hooks);
     if (changed && !dryRun) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+        writeInRepo(repo, file, JSON.stringify(cfg, null, 2) + '\n');
     }
     return `Claude Code hooks: ${changed ? 'written to' : 'already in'} .claude/settings.json (post-edit check, grep disambiguation, session line)`;
 }
@@ -180,8 +199,7 @@ function upsertClaudeHelper(repo, dryRun) {
     if (have === want) return `Claude Code: structural helper already in ${rel}`;
     if (have != null && !have.includes("graph-indexer's index")) return `Claude Code: ${rel} exists and is not graph-indexer's, so it was left as is`;
     if (!dryRun) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, want);
+        writeInRepo(repo, file, want);
     }
     return `Claude Code: structural helper ${have == null ? 'written to' : 'updated in'} ${rel} (a sub-agent on a small model that answers call-site, caller, subclass and impact questions from the index)`;
 }
@@ -224,8 +242,7 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
             cfg[a.key]['graph-indexer'] = entry;
             const changed = before !== JSON.stringify(entry);
             if (changed && !dryRun) {
-                fs.mkdirSync(path.dirname(file), { recursive: true });
-                fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
+                writeInRepo(repo, file, JSON.stringify(cfg, null, 2) + '\n');
             }
             report.push(`${a.label}: ${changed ? (before === 'null' ? 'added' : 'updated') : 'already configured'} ${rel}`);
         } else if (key === 'codex') {
@@ -242,18 +259,18 @@ export async function runInit({ opt, flag, repo: repoArg = null }) {
     if (hooks && chosen.includes('opencode')) report.push(writeOpenCodePlugin(repo, local, dryRun));
     if (!noInstructions) {
         const targets = [...new Set(chosen.map(k => AGENTS[k].instructions))];
-        for (const t of targets) report.push(`${t}: ${upsertBlock(path.join(repo, t), dryRun)} graph-indexer instructions block`);
+        for (const t of targets) report.push(`${t}: ${upsertBlock(repo, path.join(repo, t), dryRun)} graph-indexer instructions block`);
     }
     // keep the index out of version control
     const gi = path.join(repo, '.gitignore');
     const giText = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
     if (!/^\/?\.graph-indexer\/?$/m.test(giText)) {
-        if (!dryRun) fs.writeFileSync(gi, (giText.trimEnd() ? giText.trimEnd() + '\n' : '') + '.graph-indexer/\n');
+        if (!dryRun) writeInRepo(repo, gi, (giText.trimEnd() ? giText.trimEnd() + '\n' : '') + '.graph-indexer/\n');
         report.push('.gitignore: added .graph-indexer/');
     }
     process.stdout.write(`graph-indexer init ${dryRun ? '(dry run) ' : ''}in ${repo}\n  ${report.join('\n  ')}\n\n` +
-        `Other agents (Claude Desktop, JetBrains AI Assistant, Cline): add an MCP server with command "npx" and args ["-y","graph-indexer@3","serve","--repo","${repo}"].\n` +
-        (dryRun || noDemo ? `Build the index now with: npx graph-indexer index   (the server also builds it on first start)\n` : '') +
+        `Other agents (Claude Desktop, JetBrains AI Assistant, Cline): add an MCP server with command "npx" and args ${JSON.stringify([...NPX_ARGS, 'serve', '--repo', repo])}.\n` +
+        (dryRun || noDemo ? `Build the index now with: npx ${NPX_ARGS.join(' ')} index   (the server also builds it on first start)\n` : '') +
         (hooks ? '' : `Optional: graph-indexer init --hooks adds Claude Code hooks (edit check after each edit, grep disambiguation).\n`));
     if (dryRun || noDemo) return;
     // build the index now (the server would on first start) and show what it answers here

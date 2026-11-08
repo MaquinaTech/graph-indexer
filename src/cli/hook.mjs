@@ -31,7 +31,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findRepoRoot, dataDir, DATA_DIR_NAME } from '../util/paths.mjs';
+import { findRepoRoot, dataDir, DATA_DIR_NAME, readRepoFile } from '../util/paths.mjs';
 import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hooks report on code files only
 
 const MAX_CONTEXT = 1500;
@@ -78,16 +78,26 @@ function responseText(input) {
 /** Navigation calls since the last edit and definitions already shown, per session (crawl detector). */
 function sessionState(input) {
     const id = String(input.session_id ?? input.sessionId ?? input.conversation_id ?? 'default').replace(/[^\w.-]/g, '_').slice(0, 80);
-    const file = path.join(os.tmpdir(), 'graph-indexer-hooks', `${id}.json`);
+    // a per-user directory closed to others: in a shared temp dir another user could otherwise read
+    // the state or plant links that the next save writes through
+    const dir = path.join(os.tmpdir(), `graph-indexer-hooks-${process.getuid?.() ?? 'user'}`);
+    const file = path.join(dir, `${id}.json`);
+    const privateDir = () => {
+        if (process.platform === 'win32') return true;
+        try { const d = fs.lstatSync(dir); return d.isDirectory() && d.uid === process.getuid() && (d.mode & 0o077) === 0; } catch { return false; }
+    };
     let st = { nav: 0, shown: [] };
-    try { st = { ...st, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch { /* first call */ }
+    try { if (privateDir() && fs.lstatSync(file).isFile()) st = { ...st, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch { /* first call */ }
     return {
         st,
         save() {
             try {
-                fs.mkdirSync(path.dirname(file), { recursive: true });
+                fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+                if (!privateDir()) return;
                 st.shown = st.shown.slice(-400);
-                fs.writeFileSync(file, JSON.stringify(st));
+                const tmp = `${file}.${process.pid}.tmp`;
+                fs.writeFileSync(tmp, JSON.stringify(st), { flag: 'wx', mode: 0o600 });
+                fs.renameSync(tmp, file);
             } catch { /* optional */ }
         },
     };
@@ -342,7 +352,7 @@ function shellEdits(root, state) {
 const RULES = `How to look code up in this repository (graph-indexer):
 - Several things at once: several tool calls in one message, or one search with alternatives — not one search per turn.
 - The function or the 50–100 lines you need, not whole files; to find a definition, search for its definition line (\`def name\`, \`class Name\`) across the package in one search.
-- Exact uses of a function or class, even when other code shares its name: find_references (\`npx graph-indexer refs NAME\` in a shell). Before changing what other code relies on: change_impact; when you are done: check_changes, then run the tests it names, once.`;
+- Exact uses of a function or class, even when other code shares its name: find_references (\`npx -y --prefix / graph-indexer@3 refs NAME\` in a shell). Before changing what other code relies on: change_impact; when you are done: check_changes, then run the tests it names, once.`;
 
 async function sessionLine(root, { rules = false, acquire }) {
     if (!hasIndex(root)) return null; // being built in the background (spawnResident); say nothing yet
@@ -353,7 +363,7 @@ async function sessionLine(root, { rules = false, acquire }) {
         const st = intel.stats();
         const line = `graph-indexer has a live index of this repository (${st.files} files, ${st.symbols} symbols). Its MCP tools answer with exact locations: explore (the code relevant to a task, its callers, the definitions it uses and its tests, in one call), find_references (exact uses, even when other code shares the name), change_impact (what a change affects and which tests to run), check_changes (what an edit broke, and the closest tests), call_graph, read_code (symbols or ranges by name, with where each name they use is defined), search_text, search_code and outline.`;
         // the managed block of `init` already carries the rules; otherwise add them
-        const carried = ['CLAUDE.md', 'AGENTS.md'].some(f => { try { return fs.readFileSync(path.join(root, f), 'utf8').includes('<!-- graph-indexer:start -->'); } catch { return false; } });
+        const carried = ['CLAUDE.md', 'AGENTS.md'].some(f => (readRepoFile(root, f) ?? '').includes('<!-- graph-indexer:start -->'));
         return rules || !carried ? `${line}\n${RULES}` : line;
     } finally { ix.release(); }
 }
