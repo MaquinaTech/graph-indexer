@@ -20,6 +20,8 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
+// the exact release this plugin version runs through npx (never a range): keep it equal to package.json's version
+export const VERSION = '3.0.2';
 const WIN = process.platform === 'win32';
 
 export function findRepoRoot(start) {
@@ -90,7 +92,7 @@ async function main() {
     // npx from running a graph-indexer that the repository ships in its own node_modules
     // (on Windows npx.cmd needs a shell, so the home directory is quoted for cmd.exe)
     const home = WIN ? `"${os.homedir()}"` : os.homedir();
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', '--prefix', home, 'graph-indexer@3', 'hook', event], { stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', '--prefix', home, `graph-indexer@${VERSION}`, 'hook', event], { stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
     child.on('error', () => { /* fail open */ });
     child.stdin.on('error', () => { /* fail open */ });
     child.stdin.end(raw);
