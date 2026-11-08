@@ -8,7 +8,7 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 Kotlin `fun interface` support, contributed by [@jhernandez-movicoders](https://github.com/jhernandez-movicoders)
 ([#5](https://github.com/MaquinaTech/graph-indexer/issues/5), [#6](https://github.com/MaquinaTech/graph-indexer/pull/6)),
-and a Claude Code plugin whose every launcher is pinned to an exact version.
+and a Claude Code plugin that meets the plugin directory policy.
 
 ### Fixed
 
@@ -28,10 +28,16 @@ and a Claude Code plugin whose every launcher is pinned to an exact version.
 
 ### Changed
 
-- **The Claude Code plugin pins every package it runs.** The hook client (`hooks/gi-hook.mjs`) started
-  `graph-indexer@3`, a range, when no resident answered; it now runs the exact version it ships with
-  (`graph-indexer@3.0.2`), as `.mcp.json` does. Each release must update both pins; a test checks
-  that they equal `package.json`.
+- **The Claude Code plugin listed in the plugin directory is Markdown and JSON only.** The directory
+  accepts command hooks, local MCP servers and scripts only from verified organizations, so
+  `integrations/claude-code` now holds the `code-structure` sub-agent (with the `name` and `description`
+  frontmatter keys only), a `setup` skill that tells Claude how to connect the MCP server
+  (`claude mcp add graph-indexer -- npx -y --prefix / graph-indexer@3.0.2 serve`, with the user's
+  consent) and the manifest.
+- **The full plugin (MCP server, hooks, sub-agent) moved to `integrations/claude-code-local`** for manual
+  installs; `init --hooks` gives the same result without a plugin. Its launchers are pinned to the exact
+  release: the hook client ran `graph-indexer@3`, a range, and now runs `graph-indexer@3.0.2`. A test
+  keeps every pin equal to `package.json`.
 
 ---
 

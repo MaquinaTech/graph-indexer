@@ -16,7 +16,7 @@
  *   { v, version, op: 'hook', event, input }     → { ok, out }   out: what the hook prints, or null
  *   { v, version, op: 'tool', calls }            → { ok, out }   out: the CLI's output text
  * A request from another graph-indexer version gets { ok: false } and the client falls back, except
- * from thin clients that only relay hooks (`any: true`, integrations/claude-code/hooks/gi-hook.mjs).
+ * from thin clients that only relay hooks (`any: true`, integrations/claude-code-local/hooks/gi-hook.mjs).
  *
  * The socket is only reachable by its owner: inside the repository's .graph-indexer/ directory,
  * or, when that path is too long for a Unix socket, in a per-user directory with mode 0700 that

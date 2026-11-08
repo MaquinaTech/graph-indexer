@@ -60,7 +60,7 @@ to `.gitignore`, and adds a short block to `CLAUDE.md` / `AGENTS.md` on how to l
 For Claude Code it also writes a structural helper, `.claude/agents/code-structure.md`: a
 read-only sub-agent on a small model that answers call-site, caller, subclass and impact
 questions from the index, so the main agent can hand them off and get back only the list (the
-Claude Code plugin ships it too). `--hooks` adds the Claude Code hooks to `.claude/settings.json`,
+Claude Code plugin ships it too (`integrations/claude-code`; the full plugin with hooks is `integrations/claude-code-local`)). `--hooks` adds the Claude Code hooks to `.claude/settings.json`,
 which Devin, Copilot CLI and Cursor also run, and the OpenCode / Kilo Code plugin that appends the
 same context to their tool output. Flags: `--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin`,
 `--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,

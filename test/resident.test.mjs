@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { socketPath, askResident, startResident } from '../src/cli/resident.mjs';
-import * as pluginClient from '../integrations/claude-code/hooks/gi-hook.mjs';
+import * as pluginClient from '../integrations/claude-code-local/hooks/gi-hook.mjs';
 import { makeRepo, rmrf } from './helpers.mjs';
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'graph-indexer.mjs');
@@ -82,7 +82,7 @@ test("the Claude Code plugin's hook client finds the same socket and relays thro
         for (const r of [root, long]) assert.equal(pluginClient.socketPath(r), socketPath(r));
         const handle = async (req) => (req.op === 'hook' ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `seen ${req.event} ${req.input.tool_name}` } }) : null);
         const res = await startResident({ root, version: 'some-other-version', handle });
-        const client = path.join(path.dirname(BIN), '..', 'integrations', 'claude-code', 'hooks', 'gi-hook.mjs');
+        const client = path.join(path.dirname(BIN), '..', 'integrations', 'claude-code-local', 'hooks', 'gi-hook.mjs');
         const out = await new Promise((resolve) => {
             const c = spawn(process.execPath, [client, 'post-tool'], { stdio: ['pipe', 'pipe', 'ignore'] });
             let text = '';

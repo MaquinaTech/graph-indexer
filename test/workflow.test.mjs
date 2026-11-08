@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { CodeIntel } from '../src/query/intel.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { grepPattern } from '../src/cli/hook.mjs';
-import { claudeAgentFile, helperInstructions } from '../src/cli/helper.mjs';
+import { claudeAgentFile, helperInstructions, pluginAgentFile } from '../src/cli/helper.mjs';
 import { makeRepo, writeFile, rmrf } from './helpers.mjs';
 
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'graph-indexer.mjs');
@@ -144,8 +144,10 @@ test('init writes the structural helper for Claude Code once, keeps a user file 
             spawnSync(process.execPath, [BIN, 'init', '--repo', skipped, '--agents', 'claude', '--no-helper'], { encoding: 'utf8' });
             assert.ok(!fs.existsSync(path.join(skipped, '.claude/agents')));
         } finally { rmrf(skipped); }
-        const plugin = path.join(path.dirname(BIN), '..', 'integrations', 'claude-code', 'agents', 'code-structure.md');
-        assert.equal(fs.readFileSync(plugin, 'utf8'), claudeAgentFile(), 'regenerate integrations/claude-code/agents/code-structure.md from src/cli/helper.mjs');
+        for (const [dir, want] of [['claude-code-local', claudeAgentFile()], ['claude-code', pluginAgentFile()]]) {
+            const plugin = path.join(path.dirname(BIN), '..', 'integrations', dir, 'agents', 'code-structure.md');
+            assert.equal(fs.readFileSync(plugin, 'utf8'), want, `regenerate integrations/${dir}/agents/code-structure.md from src/cli/helper.mjs`);
+        }
         // through a shell, the same instructions name the CLI's commands
         const cli = helperInstructions({ cli: '/x/gi' });
         assert.match(cli, /`\/x\/gi refs <Name> --kind inherit`/);
