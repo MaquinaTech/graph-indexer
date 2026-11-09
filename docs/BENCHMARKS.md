@@ -424,9 +424,41 @@ What the debug output showed, fixed in this order:
   Some(x)`), `Self::new()`, sequential shadowing with block and match-arm scopes, and methods such
   as `upgrade()` or `get_mut()` that keep the value only when its type has no method of that name.
 
-What remains: calls through a trait path (`ser::SerializeSeq::serialize_element(self, v)`),
-two trait impls of one method name on one type (`impl From<f32>` and `impl From<f64>` for
-`Value`), and receivers typed only by a trait object or an iterator adapter.
+**Third round: calls through traits (2026-11-09, rust-analyzer 1.99.1).** Same oracle and frozen
+samples; "before" is the second round's "now":
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| serde_json (142 symbols) | before | 0.968 | 0.925 | 0.866 |
+| | now | **0.974** | **0.947** | **0.899** |
+| ripgrep (150) | before | 0.990 | 0.942 | 0.907 |
+| | now | **0.990** | **0.944** | **0.912** |
+| tokio (150) | before | 0.975 | 0.799 | 0.733 |
+| | now | **0.981** | **0.838** | **0.747** |
+
+- **Several bounds.** `W: AsyncWrite + AsyncSeek` kept only the first trait, so tokio's
+  `AsyncSeek::poll_complete` had 0 of its 19 uses; a value bound by several traits now has the
+  methods of each (`A + B` in type parameters, `where` clauses, `impl A + B`, `dyn A + B`), also
+  through a field typed by the parameter (`me.inner` with `inner: W`), a method returning it
+  (`get_pin_mut()` → `Pin<&mut R>`) and pin-project's `self.project()`. 17 of 19 now.
+- **Trait-path calls.** `ser::SerializeSeq::serialize_element(self, v)`, `Debug::fmt(n, f)`,
+  `AsRawFd::as_raw_fd(self)` and `<T as Trait>::m(x)` reach the method of the impl of that trait
+  for the first argument's type (or `T`). Each method knows the trait of its impl block, so a type
+  with `Debug::fmt` and `Display::fmt` has two methods, not one redeclared.
+- **A trait method's uses include its implementations'.** rust-analyzer counts `a.to_addrs()` on a
+  concrete `V4` as a use of the trait's `to_addrs`; so does graph-indexer now.
+- **Impls of one type stay apart.** Methods of one name in impls of different types or traits
+  (`impl AsyncWrite for Cursor<Vec<u8>>` and `… for Cursor<&mut [u8]>`) were merged as
+  redeclarations; they are now merged only within impls of one type (`#[cfg]` variants), and
+  `self.flush()` reaches the flush of its own impl block. A call on a value reaches `impl
+  IntoIterator for Map`, not the impl for `&'a Map`.
+- **Blanket impls.** `impl<M: Matcher> Matcher for &M` (and `… for Box<M>`) belongs to the trait:
+  `(*self).find_at(at)` inside it is the trait's method. `f32::to_bits(self)` inside `impl Float
+  for f32` is the primitive's own method, not a call of itself.
+
+What remains: receivers typed by a constructor of a library type (`SocketAddrV4::new(ip,
+port).to_socket_addrs()`), calls on a reference the index does not tell from the value (`map` of
+type `&Map`), `self[..]`, and macros whose arguments are not plain Rust (`async_assert_fn!`).
 
 ### A product monorepo: Twenty
 

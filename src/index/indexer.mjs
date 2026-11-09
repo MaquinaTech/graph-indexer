@@ -60,7 +60,7 @@ export class Indexer {
         this.resolveAll = s.getMeta('resolve_pending') === '1';
         const files = s.all('SELECT id, path, lang, package, is_test FROM files');
         for (const f of files) this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
-        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, exported, is_static, start_line, end_line FROM symbols')) {
+        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, decorators, exported, is_static, start_line, end_line FROM symbols')) {
             this.table.addSym(rowToSym(r));
         }
         // the interfaces a Go type satisfies implicitly are stored only as `~structural` edges
@@ -308,7 +308,7 @@ export class Indexer {
             const id = reuse ?? Number(r.lastInsertRowid);
             ids[i] = id;
             if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
-            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine });
+            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine, byRef: !!sym.decorators?.[0]?.startsWith('impl &') });
         }
         // FTS documents; documentation goes to its own table and has no file document
         if (spec.docs) {
@@ -500,6 +500,7 @@ function rowToSym(r) {
     return {
         id: r.id, fileId: r.file_id, name: r.name, qname: r.qname, kind: r.kind, parentId: r.parent_id ?? null, owner: r.owner ?? null,
         type: r.type ?? null, bases: r.bases ? JSON.parse(r.bases) : [], exported: !!r.exported, isStatic: !!r.is_static, startLine: r.start_line, endLine: r.end_line,
+        byRef: r.decorators ? /^\["impl &/.test(r.decorators) : false,
     };
 }
 

@@ -90,12 +90,33 @@ function typeHead(t) {
     return null;
 }
 
+const implOf = (node) => (node.parent?.type === 'declaration_list' && node.parent.parent?.type === 'impl_item' ? node.parent.parent : null);
+
+/**
+ * The type whose method a function in an impl block is. A blanket impl over a type parameter
+ * (`impl<'a, M: Matcher> Matcher for &'a M`, `… for Box<M>`) adds the trait's methods to every implementor:
+ * its methods belong to the trait.
+ */
 function implOwner(node) {
-    // function_item inside (impl_item body: (declaration_list ...))
-    const list = node.parent;
-    const impl = list?.parent;
-    if (list?.type === 'declaration_list' && impl?.type === 'impl_item') return typeHead(impl.childForFieldName('type'));
-    return null;
+    const impl = implOf(node);
+    if (!impl) return null;
+    const type = impl.childForFieldName('type');
+    const head = typeHead(type);
+    const params = (impl.childForFieldName('type_parameters')?.namedChildren ?? []).filter(p => p.type === 'type_parameter').map(p => p.childForFieldName('name')?.text);
+    // `impl<M: Matcher> Matcher for Box<M>`: a wrapper around the parameter is the parameter
+    let inner = head;
+    if (WRAPPERS.has(head) && type?.type === 'generic_type') inner = typeHead(type.childForFieldName('type_arguments')?.namedChildren[0]) ?? head;
+    const isParam = inner && params.includes(inner);
+    const trait = isParam ? impl.childForFieldName('trait') : null;
+    return trait ? typeHead(trait) ?? head : head;
+}
+
+/** The trait an impl block implements, for the functions declared in it (`impl fmt::Debug for Number` → Debug). */
+function implTrait(node) {
+    if (node.type !== 'function_item' && node.type !== 'function_signature_item') return [];
+    const t = implOf(node)?.childForFieldName('trait');
+    const h = t ? typeHead(t) : null;
+    return h ? [h] : [];
 }
 
 // bounds that say nothing about the methods a value has
@@ -104,15 +125,17 @@ const MARKER_TRAITS = new Set(['Copy', 'Clone', 'Send', 'Sync', 'Sized', 'Unpin'
 const GENERIC_ITEMS = new Set(['function_item', 'function_signature_item', 'impl_item', 'trait_item', 'struct_item', 'enum_item']);
 
 /**
- * The trait a type parameter in scope at `node` is bound by (`fn f<R: Read>(r: &mut R)`,
+ * The traits a type parameter in scope at `node` is bound by (`fn f<R: Read>(r: &mut R)`,
  * `impl<W, F: Formatter> Serializer<W, F>`, `where R: Read<'de>`), so `r.read()` and `R::read(x)`
- * reach the trait's method; null when `name` is no type parameter there or its bounds are markers.
+ * reach the trait's method (`A + B` when several give it methods: `W: AsyncWrite + AsyncSeek`);
+ * null when `name` is no type parameter there or its bounds are markers.
  */
 function typeParamBound(node, name) {
     for (let n = node; n; n = n.parent) {
         if (!GENERIC_ITEMS.has(n.type)) continue;
-        let declared = false, bound = null;
-        const take = (bounds) => { for (const b of bounds?.namedChildren ?? []) { const h = typeHead(b.type === 'higher_ranked_trait_bound' ? b.childForFieldName('type') : b); if (h && !MARKER_TRAITS.has(h)) { bound ??= b.text; break; } } };
+        let declared = false;
+        const bounds = [];
+        const take = (list) => { for (const b of list?.namedChildren ?? []) { const t = b.type === 'higher_ranked_trait_bound' ? b.childForFieldName('type') : b; const h = typeHead(t); if (h && !MARKER_TRAITS.has(h) && !bounds.includes(t.text)) bounds.push(t.text); } };
         for (const p of n.childForFieldName('type_parameters')?.namedChildren ?? []) {
             if (p.type !== 'type_parameter' || p.childForFieldName('name')?.text !== name) continue;
             declared = true;
@@ -121,7 +144,7 @@ function typeParamBound(node, name) {
         for (const w of n.namedChildren.find(c => c.type === 'where_clause')?.namedChildren ?? []) {
             if (w.type === 'where_predicate' && w.childForFieldName('left')?.text === name) { declared ||= GENERIC_ITEMS.has(n.type); take(w.childForFieldName('bounds')); }
         }
-        if (declared) return bound;
+        if (declared) return bounds.length ? bounds.join(' + ') : null;
     }
     return null;
 }
@@ -235,6 +258,8 @@ const WRAPPERS = new Set(['Arc', 'Rc', 'Box', 'Pin']);
 const WRAP_CTORS = new Set(['new', 'pin', 'clone', 'new_unchecked', 'from']);
 
 function wrappedValue(node, describe) {
+    // `(*self).m()`, `(**self).m()`: method calls dereference on their own
+    if (node.type === 'unary_expression' && node.text.startsWith('*') && node.namedChildren[0]) return describe(node.namedChildren[0]);
     if (node.type !== 'call_expression') return undefined;
     const fn = node.childForFieldName('function');
     if (fn?.type !== 'scoped_identifier') return undefined;
@@ -287,6 +312,15 @@ export const rust = {
     shadowing: true,
     pathCalls: true,
     ownerOf: implOwner,
+    implicitBases: implTrait,
+    // the impl a method is declared in (`impl Cursor<Vec<u8>>`): methods of one name in impls of one
+    // type are `#[cfg]` variants of one method, in impls of different types (or traits) methods of their own
+    decoratorsOf: (node) => {
+        const impl = (node.type === 'function_item' || node.type === 'function_signature_item') ? implOf(node) : null;
+        const t = impl?.childForFieldName('type');
+        return t ? ['impl ' + t.text.replace(/\s+/g, ' ')] : [];
+    },
+    traitPathCalls: true,
     refineKind(kind, d, parent) {
         if (kind === 'function' && implOwner(d.node)) return 'method';
         return kind;
@@ -294,6 +328,7 @@ export const rust = {
     isExported: (node) => node.namedChildren.some(c => c.type === 'visibility_modifier') || node.parent?.parent?.type === 'trait_item',
     visibility,
     isPrimitiveType: (t) => PRIMITIVES.has(t),
+    markerTraits: MARKER_TRAITS,
     transparentTypes: new Set(['Box', 'Rc', 'Arc', 'Cow', 'RefCell', 'Cell', 'Mutex', 'RwLock', 'MutexGuard', 'RwLockReadGuard', 'RwLockWriteGuard', 'Ref', 'RefMut', 'Pin', 'Option', 'Result', 'Weak']),
     elementTypes: new Set(['Vec', 'VecDeque', 'HashSet', 'BTreeSet', 'BinaryHeap', 'LinkedList', 'IntoIter', 'Iter', 'IterMut', 'Drain']),
     elementMethods: new Set(['first', 'last', 'get', 'get_mut', 'first_mut', 'last_mut', 'pop', 'pop_front', 'pop_back', 'front', 'back', 'remove', 'swap_remove', 'next', 'peek', 'find']),
@@ -303,7 +338,9 @@ export const rust = {
     // calls that hand back (a view of) the same value: unwrap, clone, borrow, lock, iter …
     identityMethods: new Set(['unwrap', 'expect', 'unwrap_or_default', 'unwrap_or', 'unwrap_or_else', 'as_ref', 'as_mut', 'as_deref', 'as_deref_mut',
         'clone', 'borrow', 'borrow_mut', 'lock', 'read', 'write', 'to_owned', 'deref', 'deref_mut', 'cloned', 'copied', 'iter', 'iter_mut', 'into_iter', 'drain', 'upgrade',
-        'get_mut', 'get_ref', 'into_inner', 'take']),
+        'get_mut', 'get_ref', 'into_inner', 'take',
+        // pin-project's projections have the fields of the value they project (`self.project().inner`)
+        'project', 'project_ref']),
     normalizeRefName(name, r) {
         if (r.node.type === 'macro_invocation') return BUILTIN_MACROS.has(name) ? null : name;
         // a type named by the path of `Type::item` / `Enum::Variant`, and a unit struct or constant

@@ -268,6 +268,23 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
     type has no method of that name (tokio's `Weak::upgrade` returns a sender);
   - longer path calls (`grep::regex::RegexMatcherBuilder::new()`) and associated types
     (`type Value = …;` inside an impl is not the crate's `Value`).
+- **Rust: calls through traits.** tokio recall 0.799 → 0.838, serde_json 0.925 → 0.947, precision
+  up on both (docs/BENCHMARKS.md, third round):
+  - a type parameter with several bounds (`W: AsyncWrite + AsyncSeek`, `where` clauses, `impl A +
+    B`, `dyn A + B`) has the methods of each, not only the first trait's: tokio's
+    `AsyncSeek::poll_complete` goes from 0 of 19 uses to 17. Also through a field typed by the
+    parameter, a method returning it, and pin-project's `self.project()`;
+  - trait-path calls (`SerializeSeq::serialize_element(self, v)`, `Debug::fmt(n, f)`, `<T as
+    Trait>::m(x)`) reach the impl of that trait for the first argument's type. Methods record the
+    trait of their impl block (shown as "implements"), so `Debug::fmt` and `Display::fmt` of one
+    type are two methods;
+  - the uses of a trait's method include the calls of its implementations, as rust-analyzer counts
+    them;
+  - methods of one name in impls of different types (`Cursor<Vec<u8>>`, `Cursor<&mut [u8]>`) or
+    traits are no longer merged as redeclarations, `self.m()` reaches the `m` of its own impl block,
+    and a call on a value prefers the impl for the value over the one for `&T`;
+  - a blanket impl (`impl<M: Matcher> Matcher for &M`, `… for Box<M>`) belongs to the trait, and
+    `f32::to_bits(self)` inside `impl Float for f32` is the primitive's method, not recursion.
 - **Java: overloads of one arity bind by argument types.** Calls record the types their arguments
   show (literals, typed locals and fields, `new`, casts, array elements, `"a" + x`), and among
   overloads taking that many arguments the resolver keeps those the types fit, exact matches

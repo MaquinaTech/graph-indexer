@@ -355,8 +355,23 @@ export class CodeIntel {
     overloads(sym) {
         // where each overload is a method of its own (Java, C#, Kotlin…), calls are bound to the one they reach
         if (this.ix.resolver.specs[sym.lang]?.distinctOverloads) return [];
-        return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?) AND is_static = ?',
-            sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id, sym.is_static ? 1 : 0).map(r => r.id);
+        // methods of one name from impls of different traits or types (Rust `Debug::fmt` / `Display::fmt`,
+        // `impl AsyncWrite for Cursor<Vec<u8>>` / `… for Cursor<&mut [u8]>`) are not redeclarations
+        return this.store.all('SELECT id FROM symbols WHERE file_id = ? AND qname = ? AND kind = ? AND (parent_id IS ? OR parent_id = ?) AND is_static = ? AND (kind != \'method\' OR (bases IS ? AND (? != \'rust\' OR decorators IS ?)))',
+            sym.file_id, sym.qname, sym.kind, sym.parent_id, sym.parent_id, sym.is_static ? 1 : 0, sym.bases ?? null, sym.lang, sym.decorators ?? null).map(r => r.id);
+    }
+
+    /**
+     * A Rust trait method's implementations (`fn m` in each `impl Trait for X`): calls of them are
+     * calls of the trait's method, as rust-analyzer counts them, so they are its references.
+     */
+    #traitImpls(sym) {
+        if (sym.lang !== 'rust' || sym.kind !== 'method' || sym.parent_id == null) return [];
+        const trait = this.sym(sym.parent_id);
+        if (trait?.kind !== 'trait') return [];
+        const r = this.ix.resolver;
+        return this.store.all("SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.name = ? AND s.kind = 'method' AND f.lang = 'rust' AND s.bases LIKE ?", sym.name, `%"${trait.name}"%`)
+            .filter(m => m.id !== sym.id && r.resolveTypeName(trait.name, m.file_id)?.id === trait.id).map(m => m.id);
     }
 
     /** Is `memberId` one of the members `sym` overrides (declared in a supertype)? */
@@ -438,7 +453,7 @@ export class CodeIntel {
     references(id, { kinds = null, includeTests = true, minConf = 0, family = true } = {}) {
         const sym = this.sym(id);
         if (!sym) return null;
-        const ids = [...new Set([id, ...this.overloads(sym)])];
+        const ids = [...new Set([id, ...this.overloads(sym), ...this.#traitImpls(sym)])];
         const via = new Map();
         if (family && !sym.is_static && (sym.kind === 'method' || sym.kind === 'property' || sym.kind === 'field')) {
             for (const s of this.#supertypeMembers(sym)) if (!ids.includes(s.id)) { ids.push(s.id); via.set(s.id, s.via); }

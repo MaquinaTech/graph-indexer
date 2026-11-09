@@ -224,6 +224,9 @@ export class SymbolTable {
     file(id) { return this.files.get(id); }
 }
 
+/** A resolved type as membersOf takes it: {id, name, fileId}, and `allOf` for a value of several traits. */
+const asType = (t) => (t.allOf ? t : { id: t.id ?? null, name: t.name, fileId: t.fileId ?? null });
+
 export class Resolver {
     constructor(table, specsById, { sigOf = null, modules = null } = {}) {
         this.t = table;
@@ -270,14 +273,19 @@ export class Resolver {
     /** Members named `name` of a type (by id and/or name), including inherited ones. */
     membersOf(type, name, depth = 0, seen = new Set()) {
         if (!type || depth > 6) return [];
+        // a value bound by several traits (`W: AsyncWrite + AsyncSeek`): the member of each that has it
+        if (type.allOf) return [...new Set(type.allOf.flatMap(t => this.membersOf(t, name, depth + 1, new Set(seen))))];
         const key = (type.id ?? '') + ':' + type.name;
         if (seen.has(key)) return [];
         seen.add(key);
         const out = [];
         if (type.id != null) for (const id of this.t.byParent.get(type.id)?.get(name) ?? []) out.push(id);
+        const ownSym = type.id != null ? this.t.sym(type.id) : null;
         for (const id of this.t.byOwner.get(type.name) ?? []) {
             const s = this.t.sym(id);
             if (s.name !== name) continue;
+            // a blanket impl's method (`impl<M: Matcher> Matcher for &M`) is the trait's own, called through its declaration
+            if (ownSym?.kind === 'trait' && s.bases?.includes(type.name) && out.length) continue;
             // owner-declared members must live near the type (same package/dir/file family)
             if (type.fileId != null) {
                 const a = this.t.file(s.fileId), b = this.t.file(type.fileId);
@@ -427,6 +435,13 @@ export class Resolver {
             s = s.slice(0, -2);
         }
         if (s === '!') return EXTERNAL;
+        if (s.includes('+') && !s.endsWith('[]') && !s.endsWith('{}')) {
+            // `A+B` (Rust bounds, see normalizeType): the traits of the repository among them
+            const ts = s.split('+').map(x => this.typeFromString(x, fileId)).filter(Boolean);
+            const own = ts.filter(x => x !== EXTERNAL && x.id != null);
+            if (!own.length) return ts.length ? EXTERNAL : null;
+            return own.length === 1 ? own[0] : { id: null, name: s, fileId, allOf: own };
+        }
         if (s.endsWith('[]')) return { arrayOf: s.slice(0, -2), fileId }; // a collection value
         if (s.endsWith('{}')) return { mapOf: s.slice(0, -2), fileId };   // a map value
         if (this.#qualifiedType(s, fileId) === EXTERNAL || this.#nestedType(s, fileId) === EXTERNAL) return EXTERNAL;
@@ -492,7 +507,7 @@ export class Resolver {
             // `~m`: member m of the type if it has one, else the same value (`x.clone()`, `opt.unwrap()`)
             if (name.startsWith('~')) {
                 const real = name.slice(1);
-                const own = cur.arrayOf == null && cur.mapOf == null && cur.tupleOf == null ? this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, real) : [];
+                const own = cur.arrayOf == null && cur.mapOf == null && cur.tupleOf == null ? this.membersOf(asType(cur), real) : [];
                 if (!own.length) { cur = elem ? this.#elementOf(cur, elem) : cur; continue; }
                 parts[i] = { name: real, elem };
                 i--;
@@ -514,7 +529,7 @@ export class Resolver {
                     : spec?.mapValueMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]', cur.fileId, elem) : EXTERNAL;
                 continue;
             }
-            const mem = this.membersOf({ id: cur.id ?? null, name: cur.name, fileId: cur.fileId }, name);
+            const mem = this.membersOf(asType(cur), name);
             if (!mem.length && cur.id != null && spec?.qualifiedTypes) {
                 // Go: an embedded field is named after its type (`m.MatchRegexp` in a struct embedding MatchRegexp)
                 const os = this.t.sym(cur.id);
@@ -548,7 +563,7 @@ export class Resolver {
             }
             cur = next;
         }
-        const res = cur === EXTERNAL || cur?.arrayOf != null || cur?.mapOf != null || cur?.tupleOf != null ? EXTERNAL : cur ? { id: cur.id ?? null, name: cur.name, fileId: cur.fileId ?? null } : null;
+        const res = cur === EXTERNAL || cur?.arrayOf != null || cur?.mapOf != null || cur?.tupleOf != null ? EXTERNAL : cur ? asType(cur) : null;
         this.memo.set(k, res);
         return res;
     }
@@ -715,7 +730,13 @@ export class Resolver {
         const recv = ref.recv || '';
         const kind = ref.kind;
         const name = ref.name;
-        if (recv) return this.#resolveMember(name, kind, recv, ref.recv_type, fileId, srcId);
+        if (recv) {
+            const r = this.#resolveMember(name, kind, recv, ref.recv_type, fileId, srcId);
+            // `f32::to_bits(self)` inside the `to_bits` of `impl Float for f32` is the primitive's own
+            // method (inherent methods come first), never a call of itself
+            if (r?.id != null && r.id === srcId && /^[a-z]\w*$/.test(recv) && this.specs[this.t.file(fileId)?.lang]?.isPrimitiveType?.(recv)) return { id: null, conf: 0, ncand: 0, external: true };
+            return r;
+        }
         return this.#resolveName(name, kind, fileId, srcId) ?? { id: null, conf: 0, ncand: 0 };
     }
 
@@ -778,8 +799,11 @@ export class Resolver {
     }
 
     #pick(ids, kind, conf, fileId) {
-        const cands = ids.map(id => this.t.sym(id)).filter(s => s && this.#compatible(s, kind));
+        let cands = ids.map(id => this.t.sym(id)).filter(s => s && this.#compatible(s, kind));
         if (!cands.length) return null;
+        // Rust: a method of a trait implemented for the type and for references to it (`impl
+        // IntoIterator for Map` and `for &'a Map`): a call on the value reaches the value's impl
+        if (cands.length > 1 && cands.some(s => s.byRef) && cands.some(s => !s.byRef) && cands.every(s => s.qname === cands[0].qname)) cands = cands.filter(s => !s.byRef);
         if (cands.length === 1) return { id: cands[0].id, conf, ncand: 1 };
         // overloads / redeclarations in one type or file: prefer the definition with a body (larger span)
         const sameQ = cands.every(s => s.qname === cands[0].qname);
@@ -1003,12 +1027,17 @@ export class Resolver {
                         const ts = type.id != null ? this.t.sym(type.id) : null;
                         ids = [];
                         for (const b of ts?.bases ?? []) { const bt = this.resolveTypeName(b, ts.fileId); if (bt) ids.push(...this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name)); }
-                    } else ids = this.membersOf(type, name);
+                    } else ids = this.#sameImpl(this.membersOf(type, name), srcId, fileId);
                     const r = this.#pick(this.#byStatic(ids, false), kind, 0.95, fileId);
                     if (r) return r;
                     return { id: null, conf: 0, ncand: 0 };
                 }
             }
+        }
+        // a Rust trait-path call: `SerializeSeq::serialize_element(self, v)`, `Debug::fmt(n, f)`
+        if (file.lang === 'rust' && kind === 'call' && this.argTypes?.length === 1) {
+            const r = this.#traitPathCall(name, recv, fileId);
+            if (r) return r;
         }
         // a Rust path: `crate::a::f`, `super::B::new`, `other_crate::m::T`, `alias::sub::f`
         if (file.lang === 'rust' && this.modules) {
@@ -1104,6 +1133,38 @@ export class Resolver {
         // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
         if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
         return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
+    }
+
+    /**
+     * `self.m()` in a Rust impl where several impls of the type declare `m` (tokio's `impl AsyncWrite`
+     * for `Cursor<&mut [u8]>`, `Cursor<Vec<u8>>`…): the one in the caller's own impl block, the
+     * nearest in the file among those implementing the caller's trait.
+     */
+    #sameImpl(ids, srcId, fileId) {
+        if (ids.length < 2 || srcId == null || this.t.file(fileId)?.lang !== 'rust') return ids;
+        let src = this.t.sym(srcId);
+        while (src && !CALLABLE_KINDS.has(src.kind) && src.parentId != null) src = this.t.sym(src.parentId);
+        if (!src) return ids;
+        const key = (s) => JSON.stringify(s.bases ?? []);
+        const same = ids.map(id => this.t.sym(id)).filter(s => s && s.fileId === fileId && key(s) === key(src));
+        if (same.length < 2 || same.length < ids.length) return ids;
+        same.sort((a, b) => Math.abs(a.startLine - src.startLine) - Math.abs(b.startLine - src.startLine));
+        return [same[0].id];
+    }
+
+    /**
+     * `Trait::m(x)` / `<T as Trait>::m(x)` (Rust): the method `m` of the impl of `Trait` for the
+     * type of `x` (or `T`), so a type with several traits declaring `m` (`Debug::fmt` and
+     * `Display::fmt` on one type) is told apart. Null when that type has no such impl in the
+     * repository: the path names a type, or the trait's own declaration is what is called.
+     */
+    #traitPathCall(name, recv, fileId) {
+        const trait = recv.split('.').pop();
+        if (!/^[A-Z]/.test(trait ?? '')) return null;
+        const self = this.typeFromString(this.argTypes[0], fileId);
+        if (!self || self === EXTERNAL || (self.id == null && !self.allOf)) return null;
+        const ids = this.membersOf(self, name).filter(id => { const m = this.t.sym(id); return m && CALLABLE_KINDS.has(m.kind) && m.bases?.includes(trait); });
+        return ids.length ? this.#pick(ids, 'call', 0.9, fileId) : null;
     }
 
     /**

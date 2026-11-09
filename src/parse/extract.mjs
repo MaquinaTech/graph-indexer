@@ -855,10 +855,15 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const st = selfType(ctx.sym);
             if (!st) return null;
             if (segs.length === 1) return first.ops.length ? null : st.name;
-            const nt = ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, 'this.' + segs[1].name) : null;
-            let ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
-            if (ft) ft = boundAt(ctx.pos, ft) ?? ft; // `formatter: F` in `impl<W, F: Formatter>`
-            t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
+            if (segs[1].ops[0] === '()' && spec.identityMethods?.has(segs[1].name)) {
+                // `self.project()`, `self.clone()`: the same value, unless the type defines the method
+                t = applyOps(st.name + '#~' + segs[1].name, segs[1].ops.slice(1));
+            } else {
+                const nt = ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, 'this.' + segs[1].name) : null;
+                let ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
+                if (ft) ft = boundAt(ctx.pos, ft) ?? ft; // `formatter: F` in `impl<W, F: Formatter>`
+                t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
+            }
             i = 2;
         } else {
             const isCall = first.ops[0] === '()';
@@ -918,6 +923,17 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 if (call && spec.mapMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2), seg.ops.slice(1)); continue; }
                 if (call && spec.mapValueMethods?.has(seg.name)) { t = applyOps(t.slice(0, -2) + '[]', seg.ops.slice(1)); continue; }
                 return '!';
+            }
+            // a field or a method's result typed by a type parameter of its type (`me.inner` with
+            // `inner: W`, `self.get_pin_mut()` returning `Pin<&mut R>`, where `W: AsyncSeek`): the bound in scope here
+            if (spec.typeParamBound && (!seg.ops.length || (call && seg.ops.length === 1))) {
+                const base = t.replace(/(#~[\w$]+)+$/, '');
+                const simple = /^[A-Za-z_$][\w$]*$/.test(base);
+                const ci = simple ? symbols.findIndex(x => x.qname === base && CLASS_KINDS.has(x.kind)) : -1;
+                const ft = !call ? (ci >= 0 ? fieldTypes.get(ci + ':' + seg.name) : null)
+                    : simple ? symbols.find(x => x.qname === base + '.' + seg.name && CALLABLE_KINDS.has(x.kind))?.type ?? null : null;
+                const b = ft ? boundAt(ctx.pos, ft) : null;
+                if (b) { t = b; continue; }
             }
             t = applyOps(t + '#' + seg.name, seg.ops);
         }
@@ -1017,12 +1033,28 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (spec.normalizeRefName) name = spec.normalizeRefName(name, r);
         if (!name || name.length > 128) continue;
         const kind = r.kind;
-        const recv = r.recvNode ? receiverDescriptor(r.recvNode, spec) : '';
+        let recv = r.recvNode ? receiverDescriptor(r.recvNode, spec) : '';
         const ctx = ctxAt(r.nameNode.startIndex);
+        // a trait-path call (Rust `Trait::m(x)`, `<T as Trait>::m(x)`): the type whose impl of the
+        // trait runs is the first argument's, or the one named before `as`
+        let selfArg = null;
+        if (spec.traitPathCalls && kind === 'call' && r.recvNode) {
+            const q = r.recvNode.type === 'bracketed_type' ? r.recvNode.namedChildren[0] : null;
+            if (q?.type === 'qualified_type') {
+                const alias = q.childForFieldName('alias');
+                if (alias) recv = receiverDescriptor(alias, spec);
+                selfArg = typeText(q.childForFieldName('type')?.text ?? '');
+            } else if (/^[A-Z]/.test(recv.split('.').pop() ?? '') && !recv.endsWith('Self')) {
+                const arg0 = r.node.childForFieldName('arguments')?.namedChildren.find(c => !/comment/.test(c.type));
+                const d = arg0 ? receiverDescriptor(arg0, spec) : null;
+                selfArg = d === 'this' ? selfType(ctx.sym)?.name ?? null : d ? inferType(d, { ...ctx, pos: r.nameNode.startIndex, receiver: true }) : null;
+            }
+            if (selfArg === '!') selfArg = null;
+        }
         if (kind === 'call' && !recv && spec.builtinCalls?.has(name) && !isDeclared(ctx, name)) continue;
         const root = recv.split('.')[0];
         // `module.x()` is the CommonJS global only when no local `module` is in scope
-        if (recv && spec.externalReceivers?.has(root) && !isDeclared(ctx, root)) continue;
+        if (recv && !selfArg && spec.externalReceivers?.has(root) && !isDeclared(ctx, root)) continue;
         if (kind === 'value' && spec.isNoiseValue?.(name)) continue;
         // a value or a call by the name of a local (`stack := stack(3); log(stack)`, `check := func…;
         // check()`) is the local, in languages where no local stands for repository code (Go: no
@@ -1036,7 +1068,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         // arguments passed: tells overloads apart where each one is a method of its own
         const a = spec.distinctOverloads && (kind === 'call' || kind === 'new') ? callArgc(r.node) : null;
         // and, where overloads differ by type (`append(char)` / `append(String)`), what each argument is
-        const argTypes = a && !a.open && a.n > 0 && spec.argType ? argTypesOf(r.node, { ...ctx, pos: r.nameNode.startIndex }) : null;
+        const argTypes = selfArg ? [selfArg] : a && !a.open && a.n > 0 && spec.argType ? argTypesOf(r.node, { ...ctx, pos: r.nameNode.startIndex }) : null;
         refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl, argc: a ? (a.open ? -1 : a.n) : null, argTypes });
     }
 
@@ -1127,6 +1159,15 @@ export function normalizeType(t, spec, depth = 0) {
     if (alts.length > 1) {
         const norm = [...new Set(alts.filter(a => !NULLISH_TYPES.has(a)).map(a => normalizeType(a, spec, depth + 1)))];
         return norm.length === 1 ? norm[0] : null;
+    }
+    // Rust bounds (`AsyncWrite + AsyncSeek + Send`, `dyn Error + 'static`): the traits that give the
+    // value methods, `A+B` when several do (the resolver looks a member up in each)
+    if (spec?.markerTraits) {
+        const parts = splitTop(s, '+').map(x => x.trim()).filter(Boolean);
+        if (parts.length > 1) {
+            const ts = [...new Set(parts.filter(x => !/^['?]/.test(x)).map(x => normalizeType(x, spec, depth + 1)))].filter(x => x && !x.includes('+') && !spec.markerTraits.has(x));
+            return ts.length ? ts.join('+') : null;
+        }
     }
     if (splitTop(s, '&').length > 1 || splitTop(s, ',').length > 1) return null; // intersections / tuples
     let m;
