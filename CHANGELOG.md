@@ -4,6 +4,23 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`hook prompt`, for Claude Code's `UserPromptSubmit`.**
+  - Before the agent's first turn, it resolves the code names a request mentions (`in backticks`,
+    qualified as `Type.member`, CamelCase types and snake_case functions) and adds what the index
+    knows about each: where it is defined, what implements it, its exact uses with the enclosing
+    function of each, and whether that list is complete.
+  - A request for paths or impact adds one more level of callers. For a port's method, it also lists
+    where the port is injected.
+  - A bare name that several definitions share is left out, and nothing is added when nothing
+    resolves. The index is not opened when the request names no code.
+  - On a new checkout it waits for the index that the session start is building.
+  - `init --hooks` does not install it yet: add `graph-indexer hook prompt` as a `UserPromptSubmit`
+    command hook to use it.
+
 ## [3.1.0] — 2026-11-08
 
 ### Added
