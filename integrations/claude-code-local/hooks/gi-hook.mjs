@@ -21,7 +21,7 @@ import { pathToFileURL } from 'node:url';
 
 const PROTOCOL = 1;
 // the exact release this plugin version runs through npx (never a range): keep it equal to package.json's version
-export const VERSION = '3.1.0';
+export const VERSION = '3.1.1';
 const WIN = process.platform === 'win32';
 
 export function findRepoRoot(start) {
@@ -37,7 +37,13 @@ export function findRepoRoot(start) {
 export function socketPath(root) {
     const abs = path.resolve(root);
     const hash = crypto.createHash('sha256').update(abs).digest('hex').slice(0, 16);
-    if (WIN) return `\\\\.\\pipe\\graph-indexer-${hash}`;
+    // a pipe name anyone could compute would let another user of the machine create it first and
+    // answer as the resident: the name carries a random id kept in the private data directory
+    if (WIN) {
+        let id = '';
+        try { id = fs.readFileSync(path.join(abs, '.graph-indexer', 'resident.pipe-id'), 'utf8').trim(); } catch { /* no resident yet */ }
+        return /^[0-9a-f]{32}$/.test(id) ? `\\\\.\\pipe\\graph-indexer-${hash}-${id}` : null;
+    }
     const inRepo = path.join(abs, '.graph-indexer', 'resident.sock');
     if (Buffer.byteLength(inRepo) <= 100) return inRepo;
     return path.join(os.tmpdir(), `graph-indexer-${process.getuid?.() ?? 'user'}`, `${hash}.sock`);
@@ -57,7 +63,7 @@ function trusted(file, root) {
 /** The resident's answer ({ out }) or null. `any: true`: this client has no logic of its own to match. */
 function ask(root, request, totalMs) {
     const file = socketPath(root);
-    if (!trusted(file, root)) return Promise.resolve(null);
+    if (!file || !trusted(file, root)) return Promise.resolve(null);
     return new Promise((resolve) => {
         let done = false, buf = '';
         const sock = net.createConnection(file);
@@ -91,8 +97,11 @@ async function main() {
     // no resident yet: the full hook through npx (it starts one for the next calls); --prefix keeps
     // npx from running a graph-indexer that the repository ships in its own node_modules
     // (on Windows npx.cmd needs a shell, so the home directory is quoted for cmd.exe)
-    const home = WIN ? `"${os.homedir()}"` : os.homedir();
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', '--prefix', home, `graph-indexer@${VERSION}`, 'hook', event], { stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
+    // It runs from the home directory with the repository passed explicitly: cmd.exe looks for
+    // npx.cmd in the working directory first, which here would be the repository's.
+    if (WIN && /["%\r\n]/.test(root)) return;
+    const q = (a) => (WIN ? `"${a}"` : a);
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['-y', '--prefix', q(os.homedir()), `graph-indexer@${VERSION}`, 'hook', event, '--repo', q(root)], { cwd: os.homedir(), stdio: ['pipe', 'inherit', 'ignore'], shell: WIN });
     child.on('error', () => { /* fail open */ });
     child.stdin.on('error', () => { /* fail open */ });
     child.stdin.end(raw);

@@ -128,11 +128,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
 `;
 
 export class Store {
+    /**
+     * An index.db the repository shipped is not trusted: defensive mode refuses the statements that
+     * can corrupt the file (writable_schema, …) and an untrusted schema may not call functions.
+     */
+    #harden() {
+        try { this.db.enableDefensive?.(true); } catch { /* older Node */ }
+        this.db.exec('PRAGMA trusted_schema = OFF;');
+    }
+
     constructor(dbPath) {
         this.path = dbPath;
         this.stmts = new Map();
         fs.mkdirSync(path.dirname(dbPath), { recursive: true });
         this.db = new DatabaseSync(dbPath);
+        this.#harden();
         this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536; PRAGMA busy_timeout = 5000;');
         const v = this.#schemaVersion();
         if (v !== null && v !== SCHEMA_VERSION) {
@@ -140,6 +150,7 @@ export class Store {
             this.db.close();
             for (const suffix of ['', '-wal', '-shm']) { try { fs.unlinkSync(dbPath + suffix); } catch { /* none */ } }
             this.db = new DatabaseSync(dbPath);
+            this.#harden();
             this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -65536; PRAGMA busy_timeout = 5000;');
         }
         this.db.exec(SCHEMA);

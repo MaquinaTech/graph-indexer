@@ -11,6 +11,9 @@ import { spawnSync } from 'node:child_process';
 import { CodeIntel } from '../src/query/intel.mjs';
 import { callTool } from '../src/mcp/tools.mjs';
 import { makeRepo, rmrf } from './helpers.mjs';
+import { handleHook } from '../src/cli/hook.mjs';
+import { collectModels } from '../src/query/orm.mjs';
+import { dataDir } from '../src/util/paths.mjs';
 
 let root, outside, intel;
 test.before(async () => {
@@ -36,7 +39,7 @@ test('check_changes: a base that is a git option is refused, and git writes noth
 
 test('read_code: paths outside the root, through a symlink, or into .git are not read', async () => {
     const rel = path.relative(root, path.join(outside, 'secret.txt'));
-    for (const target of [rel, `${rel}:1-1`, 'leak.txt', 'leak.txt:1-1', '.git/config']) {
+    for (const target of [rel, `${rel}:1-1`, 'leak.txt', 'leak.txt:1-1', '.git/config', '.GIT/config', '.Git/config:1-3']) {
         const t = await callTool(intel, 'read_code', { targets: [target] });
         assert.doesNotMatch(t, /TOP-SECRET-TOKEN|repositoryformatversion/, target);
     }
@@ -156,4 +159,88 @@ test("git config of the repository runs no hook or signature program, and a requ
         await callTool(ci, 'change_impact', { diff: true });
     } finally { ci.close(); rmrf(r); }
     assert.equal(fs.existsSync(marker), false);
+});
+
+test("hooks and the ORM view run git hardened too: a repository's core.fsmonitor runs nothing", { skip: process.platform === 'win32' }, async () => {
+    const r = makeRepo({ 'src/b.ts': 'export function b() { return 2; }\n', 'prisma/schema.prisma': 'model User {\n  id Int @id\n}\n' });
+    const marker = path.join(outside, 'fsmonitor-ran');
+    spawnSync('git', ['config', 'core.fsmonitor', `touch ${marker}; false`], { cwd: r });
+    fs.appendFileSync(path.join(r, 'src/b.ts'), 'export const c = 3;\n');
+    const ci = new CodeIntel({ root: r });
+    try {
+        await ci.open();
+        collectModels(ci);
+        const input = { session_id: `sec-${process.pid}`, tool_name: 'Bash', tool_input: { command: 'make' }, cwd: r };
+        await handleHook('post-tool', input, { root: r, acquire: async () => ({ intel: ci, release() {} }) });
+    } finally { ci.close(); rmrf(r); }
+    assert.equal(fs.existsSync(marker), false);
+});
+
+test('links committed inside .graph-indexer are removed, never written through (index.db-wal -> ~/.zshrc)', { skip: process.platform === 'win32' }, async () => {
+    const r = makeRepo({ 'src/a.ts': 'export const a = 1;\n' });
+    const victim = path.join(outside, 'victim.txt');
+    fs.writeFileSync(victim, 'precious\n');
+    fs.mkdirSync(path.join(r, '.graph-indexer'));
+    for (const name of ['index.db-wal', 'index.db-shm', 'resident.started', '.gitignore']) fs.symlinkSync(victim, path.join(r, '.graph-indexer', name));
+    fs.symlinkSync(path.join(outside, 'not-there.db'), path.join(r, '.graph-indexer', 'index.db'));
+    try {
+        dataDir(r);
+        assert.deepEqual(fs.readdirSync(path.join(r, '.graph-indexer')).filter(n => fs.lstatSync(path.join(r, '.graph-indexer', n)).isSymbolicLink()), []);
+        const ci = new CodeIntel({ root: r });
+        await ci.open();
+        ci.close();
+    } finally { rmrf(r); }
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'precious\n');
+    assert.equal(fs.existsSync(path.join(outside, 'not-there.db')), false);
+});
+
+test('find_files: a glob that backtracks catastrophically is stopped by the budget', async () => {
+    const r = makeRepo({ [`${'a'.repeat(120)}.txt`]: 'x\n', 'src/a.ts': 'export const a = 1;\n' });
+    const ci = new CodeIntel({ root: r });
+    try {
+        await ci.open();
+        const t0 = Date.now();
+        const t = await callTool(ci, 'find_files', { pattern: '*a'.repeat(14) + '*b' }).catch(e => e.message);
+        assert.ok(Date.now() - t0 < 15_000, `took ${Date.now() - t0} ms`);
+        assert.match(String(t), /took more than/);
+        assert.match(await callTool(ci, 'find_files', { pattern: 'src/*.ts' }), /src\/a\.ts/);
+    } finally { ci.close(); rmrf(r); }
+});
+
+test('an index committed to the repository is not opened', async () => {
+    const r = makeRepo({ 'src/a.ts': 'export const a = 1;\n', '.graph-indexer/index.db': 'not ours\n' });
+    spawnSync('git', ['add', '-f', '.graph-indexer/index.db'], { cwd: r });
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'ship an index'], { cwd: r });
+    try {
+        await assert.rejects(async () => { const ci = new CodeIntel({ root: r }); await ci.open(); ci.close(); }, /is committed to this repository/);
+    } finally { rmrf(r); }
+});
+
+test('filter and diff drivers named with "=" are switched off too (git splits -c at the first =)', { skip: process.platform === 'win32' }, async () => {
+    const r = makeRepo({ 'src/b.ts': 'export function b() { return 2; }\n', '.gitattributes': '*.ts filter=x=y diff=x=y\n' });
+    const marker = path.join(outside, 'eq-driver-ran');
+    const set = (k, v) => spawnSync('git', ['config', k, v], { cwd: r });
+    set('filter.x=y.clean', `touch ${marker}; cat`);
+    set('diff.x=y.textconv', `touch ${marker}; cat`);
+    fs.appendFileSync(path.join(r, 'src/b.ts'), 'export const c = 3;\n');
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(path.join(r, 'src/b.ts'), later, later);
+    const ci = new CodeIntel({ root: r });
+    try {
+        await ci.open();
+        await callTool(ci, 'check_changes', {});
+        ci.diffSeeds();
+        const input = { session_id: `sec-eq-${process.pid}`, tool_name: 'Bash', tool_input: { command: 'make' }, cwd: r };
+        await handleHook('post-tool', input, { root: r, acquire: async () => ({ intel: ci, release() {} }) });
+    } finally { ci.close(); rmrf(r); }
+    assert.equal(fs.existsSync(marker), false);
+});
+
+test('MCP arguments are bounded by the tool schema whatever the client sends', async () => {
+    const { boundArgs } = await import('../src/mcp/server.mjs');
+    const { TOOLS } = await import('../src/mcp/tools.mjs');
+    const schema = (n) => TOOLS.find(t => t.name === n).inputSchema;
+    assert.deepEqual(boundArgs(schema('call_graph'), { symbol: 'x', depth: 1e9, limit: -1 }), { symbol: 'x', depth: 4, limit: 5 });
+    assert.equal(boundArgs(schema('explore'), { queries: Array(50).fill('q') }).queries.length, 6);
+    assert.equal(boundArgs(schema('explore'), { symbols: Array(5000).fill('s') }).symbols.length, 100);
 });

@@ -1,0 +1,3 @@
+# Byte-exact checkouts everywhere: the vendored runtime is checked against SHA-256 digests and
+# generated files are compared with what the code writes, so no CRLF conversion on Windows.
+* -text

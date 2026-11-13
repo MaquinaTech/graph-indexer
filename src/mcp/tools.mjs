@@ -412,7 +412,7 @@ async function toolText(intel, { pattern, path: p = null, literal = false, ignor
         if (sm.unbound) parts.push(`${sm.unbound} unbound`);
         if (sm.text) parts.push(`${sm.text} in comments/strings/other text`);
         if (sm.nonCode) parts.push(`${sm.nonCode} in non-code files`);
-        out.push(`"${sm.ident}" across all ${r.total} matches: ${parts.join(', ')}.`);
+        out.push(`"${sm.ident}" across ${r.annotated < r.total ? `the first ${r.annotated} of` : 'all'} ${r.total} matches: ${parts.join(', ')}.`);
     }
     out.push(...definitionRescue(intel, pattern, literal, r));
     return out.join('\n');

@@ -28,7 +28,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { gitSync } from '../util/git.mjs';
+import { readRepoFile } from '../util/paths.mjs';
 
 const PRISMA_OPS = 'findUnique|findUniqueOrThrow|findFirst|findFirstOrThrow|findMany|create|createMany|createManyAndReturn|update|updateMany|updateManyAndReturn|upsert|delete|deleteMany|count|aggregate|groupBy';
 const PRISMA_CALL = new RegExp(`\\b(prisma\\w*|\\w*Prisma|db|tx|trx|client|transaction)\\s*\\.\\s*([a-z]\\w*)\\s*\\.\\s*(${PRISMA_OPS})\\s*[(<]`, 'g');
@@ -45,7 +46,7 @@ const decorators = (s) => { try { return JSON.parse(s.decorators || '[]'); } cat
 
 /** Repository files matching a test, indexed or not (`*.prisma`, migration `.sql`): git's list, else a bounded walk. */
 function repoFiles(root, test) {
-    const r = spawnSync('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 << 20 });
+    const r = gitSync(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { timeout: 5000, maxBuffer: 64 << 20 });
     if (r.status === 0 && r.stdout) return r.stdout.split('\0').filter(f => f && test(f));
     const out = [];
     const walk = (dir, depth) => {
@@ -65,7 +66,8 @@ function repoFiles(root, test) {
 function readLines(intel, rel) {
     const l = intel.fileLines(rel);
     if (l) return l;
-    try { return fs.readFileSync(path.join(intel.root, rel), 'utf8').split(/\r?\n/); } catch { return null; }
+    // not indexed (a .prisma file, a migration): still only a regular file inside the repository
+    return readRepoFile(intel.root, rel)?.split(/\r?\n/) ?? null;
 }
 
 /** Prisma models of every `.prisma` file. */

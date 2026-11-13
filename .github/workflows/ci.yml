@@ -22,6 +22,8 @@ jobs:
         include:
           - os: macos-latest
             node-version: "22"
+          - os: windows-latest
+            node-version: "24"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,7 +51,8 @@ jobs:
           TGZ=$(npm pack --silent | tail -1)
           WORK="$RUNNER_TEMP/gi-pack"
           rm -rf "$WORK" && mkdir -p "$WORK/repo/src"
-          tar -xzf "$TGZ" -C "$WORK"
+          # from inside $WORK: Git Bash's tar reads a "D:" in -C as a remote host
+          (cd "$WORK" && tar -xzf "$OLDPWD/$TGZ")
           PKG="$WORK/package"
           for d in bin src vendor/grammars vendor/web-tree-sitter; do
             [ -d "$PKG/$d" ] || { echo "missing $d/ in tarball"; exit 1; }

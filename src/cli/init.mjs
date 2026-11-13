@@ -58,13 +58,23 @@ function readJson(p) {
 // (code the repository ships) instead of the published package
 const NPX_ARGS = ['-y', '--prefix', '/', 'graph-indexer@3'];
 
+/**
+ * npx, by absolute path on Windows: there a bare `npx` is looked up in the working directory (the
+ * repository) before PATH, so an `npx.cmd`/`npx.exe` the repository ships would run instead.
+ */
+function npxCommand() {
+    if (process.platform !== 'win32') return 'npx';
+    const f = path.join(path.dirname(process.execPath), 'npx.cmd');
+    return fs.existsSync(f) ? f : 'npx';
+}
+
 function serverEntry(agent, { local }) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const bin = path.resolve(here, '../../bin/graph-indexer.mjs');
     const repoArgs = agent.workspaceVar ? ['--repo', agent.workspaceVar] : [];
     const base = local
         ? { command: process.execPath, args: [bin, 'serve', ...repoArgs] }
-        : { command: 'npx', args: [...NPX_ARGS, 'serve', ...repoArgs] };
+        : { command: npxCommand(), args: [...NPX_ARGS, 'serve', ...repoArgs] };
     if (agent.opencode) return { type: 'local', command: [base.command, ...base.args], enabled: true };
     if (agent.zed) return { ...base, env: {} };
     return agent.vscode ? { type: 'stdio', ...base } : base;
@@ -110,7 +120,9 @@ function upsertBlock(repo, file, dryRun) {
 /** An installed `graph-indexer` executable on PATH, if any (hooks start in ~0.1 s instead of npx's ~1 s). */
 function installedBin() {
     for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-        if (!dir) continue;
+        // only absolute entries, never a project's own bin directory: a PATH with `.` or
+        // `node_modules/.bin` would otherwise find a graph-indexer the repository ships
+        if (!dir || !path.isAbsolute(dir) || /(^|[\\/])node_modules[\\/]\.bin[\\/]?$/.test(dir)) continue;
         const f = path.join(dir, process.platform === 'win32' ? 'graph-indexer.cmd' : 'graph-indexer');
         try { if (fs.statSync(f).isFile()) return f; } catch { /* not here */ }
     }
@@ -123,7 +135,7 @@ function cliCommand(local) {
     const bin = path.resolve(here, '../../bin/graph-indexer.mjs');
     if (local) return `${JSON.stringify(process.execPath)} ${JSON.stringify(bin)}`;
     const installed = installedBin();
-    return installed ? JSON.stringify(installed) : ['npx', ...NPX_ARGS].join(' ');
+    return installed ? JSON.stringify(installed) : [npxCommand() === 'npx' ? 'npx' : JSON.stringify(npxCommand()), ...NPX_ARGS].join(' ');
 }
 
 /** The command that starts graph-indexer, as an argv array (for the OpenCode/Kilo Code plugin). */
@@ -131,7 +143,7 @@ function cliArgv(local) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     if (local) return [process.execPath, path.resolve(here, '../../bin/graph-indexer.mjs')];
     const installed = installedBin();
-    return installed ? [installed] : ['npx', ...NPX_ARGS];
+    return installed ? [installed] : [npxCommand(), ...NPX_ARGS];
 }
 
 /**

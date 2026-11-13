@@ -4,6 +4,58 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [3.1.1] — 2026-11-13
+
+A security release. Upgrading is recommended for everyone; nothing else changes. Most of these need a
+repository that was copied together with its `.git` directory (an archive, a shared folder) or that
+commits symbolic links; one needs only a hostile tool call.
+
+### Security
+
+- **git runs nothing the indexed repository's config names, on every call.** Two git calls bypassed
+  the hardening added in 3.0.1, so a repository with `core.fsmonitor` set in its `.git/config` ran
+  that command: the post-tool hook's `git status` (after every shell command the agent ran) and the
+  `models` view's `git ls-files`. Every git call now goes through one hardened function.
+- **Filter and diff drivers named with `=` are switched off too.** git splits a `-c` argument at the
+  first `=`, so the override for a driver named `x=y` set another key and left its clean filter or
+  textconv command on, running it from `check_changes`, `change_impact` and the hook. The overrides
+  now go through git's environment (`GIT_CONFIG_COUNT`), which holds any name; a git older than 2.31
+  is not run at all on such a repository. git no longer descends into submodules, whose own config
+  the overrides do not cover.
+- **`.git/` is not served under another letter case.** On a case-insensitive file system (macOS,
+  Windows) `read_code ".GIT/config"` read `.git/config`, which can hold credentials in remote URLs.
+- **Nothing is written through links committed inside `.graph-indexer/`.** A repository that
+  shipped `.graph-indexer/index.db-wal` or `resident.started` as a link to `~/.zshrc` had that file
+  overwritten. Links inside the directory are now removed before anything is written, and an index
+  committed to the repository is not opened (the database also runs in SQLite's defensive mode with
+  `trusted_schema` off).
+- **Files under a linked directory stay out.** A tracked `link/secret.ts`, where `link` points
+  outside the repository, was indexed and served, because only the last component of a path was
+  checked. Every component is now resolved, and devices and FIFOs are skipped instead of read.
+- **`Cargo.toml`, `svelte.config.*`, `pom.xml`, `build.gradle`, `.gitignore`, Prisma schemas and
+  migrations are read only as small regular files inside the repository**, like `package.json` and
+  `tsconfig.json` already were: a `Cargo.toml` linked to `/dev/zero` grew the indexer past 5 GB, and a
+  `schema.prisma` linked to a file elsewhere was read and shown.
+- **`find_files` stops a glob that backtracks catastrophically** (`*a*a*a*a*a*a*a*a*b`: 97 s on one
+  file name) after 5 s, as `search_text` does for regular expressions.
+- **`.gitignore` patterns are matched without backtracking** (repositories without git), and
+  `search_text` annotates its matches in linear time and keeps at most 50,000 of them: 10,000 matches
+  in one file took 14 s, now about 1 s.
+- **Tool arguments are held to their schema's bounds** (`depth`, `limit`, list lengths) whatever
+  the MCP client sends.
+- **Windows: nothing named `git`, `npx` or `graph-indexer` is run from the repository.** A bare
+  command is looked up in the working directory first there, so a committed `git.exe` or `npx.cmd`
+  ran. git is looked up on PATH only; the Claude Code and OpenCode plugins start npx from the home
+  directory; `init` writes npx's absolute path; and `init` no longer takes a `graph-indexer` found
+  through a relative or `node_modules/.bin` PATH entry.
+- **Windows: another user cannot answer for the resident.** The named pipe's name now carries a
+  random id kept in `.graph-indexer/`, so it cannot be created first by someone who only knows the
+  repository's path.
+- `SECURITY.md` now states the one network access there is (the opt-in, hash-checked
+  `semantic install`) and lists every file read outside the index.
+
+---
+
 ## [3.1.0] — 2026-11-08
 
 ### Added

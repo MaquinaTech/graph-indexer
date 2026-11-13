@@ -15,12 +15,14 @@ const MAX_FILE_BYTES = 1_500_000;
 // a caller's pattern gets this much matching time per search (reading files does not count): one
 // with catastrophic backtracking (`(a+)+$`) is stopped instead of blocking the server
 const REGEX_BUDGET_MS = 5000;
+const MAX_KEPT = 50_000;
 const SCAN = new vm.Script(`(() => {
     if (!re.test(text)) return null;
     const lines = text.split(/\\r?\\n/), hits = [];
     for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) hits.push(i);
     return { lines, hits };
 })()`);
+const GLOB_FILTER = new vm.Script(`paths.filter(p => re.test(onName ? p.slice(p.lastIndexOf('/') + 1) : p))`);
 const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.graph-indexer|dist|build|out|target|coverage|__pycache__|\.venv|venv|\.next|\.nuxt|\.cache|vendor)\//;
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|playground)\//i;
 const COMMENT_LINE = /^\s*(\/\/|#(?![!\[])|\*|\/\*|<!--|--\s|;;|%)/;
@@ -54,7 +56,7 @@ function globSource(glob) {
             i++;
             if (glob[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*';
         } else if (c === '?') re += '[^/]';
-        else if (c === '[' && glob.indexOf(']', i + 2) > i) { const j = glob.indexOf(']', i + 2); re += glob.slice(i, j + 1).replace(/^\[!/, '[^'); i = j; }
+        else if (c === '[' && glob.indexOf(']', i + 2) > i) { const j = glob.indexOf(']', i + 2); re += '[' + glob.slice(i + 1, j).replace(/^!/, '^').replace(/\\/g, '\\\\') + ']'; i = j; }
         else if (c === '{' && glob.indexOf('}', i) > i) { const j = glob.indexOf('}', i); re += `(?:${glob.slice(i + 1, j).split(',').map(escapeRe).join('|')})`; i = j; }
         else re += escapeRe(c);
     }
@@ -71,7 +73,16 @@ export function findFiles(root, pattern, { path: prefix = null } = {}) {
     if (/[*?[{]/.test(pattern)) {
         const onName = !pattern.includes('/');
         const re = new RegExp(onName ? `^${globSource(pattern)}$` : `(^|/)${globSource(pattern.replace(/^\.?\//, ''))}$`);
-        test = (p) => re.test(onName ? p.slice(p.lastIndexOf('/') + 1) : p);
+        // a glob of many stars (`*a*a*a*a*a*a*b`) backtracks for minutes on one long name: matched
+        // under the same budget as search_text's expressions, so it cannot block the server
+        const paths = listFiles(root).filter(p => !pre || p === pre || p.startsWith(pre + '/'));
+        const ctx = vm.createContext({ re, paths, onName });
+        try {
+            return GLOB_FILTER.runInContext(ctx, { timeout: REGEX_BUDGET_MS }).sort();
+        } catch (e) {
+            if (e.code !== 'ERR_SCRIPT_EXECUTION_TIMEOUT') throw e;
+            throw new Error(`The glob took more than ${REGEX_BUDGET_MS / 1000} s to match (too many wildcards?). Use fewer wildcards.`);
+        }
     } else {
         const t = pattern.toLowerCase();
         test = (p) => p.toLowerCase().includes(t);
@@ -133,7 +144,8 @@ export async function textSearch(intel, { pattern, path: prefix = null, literal 
         const f = indexed.get(rel);
         for (const i of scan.hits) {
             total++;
-            matches.push({ path: rel, line: i + 1, text: scan.lines[i], fileId: f?.id ?? null, isTest: !!f?.is_test, code: !!f });
+            // counted, but kept (and annotated) only up to a bound: memory and time stay bounded
+            if (matches.length < MAX_KEPT) matches.push({ path: rel, line: i + 1, text: scan.lines[i], fileId: f?.id ?? null, isTest: !!f?.is_test, code: !!f });
         }
     }
     const ident = identifierOf(pattern, literal);
@@ -149,13 +161,22 @@ export async function textSearch(intel, { pattern, path: prefix = null, literal 
             WHERE r.file_id = ? AND r.name = ?`, f.id, ident) : [];
         const refsAt = new Map();
         for (const r of refs) (refsAt.get(r.line) ?? refsAt.set(r.line, []).get(r.line)).push(r);
+        // innermost definition around each matched line, ignoring ones that start on it (inline
+        // classes, the def itself): one sweep over the definitions in start order, writing only the
+        // matched lines, instead of every definition for every match
+        const wanted = new Map(ms.map(m => [m.line, null]));
+        const lines = [...wanted.keys()].sort((a, b) => a - b);
+        for (const s of syms) {
+            let lo = 0, hi = lines.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (lines[mid] <= s.start_line) lo = mid + 1; else hi = mid; }
+            for (let k = lo; k < lines.length && lines[k] <= s.end_line; k++) wanted.set(lines[k], s);
+        }
+        const defAt = new Map();
+        if (summary) for (const s of syms) if (s.name === ident && !defAt.has(s.name_line)) defAt.set(s.name_line, s);
         for (const m of ms) {
-            // innermost definition around the line, ignoring ones that start on it (inline classes, the def itself)
-            let encl = null;
-            for (const s of syms) if (s.start_line < m.line && s.end_line >= m.line && (!encl || s.start_line >= encl.start_line)) encl = s;
-            m.encl = encl?.qname ?? null;
+            m.encl = wanted.get(m.line)?.qname ?? null;
             if (!summary) continue;
-            const def = syms.find(s => s.name === ident && s.name_line === m.line);
+            const def = defAt.get(m.line);
             const rs = refsAt.get(m.line) ?? [];
             if (def) { m.what = 'def'; m.target = def.qname; summary.defs++; continue; }
             const bound = rs.filter(r => r.dst_id != null);
@@ -174,5 +195,5 @@ export async function textSearch(intel, { pattern, path: prefix = null, literal 
         }
     }
     matches.sort((a, b) => rank(a.path, a.isTest) + (a.code ? 0 : 1) - (rank(b.path, b.isTest) + (b.code ? 0 : 1)) || a.path.localeCompare(b.path) || a.line - b.line);
-    return { total, files: nfiles, shown: matches.slice(0, limit), all: matches, summary, truncated: matches.length > limit };
+    return { total, files: nfiles, shown: matches.slice(0, limit), all: matches, summary, truncated: total > limit, annotated: matches.length };
 }

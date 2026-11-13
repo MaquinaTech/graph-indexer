@@ -98,7 +98,7 @@ export class Indexer {
         const toParse = [];
         for (const rel of files) {
             const st = safeStat(path.join(this.root, rel));
-            if (!st || st.size > MAX_FILE_BYTES) { if (known.has(rel)) removed.push(rel); continue; }
+            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES) { if (known.has(rel)) removed.push(rel); continue; }
             const k = known.get(rel);
             if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
             toParse.push({ rel, st, prev: k ?? null });

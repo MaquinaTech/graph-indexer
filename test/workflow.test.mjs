@@ -113,7 +113,7 @@ test('hook post-tool: shell edits get the checker; chained shell reads are all r
     assert.match(ctxOf(reads), /Wishlist\.total → src\/cart\.ts:5/);
 });
 
-test('shell lines: reads after `cd DIR;`, heredoc bodies skipped', () => {
+test('shell lines: reads after `cd DIR;`, heredoc bodies skipped', { skip: process.platform === 'win32' && 'POSIX paths' }, () => {
     assert.deepEqual(shellReads('cd /r; sed -n 100,125p a/b.py; sed -n 5,9p /abs/c.py'), [['/r/a/b.py', 100, 125], ['/abs/c.py', 5, 9]]);
     assert.deepEqual(shellReads("python3 - <<'E'\nprint('sed -n 1,2p x.py; cat y.py')\nE\nhead -20 g.py"), [['g.py', 1, 20]]);
     assert.deepEqual(shellReads('grep -n "a;b" f.py && nl -ba f.py | sed -n 1,9p'), [['f.py', 1, 9]]);
@@ -200,13 +200,15 @@ test('init: OpenCode/Kilo Code, Junie and Zed configuration in their formats; De
         assert.equal(r.status, 0, r.stderr);
         const kilo = JSON.parse(fs.readFileSync(path.join(dir, 'kilo.json'), 'utf8'));
         assert.equal(kilo.model, 'x', 'keeps the existing Kilo config');
-        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: ['npx', '-y', '--prefix', '/', 'graph-indexer@3', 'serve'], enabled: true });
+        // on Windows npx is written by absolute path, so the repository's own npx.cmd is never run
+        const npx = process.platform === 'win32' ? path.join(path.dirname(process.execPath), 'npx.cmd') : 'npx';
+        assert.deepEqual(kilo.mcp['graph-indexer'], { type: 'local', command: [npx, '-y', '--prefix', '/', 'graph-indexer@3', 'serve'], enabled: true });
         assert.ok(!fs.existsSync(path.join(dir, 'opencode.json')), 'an existing kilo.json is used instead');
         const junie = JSON.parse(fs.readFileSync(path.join(dir, '.junie/mcp/mcp.json'), 'utf8'));
         assert.deepEqual(junie.mcpServers['graph-indexer'].args, ['-y', '--prefix', '/', 'graph-indexer@3', 'serve']);
         const zed = JSON.parse(fs.readFileSync(path.join(dir, '.zed/settings.json'), 'utf8'));
         assert.equal(zed.tab_size, 2);
-        assert.deepEqual(zed.context_servers['graph-indexer'], { command: 'npx', args: ['-y', '--prefix', '/', 'graph-indexer@3', 'serve'], env: {} });
+        assert.deepEqual(zed.context_servers['graph-indexer'], { command: npx, args: ['-y', '--prefix', '/', 'graph-indexer@3', 'serve'], env: {} });
         assert.match(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), /graph-indexer:start/);
         assert.ok(JSON.parse(fs.readFileSync(path.join(dir, '.claude/settings.json'), 'utf8')).hooks.PostToolUse, 'Devin runs the Claude Code hooks');
         assert.match(r.stdout, /Devin: reads AGENTS\.md and the Claude Code hooks/);

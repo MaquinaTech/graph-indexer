@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { gitSync } from '../util/git.mjs';
+import { readRepoFile, withinRoot } from '../util/paths.mjs';
 import { specForPath } from '../parse/languages.mjs';
 
 export const MAX_FILE_BYTES = 1_500_000;
@@ -34,26 +35,56 @@ function gitListFiles(root) {
     return r.stdout.split('\0').filter(Boolean);
 }
 
+/**
+ * A .gitignore pattern as a matcher that cannot backtrack: `*` (within a name), `?`, `**` (across
+ * names), anything else literal. A regular expression of many stars (`*a*a*a*a*a*b`) takes seconds
+ * per long path; this keeps the set of positions reachable after each token, so a match costs
+ * pattern length × path length. Unanchored, it may start at any name; it must end at the end of
+ * the path or at a `/` (a directory and everything under it).
+ */
+function globMatcher(glob, anchored) {
+    const tokens = [];
+    for (let i = 0; i < glob.length; i++) {
+        if (glob[i] === '*') {
+            let j = i; while (glob[j + 1] === '*') j++;
+            tokens.push(j > i ? '**' : '*'); i = j;
+        } else tokens.push(glob[i] === '?' ? '?' : { c: glob[i] });
+    }
+    return (s) => {
+        const n = s.length;
+        let cur = new Uint8Array(n + 1);
+        cur[0] = 1;
+        if (!anchored) for (let k = 0; k < n; k++) if (s[k] === '/') cur[k + 1] = 1;
+        for (const t of tokens) {
+            const next = new Uint8Array(n + 1);
+            let any = false;
+            if (t === '**') { let on = 0; for (let p = 0; p <= n; p++) { on |= cur[p]; next[p] = on; any ||= !!on; } }
+            else if (t === '*') { let on = 0; for (let p = 0; p <= n; p++) { on |= cur[p]; next[p] = on; any ||= !!on; if (s[p] === '/') on = 0; } }
+            else if (t === '?') { for (let p = 0; p < n; p++) if (cur[p] && s[p] !== '/') { next[p + 1] = 1; any = true; } }
+            else { for (let p = 0; p < n; p++) if (cur[p] && s[p] === t.c) { next[p + 1] = 1; any = true; } }
+            if (!any) return false;
+            cur = next;
+        }
+        for (let p = 0; p <= n; p++) if (cur[p] && (p === n || s[p] === '/')) return true;
+        return false;
+    };
+}
+
 /** Minimal .gitignore → predicate (used only outside git repos). */
 function loadGitignore(root) {
     const rules = [];
-    try {
-        for (let line of fs.readFileSync(path.join(root, '.gitignore'), 'utf8').split(/\r?\n/)) {
-            line = line.trim();
-            if (!line || line.startsWith('#')) continue;
-            const neg = line.startsWith('!');
-            if (neg) line = line.slice(1);
-            const dirOnly = line.endsWith('/');
-            if (dirOnly) line = line.slice(0, -1);
-            const anchored = line.startsWith('/') || line.includes('/');
-            line = line.replace(/^\//, '');
-            const re = line.split('**').map(seg => seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')).join('.*');
-            rules.push({ neg, re: new RegExp(anchored ? `^${re}(/|$)` : `(^|/)${re}(/|$)`) });
-        }
-    } catch { /* no .gitignore */ }
+    for (let line of (readRepoFile(root, '.gitignore') ?? '').split(/\r?\n/)) {
+        line = line.trim();
+        if (!line || line.startsWith('#')) continue;
+        const neg = line.startsWith('!');
+        if (neg) line = line.slice(1);
+        if (line.endsWith('/')) line = line.slice(0, -1);
+        const anchored = line.startsWith('/') || line.includes('/');
+        rules.push({ neg, test: globMatcher(line.replace(/^\//, ''), anchored) });
+    }
     return (rel) => {
         let ignored = false;
-        for (const r of rules) if (r.re.test(rel)) ignored = !r.neg;
+        for (const r of rules) if (r.test(rel)) ignored = !r.neg;
         return ignored;
     };
 }
@@ -95,28 +126,19 @@ export function discoverFiles(root, opts = {}) {
         viaGit = rels !== null;
     }
     if (!rels) rels = walk(root, loadGitignore(root));
-    const files = rels.map(r => r.replace(/\\/g, '/')).filter(r => isIndexablePath(r, opts) && (!viaGit || insideRoot(root, r)));
+    const files = rels.map(r => r.replace(/\\/g, '/')).filter(r => isIndexablePath(r, opts) && insideRoot(root, r));
     files.sort();
     return { files, viaGit };
 }
 
-const realRoots = new Map();
-
 /**
- * A tracked file must resolve inside the repository: symlinks are followed only when their target
- * stays under the root, so a link to /etc/… or ~/.ssh/… is never read, indexed or served.
+ * A tracked file must resolve inside the repository: every component of its path is resolved, so
+ * neither a link to /etc/… or ~/.ssh/… nor a file under a linked directory (`link/secret.ts` with
+ * `link` → elsewhere, which git lists from its index without looking) is read, indexed or served.
  */
 export function insideRoot(root, rel) {
-    const abs = path.join(root, rel);
-    let st;
-    try { st = fs.lstatSync(abs); } catch { return true; } // vanished: the caller handles deletion
-    if (!st.isSymbolicLink()) return true;
-    let realRoot = realRoots.get(root);
-    if (!realRoot) { try { realRoot = fs.realpathSync(root); } catch { realRoot = root; } realRoots.set(root, realRoot); }
-    try {
-        const target = fs.realpathSync(abs);
-        return target === realRoot || target.startsWith(realRoot + path.sep);
-    } catch { return false; } // dangling link
+    try { fs.lstatSync(path.join(root, rel)); } catch { return true; } // vanished: the caller handles deletion
+    return withinRoot(root, rel);
 }
 
 /** Heuristic: minified / generated content that slipped past the name filters. */

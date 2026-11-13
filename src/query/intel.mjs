@@ -12,7 +12,7 @@ import { Indexer } from '../index/indexer.mjs';
 import { SearchEngine } from '../search/search.mjs';
 import { computeCentrality, loadGraph } from '../index/graph.mjs';
 import { confidenceLabel } from '../index/resolver.mjs';
-import { dataDir, withinRoot, isRevision } from '../util/paths.mjs';
+import { dataDir, withinRoot, isRevision, DATA_DIR_NAME } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
 import { sigArity } from '../parse/arity.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
@@ -27,6 +27,7 @@ const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials
 export class CodeIntel {
     constructor({ root, dbPath = null, log = () => {}, watch = false }) {
         this.root = path.resolve(root);
+        this.ownDb = dbPath == null;
         this.dbPath = dbPath ?? path.join(dataDir(this.root), 'index.db');
         this.log = log;
         this.watchEnabled = watch;
@@ -49,6 +50,13 @@ export class CodeIntel {
      * MCP server so the first tool call never times out on a large repository.
      */
     async open({ onProgress = null, background = false } = {}) {
+        // an index the repository ships (a crafted index.db, its -wal) is never opened: it was not
+        // built here and would be answered from as if it had been
+        if (this.ownDb) {
+            const r = gitSync(this.root, ['ls-files', '-z', '--', DATA_DIR_NAME]);
+            const tracked = r.status === 0 ? r.stdout.split('\0').filter(Boolean) : [];
+            if (tracked.length) throw new Error(`${DATA_DIR_NAME}/ is committed to this repository (${tracked.length} file${tracked.length === 1 ? '' : 's'}); graph-indexer does not use an index it did not build. Remove it from the repository (git rm -r --cached ${DATA_DIR_NAME}) and run again.`);
+        }
         this.store = new Store(this.dbPath);
         this.ix = new Indexer({ root: this.root, store: this.store, log: this.log });
         this.ix.load();

@@ -86,8 +86,7 @@ export class ModuleResolver {
         // .svelte-kit/tsconfig.json that a repository does not carry, so read svelte.config itself
         for (const rel of [...this.#findManifests('svelte.config.js'), ...this.#findManifests('svelte.config.ts')]) {
             const dir = path.posix.dirname(rel), at = (p) => path.posix.normalize(dir === '.' ? p : `${dir}/${p}`);
-            let text = '';
-            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { /* unreadable */ }
+            const text = readRepoFile(this.root, rel) ?? '';
             const lib = /\bfiles\s*:\s*\{[^}]*\blib\s*:\s*['"]([^'"]+)['"]/.exec(text)?.[1] ?? 'src/lib';
             const aliases = [['$lib', lib]];
             const block = /\balias\s*:\s*\{([^}]*)\}/.exec(text)?.[1] ?? '';
@@ -110,8 +109,8 @@ export class ModuleResolver {
         this.rustCrates = new Map();
         this.rustPackages = [];
         for (const rel of this.#findManifests('Cargo.toml')) {
-            let text;
-            try { text = fs.readFileSync(path.join(this.root, rel), 'utf8'); } catch { continue; }
+            const text = readRepoFile(this.root, rel);
+            if (text == null) continue;
             const dir = path.posix.dirname(rel), at = (p) => (dir === '.' ? p : `${dir}/${p}`);
             if (/^\[package\]\s*$/m.test(text)) this.rustPackages.push(dir);
             const table = (name) => { const m = new RegExp(`^\\[${name}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, 'm').exec(text); return m?.[1] ?? ''; };
