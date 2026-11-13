@@ -10,6 +10,32 @@
 import readline from 'node:readline';
 import { TOOLS, LEGACY_TOOLS, SERVER_INSTRUCTIONS, callTool } from './tools.mjs';
 
+const MAX_ITEMS = 100;          // an array argument with no maxItems of its own
+const MAX_STRING = 200_000;     // a string argument (an issue pasted as a query is long, not this long)
+
+/**
+ * The arguments as the tool's schema bounds them: numbers clamped to minimum/maximum, arrays cut
+ * to maxItems (else MAX_ITEMS), strings to MAX_STRING. A client is not trusted to respect the schema,
+ * and `depth: 1e9` or ten thousand queries would otherwise hold the server.
+ */
+export function boundArgs(schema, raw) {
+    const args = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
+    const props = schema?.properties ?? {};
+    const str = (v) => (typeof v === 'string' && v.length > MAX_STRING ? v.slice(0, MAX_STRING) : v);
+    for (const [k, v] of Object.entries(args)) {
+        const p = props[k];
+        if (typeof v === 'number' && p && (p.type === 'integer' || p.type === 'number')) {
+            let n = Number.isFinite(v) ? v : (p.default ?? p.minimum ?? 0);
+            if (p.type === 'integer') n = Math.trunc(n);
+            if (p.minimum != null) n = Math.max(p.minimum, n);
+            if (p.maximum != null) n = Math.min(p.maximum, n);
+            args[k] = n;
+        } else if (Array.isArray(v)) args[k] = v.slice(0, p?.maxItems ?? MAX_ITEMS).map(str);
+        else args[k] = str(v);
+    }
+    return args;
+}
+
 export const SUPPORTED_VERSIONS = ['2026-07-28', '2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const LATEST_HANDSHAKE = '2025-11-25';
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion';
@@ -105,7 +131,7 @@ export class McpServer {
                     const name = params?.name;
                     const tool = TOOLS.find(t => t.name === name) ?? LEGACY_TOOLS.find(t => t.name === name);
                     if (!tool) { this.#error(id, -32602, `Unknown tool: ${name}`); return; }
-                    const args = params?.arguments ?? {};
+                    const args = boundArgs(tool.inputSchema, params?.arguments);
                     const missing = (tool.inputSchema.required ?? []).filter(k => args[k] === undefined || args[k] === null || args[k] === '');
                     if (missing.length) {
                         done({ content: [{ type: 'text', text: `Missing required argument(s): ${missing.join(', ')}.` }], isError: true });

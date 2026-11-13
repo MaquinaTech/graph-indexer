@@ -39,7 +39,13 @@ function findRepoRoot(start) {
 function socketPath(root) {
     const abs = path.resolve(root);
     const hash = crypto.createHash('sha256').update(abs).digest('hex').slice(0, 16);
-    if (WIN) return `\\\\.\\pipe\\graph-indexer-${hash}`;
+    // a pipe name anyone could compute would let another user of the machine create it first and
+    // answer as the resident: the name carries a random id kept in the private data directory
+    if (WIN) {
+        let id = '';
+        try { id = fs.readFileSync(path.join(abs, '.graph-indexer', 'resident.pipe-id'), 'utf8').trim(); } catch { /* no resident yet */ }
+        return /^[0-9a-f]{32}$/.test(id) ? `\\\\.\\pipe\\graph-indexer-${hash}-${id}` : null;
+    }
     const inRepo = path.join(abs, '.graph-indexer', 'resident.sock');
     if (Buffer.byteLength(inRepo) <= 100) return inRepo;
     return path.join(os.tmpdir(), `graph-indexer-${process.getuid?.() ?? 'user'}`, `${hash}.sock`);
@@ -58,7 +64,7 @@ function trusted(file, root) {
 
 function ask(root, request, totalMs) {
     const file = socketPath(root);
-    if (!trusted(file, root)) return Promise.resolve(null);
+    if (!file || !trusted(file, root)) return Promise.resolve(null);
     return new Promise((resolve) => {
         let done = false, buf = '';
         const sock = net.createConnection(file);
@@ -112,7 +118,8 @@ export const GraphIndexer = async ({ directory, worktree } = {}) => {
                         // every argument, and give up on one that a quote cannot hold
                         const args = [...DAEMON.slice(1), '--repo', root];
                         if (WIN && args.some(a => /["%\r\n]/.test(a))) return;
-                        const child = spawn(DAEMON[0], WIN ? args.map(a => `"${a}"`) : args, { detached: true, stdio: 'ignore', windowsHide: true, shell: WIN });
+                        // from the home directory: cmd.exe would look for npx.cmd in the repository first
+                        const child = spawn(DAEMON[0], WIN ? args.map(a => `"${a}"`) : args, { cwd: os.homedir(), detached: true, stdio: 'ignore', windowsHide: true, shell: WIN });
                         child.on('error', () => { /* optional */ });
                         child.unref();
                     }

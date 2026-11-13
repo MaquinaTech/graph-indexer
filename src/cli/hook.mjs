@@ -29,9 +29,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findRepoRoot, dataDir, DATA_DIR_NAME, readRepoFile } from '../util/paths.mjs';
+import { gitSync } from '../util/git.mjs';
 import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hooks report on code files only
 
 const MAX_CONTEXT = 1500;
@@ -333,7 +334,8 @@ async function afterRead(root, input, state, crawling, acquire) {
  */
 function shellEdits(root, state) {
     let r;
-    try { r = spawnSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all', '-z'], { encoding: 'utf8', timeout: 1500 }); } catch { return []; }
+    // hardened (gitSync): a repository's core.fsmonitor or filters would otherwise run
+    try { r = gitSync(root, ['status', '--porcelain', '--untracked-files=all', '-z'], { timeout: 1500 }); } catch { return []; }
     if (r.status !== 0 || typeof r.stdout !== 'string') return [];
     const seen = state.st.mtimes ??= {};
     const changed = [];

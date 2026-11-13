@@ -19,6 +19,7 @@
  */
 
 import { collectSpring } from './injection-spring.mjs';
+import { escapeRegExp } from '../util/regex.mjs';
 
 const PROVIDE = /\bprovide\s*:\s*([^,}\n]+?)\s*(?:,|}|$)/;
 const USE = /\buse(Class|Existing|Factory|Value)\s*:\s*([^,}\n]*)/;
@@ -42,7 +43,7 @@ function symRow(intel, id) {
 function stringValue(intel, s) {
     if (s.kind !== 'constant' && s.kind !== 'variable') return null;
     const l = intel.fileLines(s.path)?.[s.start_line - 1] ?? '';
-    return new RegExp(`\\b${s.name}\\s*(?::[^=]+)?=\\s*(['"\`])([^'"\`]*)\\1\\s*;?\\s*$`).exec(l)?.[2] ?? null;
+    return new RegExp(`\\b${escapeRegExp(s.name)}\\s*(?::[^=]+)?=\\s*(['"\`])([^'"\`]*)\\1\\s*;?\\s*$`).exec(l)?.[2] ?? null;
 }
 
 /**

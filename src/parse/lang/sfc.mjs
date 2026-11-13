@@ -14,6 +14,7 @@
  * out, as are HTML elements and the frameworks' own (`<Transition>`, `<svelte:self>`).
  */
 import { typescript } from './ecma.mjs';
+import { escapeRegExp } from '../../util/regex.mjs';
 
 const BUILTIN = new Set(['Transition', 'TransitionGroup', 'KeepAlive', 'Teleport', 'Suspense', 'Component', 'Slot', 'Template', 'RouterView', 'RouterLink']);
 
@@ -65,7 +66,7 @@ function rewrite(source, kind) {
         ranges = ranges.filter(([a, b]) => source.slice(a, b).trim());
     }
     if (!ranges.length) return lines.join('\n');
-    const known = (name) => !BUILTIN.has(name) && new RegExp(`\\b${name}\\b`).test(scriptText);
+    const known = (name) => !BUILTIN.has(name) && new RegExp(`\\b${escapeRegExp(name)}\\b`).test(scriptText);
     const tags = [];
     for (const [a, b] of ranges) {
         const markup = source.slice(a, b).replace(/<!--[\s\S]*?-->/g, (c) => c.replace(/[^\n]/g, ' '));
@@ -115,7 +116,7 @@ const sfc = (id, extensions) => ({
         // its template's tags are that import, so the component itself takes another name
         const root = d.node.tree?.rootNode ?? d.node.parent;
         const imports = (root?.namedChildren ?? []).filter(c => c.type === 'import_statement').map(c => c.text).join('\n');
-        return new RegExp(`\\b${comp}\\b`).test(imports) ? `${comp}Component` : comp;
+        return new RegExp(`\\b${escapeRegExp(comp)}\\b`).test(imports) ? `${comp}Component` : comp;
     },
     rewriteSource: (source) => rewrite(source, id),
     testFile: /(^|\/)(__tests__|tests?|spec|e2e)\//,

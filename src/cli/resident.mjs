@@ -37,7 +37,13 @@ const WIN = process.platform === 'win32';
 export function socketPath(root) {
     const abs = path.resolve(root);
     const hash = crypto.createHash('sha256').update(abs).digest('hex').slice(0, 16);
-    if (WIN) return `\\\\.\\pipe\\graph-indexer-${hash}`;
+    // a pipe name anyone could compute would let another user of the machine create it first and
+    // answer as the resident: the name carries a random id kept in the private data directory
+    if (WIN) {
+        let id = '';
+        try { id = fs.readFileSync(path.join(abs, '.graph-indexer', 'resident.pipe-id'), 'utf8').trim(); } catch { /* no resident yet */ }
+        return /^[0-9a-f]{32}$/.test(id) ? `\\\\.\\pipe\\graph-indexer-${hash}-${id}` : null;
+    }
     const inRepo = path.join(abs, DATA_DIR_NAME, 'resident.sock');
     // Unix socket paths are limited to 104–108 bytes
     if (Buffer.byteLength(inRepo) <= 100) return inRepo;
@@ -74,7 +80,7 @@ export const residentRequired = () => process.env.GRAPH_INDEXER_RESIDENT === 're
 export function askResident(root, request, { version, connectMs = 250, totalMs = 5000 } = {}) {
     if (disabled()) return Promise.resolve(null);
     const file = socketPath(root);
-    if (!WIN && (!ownSocket(file) || !privateDir(path.dirname(file), root))) return Promise.resolve(null);
+    if (!file || (!WIN && (!ownSocket(file) || !privateDir(path.dirname(file), root)))) return Promise.resolve(null);
     return new Promise((resolve) => {
         let done = false, connected = false, buf = '';
         const sock = net.createConnection(file);
@@ -114,7 +120,7 @@ export function askResident(root, request, { version, connectMs = 250, totalMs =
  */
 export async function startResident({ root, version, handle, log = () => {}, idleMs = 0, onIdle = null, wanted = () => true }) {
     if (disabled()) return null;
-    const file = socketPath(root);
+    let file = socketPath(root);
     if (!WIN) {
         const dir = path.dirname(file);
         try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* checked below */ }
@@ -123,6 +129,15 @@ export async function startResident({ root, version, handle, log = () => {}, idl
     // another resident may serve this repository already; a dead one leaves its socket file behind
     if (await askResident(root, { op: 'ping' }, { version, connectMs: 300, totalMs: 1500 })) return null;
     if (!WIN) { try { fs.unlinkSync(file); } catch { /* none */ } }
+    else {
+        // a fresh pipe id for this resident (see socketPath)
+        const idFile = path.join(path.resolve(root), DATA_DIR_NAME, 'resident.pipe-id');
+        try {
+            fs.mkdirSync(path.dirname(idFile), { recursive: true });
+            fs.writeFileSync(idFile, crypto.randomBytes(16).toString('hex'), { mode: 0o600 });
+        } catch (e) { log(`resident: cannot write ${idFile} (${e.message}); not listening`); return null; }
+        file = socketPath(root);
+    }
 
     let last = Date.now();
     const server = net.createServer((sock) => {

@@ -42,6 +42,7 @@ const ANNOTATION = /@[\w.]+(?:\s*\((?:[^()"]|"[^"]*"|\((?:[^()"]|"[^"]*")*\))*\)
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { readRepoFile } from '../util/paths.mjs';
 
 const BUILD_FILES = ['pom.xml', 'build.gradle', 'build.gradle.kts'];
 
@@ -53,8 +54,7 @@ const strip = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
 function moduleDeps(root, mods) {
     const info = new Map();
     for (const m of mods) {
-        const dir = path.join(root, m);
-        const pom = read(path.join(dir, 'pom.xml'));
+        const pom = read(root, m, 'pom.xml');
         if (pom != null) {
             let body = pom;
             for (let prev; prev !== body;) { prev = body; body = body.replace(/<!--[\s\S]*?-->/g, ''); }
@@ -63,7 +63,7 @@ function moduleDeps(root, mods) {
             info.set(m, { names: [own, path.posix.basename(m)].filter(Boolean), deps: ds });
             continue;
         }
-        const gradle = read(path.join(dir, 'build.gradle')) ?? read(path.join(dir, 'build.gradle.kts'));
+        const gradle = read(root, m, 'build.gradle') ?? read(root, m, 'build.gradle.kts');
         if (gradle != null) info.set(m, { names: [path.posix.basename(m)], deps: [...gradle.matchAll(/project\(\s*(?:path\s*[:=]\s*)?['"]:?([\w:.-]+)['"]/g)].map(x => x[1].split(':').pop()) });
     }
     const byName = new Map();
@@ -73,7 +73,8 @@ function moduleDeps(root, mods) {
     return out;
 }
 
-function read(f) { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } }
+/** A build file of module `m`: a small regular file inside the repository, or null. */
+const read = (root, m, name) => readRepoFile(root, path.posix.join(m || '.', name));
 
 /** Spring's default bean name: `FooService` → `fooService`, but `URLMapper` stays `URLMapper`. */
 const beanName = (cls) => /^[A-Z]{2}/.test(cls) ? cls : cls[0].toLowerCase() + cls.slice(1);
