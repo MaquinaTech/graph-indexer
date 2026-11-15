@@ -417,7 +417,8 @@ export class CodeIntel {
         let bases = [];
         try { bases = JSON.parse(sym.bases ?? '[]'); } catch { /* no trait */ }
         for (const b of Array.isArray(bases) ? bases : []) {
-            const trait = this.ix.resolver.resolveTypeName(String(b).replace(/<.*$/, '').split('::').pop(), sym.file_id);
+            const name = String(b), lt = name.indexOf('<');
+            const trait = this.ix.resolver.resolveTypeName((lt < 0 ? name : name.slice(0, lt)).split('::').pop(), sym.file_id);
             if (trait?.id == null || this.sym(trait.id)?.kind !== 'trait') continue;
             for (const m of this.store.all("SELECT id FROM symbols WHERE parent_id = ? AND name = ? AND kind = 'method'", trait.id, sym.name)) {
                 ids.add(m.id);

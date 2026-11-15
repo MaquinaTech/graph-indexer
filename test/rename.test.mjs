@@ -376,7 +376,7 @@ test('review: a link planted at a temporary name the writer could use is never w
         const text = await callTool(intel, 'rename_symbol', { symbol: 'greet', new_name: 'hello', apply: true }, { cli: true });
         assert.match(text, /3 edits written in 2 files/, text);
         assert.equal(fs.readFileSync(victim, 'utf8'), 'VICTIM ORIGINAL');
-        assert.equal(fs.statSync(victim).mode & 0o777, 0o600);
+        if (process.platform !== 'win32') assert.equal(fs.statSync(victim).mode & 0o777, 0o600); // Windows has no such modes
         for (const f of ['src/a.ts', 'src/b.ts']) assert.ok(fs.lstatSync(path.join(root, f)).isFile(), `${f} is still a regular file`);
         assert.match(read('src/b.ts'), /hello\('bob'\)/);
     } finally { rmrf(outside); }

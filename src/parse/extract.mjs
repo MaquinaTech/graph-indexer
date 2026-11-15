@@ -138,7 +138,9 @@ function simplifyChain(text) {
     }
     // a fluent chain formatted one call per line is long mostly in whitespace: measure it without
     // a turbofish (Rust `channel::<u8>(1)`, `iter.collect::<Vec<_>>()`) names type arguments, not a path segment
-    s = s.replace(/\s+/g, '').replace(/::<(?:[^<>()]|<(?:[^<>()]|<[^<>()]*>)*>)*>(?=\()/g, '').replace(/<[^<>()]*>(?=\()/g, '');
+    s = s.replace(/\s+/g, '');
+    // to a fixed point: a removal can never leave a new `<…>(` behind unnoticed
+    for (let prev = null; prev !== s;) { prev = s; s = s.replace(/::<(?:[^<>()]|<(?:[^<>()]|<[^<>()]*>)*>)*>(?=\()/g, '').replace(/<[^<>()]*>(?=\()/g, ''); }
     if (s.length > 600) return null;
     for (let i = 0; i < 12 && /[()[\]]/.test(s); i++) {
         const next = s.replace(/\([^()[\]]*\)/g, '\u0001').replace(/\[[^()[\]]*\]/g, '\u0002');
