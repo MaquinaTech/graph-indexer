@@ -45,7 +45,10 @@ function supportsEnvConfig() {
  * Returns null when the overrides cannot be expressed (an old git and such a name): git is not run.
  */
 function hardening(root) {
-    const pairs = [['core.fsmonitor', 'false'], ['core.hooksPath', '/dev/null'], ['diff.external', ''], ['log.showSignature', 'false']];
+    // core.quotePath off: a path with an accent is printed as it is, not as "\303\272til.py"
+    const pairs = [['core.fsmonitor', 'false'], ['core.hooksPath', '/dev/null'], ['diff.external', ''], ['log.showSignature', 'false'], ['core.quotePath', 'false'],
+        // the a/ and b/ prefixes the diff headers are read with: a user's diff.noprefix or diff.mnemonicPrefix would change them
+        ['diff.noprefix', 'false'], ['diff.mnemonicPrefix', 'false']];
     const r = spawnSync(gitExecutable(), ['config', '-z', '--name-only', '--get-regexp', '^(filter|diff)\\.'], { cwd: root, encoding: 'utf8' });
     for (const key of (r.status === 0 ? r.stdout : '').split('\0')) {
         const m = COMMAND_KEY.exec(key);
@@ -76,4 +79,27 @@ export function gitSync(root, args, opts = {}) {
     const h = hardening(root);
     if (!h) return { status: 1, stdout: '', stderr: 'git not run: the repository config names a filter or diff driver this git cannot switch off', error: null };
     return spawnSync(gitExecutable(), [...h.args, ...sub], { cwd: root, encoding: 'utf8', ...opts, env: { ...process.env, ...opts.env, ...h.env } });
+}
+
+/**
+ * The path a `+++ b/…` or `--- a/…` line of a diff names, or null for /dev/null. git ends a path
+ * that holds a space with a tab, and writes one that holds a quote, a backslash or a control
+ * character in C quotes.
+ */
+export function diffHeaderPath(line) {
+    let p = line.slice(4);
+    if (p.endsWith('\t')) p = p.slice(0, -1);
+    if (p.length > 1 && p.startsWith('"') && p.endsWith('"')) {
+        const bytes = [];
+        const body = p.slice(1, -1);
+        const esc = { n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11, '"': 34, '\\': 92 };
+        for (let i = 0; i < body.length; i++) {
+            if (body[i] !== '\\') { bytes.push(...Buffer.from(body[i], 'utf8')); continue; }
+            const oct = /^[0-7]{3}/.exec(body.slice(i + 1));
+            if (oct) { bytes.push(parseInt(oct[0], 8)); i += 3; }
+            else { bytes.push(esc[body[i + 1]] ?? body.charCodeAt(i + 1)); i++; }
+        }
+        p = Buffer.from(bytes).toString('utf8');
+    }
+    return p === '/dev/null' ? null : p.replace(/^[ab]\//, '');
 }

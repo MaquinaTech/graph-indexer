@@ -75,6 +75,36 @@ export function paramArity(def, { method = false, lang = '', isStatic = false, d
     return { min, max };
 }
 
+/**
+ * The names a Python definition accepts as keyword arguments: { names, open } (open: it takes
+ * `**kwargs`), or null when its call sites say nothing about it (a property, a descriptor) or it
+ * is not Python. Positional-only parameters (before `/`) are not keywords.
+ */
+export function paramKeywords(def, { lang = '', decorators = [] } = {}) {
+    if (lang !== 'python' || decorators.some(isDescriptorDecorator)) return null;
+    const params = paramsNodeOf(def);
+    if (!params || params.type === 'identifier') return null;
+    let names = new Set(), open = false;
+    for (const p of params.namedChildren) {
+        const t = p.type;
+        if (t === 'positional_separator') { names = new Set(); continue; }
+        if (t === 'dictionary_splat_pattern' || /^\*\*/.test(p.text)) { open = true; continue; }
+        if (t === 'keyword_separator' || t === 'list_splat_pattern' || /^\*/.test(p.text) || /comment/.test(t)) continue;
+        const name = t === 'identifier' ? p : p.childForFieldName('name') ?? p.namedChildren.find(c => c.type === 'identifier');
+        if (name) names.add(name.text);
+    }
+    return { names, open };
+}
+
+/** The keyword names a call passes (`f(a, key=1)` → ['key']). */
+export function callKeywords(call) {
+    const args = call.childForFieldName('arguments') ?? call.namedChildren.find(c => ARG_LIST_TYPES.has(c.type));
+    if (!args) return [];
+    const out = [];
+    for (const c of args.namedChildren) if (c.type === 'keyword_argument') { const n = c.childForFieldName('name'); if (n) out.push(n.text); }
+    return out;
+}
+
 /** Node of the call whose callee name sits at (row, column), with its argument list. */
 export function callAt(tree, row, column) {
     let n = tree.rootNode.descendantForPosition({ row, column });
@@ -100,6 +130,8 @@ export function callArgc(call) {
         }
         return null;
     }
+    // Python `f(x for x in xs)`: the generator is the one argument, not its parts
+    if (args.type === 'generator_expression') return { n: 1, open: false };
     let n = 0, open = false;
     for (const c of args.namedChildren) {
         if (/comment/.test(c.type)) continue;

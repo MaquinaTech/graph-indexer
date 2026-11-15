@@ -8,17 +8,17 @@ This plugin brings the `code-structure` sub-agent and these instructions. The gr
 come from a local MCP server that the user adds to the repository once. The plugin directory does not
 allow plugins to start local programs, so the user must approve this step.
 
-1. Check that Node.js 22.23.4+, 24.22.1+ or 26.12.1+ is installed (`node --version`).
+1. Check that Node.js 22.23.5+, 24.22.3+ or 26.13.1+ is installed (`node --version`).
 2. Ask the user to confirm, then run from the repository root:
 
    ```bash
-   claude mcp add graph-indexer -- npx -y --prefix / graph-indexer@3.1.1 serve
+   claude mcp add graph-indexer -- npx -y --prefix / graph-indexer@3.2.0 serve
    ```
 
    `--prefix /` makes npx run only the published package, never a copy shipped inside the repository.
    The version is pinned on purpose: update it by hand when a newer graph-indexer is released.
 
-3. Optional, with the user's consent: `npx -y --prefix / graph-indexer@3.1.1 init --hooks` also writes the
+3. Optional, with the user's consent: `npx -y --prefix / graph-indexer@3.2.0 init --hooks` also writes the
    Claude Code hooks (an edit check after each edit, grep disambiguation) to `.claude/settings.json`.
 4. Restart Claude Code, or run `/mcp`, and confirm `graph-indexer` is connected.
 

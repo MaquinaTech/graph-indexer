@@ -22,6 +22,7 @@ const QUERY = `
 (decorator (identifier) @name) @ref.decorator
 (decorator (attribute object: (_) @recv attribute: (identifier) @name)) @ref.decorator
 (decorator (call function: (identifier) @name)) @ref.decorator
+(decorator (attribute object: (identifier) @name attribute: (identifier) @_acc (#match? @_acc "^(setter|getter|deleter)$"))) @ref.accessor
 (decorator (call function: (attribute object: (_) @recv attribute: (identifier) @name))) @ref.decorator
 (type (identifier) @name) @ref.type
 (type (attribute object: (_) @recv attribute: (identifier) @name)) @ref.type
@@ -31,7 +32,7 @@ const QUERY = `
 ${UNION_TYPES}
 (call function: [(identifier) (attribute)] @_tv arguments: (argument_list (keyword_argument name: (identifier) @_bound value: (string (string_content) @name))) (#match? @_tv "TypeVar$") (#eq? @_bound "bound")) @ref.type
 (expression_statement (assignment left: (identifier) @_all right: [(list (string (string_content) @name)) (tuple (string (string_content) @name))] (#eq? @_all "__all__"))) @ref.value
-(attribute object: (identifier) @name (#match? @name "^[A-Z]")) @ref.value
+(attribute object: (identifier) @name) @ref.value
 (argument_list (identifier) @name) @ref.value
 (keyword_argument value: (identifier) @name) @ref.value
 (list (identifier) @name) @ref.value
@@ -65,6 +66,7 @@ ${UNION_TYPES}
 
 (assignment left: (identifier) @bind.name right: (_) @bind.expr) @bind
 (assignment left: (identifier) @bind.name type: (type) @bind.type) @bind
+(assignment left: [(pattern_list) (tuple_pattern)] @bind.tuple right: (_) @bind.expr) @bind
 (typed_parameter (identifier) @bind.name type: (type) @bind.type) @bind
 (parameters (identifier) @bind.name @bind.local) @bind
 (default_parameter name: (identifier) @bind.name @bind.local) @bind
@@ -166,6 +168,10 @@ export const python = {
     family: 'python',
     query: QUERY,
     implicitThis: false,
+    // `x.m()` on an object of unknown type does not bind to the one class that declares an `m`
+    noNameGuess: true,
+    paramReceivers: true,
+    functionReads: true,
     selfNames: ['self', 'cls'],
     externalReceivers: EXTERNAL_RECEIVERS,
     builtinCalls: BUILTIN_CALLS,
@@ -182,6 +188,7 @@ export const python = {
     transparentTypes: new Set(['Optional', 'Final', 'ClassVar', 'Annotated', 'Type', 'type', 'Awaitable', 'Required', 'NotRequired', 'ReadOnly']),
     elementTypes: new Set(['list', 'List', 'Sequence', 'MutableSequence', 'Iterable', 'Iterator', 'AsyncIterable', 'AsyncIterator',
         'Generator', 'AsyncGenerator', 'set', 'Set', 'frozenset', 'FrozenSet', 'AbstractSet', 'MutableSet', 'Collection', 'Deque', 'deque', 'tuple', 'Tuple']),
+    positionalTuples: new Set(['tuple', 'Tuple']),
     elementMethods: new Set(['pop', 'popleft']),
     mapTypes: new Set(['dict', 'Dict', 'Mapping', 'MutableMapping', 'DefaultDict', 'defaultdict', 'OrderedDict']),
     mapMethods: new Set(['get', 'pop', 'setdefault']),

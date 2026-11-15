@@ -5,10 +5,12 @@
  *   - handshake-based (2024-11-05 … 2025-11-25): initialize → notifications/initialized → requests
  *   - stateless 2026-07-28: every request carries `_meta["io.modelcontextprotocol/protocolVersion"]`
  *     and `server/discover` advertises versions, capabilities and instructions.
- * Only tools are exposed (all read-only). stdout carries protocol messages exclusively; logs go to stderr.
+ * Only tools are exposed: read-only ones and `rename_symbol`, which writes when asked to apply
+ * (not at all when the server is started read-only). stdout carries protocol messages exclusively;
+ * logs go to stderr.
  */
 import readline from 'node:readline';
-import { TOOLS, LEGACY_TOOLS, SERVER_INSTRUCTIONS, callTool } from './tools.mjs';
+import { TOOLS, LEGACY_TOOLS, SERVER_INSTRUCTIONS, READ_ONLY_INSTRUCTIONS, callTool, readOnlyTool } from './tools.mjs';
 
 const MAX_ITEMS = 100;          // an array argument with no maxItems of its own
 const MAX_STRING = 200_000;     // a string argument (an issue pasted as a query is long, not this long)
@@ -41,8 +43,9 @@ const LATEST_HANDSHAKE = '2025-11-25';
 const META_VERSION = 'io.modelcontextprotocol/protocolVersion';
 
 export class McpServer {
-    constructor({ intel, name = 'graph-indexer', version = '0.0.0', log = () => {}, ready = Promise.resolve() }) {
+    constructor({ intel, name = 'graph-indexer', version = '0.0.0', log = () => {}, ready = Promise.resolve(), readOnly = false }) {
         this.intel = intel;
+        this.readOnly = !!readOnly;    // no tool writes: `rename_symbol` lists its edits
         this.info = { name, version };
         this.log = log;
         this.ready = ready;            // resolves when the initial index is usable
@@ -104,7 +107,7 @@ export class McpServer {
                         protocolVersion: version,
                         capabilities: { tools: { listChanged: false } },
                         serverInfo: { ...this.info, title: 'graph-indexer — code graph & search' },
-                        instructions: SERVER_INSTRUCTIONS,
+                        instructions: this.readOnly ? READ_ONLY_INSTRUCTIONS(SERVER_INSTRUCTIONS) : SERVER_INSTRUCTIONS,
                     });
                     return;
                 }
@@ -112,7 +115,7 @@ export class McpServer {
                     done({
                         supportedVersions: SUPPORTED_VERSIONS,
                         capabilities: { tools: { listChanged: false } },
-                        instructions: SERVER_INSTRUCTIONS,
+                        instructions: this.readOnly ? READ_ONLY_INSTRUCTIONS(SERVER_INSTRUCTIONS) : SERVER_INSTRUCTIONS,
                         ttlMs: 3_600_000,
                         cacheScope: 'private',
                         _meta: { 'io.modelcontextprotocol/serverInfo': this.info },
@@ -122,7 +125,7 @@ export class McpServer {
                     done({});
                     return;
                 case 'tools/list': {
-                    const res = { tools: TOOLS.map(({ name, title, description, inputSchema, annotations, _meta }) => ({ name, title, description, inputSchema, annotations, ...(_meta ? { _meta } : {}) })) };
+                    const res = { tools: TOOLS.map(t => (this.readOnly ? readOnlyTool(t) : t)).map(({ name, title, description, inputSchema, annotations, _meta }) => ({ name, title, description, inputSchema, annotations, ...(_meta ? { _meta } : {}) })) };
                     if (this.#requestVersion(params) === '2026-07-28') Object.assign(res, { ttlMs: 3_600_000, cacheScope: 'private' });
                     done(res);
                     return;
@@ -141,7 +144,7 @@ export class McpServer {
                     try {
                         const note = await this.#awaitReady();
                         await this.intel.ensureFresh();
-                        const text = await callTool(this.intel, name, args);
+                        const text = await callTool(this.intel, name, args, { readOnly: this.readOnly });
                         done({ content: [{ type: 'text', text: note ? `${note}\n${text}` : text }] });
                     } catch (err) {
                         this.log(`tool ${name} failed: ${err.stack || err.message}`);

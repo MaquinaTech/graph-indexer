@@ -4,6 +4,277 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [3.2.0] — 2026-11-15
+
+An index that was updated holds the facts of one built from scratch; `check` is measured on changes
+left half done, and fixed where that showed it wrong; a rename on bound references. A second pass
+(2026-11-15) had the result read by two independent reviewers and measured against the compilers
+again: source that git tracks under `bin/`, `build/` or `external/` is indexed, `check` sees a
+file that was deleted or moved from under its importers, references are closer to javac, pyright
+and rust-analyzer, and the faults the reviewers found in updates and in `rename` are fixed.
+[docs/REPLANTEAMIENTO-2026-11.md](docs/REPLANTEAMIENTO-2026-11.md) has the review these came from.
+
+### Fixed
+
+- **An updated index could differ from a fresh one.** After an edit only the references of the
+  files that changed, those that pointed at removed definitions and those with the name of a new
+  one were resolved again. Everything else stayed as it was:
+  - a changed return type, base class, inferred field type or re-export left the calls made
+    through it, in files that had not changed, bound to the old definition;
+  - an import written before the file it names existed was never resolved, and one whose target
+    moved with a `tsconfig.json`, `package.json`, `go.mod` or `Cargo.toml` change stayed put;
+  - a Go import of a package whose last file was removed still led to the empty directory;
+  - a type, a value or an attribute used before its definition was written lost the reference for
+    good, because references that bound to nothing were deleted;
+  - a file deleted and written again (a branch switch) left its importers unbound;
+  - which of two same-name candidates a call bound to, and with what confidence, could depend on
+    the order in which files had been indexed.
+
+  Now resolving a file's references records what it read of the rest of the repository, a change
+  emits what it altered, and exactly the files that read it are resolved again
+  ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#an-updated-index-is-the-index-built-from-scratch)).
+  References that bind to nothing are kept apart (`refs_unbound`) instead of deleted, and the
+  symbol table's lists are in one canonical order.
+  - `bench/eval-incremental.mjs` replays real history through the update path, commit by commit and
+    file by file in both orders, and compares every fact with a fresh index: over 870 commits of
+    nine repositories, 3.1.0 leaves the index different after 8, 25 and 30 commits in the three
+    modes (580 to 772 references); this build after none.
+  - 26 of the 32 tests `test/incremental.test.mjs` had before the second pass fail on 3.1.0.
+  - A fresh index is unchanged, fact for fact, in 19 of the 20 repositories compared that are not
+    Go (eight references of Commons Collections change, with the same score against javac), so the
+    published oracle figures hold. A body edit that changes no signature reaches no other file.
+  - Cold indexing costs 5 % more CPU on nestjs and the index is 2–7 % larger. Indexes are rebuilt
+    on upgrade.
+- **`check_changes` reported legal JavaScript as broken.** A call that passes fewer arguments than
+  a function declares is legal there (the rest are undefined). On axios the developer's own finished
+  change was reported with problems in 7 of 7 commits. In JavaScript a count that does not match is
+  now listed to look at; in TypeScript, Python, Go, Java and the others it is still a problem.
+- **`check_changes`: "removed but still used" went by name.** A removed `map` claimed every
+  `.map()` call; a Go type renamed in one file and still used in another file of its package was
+  not found. The removed definition is put back into the symbol table as it was, the references
+  that bind to nothing and carry its name are resolved again, and the ones that bind to it are its
+  uses: types, constants and attribute reads as well as calls. Uses only the name ties to it are
+  listed apart, as possible.
+- **`check_changes` no longer calls removed** a definition that changed kind (a function made a
+  class, a type alias an interface) or a name its file still binds by an import or by destructuring;
+  a method removed from a Go receiver or a Rust impl is matched by its owner, not by any call of
+  its name; in Python `Base.method(self, x)` is not one argument too many, and a generator passed
+  as the only argument (`f(x for x in xs)`) is one argument, not two.
+- **Indexing a large Go package was quadratic.** For every reference the resolver scanned all the
+  symbols of the file, or of every file of the package, to pick those of one name. nats-server
+  (one package of 233 files): 38.3 s → 8.8 s of CPU; the index is the same.
+- **Go: a name declared again in an inner block** (`for _, r := range …` in a method whose receiver
+  is `r`) no longer erases the type it has outside the block, and **table-driven tests are typed**:
+  the fields of `for _, tc := range []struct{ … }{ … }` have the types written there. Against the
+  Go type checker, exact sets go from 0.986 to 0.993 (gin), 0.934 to 0.964 (caddy) and 0.935 to
+  0.945 (nats-server), with the same precision ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#the-same-measurement-for-go)).
+- **A manifest change moves imports.** An edit to `tsconfig.json`, `package.json`, `go.mod` or
+  `Cargo.toml` is picked up by the next answer; before, it took a restart and a re-index.
+- **Source under `bin/`, `build/`, `external/`, `env/`, `target/`, `deps/`, `out/`, `obj/` or
+  `coverage/` was never indexed**, and nothing could switch that on. Those names are build output
+  in one project and source in another: a CLI's entry points, the build scripts, the adapters to
+  an external service. A function called only from `bin/` had no callers, an import into
+  `external/` led nowhere, and `check_changes` answered "No problems found" when an interface
+  declared there was removed while three files still imported it (nestjs `40e2755`). In 10 of
+  the 43 repositories at hand, 216 files the projects wrote themselves were left out this way
+  (105 of Twenty's, 36 of sympy's, 17 of nestjs's, graph-indexer's own `bin/`); none is dropped. Now such a directory is skipped only
+  when git tracks no code under it — what a build writes is ignored or untracked, what is
+  committed there is the project's own — and a copy of another project inside one
+  (`deps/hiredis/`, `external/googletest/`), which carries its own licence file, still is.
+  `node_modules`, `vendor`, `third_party`, `dist` and the caches are skipped as before, and so is
+  everything of these names outside git. `search_text` and `find_files` follow the same rule.
+- **A tracked file deleted from the working tree was still a module.** git lists a file until its
+  deletion is staged, so an import of it kept resolving to a path with nothing behind it.
+- **`check_changes` said nothing about a file deleted or moved from under its importers.** The
+  compiler's first error after `git mv util.ts helpers.ts` is "module not found"; `check` reported
+  no problem, because the definitions of a moved file still exist under their names. It now
+  lists the imports left on the old path, and where the file went when the change shows it (git's
+  rename detection, or an added file with the same name or the same text).
+- **`check_changes`, found by an independent reading of the code:**
+  - a removed definition was taken for a moved one whenever any file declared something of the
+    same name, and its uses were not reported. A definition that moved has its uses bound to where
+    it is now; one that only shares the name does not: the binding decides, not the name;
+  - a changed file whose path holds a space or a non-ASCII letter was not checked at all (git
+    quotes such paths and ends them with a tab);
+  - a decorator that supplies an argument (`@click.option`, a `@with_db` that passes the
+    connection) made a correct change a problem. A call that no longer fits is one that fitted
+    the old signature, and a call written now to a function under a decorator that may change its
+    parameters is not counted against them;
+  - Rust: `Type::method(value, x)` passes its receiver by hand, as `Base.method(self, x)` does in
+    Python, and was one argument too many;
+  - the report said nothing about what its limits left out: with more than 40 changed signatures
+    or 30 removed definitions it now names the ones it did not look at.
+- **References, against the compilers again** ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#1-reference-accuracy-against-the-typescript-compiler);
+  precision / recall / exact sets, the samples of 3.1.0; no repository of any language lost either):
+  - Java against javac: Commons Collections 0.961 / 0.883 / 0.825 → 0.991 / 0.904 / 0.885, jsoup
+    0.992 / 0.943 / 0.846 → 0.996 / 0.965 / 0.899, spring-petclinic 0.994 / 0.989 / 0.973 → 1.000 /
+    0.995 / 0.991. Static imports, a varargs parameter as an array, the methods of an enclosing
+    class from an inner one, an enum constant with a body, a field and a method of one name, an
+    override reached through a second interface, overloads told apart by parameter type when a
+    method's family is drawn, and signatures that began with an annotation line.
+  - Python against pyright: flask 0.895 / 0.927 / 0.753 → 0.961 / 0.976 / 0.853, requests 0.954 /
+    0.987 / 0.886 → 0.954 / 0.993 / 0.913, httpx 0.998 / 0.950 / 0.800 → 0.999 / 0.970 / 0.873,
+    click 0.971 / 0.980 / 0.917 → 0.994 / 0.980 / 0.931; rich, which no fix was derived from,
+    0.992 / 0.974 / 0.861 → 0.992 / 0.979 / 0.896. An import inside a function binds there only;
+    a parameter assigned a typed value later; `a, b = f()` with `f` returning `tuple[A, B]`;
+    `@x.setter`; `self.x = v` running a base class's property setter; `pkg.sub.X` only when
+    some module imports `pkg.sub` (Python's rule; pyright wants the import in the same file,
+    which is why `requests.cookies.RequestsCookieJar()` after `import requests` counts against
+    requests' precision here); a module function named as a value; and a member called on an untyped
+    parameter of a test function is no longer given to the one class that declares a member of
+    that name (the test runner fills it in).
+  - Rust against rust-analyzer: tokio 0.981 / 0.838 / 0.747 → 0.990 / 0.906 / 0.813, serde_json
+    0.974 / 0.947 / 0.899 → 0.993 / 0.947 / 0.920, ripgrep 0.990 / 0.944 / 0.912 → 0.990 / 0.948 /
+    0.919. A module brought in by a glob import, a method call never selecting a field, a
+    crate's own `Mutex` or `LinkedList`, `Arc` through a crate path, a parameter typed `Self`,
+    turbofish calls, primitive-typed locals; and a call such as `Value::from(x)`, where several
+    impls of one trait differ only in a parameter type, reaches the impl that takes the
+    argument's type when the source shows it (a literal, a typed local or parameter, `vec![…]`,
+    `&x[..]`, a construction), and is left unbound, and counted as such, when it does not —
+    instead of reaching the first impl whatever the argument.
+  - Repositories nobody had looked at, measured once on frozen samples with the build before
+    and this one: gson (javac) 0.939 / 0.983 / 0.905 → 0.991 / 0.987 / 0.940; urllib3 (pyright)
+    0.966 / 0.975 / 0.780 → 0.966 / 0.980 / 0.827; arrayvec (rust-analyzer) 0.960 / 0.751 / 0.673
+    → 0.964 / 0.759 / 0.700. A fourth, bytes, showed a fault of this very pass and stopped being
+    unseen: it has four `impl From<…> for Bytes`. The build before bound every `Bytes::from(x)`
+    to one of them (0.666 / 0.844 / 0.633: right for that one, wrong for the other three); the
+    rule as first written bound none (0.904 / 0.732 / 0.633); with the argument's type it is
+    0.939 / 0.859 / 0.673.
+- **Updates, found by the same kind of reading** (each one a test in `test/incremental.test.mjs`):
+  - tool calls that arrived while another was syncing ran two updates at once: one could fail
+    with `UNIQUE constraint failed: files.path` and leave references bound to rows that were gone.
+    Updates now run one after the other, and a call waits for the update in flight;
+  - an update that failed after its removals were written left the imports of the removed file
+    resolved to it for good;
+  - an index written by a second process (the edit hook opens its own when the resident is
+    busy) was not read again by the first, which then answered from what it held in memory;
+  - the type of a receiver such as `make().x` was remembered per file, so with a function
+    declared inside another and an imported one of the same name the answer depended on which
+    reference was resolved first, and could differ between an updated index and a fresh one;
+  - a directory renamed or removed as a whole, a file the repository ignores, a rename that
+    changes only the letter case (on macOS and Windows both names answered), `svelte.config.js`
+    and the base a `tsconfig` extends were not followed until the next full sweep, or indexed
+    when they should not be;
+  - a file rewritten alone in its directory re-resolved every Java file that imports a library
+    type, and a new document re-resolved every Rust file.
+  - a file renamed only in its letter case without `git mv` (macOS, Windows) kept the name
+    git's index had in a full update and took the one on disk in an update of that path. It has
+    the name on disk in both, the index no longer changes when git's index catches up, and
+    `check` reports the imports that still use the old name.
+  - Replayed again over 840 commits of seven repositories in the three modes, an updated index
+    is the fresh one after every commit. Two runs of that replay were not clean, both file by
+    file in reverse order: one commit caused by this pass's own check for ignored paths (a file
+    written while `.gitignore` still ignored it, then the rule removed; a change to a
+    `.gitignore` is followed by a full reconciliation now), and then one that reconciliation
+    exposed, the rename by letter case above.
+  - Cold indexing costs 5–14 % more CPU than before this pass (nestjs 3.10 → 3.39 s, sqlglot
+    3.69 → 4.20 s of one thread), for answers that no longer depend on the order of resolution
+    and the argument types of Rust calls.
+
+- **Found by the independent review before this release** (each with a test that fails on the code
+  before the fix):
+  - `check` found nothing when the indexed directory is a subdirectory of the git work tree, or
+    under the user's `diff.noprefix` or `diff.mnemonicPrefix` setting (the same for `impact --diff`,
+    and from a subdirectory for the files changed together in git history and for the edits a
+    shell command made that the hooks follow); and it missed a file renamed only in its letter
+    case when its content was unchanged.
+  - An update handed single paths indexed files git never lists (in a nested repository or a
+    submodule, beyond a symbolic link), and one such path switched the ignore rules off for the
+    rest of the batch; now git is asked which of the new paths it lists, as a full discovery does.
+  - An update also went wrong on a decomposed Unicode name (as macOS's watcher reports it), on a
+    case rename handed over by its new name only, on a directory named like a file (`m.ts/`), on
+    a link in a new directory, on a file grown past the size limit (its importers lost it), on
+    spellings like `./src/` or `src//a.ts`, and on an index reopened and handed paths before any
+    full update.
+  - **On Node.js 26 an update failed** once a file already in the index changed (3.1.1 too: "Value is too large to be
+    represented as a JavaScript number"): after a write to the full-text tables SQLite can report one
+    of FTS5's own rowids, past 2^53, as the last inserted one, and Node 26's `node:sqlite` throws
+    where 22 and 24 round it. Writes now read it as a BigInt. CI runs on Node 26 as well.
+  - A failed first build in the background (the store busy, the disk full) left the server never
+    updating the index again; the next call now builds it again.
+  - Known and not fixed: outside git, an update handed single paths can index a file under a
+    dot-directory or a re-included one under an ignored directory that a full walk skips, until
+    the next sweep; a file staged with `git add` under an output-like directory is indexed at the
+    next sweep, not at once.
+
+### Added
+
+- **`check_changes` sees more of a change left half done.**
+  - Python: a call that passes a keyword the definition no longer takes.
+  - A method that was removed or changed its signature is reported with the supertypes that still
+    declare it and the subtypes that still override it, in files the change did not touch.
+  - A signature that changed without changing its argument count (another result, a parameter
+    renamed) lists its callers in files not touched.
+  - `bench/eval-check.mjs` measures it on real commits applied in part: on the development
+    repositories `check` points into the file a developer had to follow the change to for 61 of 103
+    ripples (40 on 3.1.0; 59 before the second pass), and reports the developer's finished change
+    with problems in 1 of 56 commits (12 on 3.1.0); on the held-out ones, run once with the code frozen, 177 of 288 (159)
+    and 6 of 120 commits (18), and after the second pass 178 of 288 and 2 of 120
+    ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#check-on-changes-left-half-done)).
+- **`rename_symbol` (MCP) and `graph-indexer rename <symbol> <new-name> [--write]`.** Renames a
+  definition where the index binds its uses, as an IDE does: the definition and its overloads, for a method the declarations it
+  overrides and that override it, every reference bound to them with `exact` confidence, and the
+  imports and re-exports that name it. Other definitions of the same name keep theirs; what could
+  not be bound is listed, not edited. Without `apply: true` (`--write` on the command line) it
+  lists the edits.
+  - Run alone on the 17 rename tasks of the agent benchmark, graded by the TypeScript compiler and
+    the Go type checker, it solved 15 at the first run (nestjs 11 of 11, Twenty 4 of 4) and all 17
+    once the Go table-driven tests above were typed; it still solves the 17 with the checks below
+    in place ([docs/BENCHMARKS.md](docs/BENCHMARKS.md#rename-alone-on-the-refactor-tasks)).
+  - Over MCP it is the one tool that is not read-only, and it is declared so (`readOnlyHint:
+    false`, `destructiveHint: true`): a client that asks before running such a tool asks.
+    `graph-indexer serve --read-only` (or `GRAPH_INDEXER_READ_ONLY=1`) starts a server on which
+    it only lists its edits, over MCP and to the CLI queries the server answers on its local
+    socket. The instructions `init` writes for agents name it in one line.
+    Whether an agent uses it, and gains from it, has not been measured in sessions.
+  - It writes every file or none. The index is brought up to date before anything is read from it
+    (with a stale index it had renamed the call of another class's method and reported success);
+    every edit is checked against the file as it is on disk; a file that changed, is read-only,
+    is not a regular file or lies outside the repository stops the write before the first byte;
+    files are written through a temporary one, and a failure half way puts the written ones back.
+    The temporary file has a random name, is created exclusively and never through a link, and a
+    file that is not valid UTF-8 is not rewritten (its other bytes would change).
+  - It refuses instead of changing what the code means: a new name that a supertype or subtype
+    already declares, that another file of the same Go or Java package declares, that is a local
+    or a parameter where a use would be rewritten, that is a builtin or global the file uses
+    (`len`, `console`), that is a reserved word (`_` in Go and Rust), or that would make an
+    exported Go name unexported while other packages use it. A Go method's name is checked against
+    its receiver type, not the package. A Java class its file is named after is not renamed: the
+    file would have to be renamed with it.
+  - A Rust trait's method is renamed with its `fn` in every `impl Trait for X`, from either side.
+  - Uses of the name the index binds to nothing (a function passed as a value, `ns.name` through a
+    namespace import, `T::name` as a method reference) are listed to check by hand, not edited; a
+    member called on some other receiver (`params.get(…)`) is not among them.
+  - It edits what follows from the definition and is no reference of its own: the closing tag of
+    a JSX element, `@name.setter` on a Python property, `export default name` and `export { name }`
+    in the defining file, a Python import continued with a backslash; a shorthand property
+    `{ name }` becomes `{ name: newName }`, so the key other code reads stays.
+
+### Security
+
+- **Node.js 22.23.5+, 24.22.3+ or 26.13.1+** is now required (`engines`): the November 11, 2026
+  Node.js security releases, which fix, among others, CVE-2026-123864 (HTTPS re-entrancy that can
+  expose server memory, TLS private keys included), CVE-2026-126051 (a remotely triggered TLS
+  server crash) and CVE-2026-123828 (an HTTP/2 heap buffer overflow). graph-indexer serves no
+  HTTP or TLS itself, but it runs inside the Node.js the user has installed.
+- In the first cut of `rename_symbol` (never released) the independent review found two holes,
+  fixed before release: a link planted at the temporary file's predictable name made the write go
+  outside the repository, and a server started `--read-only` still wrote for a CLI query sent to
+  its local socket.
+- graph-indexer has no npm dependencies; GitHub reports no code-scanning, Dependabot or secret
+  alerts, and the CI actions are at their latest release.
+
+### Changed
+
+- **The PHP grammar is tree-sitter-php 0.25.1** (was 0.24.2): asymmetric visibility in constructor
+  promotion, `clone` with arguments and PHP 8.6 partial application are parsed, and two faults of
+  its heredoc scanner are fixed upstream. The symbols and references extracted from Laravel and
+  Symfony (1,104 files) are the same with both. The other grammars are at their latest release,
+  except Scala, whose grammar is publishing fixes daily at the moment and stays at 0.26.2.
+- **Indexes are rebuilt on upgrade** (the index schema and the grammar manifest changed).
+
+---
+
 ## [3.1.1] — 2026-11-13
 
 A security release. Upgrading is recommended for everyone; nothing else changes. Most of these need a

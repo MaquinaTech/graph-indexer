@@ -153,3 +153,114 @@ test('rust: calls of a trait\'s implementations are uses of its method; impls of
     // `f32::to_bits(self)` inside `to_bits` is the primitive's own method
     assert.deepEqual(at('src/lib.rs:28', 'src/lib.rs'), []);
 });
+
+test('rust: `Type::from(x)` with several `impl From<_> for Type` stays unbound without the argument\'s type', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Value;',                                         // 1
+            'impl From<f32> for Value {',                                // 2
+            '    fn from(f: f32) -> Self { Value }',                     // 3
+            '}',                                                         // 4
+            'impl From<bool> for Value {',                               // 5
+            '    fn from(f: bool) -> Self { Value }',                    // 6
+            '}',                                                         // 7
+            'fn t() { Value::from(make()); }',                           // 8
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:3', 'src/lib.rs'), []);
+    assert.deepEqual(at('src/lib.rs:6', 'src/lib.rs'), []);
+});
+
+test('rust: among `impl From<_> for Type` the call reaches the impl whose trait argument is its argument\'s type', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Value;',                                         // 1
+            'pub struct Other {}',                                        // 2
+            "impl From<f32> for Value { fn from(f: f32) -> Self { Value } }",              // 3
+            "impl From<bool> for Value { fn from(f: bool) -> Self { Value } }",            // 4
+            "impl<'a> From<&'a [u8]> for Value { fn from(f: &'a [u8]) -> Self { Value } }", // 5
+            'impl From<&str> for Value { fn from(f: &str) -> Self { Value } }',            // 6
+            'impl From<Vec<u8>> for Value { fn from(f: Vec<u8>) -> Self { Value } }',      // 7
+            'impl From<Other> for Value { fn from(f: Other) -> Self { Value } }',          // 8
+            'impl From<&Other> for Value { fn from(f: &Other) -> Self { Value } }',        // 9
+            'fn t(flag: bool, o: Other, r: &Other, bytes: &[u8]) {',                       // 10
+            '    Value::from(1.0f32);',                                  // 11
+            '    Value::from(flag);',                                    // 12
+            '    Value::from(true);',                                    // 13
+            '    Value::from(&b"abc"[..]);',                             // 14
+            '    Value::from(bytes);',                                   // 15
+            '    Value::from("s");',                                     // 16
+            '    Value::from(vec![1u8, 2]);',                            // 17
+            '    let v = Vec::new();',                                   // 18
+            '    Value::from(v);',                                       // 19
+            '    Value::from(Other {});',                                 // 20
+            '    Value::from(o);',                                       // 21
+            '    Value::from(&o);',                                      // 22
+            '    Value::from(r);',                                       // 23
+            '    Value::from(2.5);',                                     // 24 an unsuffixed float: f32, the only float impl
+            '}',                                                         // 25
+            '',
+        ].join('\n'),
+    });
+    const lines = (def) => at('src/lib.rs:' + def, 'src/lib.rs');
+    assert.deepEqual(lines(3), [11, 24]);
+    assert.deepEqual(lines(4), [12, 13]);
+    assert.deepEqual(lines(5), [14, 15]);
+    assert.deepEqual(lines(6), [16]);
+    assert.deepEqual(lines(7), [17, 19]);
+    assert.deepEqual(lines(8), [20, 21]);
+    assert.deepEqual(lines(9), [22, 23]);
+});
+
+test('rust: a method call picks among `impl Trait<_> for Type` by its argument, and an argument that fits several or none stays unbound', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Buf;',                                           // 1
+            'pub trait Put<T> { fn put(&mut self, x: T); }',             // 2
+            'impl Put<u8> for Buf { fn put(&mut self, x: u8) {} }',      // 3
+            'impl Put<&str> for Buf { fn put(&mut self, x: &str) {} }',  // 4
+            'impl<T> Put<Vec<T>> for Buf { fn put(&mut self, x: Vec<T>) {} }', // 5
+            'fn t(mut b: Buf, n: u8, s: String) {',                      // 6
+            '    b.put(n);',                                             // 7
+            '    b.put("x");',                                           // 8
+            '    b.put(vec![1, 2]);',                                    // 9
+            '    b.put(s.clone());',                                     // 10 a String is none of the three
+            '    b.put(1);',                                             // 11 an integer literal fits u8 only here
+            '    b.put(unknown());',                                     // 12
+            '}',                                                         // 13
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:3', 'src/lib.rs'), [7, 11]);
+    assert.deepEqual(at('src/lib.rs:4', 'src/lib.rs'), [8]);
+    assert.deepEqual(at('src/lib.rs:5', 'src/lib.rs'), [9]);
+});
+
+test('rust: `format!`, `.to_string()` and `String::from` are Strings, `.clone()` of a reference is the value, `x.into_bytes()` of a String is a Vec<u8>', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct V;',                                             // 1
+            'impl From<String> for V { fn from(s: String) -> V { V } }', // 2
+            'impl From<&String> for V { fn from(s: &String) -> V { V } }', // 3
+            'impl From<Vec<u8>> for V { fn from(s: Vec<u8>) -> V { V } }', // 4
+            'fn t(r: &String, n: i32) {',                                // 5
+            '    V::from(format!("{}", n));',                            // 6
+            '    V::from(n.to_string());',                               // 7
+            '    V::from(String::from("a"));',                           // 8
+            '    V::from(r.clone());',                                   // 9
+            '    V::from(r);',                                           // 10
+            '    let s = String::new();',                                // 11
+            '    V::from(s.into_bytes());',                              // 12
+            '}',                                                         // 13
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:2', 'src/lib.rs'), [6, 7, 8, 9]);
+    assert.deepEqual(at('src/lib.rs:3', 'src/lib.rs'), [10]);
+    assert.deepEqual(at('src/lib.rs:4', 'src/lib.rs'), [12]);
+});

@@ -46,6 +46,16 @@ const QUERY = `
 (selector_expression operand: (_) @recv field: (field_identifier) @name) @ref.read
 
 (func_literal) @scope
+(block) @scope.block
+(for_statement) @scope.block
+(if_statement) @scope.block
+(expression_switch_statement) @scope.block
+(type_switch_statement) @scope.block
+(select_statement) @scope.block
+(expression_case) @scope.block
+(type_case) @scope.block
+(communication_case) @scope.block
+(default_case) @scope.block
 (return_statement (expression_list . (_) @ret))
 (import_spec) @import
 
@@ -54,6 +64,12 @@ const QUERY = `
 (short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (_) @bind.expr)) @bind
 (var_spec name: (identifier) @bind.name value: (expression_list . (_) @bind.expr)) @bind
 (for_statement (range_clause left: (expression_list . (_) . (identifier) @bind.name) right: (_) @bind.elem)) @bind
+; table-driven tests: values of a struct type written in place, and the loop over a table of them
+(for_statement (range_clause left: (expression_list . (_) . (identifier) @bind.name) right: (composite_literal type: [(slice_type element: (struct_type) @bind.inline) (array_type element: (struct_type) @bind.inline) (map_type value: (struct_type) @bind.inline)]))) @bind
+(short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (composite_literal type: [(slice_type element: (struct_type) @bind.inlineElem) (array_type element: (struct_type) @bind.inlineElem) (map_type value: (struct_type) @bind.inlineElem)]))) @bind
+(var_spec name: (identifier) @bind.name value: (expression_list . (composite_literal type: [(slice_type element: (struct_type) @bind.inlineElem) (array_type element: (struct_type) @bind.inlineElem) (map_type value: (struct_type) @bind.inlineElem)]))) @bind
+(var_spec name: (identifier) @bind.name type: [(slice_type element: (struct_type) @bind.inlineElem) (array_type element: (struct_type) @bind.inlineElem) (map_type value: (struct_type) @bind.inlineElem)]) @bind
+(short_var_declaration left: (expression_list . (identifier) @bind.name) right: (expression_list . (composite_literal type: (struct_type) @bind.inline))) @bind
 (var_spec name: (identifier) @bind.name type: ${TYPE_HEAD.replaceAll('@type', '@bind.type')}) @bind
 (parameter_declaration name: (identifier) @bind.name type: ${TYPE_HEAD.replaceAll('@type', '@bind.type')}) @bind
 `;
@@ -160,6 +176,18 @@ function fileInfo(root) {
     return { package: pkg?.namedChildren[0]?.text ?? null };
 }
 
+/** The type of field `key` in the text of a struct type written in place (`struct { a, b T; c *U \`tag\` }`). */
+function structFieldType(text, key) {
+    const open = text.indexOf('{'), close = text.lastIndexOf('}');
+    if (open < 0 || close < open) return null;
+    for (const line of text.slice(open + 1, close).split(/[\n;]/)) {
+        const decl = line.replace(/\/\/.*$/, '').replace(/`[^`]*`\s*$/, '').replace(/"[^"]*"\s*$/, '').trim();
+        const m = /^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+(\S.*)$/.exec(decl);
+        if (m && m[1].split(',').some(n => n.trim() === key)) return m[2].trim();
+    }
+    return null;
+}
+
 export const go = {
     id: 'go',
     grammar: 'go',
@@ -186,6 +214,7 @@ export const go = {
     packageValues: true, // a bare identifier that is not local is a package-level variable
     qualifiedTypes: true, // types keep their package (`http.Request`)
     methodShape, // interfaces are satisfied by name and signature
+    inlineMemberType: structFieldType, // `struct { in Request; want, got string }` written in place
     cleanType: (t) => t.replace(/^\(\s*(?:\w+\s+)?([^,()]+?)\s*,\s*(?:\w+\s+)?error\s*\)$/s, '$1'),
     refineKind(kind, d, parent) {
         if (d.node.type === 'method_elem') return 'method';

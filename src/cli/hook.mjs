@@ -225,13 +225,18 @@ async function afterEdit(root, input, acquire, files = null) {
         const lines = [];
         for (const e of r.syntax.slice(0, 3)) lines.push(`${e.path}:${e.line} has a syntax error introduced since the last commit (${e.missing ? `missing ${e.missing}` : 'unexpected code'}): ${e.text.slice(0, 100)}`);
         for (const a of r.arity.slice(0, 4)) {
-            const sites = a.sites.slice(0, 4).map(x => `${x.path}:${x.line} (passes ${x.argc.n})`).join(', ');
+            const sites = a.sites.slice(0, 4).map(x => `${x.path}:${x.line} (passes ${x.keyword ? `${x.keyword}=` : x.argc.n})`).join(', ');
             lines.push(a.newCall ? `The call at ${sites} does not fit ${a.target}, which takes ${a.is} argument(s).`
+                : a.keyword ? `${a.target} no longer takes a keyword that ${a.sites.length} of its ${a.total} call sites pass: ${sites}${a.sites.length > 4 ? ', …' : ''}.`
                 : `${a.target} now takes ${a.is} argument(s) (was ${a.was}); ${a.sites.length} of its ${a.total} call sites no longer fit: ${sites}${a.sites.length > 4 ? ', …' : ''}.`);
         }
+        for (const m of (r.imports ?? []).slice(0, 3)) {
+            lines.push(`${m.path} was ${m.movedTo ? `moved to ${m.movedTo}` : 'deleted'} but ${m.total} import(s) still use its old path: ${m.sites.slice(0, 4).map(x => `${x.path}:${x.line}`).join(', ')}${m.total > 4 ? ', …' : ''}.`);
+        }
         for (const m of r.removed.slice(0, 3)) {
-            const uses = m.uses.slice(0, 4).map(u => `${u.path}:${u.line}`).join(', ');
-            lines.push(`${m.qname} no longer exists in ${m.path} but is still used ${m.total + m.imports.length} time(s): ${uses}${m.total > 4 ? ', …' : ''}.`);
+            const at = [...m.uses, ...m.imports];
+            const uses = at.slice(0, 4).map(u => `${u.path}:${u.line}`).join(', ');
+            lines.push(`${m.qname} no longer exists in ${m.path} but is still used ${m.total + m.imports.length} time(s): ${uses}${m.total + m.imports.length > 4 ? ', …' : ''}.`);
         }
         if (!lines.length) return null;
         return `graph-indexer check after this edit:\n- ${lines.join('\n- ')}\n(check_changes lists everything, including the tests to run.)`;
@@ -337,11 +342,15 @@ function shellEdits(root, state) {
     // hardened (gitSync): a repository's core.fsmonitor or filters would otherwise run
     try { r = gitSync(root, ['status', '--porcelain', '--untracked-files=all', '-z'], { timeout: 1500 }); } catch { return []; }
     if (r.status !== 0 || typeof r.stdout !== 'string') return [];
+    // status names paths from the top of the work tree: the index's root can be a directory inside it
+    let prefix = '';
+    try { const p = gitSync(root, ['rev-parse', '--show-prefix'], { timeout: 1500 }); if (p.status === 0) prefix = String(p.stdout).trim(); } catch { /* top level */ }
     const seen = state.st.mtimes ??= {};
     const changed = [];
     for (const e of r.stdout.split('\0')) {
         if (e.length < 4 || e.startsWith('D') || e[1] === 'D') continue;
-        const rel = e.slice(3);
+        if (prefix && !e.slice(3).startsWith(prefix)) continue;
+        const rel = e.slice(3 + prefix.length);
         if (!specForPath(rel) || rel.startsWith(DATA_DIR_NAME + '/')) continue;
         let m;
         try { m = fs.statSync(path.join(root, rel)).mtimeMs; } catch { continue; }

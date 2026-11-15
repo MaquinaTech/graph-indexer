@@ -83,3 +83,117 @@ test('java: a library import, Outer.this, `new` inside the class and nested type
     assert.ok(at('src/org/acme/Map.java', 'Map.Node', 'src/org/acme/Map.java').includes(6), 'new Node(1) inside Node names the class');
     assert.deepEqual(at('src/org/acme/Map.java', 'Map.Kind', 'src/org/acme/Map.java'), [9, 9, 9]);
 });
+
+test('java: a varargs parameter is an array, a call inside an overload picks by it, a long signature keeps its parameters', async (t) => {
+    const at = await repo(t, {
+        'src/p/It.java': [
+            'package p;',                                                  // 1
+            'class It {',                                                  // 2
+            '    static void check(Iterable<?> one) {}',                   // 3
+            '    static void check(Iterable<?>... many) {',                // 4
+            '        for (Iterable<?> x : many) check(x);',                // 5
+            '    }',                                                       // 6
+            '    static void chain(Iterable<String>... its) { check(its); }', // 7
+            '    @SuppressWarnings("unchecked") @Deprecated public static <I, O> void sw(final java.util.List<? super I> predicate,',
+            '            final java.util.Map<? super I, ? extends O> trueTransformer, final java.util.Map<? super I, ? extends O> falseTransformer, final long a, final long b) {}', // 9
+            '    static void sw(java.util.List<String>[] ps, java.util.Map<String, String>[] ts, java.util.Map<String, String> d, long a, long b) {}', // 10
+            '    void use(java.util.List<String>[] ps, java.util.Map<String, String>[] ts, java.util.Map<String, String> d) { sw(ps, ts, d, 1L, 2L); }', // 11
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/p/It.java', 'It.check', 'src/p/It.java', 3), [5], 'a single Iterable is the fixed overload, also inside the variadic one');
+    assert.deepEqual(at('src/p/It.java', 'It.check', 'src/p/It.java', 4), [7], 'an array of Iterable is the variadic one taken as it is');
+    assert.deepEqual(at('src/p/It.java', 'It.sw', 'src/p/It.java', 8), []);
+    assert.deepEqual(at('src/p/It.java', 'It.sw', 'src/p/It.java', 10), [11]);
+});
+
+test('java: static imports name the static members of a type, inherited ones included', async (t) => {
+    const at = await repo(t, {
+        'src/p/Fu.java': [
+            'package p;',                                                  // 1
+            'class Fu {',                                                  // 2
+            '    static void validate(Object... xs) {}',                   // 3
+            '    static void validate(java.util.List<String> xs) {}',      // 4
+            '    static int coerce(int x) { return x; }',                  // 5
+            '}',
+            '',
+        ].join('\n'),
+        'src/q/All.java': [
+            'package q;',                                                  // 1
+            'import static p.Fu.validate;',                                // 2
+            'import static p.Fu.*;',                                       // 3
+            'class All {',                                                 // 4
+            '    void f(String[] a, int n) { validate(a); coerce(n); }',   // 5
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/p/Fu.java', 'Fu.validate', 'src/q/All.java', 3), [5]);
+    assert.deepEqual(at('src/p/Fu.java', 'Fu.coerce', 'src/q/All.java'), [5]);
+});
+
+test('java: an inner class calls the method of its outer class; an enum constant is a value of the enum', async (t) => {
+    const at = await repo(t, {
+        'src/p/Outer.java': [
+            'package p;',                                                  // 1
+            'abstract class Outer {',                                      // 2
+            '    abstract Object make();',                                 // 3
+            '    class Inner { Object g() { return make(); } }',           // 4
+            '    int make(int n) { return n; }',                           // 5
+            '}',
+            '',
+        ].join('\n'),
+        'src/p/St.java': [
+            'package p;',                                                  // 1
+            'enum St {',                                                   // 2
+            '    A { boolean go(int t) { return B.go(t); } },',            // 3
+            '    B { boolean go(int t) { return true; } };',               // 4
+            '    abstract boolean go(int t);',                             // 5
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/p/Outer.java', 'Outer.make', 'src/p/Outer.java', 3), [4]);
+    assert.deepEqual(at('src/p/St.java', 'St.go', 'src/p/St.java', 5), [3], 'B.go(t) is a call of the enum\'s go');
+});
+
+test('java: members of a type are told by what they are: a field is no override of a method; an override beats what another base inherits', async (t) => {
+    const at = await repo(t, {
+        'src/p/Fam.java': [
+            'package p;',                                                  // 1
+            'interface Get { int size(); Object it(); }',                  // 2
+            'interface Ord extends Get { @Override Object it(); }',        // 3
+            'interface Bidi extends Get { }',                              // 4
+            'interface OrdBidi extends Bidi, Ord { }',                     // 5
+            'class Impl implements Get {',                                 // 6
+            '    private final Object size = null;',                      // 7
+            '    public int size() { return 0; }',                         // 8
+            '    public Object it() { return size; }',                     // 9
+            '}',
+            'class Use { Object f(OrdBidi o) { return o.it(); } }',        // 11
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/p/Fam.java', 'Impl.size', 'src/p/Fam.java', 8), [], 'the field `size` is not a call of size()');
+    assert.deepEqual(at('src/p/Fam.java', 'Ord.it', 'src/p/Fam.java'), [11], 'OrdBidi inherits Ord.it, which overrides Get.it');
+});
+
+test('java: overloads of one arity are not one family; an annotation line above a bodyless method is no signature', async (t) => {
+    const at = await repo(t, {
+        'src/p/Multi.java': [
+            'package p;',                                                  // 1
+            'interface Multi {',                                              // 2
+            '    @Override',                                               // 3
+            '    boolean add(String e);',                                  // 4
+            '    boolean put(java.util.Map<String, String> m);',           // 5
+            '    boolean put(Multi m);',                                      // 6
+            '}',
+            'class Dec { Multi d; boolean f(java.util.Map<String, String> m) { d.add("a"); return d.put(m); } }', // 8
+            'abstract class Impl implements Multi { public boolean put(Multi m) { return true; } boolean g(Impl i) { return add("a", 1); } boolean add(String e, int n) { return true; } }',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/p/Multi.java', 'Impl.put', 'src/p/Multi.java'), [], 'put(Multi) does not override put(Map)');
+    assert.deepEqual(at('src/p/Multi.java', 'Multi.add', 'src/p/Multi.java'), [8], 'add(String, int) is not an override of add(String)');
+});

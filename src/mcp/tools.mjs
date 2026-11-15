@@ -1,15 +1,18 @@
 /**
- * The MCP tool surface: nine read-only tools, each answering one kind of question an agent has
+ * The MCP tool surface: nine read-only tools, each answering one kind of question an agent has, and
+ * one that edits (`rename_symbol`)
  * while changing code; descriptions are short because clients re-read them on every turn (`get_symbol`, which `read_code` replaced, stays callable for older clients).
  * Descriptions say when to use the tool (and when grep/read is better);
  * outputs are compact text with file:line locations and explicit totals/truncation notes.
  */
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { analyzeQuery } from '../search/tokenize.mjs';
 import { MAX_QUERIES, WANTS_DOCS } from '../search/search.mjs';
 import { loc, clip, codeBlock, symHeader, confWord, matchingLines, plural } from './render.mjs';
 import { textSearch, findFiles, identifierOf } from '../query/textsearch.mjs';
 import { checkChanges } from '../query/check.mjs';
+import { renameSymbol } from '../query/rename.mjs';
 import { definitionsUsed, testsUsing } from '../query/read.mjs';
 import { factsForRange, renderFacts } from '../query/facts.mjs';
 import { testCommands } from '../query/testcmd.mjs';
@@ -164,7 +167,25 @@ export const TOOLS = [
             },
         },
     },
+    {
+        name: 'rename_symbol',
+        title: 'Rename symbol',
+        description: 'Renames a definition and everything bound to it across the repository, as an IDE rename does: its uses, its imports and exports, and the overrides and implementations that must keep matching. Lists the edits first; with `apply: true` it writes them, all or none. Refuses when the new name is taken where the symbol lives or is used, and leaves out (and lists) the uses it cannot bind for sure.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                symbol: { type: 'string', description: 'The definition to rename: name, Class.member or path:Name.' },
+                new_name: { type: 'string', description: 'Its new name (an identifier, not a qualified name).' },
+                apply: { type: 'boolean', default: false, description: 'Write the edits. Default false: list them without changing any file.' },
+                min_confidence: { type: 'string', enum: ['exact', 'high'], default: 'exact', description: 'Which uses are edited: exact = bound for sure; high = also the likely ones (a receiver typed by inference).' },
+            },
+            required: ['symbol', 'new_name'],
+        },
+    },
 ];
+
+// the tools that change files: every other one only reads
+const WRITING_TOOLS = new Set(['rename_symbol']);
 
 // `get_symbol` predates read_code: still callable by clients configured for it, no longer listed
 export const LEGACY_TOOLS = [
@@ -190,11 +211,25 @@ export const LEGACY_TOOLS = [
 // `explore` joins it as the one call that opens a task (docs/PLAN-REFERENCIA.md §1.1; unmeasured).
 const ALWAYS_LOAD = new Set(['find_references', 'explore']);
 for (const t of [...TOOLS, ...LEGACY_TOOLS]) {
-    t.annotations = { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+    // a rename rewrites existing lines: not read-only, and not merely additive
+    t.annotations = WRITING_TOOLS.has(t.name)
+        ? { title: t.title, readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+        : { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     if (ALWAYS_LOAD.has(t.name)) t._meta = { 'anthropic/alwaysLoad': true };
 }
 
-export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. To start on a task in unfamiliar code, explore gives the relevant code, its callers, the definitions it uses and its tests in one call. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). Answers state what the index cannot see.`;
+/** The tool as a read-only server lists it: `rename_symbol` still lists the edits there, and writes none. */
+export function readOnlyTool(t) {
+    if (!WRITING_TOOLS.has(t.name)) return t;
+    const { apply, ...properties } = t.inputSchema.properties;
+    return { ...t, description: t.description.replace(/ Lists the edits first; with `apply: true` it writes them, all or none\./, ' Lists the edits without writing them (this server is read-only).'),
+        inputSchema: { ...t.inputSchema, properties },
+        annotations: { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } };
+}
+
+export const READ_ONLY_INSTRUCTIONS = (s) => s.replace('rename_symbol lists the edits and, with apply, writes them', 'rename_symbol lists the edits (this server is read-only: it writes none)');
+
+export const SERVER_INSTRUCTIONS = `A live structural index of this repository (definitions, references bound through scopes, imports and receiver types, call graph, tests), re-synced before every answer. To start on a task in unfamiliar code, explore gives the relevant code, its callers, the definitions it uses and its tests in one call. Keep reading and searching text with your own tools; use this for what text search cannot answer exactly: the uses of a symbol that other code shares a name with (find_references), callers of callers (call_graph), what a signature change reaches (change_impact) and what your edit broke (check_changes). To rename a definition with its uses, imports and overrides in one step, rename_symbol lists the edits and, with apply, writes them. Answers state what the index cannot see.`;
 
 // ── handlers ─────────────────────────────────────────────────────────────────────
 
@@ -294,9 +329,12 @@ function refSummary(intel, id) {
  * Hints inside tool output name the next tool to call; through the CLI they must name the
  * equivalent command instead (`symbol <target>`, not `get_symbol(…)`).
  */
-const CLI_NAMES = { explore: 'explore', search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
-let surface = 'mcp';
-const tn = (name) => (surface === 'cli' ? `\`${CLI_NAMES[name]}\`` : name);
+const CLI_NAMES = { rename_symbol: 'rename', explore: 'explore', search_code: 'search', search_text: 'grep', get_symbol: 'symbol', read_code: 'read', find_references: 'refs', call_graph: 'callgraph', change_impact: 'impact', check_changes: 'check', outline: 'outline', find_files: 'files' };
+// per call, not module state: a CLI query through the resident can run while an MCP call waits
+const callContext = new AsyncLocalStorage();
+const viaCli = () => callContext.getStore()?.cli === true;
+const writes = () => callContext.getStore()?.writes ?? true; // false for the tools of a server started read-only
+const tn = (name) => (viaCli() ? `\`${CLI_NAMES[name]}\`` : name);
 
 /**
  * Agents often pass absolute paths (`/work/repo/src`, `./src/`): path arguments are relative to
@@ -318,9 +356,8 @@ function relativePaths(intel, args) {
     return out;
 }
 
-export async function callTool(intel, name, args = {}, { cli = false } = {}) {
-    surface = cli ? 'cli' : 'mcp';
-    try { return await dispatchTool(intel, name, relativePaths(intel, args ?? {})); } finally { surface = 'mcp'; }
+export async function callTool(intel, name, args = {}, { cli = false, readOnly = false } = {}) {
+    return callContext.run({ cli, writes: !readOnly }, () => dispatchTool(intel, name, relativePaths(intel, args ?? {})));
 }
 
 async function dispatchTool(intel, name, args) {
@@ -335,6 +372,7 @@ async function dispatchTool(intel, name, args) {
         case 'change_impact': return toolImpact(intel, args);
         case 'outline': return toolOutline(intel, args);
         case 'check_changes': return toolCheck(intel, args);
+        case 'rename_symbol': return toolRename(intel, args);
         case 'find_files': return toolFiles(intel, args); // CLI helper (`files`): MCP hosts have their own file finder
         case 'demo': return showcaseText(intel);
         case 'inject': return toolInject(intel, args); // CLI helper (`inject`): dependency-injection tokens, their providers and where they are injected
@@ -383,7 +421,7 @@ async function toolSearch(intel, { query, queries = null, path: p = null, kind =
             for (const ln of matchingLines(lines, s, terms, 2)) out.push(`   ${ln}: ${clip(lines[ln - 1].trim(), 150)}`);
         }
     });
-    out.push(surface === 'cli' ? 'Next: `read <name | path:START-END>…` to read them (several at once); `refs` / `callgraph` for usages.' : 'Next: read_code with the names you want (several at once); find_references / call_graph for usages.');
+    out.push(viaCli() ? 'Next: `read <name | path:START-END>…` to read them (several at once); `refs` / `callgraph` for usages.' : 'Next: read_code with the names you want (several at once); find_references / call_graph for usages.');
     return out.join('\n');
 }
 
@@ -507,7 +545,7 @@ async function readFile(intel, rel, { full, seen }) {
     if (!lines) return `Cannot read ${rel}.`;
     const n = lines.length && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
     if (!full && indexed && n > READ_WHOLE_MAX) {
-        return fileOutline(intel, rel, 1500) + `\n(${n} lines, so this is the outline. Read the parts you need by range or name — ${surface === 'cli' ? `\`read ${rel}:START-END Name …\`` : 'read_code with several targets'} — or the whole file with ${surface === 'cli' ? '`--full`' : 'full: true'}.)`;
+        return fileOutline(intel, rel, 1500) + `\n(${n} lines, so this is the outline. Read the parts you need by range or name — ${viaCli() ? `\`read ${rel}:START-END Name …\`` : 'read_code with several targets'} — or the whole file with ${viaCli() ? '`--full`' : 'full: true'}.)`;
     }
     const cap = full ? 2000 : READ_WHOLE_MAX;
     const out = [`${rel} — ${plural(n, 'line')}`, codeBlock(lines, 1, n, { maxLines: cap })];
@@ -1036,7 +1074,55 @@ async function toolImpact(intel, { symbols = [], files = [], diff = false, depth
 }
 
 async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName = false }) {
-    const r = await checkChanges(intel, { base, files: files?.length ? files : null, byName });
+    return formatCheck(await checkChanges(intel, { base, files: files?.length ? files : null, byName }), { base, files });
+}
+
+async function toolRename(intel, { symbol, new_name: newName, apply = false, min_confidence: min = 'exact' }) {
+    if (!symbol || !newName) return 'rename_symbol needs `symbol` and `new_name`.';
+    // a server started read-only lists the edits whatever it is asked; and only `true` asks for them
+    // to be written (the string "false" a careless client sends is not a yes)
+    const r = await renameSymbol(intel, { symbol: String(symbol), newName: String(newName), apply: apply === true && writes(), minConf: min === 'high' ? 0.7 : 0.9 });
+    if (r.error) return r.error;
+    const out = [];
+    const what = `${r.sym.qname} → ${r.newName}`;
+    const taken = r.conflicts.filter(c => !c.why), reasons = r.conflicts.filter(c => c.why);
+    const needed = `${plural(r.edits.length, 'edit')} in ${plural(r.files, 'file')} would be needed:`;
+    const quote = (x) => (/^[\w.:/@-]+$/.test(x) ? x : `'${x.replace(/'/g, `'\\''`)}'`);
+    const command = `\`graph-indexer rename ${quote(String(symbol))} ${quote(r.newName)} --write\``;
+    const toWrite = !writes() ? (viaCli() ? 'the MCP server that answers for this repository was started read-only, so nothing was written; stop it, or run this with GRAPH_INDEXER_RESIDENT=0 to write from this process' : `this server is read-only${apply ? ', so nothing was written' : ''}`)
+        : viaCli() ? `${command} writes them`
+            : 'call rename_symbol again with apply: true to write them';
+    if (r.conflicts.length) out.push(`Not renamed: ${[taken.length ? `${r.newName} is already taken where ${r.sym.qname} lives or is used (${taken.slice(0, 4).map(c => `${c.qname}, ${c.path}:${c.line}`).join('; ')})` : '', ...reasons.slice(0, 4).map(c => c.why)].filter(Boolean).join('; ')}. ${needed}`);
+    else if (r.notWritten) out.push(`Not written: ${r.notWritten}. Nothing was changed; ${needed}`);
+    else out.push(r.applied ? `Renamed ${what}: ${plural(r.edits.length, 'edit')} written in ${plural(r.written, 'file')}.` : `Rename ${what}: ${plural(r.edits.length, 'edit')} in ${plural(r.files, 'file')}, not written (${toWrite}).`);
+    const together = r.family.filter(f => f.how !== 'the definition');
+    if (together.length) out.push(`renamed with it, so overrides keep matching: ${together.slice(0, 8).map(f => `${f.qname} (${f.path}:${f.line}, ${f.how})`).join(', ')}${together.length > 8 ? `, … ${together.length - 8} more` : ''}`);
+    const byFile = new Map();
+    for (const e of r.edits) (byFile.get(e.path) ?? byFile.set(e.path, []).get(e.path)).push(e);
+    let shown = 0;
+    for (const [p, es] of byFile) {
+        if (shown >= 40) { out.push(`… ${r.edits.length - shown} more edits in ${byFile.size - [...byFile.keys()].indexOf(p)} more files`); break; }
+        out.push(`${p} (${es.length})`);
+        for (const e of es.slice(0, 6)) { out.push(`  ${e.line}  ${e.what}  │ ${clip(e.after, 110)}`); shown++; }
+        if (es.length > 6) { out.push(`  … ${es.length - 6} more on lines ${es.slice(6, 14).map(e => e.line).join(', ')}${es.length > 14 ? ', …' : ''}`); shown += es.length - 6; }
+    }
+    const left = [];
+    for (const s of r.skipped.slice(0, 10)) left.push(`  ${s.path}:${s.line}  ${s.why}`);
+    if (r.skipped.length > 10) left.push(`  … ${r.skipped.length - 10} more references bound less surely`);
+    if (r.unbound.plausible.length) left.push(`  ${plural(r.unbound.plausible.length, 'call')} of that name on a receiver whose type the index does not know, in files that use ${r.unbound.typeNames.slice(0, 3).join(', ') || 'its module'}: ${r.unbound.plausible.slice(0, 8).map(u => `${u.path}:${u.line}`).join(', ')}${r.unbound.plausible.length > 8 ? ', …' : ''}`);
+    for (const s of r.strings.slice(0, 6)) left.push(`  ${s.path}:${s.line}  names it in a string  │ ${clip(s.text, 100)}`);
+    for (const u of r.unreadable.slice(0, 6)) left.push(`  ${u.path}:${u.line}  the name occurs in code the parser could not read`);
+    for (const m of r.mentions.slice(0, 12)) left.push(`  ${m.path}:${m.line}  the name, where the index binds nothing (a value, a namespace or method reference?)  │ ${clip(m.text, 100)}`);
+    if (r.mentions.length > 12) left.push(`  … ${r.mentions.length - 12} more such mentions`);
+    if (r.mentionsCut) left.push(`  the name was looked for in the first 400 of the ${r.mentionsCut} files that use the definition, not the rest`);
+    if (left.length) out.push(`not edited — check these by hand:`, ...left);
+    else out.push('Every use of the name the index or the text shows in the files that use it was bound and is in the edits.');
+    if (r.applied) out.push(`Next: ${tn('check_changes')} verifies the result.`);
+    return out.join('\n');
+}
+
+/** The reply of `check_changes` for a report of query/check.mjs (also what bench/eval-check.mjs measures). */
+export function formatCheck(r, { base = 'HEAD', files = null } = {}) {
     if (r.error) return r.error;
     if (!r.files) return `No changed source files against ${base}${files?.length ? ` under ${files.join(', ')}` : ''}.`;
     const out = [`Checked ${plural(r.files, 'changed file')} against ${base}.`];
@@ -1050,9 +1136,17 @@ async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName =
         problems += a.sites.length;
         out.push(a.newCall
             ? `✗ call does not fit ${a.target} (${a.path}; takes ${a.is} argument${a.is === '1' ? '' : 's'}):`
-            : `✗ ${a.sites.length} of ${a.total} call site${a.total === 1 ? '' : 's'} no longer fit${a.sites.length === 1 ? 's' : ''} ${a.target} (${a.path}; now takes ${a.is}, was ${a.was}):`);
-        for (const x of a.sites.slice(0, 10)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  passes ${x.argc.n}${x.argc.open ? '+' : ''}  │ ${clip(x.text ?? '', 110)}`);
+            : a.keyword
+                ? `✗ ${a.sites.length} of ${a.total} call site${a.total === 1 ? '' : 's'} pass${a.sites.length === 1 ? 'es' : ''} a keyword ${a.target} (${a.path}) no longer takes:`
+                : `✗ ${a.sites.length} of ${a.total} call site${a.total === 1 ? '' : 's'} no longer fit${a.sites.length === 1 ? 's' : ''} ${a.target} (${a.path}; now takes ${a.is}, was ${a.was}):`);
+        for (const x of a.sites.slice(0, 10)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  passes ${x.keyword ? `${x.keyword}=` : `${x.argc.n}${x.argc.open ? '+' : ''}`}  │ ${clip(x.text ?? '', 110)}`);
         if (a.sites.length > 10) out.push(`    … ${a.sites.length - 10} more`);
+    }
+    for (const m of r.imports ?? []) {
+        problems += m.total;
+        out.push(`✗ ${m.path} was ${m.movedTo ? `moved to ${m.movedTo}` : 'deleted'} but is still imported by its old path (${m.total}):`);
+        for (const x of m.sites) out.push(`    ${x.path}:${x.line}  │ ${clip(x.text || x.source, 110)}`);
+        if (m.total > m.sites.length) out.push(`    … ${m.total - m.sites.length} more`);
     }
     for (const m of r.removed) {
         problems += m.total + m.imports.length;
@@ -1061,10 +1155,28 @@ async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName =
         if (m.total > m.uses.length) out.push(`    … ${m.total - m.uses.length} more`);
         for (const i of m.imports.slice(0, 6)) out.push(`    imported at ${i.path}:${i.line}`);
     }
+    for (const m of (r.maybeRemoved ?? []).slice(0, 4)) {
+        out.push(`• ${m.qname} (${m.path}) was removed or renamed; ${plural(m.total, 'call')} of that name on a receiver whose type the index does not know may be to it:`);
+        for (const u of m.uses.slice(0, 6)) out.push(`    ${u.path}:${u.line}${u.src_qname ? `  in ${u.src_qname}` : ''}${u.recv ? `  (${u.recv}.${m.qname.split('.').pop()})` : ''}`);
+        if (m.total > 6) out.push(`    … ${m.total - 6} more`);
+    }
+    for (const u of r.loose ?? []) {
+        out.push(`• ${u.target} (${u.path}) now declares ${u.is} parameter${u.is === '1' ? '' : 's'} (was ${u.was}); ${plural(u.sites.length, 'call site')} of ${u.total} pass${u.sites.length === 1 ? 'es' : ''} another count — legal in JavaScript (missing ones are undefined), so check they mean it:`);
+        for (const x of u.sites.slice(0, 4)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  passes ${x.argc.n}${x.argc.open ? '+' : ''}  │ ${clip(x.text ?? '', 110)}`);
+        if (u.sites.length > 4) out.push(`    … ${u.sites.length - 4} more`);
+    }
     for (const u of r.untouched) {
         out.push(`• ${u.target} changed signature (${u.was} → ${u.is} arguments); ${plural(u.sites.length, 'call site')} in files you did not modify still fit — review them if the meaning changed:`);
         for (const x of u.sites.slice(0, 8)) out.push(`    ${x.path}:${x.line}${x.src_qname ? `  in ${x.src_qname}` : ''}  │ ${clip(x.text ?? '', 110)}`);
         if (u.sites.length > 8) out.push(`    … ${u.sites.length - 8} more`);
+    }
+    // one line each: the agent wrote the change and knows what it was; what it may not know is who calls it
+    for (const u of (r.changed ?? []).slice(0, 4)) {
+        out.push(`• ${u.target} changed its signature, not its argument count; ${plural(u.total, 'call site')} in files you did not modify (review if a parameter or the result means something else now): ${u.sites.map(x => `${x.path}:${x.line}`).join(', ')}${u.total > u.sites.length ? ', …' : ''}`);
+    }
+    if ((r.changed ?? []).length > 4) out.push(`• so did ${r.changed.length - 4} more with callers in files you did not modify: ${r.changed.slice(4, 12).map(u => u.target).join(', ')}${r.changed.length > 12 ? ', …' : ''}`);
+    for (const f of (r.family ?? []).slice(0, 8)) {
+        out.push(`• ${f.target} ${f.change === 'removed' ? 'was removed or renamed' : 'changed its signature'}; the same method is still declared as it was in ${f.sites.length === 1 ? 'a file' : 'files'} you did not modify: ${f.sites.slice(0, 6).map(x => `${x.qname} (${x.path}:${x.line}, ${x.how})`).join(', ')}${f.sites.length > 6 ? `, … ${f.sites.length - 6} more` : ''}`);
     }
     for (const h of r.inherited ?? []) {
         const members = h.members.join(', ');
@@ -1085,6 +1197,7 @@ async function toolCheck(intel, { files = null, base = 'HEAD', by_name: byName =
         out.push(`test files that name a changed module in a string (they may reach it by a lookup the index does not see; run them for more certainty) (${r.byName.length}): ${r.byName.slice(0, 12).join(', ')}${r.byName.length > 12 ? ', …' : ''}`);
         for (const c of r.byNameCommands) out.push(`    run: ${clip(c, 400)}`);
     }
+    for (const n of r.notes ?? []) out.push(`not checked: ${n}`);
     out.push(problems ? `${plural(problems, 'problem')} found.` : 'No problems found in the changed code (this check does not replace running the tests).');
     return out.join('\n');
 }
@@ -1296,8 +1409,8 @@ async function toolExplore(intel, { query = '', queries = null, symbols = [], pa
     });
     if (tail.length) out.push('', ...tail);
     out.push(cut.length
-        ? `Left out to fit the budget: ${cut.join(', ')} — ${surface === 'cli' ? `\`read ${cut.slice(0, 3).join(' ')}\`` : `read_code with ${cut.length === 1 ? 'it' : 'them'}`}, or raise max_tokens.`
-        : `Next: ${surface === 'cli' ? '`read <name>…`' : 'read_code'} for the names above; ${tn('change_impact')} before changing a signature others rely on.`);
+        ? `Left out to fit the budget: ${cut.join(', ')} — ${viaCli() ? `\`read ${cut.slice(0, 3).join(' ')}\`` : `read_code with ${cut.length === 1 ? 'it' : 'them'}`}, or raise max_tokens.`
+        : `Next: ${viaCli() ? '`read <name>…`' : 'read_code'} for the names above; ${tn('change_impact')} before changing a signature others rely on.`);
     return out.join('\n');
 }
 

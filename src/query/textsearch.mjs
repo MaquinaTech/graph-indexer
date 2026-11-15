@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { withinRoot } from '../util/paths.mjs';
-import { gitSync } from '../util/git.mjs';
+import { gitListFiles, ownDirectories, underSkippedDir } from '../index/discover.mjs';
 
 const MAX_FILE_BYTES = 1_500_000;
 // a caller's pattern gets this much matching time per search (reading files does not count): one
@@ -23,13 +23,20 @@ const SCAN = new vm.Script(`(() => {
     return { lines, hits };
 })()`);
 const GLOB_FILTER = new vm.Script(`paths.filter(p => re.test(onName ? p.slice(p.lastIndexOf('/') + 1) : p))`);
-const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.graph-indexer|dist|build|out|target|coverage|__pycache__|\.venv|venv|\.next|\.nuxt|\.cache|vendor)\//;
+// text is searched more widely than code is indexed (configuration, scripts, documentation):
+// dependencies, caches and bundles are left out, and what a build writes — the directories of
+// these names that git tracks no source in (src/index/discover.mjs)
+const SKIP_DIRS = new Set(['node_modules', '.git', '.graph-indexer', 'dist', '__pycache__', '.venv', '.next', '.nuxt', '.cache', 'vendor']);
+const OUTPUT_DIRS = new Set(['build', 'out', 'target', 'coverage', 'venv']);
 const EXAMPLE_PATH = /(^|\/)(docs?_src|docs?|examples?|samples?|demos?|tutorials?|benchmarks?|playground)\//i;
 const COMMENT_LINE = /^\s*(\/\/|#(?![!\[])|\*|\/\*|<!--|--\s|;;|%)/;
 
 function listFiles(root) {
-    const r = gitSync(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { maxBuffer: 1 << 30 });
-    if (r.status === 0) return r.stdout.split('\0').filter(Boolean).filter(p => !SKIP_DIRS.test(p));
+    const listed = gitListFiles(root);
+    if (listed) {
+        const layout = ownDirectories(listed.tracked, OUTPUT_DIRS);
+        return listed.tracked.concat(listed.others).filter(p => !underSkippedDir(p, layout, SKIP_DIRS, OUTPUT_DIRS));
+    }
     const out = [];
     const stack = [''];
     while (stack.length) {
@@ -38,7 +45,7 @@ function listFiles(root) {
         try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { continue; }
         for (const e of entries) {
             const p = rel ? `${rel}/${e.name}` : e.name;
-            if (e.isDirectory()) { if (!e.name.startsWith('.') && !SKIP_DIRS.test(p + '/')) stack.push(p); } else if (e.isFile()) out.push(p);
+            if (e.isDirectory()) { if (!e.name.startsWith('.') && !SKIP_DIRS.has(e.name) && !OUTPUT_DIRS.has(e.name)) stack.push(p); } else if (e.isFile()) out.push(p);
         }
     }
     return out;

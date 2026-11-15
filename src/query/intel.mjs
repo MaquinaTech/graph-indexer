@@ -14,9 +14,9 @@ import { computeCentrality, loadGraph } from '../index/graph.mjs';
 import { confidenceLabel } from '../index/resolver.mjs';
 import { dataDir, withinRoot, isRevision, DATA_DIR_NAME } from '../util/paths.mjs';
 import { isConstructor } from '../parse/languages.mjs';
-import { sigArity } from '../parse/arity.mjs';
+import { sigArity, sigParamTypes, simpleParamType } from '../parse/arity.mjs';
 import { escapeRegExp } from '../util/regex.mjs';
-import { gitSync } from '../util/git.mjs';
+import { gitSync, diffHeaderPath } from '../util/git.mjs';
 
 const TYPE_KINDS = new Set(['class', 'interface', 'struct', 'enum', 'trait', 'type', 'object', 'module', 'impl']);
 const CALLABLE = new Set(['function', 'method', 'constructor', 'macro']);
@@ -65,10 +65,14 @@ export class CodeIntel {
         this.initialDone = false;
         this.progress = null;
         const p = this.ix.sync({ onProgress: (done, total) => { this.progress = { done, total }; onProgress?.(done, total); } })
-            .then((res) => { this.lastSyncStats = res; this.lastSweep = Date.now(); this.initialDone = true; this.progress = null; return res; })
+            .then((res) => { this.lastSyncStats = res; this.lastSweep = Date.now(); this.initialDone = true; this.progress = null; return res; },
+                // a failed first build (the store busy, the disk full) is not the end: the next answer sweeps again
+                (e) => { this.initialDone = true; this.lastSweep = 0; this.progress = null; throw e; })
             .finally(() => { if (this.indexing === p) this.indexing = null; });
         this.indexing = p;
         this.ready = p;
+        // in the background nothing awaits it but the calls: they go on (and retry the build), each not failing on the first one
+        if (background) { p.catch((e) => this.log(`initial indexing failed (retried at the next call): ${e.message}`)); this.ready = p.catch(() => null); }
         if (!background) await p;
         return background ? null : p;
     }
@@ -101,26 +105,35 @@ export class CodeIntel {
      */
     async ensureFresh() {
         if (!this.initialDone) return null; // initial build in progress: answer from the partial index
-        if (this.indexing) await this.indexing;
+        // an update another call started is waited for, and so is the one a third call starts
+        // meanwhile: an answer is never given from under an update in flight
+        while (this.indexing) { try { await this.indexing; } catch { /* reported to the call that started it */ } }
         const now = Date.now();
         const sweepDue = now - this.lastSweep > (this.watcherHealthy ? 30_000 : this.sweepIntervalMs);
         let res = null;
         if (sweepDue) {
+            const kept = [...this.dirty];
             this.dirty.clear();
-            this.indexing = this.ix.sync();
-            try { res = await this.indexing; } finally { this.indexing = null; }
-            this.lastSweep = Date.now();
+            const p = this.indexing = this.ix.sync();
+            try { res = await p; this.lastSweep = Date.now(); }
+            catch (e) { for (const d of kept) this.dirty.add(d); throw e; } // the sweep is due again at the next call
+            finally { if (this.indexing === p) this.indexing = null; }
         } else if (this.dirty.size) {
             const paths = [...this.dirty];
             this.dirty.clear();
-            this.indexing = this.ix.syncPaths(paths);
-            try { res = await this.indexing; } finally { this.indexing = null; }
+            const p = this.indexing = this.ix.syncPaths(paths);
+            try { res = await p; }
+            catch (e) { for (const d of paths) this.dirty.add(d); throw e; } // an update that failed has not looked at them
+            finally { if (this.indexing === p) this.indexing = null; }
+        } else if (this.ix.reloadIfForeign()) {
+            // another process (the edit hook's own index) wrote the store: nothing to parse here,
+            // but what is held in memory was read again
+            this._centrality = null;
         }
         if (res && (res.changed || res.added || res.removed)) this.lastSyncStats = { ...res, at: Date.now() };
         return res;
     }
 
-    /** Re-validate specific files right before rendering them (cheap stat). */
     async revalidate(paths) {
         const stale = this.ix.staleAmong(paths);
         if (stale.length) await this.ix.syncPaths(stale);
@@ -340,9 +353,21 @@ export class CodeIntel {
     /** Where overloads are methods of their own, an override has the parameters of what it overrides. */
     #sameArity(sym, otherId) {
         if (!this.ix.resolver.specs[sym.lang]?.distinctOverloads) return true;
-        const o = this.store.get('SELECT name, sig FROM symbols WHERE id = ?', otherId);
+        const o = this.store.get('SELECT name, sig, kind FROM symbols WHERE id = ?', otherId);
+        if (o && o.kind !== sym.kind) return false; // a field called like a method is not an override of it (`valueComparator`)
         const a = sigArity(sym.sig, sym.name), b = o ? sigArity(o.sig, o.name) : null;
-        return !a || !b || (a.min === b.min && a.max === b.max);
+        if (a && b && (a.min !== b.min || a.max !== b.max)) return false;
+        // … and, a type parameter aside (`K` may be any type), the same parameter types:
+        // `putAll(Map)` does not override `putAll(MultiValuedMap)`
+        const pa = sigParamTypes(sym.sig, sym.name), pb = o ? sigParamTypes(o.sig, o.name) : null;
+        if (pa && pb && pa.length === pb.length) {
+            const typeVar = (t) => !t || /^[A-Z]\w?(\[\])*$/.test(t);
+            for (let i = 0; i < pa.length; i++) {
+                const x = simpleParamType(pa[i].replace(/\.\.\.$/, '[]')), y = simpleParamType(pb[i].replace(/\.\.\.$/, '[]'));
+                if (x !== y && !typeVar(x) && !typeVar(y)) return false;
+            }
+        }
+        return true;
     }
 
     #membersNamed(typeId, name) {
@@ -380,6 +405,28 @@ export class CodeIntel {
         const r = this.ix.resolver;
         return this.store.all("SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.name = ? AND s.kind = 'method' AND f.lang = 'rust' AND s.bases LIKE ?", sym.name, `%"${trait.name}"%`)
             .filter(m => m.id !== sym.id && r.resolveTypeName(trait.name, m.file_id)?.id === trait.id).map(m => m.id);
+    }
+
+    /**
+     * The Rust methods that are one name with `sym` through a trait: for a trait's method, its `fn` in each
+     * `impl Trait for X`; for such an `fn`, the trait's method (and so its other impls). A rename changes them together.
+     */
+    traitFamily(sym) {
+        if (sym.lang !== 'rust' || sym.kind !== 'method') return [];
+        const ids = new Set(this.#traitImpls(sym));
+        let bases = [];
+        try { bases = JSON.parse(sym.bases ?? '[]'); } catch { /* no trait */ }
+        for (const b of Array.isArray(bases) ? bases : []) {
+            const trait = this.ix.resolver.resolveTypeName(String(b).replace(/<.*$/, '').split('::').pop(), sym.file_id);
+            if (trait?.id == null || this.sym(trait.id)?.kind !== 'trait') continue;
+            for (const m of this.store.all("SELECT id FROM symbols WHERE parent_id = ? AND name = ? AND kind = 'method'", trait.id, sym.name)) {
+                ids.add(m.id);
+                const ms = this.sym(m.id);
+                if (ms) for (const id of this.#traitImpls(ms)) ids.add(id);
+            }
+        }
+        ids.delete(sym.id);
+        return [...ids].map(id => this.sym(id)).filter(Boolean);
     }
 
     /** Is `memberId` one of the members `sym` overrides (declared in a supertype)? */
@@ -648,20 +695,20 @@ export class CodeIntel {
     /** Symbols overlapping the working-tree diff (git), as impact seeds. */
     diffSeeds(base = 'HEAD') {
         if (!isRevision(base)) return { error: `Not a git revision: ${base}`, seeds: [], files: [] };
-        const r = gitSync(this.root, ['diff', '-U0', '--no-color', base, '--'], { maxBuffer: 1 << 28 });
+        const r = gitSync(this.root, ['diff', '--relative', '-U0', '--no-color', base, '--'], { maxBuffer: 1 << 28 });
         if (r.status !== 0) return { error: (r.stderr || 'git diff failed').trim(), seeds: [], files: [] };
         const changes = new Map();
         let file = null;
         for (const line of r.stdout.split('\n')) {
-            if (line.startsWith('+++ ')) { file = line.slice(4).replace(/^b\//, ''); if (file === '/dev/null') file = null; continue; }
+            if (line.startsWith('+++ ')) { file = diffHeaderPath(line); continue; }
             const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
             if (h && file) {
                 const start = Number(h[1]), len = h[2] === undefined ? 1 : Number(h[2]);
                 (changes.get(file) ?? changes.set(file, []).get(file)).push([start, Math.max(start, start + len - 1)]);
             }
         }
-        const untracked = gitSync(this.root, ['ls-files', '--others', '--exclude-standard']);
-        for (const f of (untracked.stdout || '').split('\n').filter(Boolean)) if (!changes.has(f)) changes.set(f, [[1, 1e9]]);
+        const untracked = gitSync(this.root, ['ls-files', '-z', '--others', '--exclude-standard']);
+        for (const f of (untracked.stdout || '').split('\0').filter(Boolean)) if (!changes.has(f)) changes.set(f, [[1, 1e9]]);
         const seeds = new Set();
         for (const [f, ranges] of changes) {
             for (const [a, b] of ranges) {
@@ -677,7 +724,7 @@ export class CodeIntel {
     /** Files that historically change together with the given files (git log, bounded). */
     coChange(files, { commits = 400, limit = 8 } = {}) {
         if (!this._cochange || this._cochangeAt < Date.now() - 600_000) {
-            const r = gitSync(this.root, ['log', `-n${commits}`, '--name-only', '--pretty=format:%x00'], { maxBuffer: 1 << 28 });
+            const r = gitSync(this.root, ['log', `-n${commits}`, '--name-only', '--relative', '--pretty=format:%x00'], { maxBuffer: 1 << 28 });
             const counts = new Map(); const pair = new Map();
             if (r.status === 0) {
                 for (const block of r.stdout.split('\0')) {

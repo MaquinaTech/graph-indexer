@@ -1,6 +1,6 @@
 {
     "name": "graph-indexer",
-    "version": "3.1.1",
+    "version": "3.2.0",
     "description": "Live code graph and search for AI coding agents over MCP: tree-sitter (WASM) symbols, scope/import/type-aware references, call graphs, change impact and hybrid search — local, zero-dependency, no native builds.",
     "type": "module",
     "main": "src/query/intel.mjs",
@@ -29,12 +29,15 @@
         "bench": "node bench/eval-search.mjs",
         "bench:graph": "node bench/eval-graph.mjs",
         "bench:localize": "node bench/eval-localize.mjs",
+        "bench:incremental": "node bench/eval-incremental.mjs",
+        "bench:check": "node bench/eval-check.mjs",
+        "bench:rename": "node bench/eval-rename.mjs",
         "fixtures": "node bench/fixtures.mjs",
         "start": "node bin/graph-indexer.mjs serve",
         "index": "node bin/graph-indexer.mjs index"
     },
     "engines": {
-        "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
+        "node": "^22.23.5 || ^24.22.3 || >=26.13.1"
     },
     "repository": {
         "type": "git",

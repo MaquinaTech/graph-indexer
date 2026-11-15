@@ -133,30 +133,118 @@ function splitElem(part) {
     return { name: part, elem };
 }
 
+/**
+ * A lookup map that records what a resolution reads. While the table has a dependency set open
+ * (`table.deps`), every key looked up is noted under the map's kind; outside resolution it is a Map.
+ * What is recorded is the question asked ("the definitions named `get`"), so a later change to any
+ * definition of that name invalidates the answer whether or not one existed when it was asked.
+ */
+class TrackedMap extends Map {
+    constructor(table, kind) { super(); this.table = table; this.kind = kind; }
+    get(k) { const d = this.table.deps; if (d) d[this.kind].add(k); return super.get(k); }
+    has(k) { const d = this.table.deps; if (d) d[this.kind].add(k); return super.has(k); }
+}
+
+const NONE = Object.freeze([]);
+const NO_SET = new Set();
+const NO_MAP = new Map();
+
+/** What one file's references read while they were resolved, by kind of question. */
+export function newDeps() {
+    return { N: new Set(), Q: new Set(), O: new Set(), P: new Set(), I: new Set(), FT: new Set(), X: new Set(), L: new Set(), G: new Set(), B: new Set() };
+}
+
+/** 32-bit FNV-1a of a dependency key: equal keys hash equal, so a collision can only invalidate too much. */
+export function depHash(kind, key) {
+    let h = 0x811c9dc5;
+    const s = kind + '\u0000' + key;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return h >>> 0;
+}
+
 export class SymbolTable {
     constructor() {
+        this.deps = null;               // the dependency set being recorded (see TrackedMap), or null
+        this.pkgEpoch = 0;              // bumps when a package or directory gains its first file or loses its last
+        this.pkgDelta = new Map();      // per package or directory key, files gained first (+1) and lost last (−1) since the indexer cleared it
         this.syms = new Map();          // id -> sym
-        this.byName = new Map();        // name -> [id]
-        this.byQname = new Map();       // qname -> [id]
+        this.byName = new TrackedMap(this, 'N');   // name -> [id]
+        this.byQname = new TrackedMap(this, 'Q');  // qname -> [id]
         this.byParent = new Map();      // parentId -> Map(name -> [id])
-        this.byOwner = new Map();       // owner name -> [id] (members declared outside their type: Go/Rust/C++/JS prototype)
+        this.byOwner = new TrackedMap(this, 'O');  // owner name -> [id] (members declared outside their type: Go/Rust/C++/JS prototype)
         this.fileSyms = new Map();      // fileId -> [id]
+        this.fileNames = new Map();     // fileId -> Map(name -> [id]), in the file's order (see symsNamed)
         this.files = new Map();         // fileId -> { id, path, lang, package, dir, isTest }
-        this.fileByPath = new Map();
+        this.fileByPath = new TrackedMap(this, 'P');
         this.packageFiles = new Map();  // package -> [fileId]
         this.dirFiles = new Map();      // dir -> [fileId]
-        this.imports = new Map();       // fileId -> [imp]
+        this.imports = new TrackedMap(this, 'I');  // fileId -> [imp]
         this.importedBy = new Map();    // fileId -> Set(fileId)
-        this.fieldTypes = new Map();    // ownerQname -> Map(name -> type)
+        this.importTargets = new Map(); // fileId -> Set(fileId): the files its imports lead to, as last set
+        this.importDelta = new Set();   // files whose set of importers changed since the indexer cleared it
+        this.fieldTypes = new TrackedMap(this, 'FT'); // ownerQname -> Map(name -> type), merged over the files that declare fields of it
+        this.fieldRows = new Map();     // fileId -> [{ owner, name, type }]
+        this.fieldFiles = new Map();    // ownerQname -> Set(fileId)
+    }
+
+    /** Note a question the resolution asked that no tracked map sees (a scan filtered by name, the module map). */
+    note(kind, key) { if (this.deps) this.deps[kind].add(key); }
+
+    /**
+     * The definitions named `name` declared directly in another one. The question is recorded even
+     * when that one has no members yet: the first member a type gains has to reach who asked.
+     */
+    childrenNamed(parentId, name) {
+        if (this.deps) this.deps.N.add(name);
+        return Map.prototype.get.call(this.byParent.get(parentId) ?? NO_MAP, name) ?? NONE;
+    }
+
+    /** The definitions named `name` in one file, in the file's order. */
+    symsNamed(fileId, name) {
+        if (this.deps) this.deps.N.add(name);
+        return this.fileNames.get(fileId)?.get(name) ?? NONE;
+    }
+
+    /**
+     * Canonical order of definitions: by file path, then by position in the file's extraction. Every
+     * list of the table is kept in it, so "the first candidate" is the same in an index built from
+     * scratch and in one that re-indexed its files in any order.
+     */
+    cmp(a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : a.seq - b.seq; }
+
+    #insert(map, key, s) {
+        const list = map.get(key);
+        if (!list?.length) { map.set(key, [s.id]); return; }
+        let i = list.length;
+        if (this.cmp(this.syms.get(list[i - 1]), s) > 0) {
+            let lo = 0, hi = i - 1;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (this.cmp(this.syms.get(list[mid]), s) > 0) hi = mid; else lo = mid + 1; }
+            i = lo;
+        }
+        if (i === list.length) list.push(s.id); else list.splice(i, 0, s.id);
+    }
+
+    #insertFile(map, key, file) {
+        const list = map.get(key);
+        if (!list) { map.set(key, [file.id]); this.pkgEpoch++; this.#delta(map, key, 1); return; }
+        let i = list.length;
+        while (i > 0 && this.files.get(list[i - 1]).path > file.path) i--;
+        list.splice(i, 0, file.id);
+    }
+
+    #delta(map, key, d) {
+        const k = (map === this.packageFiles ? 'p\u0000' : 'd\u0000') + key;
+        this.pkgDelta.set(k, (this.pkgDelta.get(k) ?? 0) + d);
     }
 
     addFile(f) {
         const file = { ...f, dir: path.posix.dirname(f.path) };
         this.files.set(f.id, file);
         this.fileByPath.set(f.path, file);
-        if (f.package) push(this.packageFiles, f.package, f.id);
-        push(this.dirFiles, file.dir, f.id);
+        if (f.package) this.#insertFile(this.packageFiles, f.package, file);
+        this.#insertFile(this.dirFiles, file.dir, file);
         this.fileSyms.set(f.id, []);
+        this.fileNames.set(f.id, new Map());
     }
 
     removeFile(fileId) {
@@ -164,26 +252,46 @@ export class SymbolTable {
         if (!f) return;
         for (const id of this.fileSyms.get(fileId) ?? []) this.#removeSym(id);
         this.fileSyms.delete(fileId);
-        this.files.delete(fileId);
-        this.fileByPath.delete(f.path);
-        const rm = (map, key) => { const a = map.get(key); if (a) { const i = a.indexOf(fileId); if (i >= 0) a.splice(i, 1); } };
+        this.fileNames.delete(fileId);
+        const rm = (map, key) => { const a = map.get(key); if (a) { const i = a.indexOf(fileId); if (i >= 0) a.splice(i, 1); if (!a.length) { map.delete(key); this.pkgEpoch++; this.#delta(map, key, -1); } } };
         if (f.package) rm(this.packageFiles, f.package);
         rm(this.dirFiles, f.dir);
+        this.files.delete(fileId);
+        this.fileByPath.delete(f.path);
         this.setImports(fileId, []);
-        for (const [q, m] of this.fieldTypes) if (m.fileId === fileId) this.fieldTypes.delete(q);
+        this.setFieldTypes(fileId, []);
     }
 
     addSym(s) {
+        s.path ??= this.files.get(s.fileId)?.path ?? '';
+        s.seq ??= this.fileSyms.get(s.fileId)?.length ?? 0;
         this.syms.set(s.id, s);
-        push(this.byName, s.name, s.id);
-        push(this.byQname, s.qname, s.id);
+        this.#insert(this.byName, s.name, s);
+        this.#insert(this.byQname, s.qname, s);
         if (s.parentId != null) {
             let m = this.byParent.get(s.parentId);
-            if (!m) this.byParent.set(s.parentId, (m = new Map()));
-            push(m, s.name, s.id);
+            if (!m) this.byParent.set(s.parentId, (m = new TrackedMap(this, 'N')));
+            this.#insert(m, s.name, s);
         }
-        if (s.owner && (s.parentId == null || this.syms.get(s.parentId)?.name !== s.owner)) push(this.byOwner, s.owner, s.id);
+        if (s.owner && (s.parentId == null || this.syms.get(s.parentId)?.name !== s.owner)) this.#insert(this.byOwner, s.owner, s);
         push(this.fileSyms, s.fileId, s.id);
+        const names = this.fileNames.get(s.fileId);
+        if (names) push(names, s.name, s.id);
+    }
+
+    /**
+     * Take one definition out again. Only for a definition added to ask a hypothetical question
+     * ("what would bind to this name if it were still declared": see query/check.mjs); a file's own
+     * definitions leave with their file.
+     */
+    dropSym(id) {
+        const s = this.syms.get(id);
+        if (!s) return;
+        const rm = (list) => { if (list) { const i = list.indexOf(id); if (i >= 0) list.splice(i, 1); } return list; };
+        rm(this.fileSyms.get(s.fileId));
+        const names = this.fileNames.get(s.fileId);
+        if (names && !rm(names.get(s.name))?.length) names.delete(s.name);
+        this.#removeSym(id);
     }
 
     #removeSym(id) {
@@ -199,24 +307,48 @@ export class SymbolTable {
     }
 
     setImports(fileId, imps) {
-        for (const old of this.imports.get(fileId) ?? []) {
-            if (old.targetFileId != null) this.importedBy.get(old.targetFileId)?.delete(fileId);
+        // (the previous targets are kept apart: the import records are also updated in place)
+        const before = this.importTargets.get(fileId) ?? NO_SET;
+        const now = new Set();
+        for (const imp of imps) if (imp.targetFileId != null) now.add(imp.targetFileId);
+        for (const id of before) if (!now.has(id)) { this.importedBy.get(id)?.delete(fileId); this.importDelta.add(id); }
+        for (const id of now) {
+            if (before.has(id)) continue;
+            let s = this.importedBy.get(id);
+            if (!s) this.importedBy.set(id, (s = new Set()));
+            s.add(fileId);
+            this.importDelta.add(id);
         }
+        if (now.size) this.importTargets.set(fileId, now); else this.importTargets.delete(fileId);
         this.imports.set(fileId, imps);
-        for (const imp of imps) {
-            if (imp.targetFileId != null) {
-                let s = this.importedBy.get(imp.targetFileId);
-                if (!s) this.importedBy.set(imp.targetFileId, (s = new Set()));
-                s.add(fileId);
-            }
-        }
     }
 
+    /** The files that import `fileId`. The question is recorded: a first importer, or the loss of the last, changes answers elsewhere. */
+    importersOf(fileId) {
+        if (this.deps) this.deps.B.add(fileId);
+        return this.importedBy.get(fileId) ?? NO_SET;
+    }
+
+    /**
+     * The field types one file infers. An owner's fields can come from several files (a Go or Rust
+     * type's methods, a class reopened elsewhere): its map is merged over them in file order, the
+     * first type recorded for a name kept, whichever of those files was indexed last.
+     */
     setFieldTypes(fileId, rows) {
-        for (const r of rows) {
-            let m = this.fieldTypes.get(r.owner_qname ?? r.owner);
-            if (!m) { m = new Map(); m.fileId = fileId; this.fieldTypes.set(r.owner_qname ?? r.owner, m); }
-            if (!m.has(r.name)) m.set(r.name, r.type);
+        const norm = rows.map(r => ({ owner: r.owner_qname ?? r.owner, name: r.name, type: r.type }));
+        const owners = new Set(norm.map(r => r.owner));
+        for (const r of this.fieldRows.get(fileId) ?? []) owners.add(r.owner);
+        if (norm.length) this.fieldRows.set(fileId, norm); else this.fieldRows.delete(fileId);
+        for (const owner of owners) {
+            let files = this.fieldFiles.get(owner);
+            const has = norm.some(r => r.owner === owner);
+            if (has) { if (!files) this.fieldFiles.set(owner, (files = new Set())); files.add(fileId); }
+            else if (files) { files.delete(fileId); if (!files.size) { this.fieldFiles.delete(owner); files = null; } }
+            if (!files) { this.fieldTypes.delete(owner); continue; }
+            const m = new Map();
+            const ordered = [...files].map(id => this.files.get(id)).filter(Boolean).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+            for (const f of ordered) for (const r of this.fieldRows.get(f.id) ?? []) if (r.owner === owner && !m.has(r.name)) m.set(r.name, r.type);
+            Map.prototype.set.call(this.fieldTypes, owner, m);
         }
     }
 
@@ -236,7 +368,7 @@ export class Resolver {
         this.memo = new Map();
     }
 
-    resetMemo() { this.memo.clear(); }
+    resetMemo() { this.memo.clear(); this.pkgPrefixes = null; } // (the prefixes are keyed by an epoch that starts again with a new table)
 
     // ── type & member helpers ─────────────────────────────────────────────────────
 
@@ -279,7 +411,7 @@ export class Resolver {
         if (seen.has(key)) return [];
         seen.add(key);
         const out = [];
-        if (type.id != null) for (const id of this.t.byParent.get(type.id)?.get(name) ?? []) out.push(id);
+        if (type.id != null) for (const id of this.t.childrenNamed(type.id, name)) out.push(id);
         const ownSym = type.id != null ? this.t.sym(type.id) : null;
         for (const id of this.t.byOwner.get(type.name) ?? []) {
             const s = this.t.sym(id);
@@ -306,17 +438,27 @@ export class Resolver {
             }
             return out;
         }
+        // Java: a member found through one base may be overridden through another (`OrderedBidiMap extends BidiMap,
+        // OrderedMap`: `mapIterator()` is OrderedMap's, which overrides the one BidiMap inherits): the override is the member
+        let found = null;
         for (const base of typeSym?.bases ?? []) {
             const bt = this.resolveTypeName(base, typeSym.fileId);
             if (bt) {
                 const r = this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name, depth + 1, seen);
-                if (r.length) return r;
+                if (r.length && !this.specs[this.t.file(typeSym.fileId)?.lang]?.distinctOverloads) return r;
+                if (r.length) found = found ? (this.#overridesAll(r, found) ? r : found) : r;
             } else if (base !== type.name) {
                 const r = this.membersOf({ id: null, name: base, fileId: null }, name, depth + 1, seen);
                 if (r.length) return r;
             }
         }
-        return out;
+        return found ?? out;
+    }
+
+    /** Are all of `a` declared in subtypes of where each of `b` is declared (so `a` overrides `b`)? */
+    #overridesAll(a, b) {
+        const decl = (id) => this.t.sym(id)?.parentId;
+        return a.every(x => decl(x) != null && b.every(y => decl(y) != null && decl(x) !== decl(y) && this.mro(decl(x)).includes(decl(y))));
     }
 
     /**
@@ -329,6 +471,7 @@ export class Resolver {
         if (type.id == null || s.fileId === type.fileId) return true;
         const seen = this.resolveTypeName(type.name, s.fileId);
         if (seen) return seen.id === type.id;
+        this.t.note('G', 'modules');
         const pa = this.modules?.rustPackageOf?.(a.path), pb = this.modules?.rustPackageOf?.(b.path);
         return pa == null || pb == null || pa === pb;
     }
@@ -405,7 +548,7 @@ export class Resolver {
         let cur = this.resolveTypeName(head, fileId);
         if (!cur) return spec.isPrimitiveType?.(head) ? EXTERNAL : undefined;
         for (const seg of rest) {
-            const ids = (this.t.byParent.get(cur.id)?.get(seg) ?? []).map(id => this.t.sym(id)).filter(x => x && TYPE_KINDS.has(x.kind));
+            const ids = this.t.childrenNamed(cur.id, seg).map(id => this.t.sym(id)).filter(x => x && TYPE_KINDS.has(x.kind));
             if (!ids.length) return null;
             cur = ids[0];
         }
@@ -463,7 +606,14 @@ export class Resolver {
     resolveRecvType(desc, fileId, srcId) {
         if (!desc) return null;
         if (desc === '!') return EXTERNAL;
-        const k = 'r|' + fileId + '|' + desc;
+        // where overloads are told apart by the arguments of the reference being resolved, the answer
+        // for a `call:` receiver is that reference's: it is kept per argument shape, so that it does
+        // not depend on which reference of the file asked first
+        const shaped = this.argc != null && desc.includes('call:') && this.specs[this.t.file(fileId)?.lang]?.distinctOverloads;
+        // …and per enclosing definition: the head of a receiver is looked up from where the reference
+        // stands (a function declared inside another one shadows an imported one of its name), so
+        // the answer for one definition is not the answer for the next
+        const k = 'r|' + fileId + '|' + (srcId ?? '') + '|' + desc + (shaped ? '|' + this.argc + '|' + (this.argTypes ? this.argTypes.join(',') : '') : '');
         if (this.memo.has(k)) return this.memo.get(k);
         this.memo.set(k, null);
         const parts = desc.split('#').map(splitElem);
@@ -502,8 +652,12 @@ export class Resolver {
         }
         const spec = this.specs[this.t.file(fileId)?.lang];
         for (let i = 1; i < parts.length && cur && cur !== EXTERNAL; i++) {
-            const { name, elem } = parts[i];
+            let { name, elem } = parts[i];
             if (!name) { cur = elem ? this.#elementOf(cur, elem) : cur; continue; } // `T#[]`: an element of T itself
+            // `m()`: a step that is called (marked where the language tells a method from a field of
+            // the same name: see `memberRef` in extract.mjs); no parentheses, a member read
+            const called = name.endsWith('()');
+            if (called) name = name.slice(0, -2);
             // `~m`: member m of the type if it has one, else the same value (`x.clone()`, `opt.unwrap()`)
             if (name.startsWith('~')) {
                 const real = name.slice(1);
@@ -529,7 +683,14 @@ export class Resolver {
                     : spec?.mapValueMethods?.has(name) ? this.typeFromString(cur.mapOf + '[]', cur.fileId, elem) : EXTERNAL;
                 continue;
             }
-            const mem = this.membersOf(asType(cur), name);
+            let mem = this.membersOf(asType(cur), name);
+            // Rust: `x.m()` calls a method, never a field `m` (a builder's field and its setter share a name)
+            if (called && spec?.methodCallSteps) mem = mem.filter(id => CALLABLE_KINDS.has(this.t.sym(id)?.kind));
+            // Java: a field and a method may share a name; the step says which one it reads
+            else if (mem.length > 1 && spec?.distinctOverloads) {
+                const same = mem.filter(id => CALLABLE_KINDS.has(this.t.sym(id)?.kind) === called);
+                if (same.length) mem = same;
+            }
             if (!mem.length && cur.id != null && spec?.qualifiedTypes) {
                 // Go: an embedded field is named after its type (`m.MatchRegexp` in a struct embedding MatchRegexp)
                 const os = this.t.sym(cur.id);
@@ -595,9 +756,31 @@ export class Resolver {
 
     // ── import helpers ───────────────────────────────────────────────────────────
 
-    #importFor(fileId, local) {
-        for (const imp of this.t.imports.get(fileId) ?? []) if (imp.local === local) return imp;
+    #importFor(fileId, local, srcId) {
+        for (const imp of this.t.imports.get(fileId) ?? []) if (imp.local === local && this.#importVisible(fileId, imp, srcId)) return imp;
         return null;
+    }
+
+    /**
+     * Python: an import statement inside a function binds its names in that function only (a test
+     * that does `from blueprintapp import app` leaves the `app` fixture of the others alone).
+     * `srcId` is the definition that holds the use; without one every import is visible.
+     */
+    #importVisible(fileId, imp, srcId) {
+        if (srcId === undefined || imp.line == null || this.t.file(fileId)?.lang !== 'python') return true;
+        const k = 'iv|' + fileId + '|' + imp.line;
+        let scope = this.memo.get(k);
+        if (scope === undefined) {
+            scope = null;
+            for (const id of this.t.fileSyms.get(fileId) ?? []) {
+                const s = this.t.sym(id);
+                if (s && CALLABLE_KINDS.has(s.kind) && s.startLine < imp.line && imp.line <= s.endLine && (scope == null || s.startLine >= this.t.sym(scope).startLine)) scope = id;
+            }
+            this.memo.set(k, scope);
+        }
+        if (scope == null) return true;
+        for (let s = srcId != null ? this.t.sym(srcId) : null, g = 0; s && g < 32; s = s.parentId != null ? this.t.sym(s.parentId) : null, g++) if (s.id === scope) return true;
+        return false;
     }
 
     /**
@@ -628,9 +811,9 @@ export class Resolver {
         const out = [];
         // a Rust or Go method (declared in an `impl` block or with a receiver) is no item of its module
         const lang = this.t.file(targetFileId)?.lang, typedOwners = lang === 'rust' || lang === 'go';
-        for (const id of this.t.fileSyms.get(targetFileId) ?? []) {
+        for (const id of this.t.symsNamed(targetFileId, name)) {
             const s = this.t.sym(id);
-            if (s.name === name && s.parentId == null && !(typedOwners && s.owner && (MEMBER_KINDS.has(s.kind) || s.kind === 'type'))) out.push(id);
+            if (s.parentId == null && !(typedOwners && s.owner && (MEMBER_KINDS.has(s.kind) || s.kind === 'type'))) out.push(id);
         }
         if (out.length) return out;
         // in Python a later import rebinds the name (`from a import *` then `from b import *`)
@@ -648,12 +831,18 @@ export class Resolver {
     }
 
     /** The module a Python package or module file exposes as `seg`: a submodule file, or a module it imports. */
-    #submodule(fileId, seg) {
+    #submodule(fileId, seg, fromFileId, path) {
         const f = this.t.file(fileId);
         if (f?.path.endsWith('/__init__.py')) {
             const dir = f.path.slice(0, -'/__init__.py'.length);
             const sub = this.t.fileByPath.get(`${dir}/${seg}.py`) ?? this.t.fileByPath.get(`${dir}/${seg}/__init__.py`);
-            if (sub) return sub.id;
+            // `pkg.sub` is an attribute of the package once something has imported `pkg.sub`: the
+            // package itself (`from .sub import x`, `from . import sub`), the file that names it
+            // (`import pkg.sub`), or any other module (`requests.adapters` after `import requests`,
+            // because `requests.sessions` imports it: a type checker rejects that, Python runs it).
+            // A submodule nobody imports is an AttributeError.
+            if (sub && (fromFileId == null || this.t.importersOf(sub.id).size
+                || (this.t.imports.get(fromFileId) ?? []).some(i => i.imported === '*' && !i.wildcard && (i.local === path || i.local?.startsWith(path + '.'))))) return sub.id;
         }
         return this.#moduleFileOf(fileId, seg);
     }
@@ -677,10 +866,13 @@ export class Resolver {
 
     #symbolsInDir(dir, name, fileId) {
         const out = [];
+        // a file joining or leaving the directory changes the answer only through a definition of that
+        // name: that is the question recorded, also when the directory holds no file yet
+        this.t.note('N', name);
         for (const fid of this.t.dirFiles.get(dir) ?? []) {
-            for (const id of this.t.fileSyms.get(fid) ?? []) {
+            for (const id of this.t.symsNamed(fid, name)) {
                 const s = this.t.sym(id);
-                if (s.name === name && (s.parentId == null) && !(s.kind === 'method' && s.owner)) out.push(id);
+                if ((s.parentId == null) && !(s.kind === 'method' && s.owner)) out.push(id);
             }
         }
         return out;
@@ -694,23 +886,42 @@ export class Resolver {
     #importsLibraryType(file, imp) {
         if (!SINGLE_TYPE_IMPORTS.has(file.lang) || imp.wildcard || !imp.imported || imp.imported === '*' || !imp.source) return false;
         const segs = imp.source.split('.');
+        this.t.note('G', 'packages'); // the answer depends on which packages the repository has
         for (let n = segs.length; n > 0; n--) if (this.t.packageFiles.has(segs.slice(0, n).join('.'))) return false;
         // nor a package that encloses some of the repository's (`import org.acme.X` with `org.acme.core` here)
-        if (this.pkgPrefixes?.size !== this.t.packageFiles.size) {
+        if (this.pkgPrefixes?.epoch !== this.t.pkgEpoch) {
             const set = new Set();
             for (const p of this.t.packageFiles.keys()) { const s = p.split('.'); for (let n = 1; n < s.length; n++) set.add(s.slice(0, n).join('.')); }
-            this.pkgPrefixes = { size: this.t.packageFiles.size, set };
+            this.pkgPrefixes = { epoch: this.t.pkgEpoch, set };
         }
         return !this.pkgPrefixes.set.has(imp.source);
     }
 
+    /**
+     * `import static pkg.Type.name;` and `import static pkg.Type.*;` (JLS 7.5.3/7.5.4): the static
+     * members called `name` of the repository's type `pkg.Type`, inherited ones included. `source`
+     * is `pkg.Type`; an import of a plain type has a package there, which holds no such type.
+     */
+    #staticImported(source, name) {
+        const dot = source.lastIndexOf('.');
+        if (dot < 0) return [];
+        const out = [];
+        for (const tid of this.#symbolsInPackage(source.slice(0, dot), source.slice(dot + 1))) {
+            const ts = this.t.sym(tid);
+            if (!ts || !TYPE_KINDS.has(ts.kind)) continue;
+            for (const id of this.membersOf({ id: ts.id, name: ts.name, fileId: ts.fileId }, name)) {
+                const m = this.t.sym(id);
+                if (m && (m.isStatic || TYPE_KINDS.has(m.kind))) out.push(id);
+            }
+        }
+        return out;
+    }
+
     #symbolsInPackage(pkg, name) {
         const out = [];
+        this.t.note('N', name);
         for (const fid of this.t.packageFiles.get(pkg) ?? []) {
-            for (const id of this.t.fileSyms.get(fid) ?? []) {
-                const s = this.t.sym(id);
-                if (s.name === name && s.parentId == null) out.push(id);
-            }
+            for (const id of this.t.symsNamed(fid, name)) if (this.t.sym(id).parentId == null) out.push(id);
         }
         return out;
     }
@@ -725,6 +936,9 @@ export class Resolver {
     resolve(ref) {
         this.argc = ref.argc ?? null;
         try { this.argTypes = ref.arg_types ? JSON.parse(ref.arg_types) : (ref.argTypes ?? null); } catch { this.argTypes = null; }
+        // a Rust trait-path call (`Trait::m(x)`) carries the type the trait is implemented for, marked `=`, before its arguments
+        this.selfArg = null;
+        if (this.argTypes?.[0]?.startsWith?.('=')) { this.selfArg = this.argTypes[0].slice(1); this.argTypes = this.argTypes.slice(1); }
         const fileId = ref.file_id;
         const srcId = ref.src_id ?? null;
         const recv = ref.recv || '';
@@ -794,6 +1008,8 @@ export class Resolver {
         if (kind === 'new') return TYPE_KINDS.has(s.kind) || s.kind === 'function' || s.kind === 'constructor';
         if (kind === 'call') return CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind) || s.kind === 'variable' || s.kind === 'field' || s.kind === 'property' || s.kind === 'constant';
         if (kind === 'decorator') return CALLABLE_KINDS.has(s.kind) || TYPE_KINDS.has(s.kind) || s.kind === 'variable';
+        // a module's function named as a value (`requests.get` in a tuple, `runner.invoke(httpx.main)`) is Python's to read
+        if (kind === 'read' && s.kind === 'function' && this.specs[this.t.file(s.fileId)?.lang]?.functionReads) return true;
         if (kind === 'read') return s.kind === 'field' || s.kind === 'property' || s.kind === 'method' || s.kind === 'constant' || s.kind === 'variable' || TYPE_KINDS.has(s.kind);
         return true;
     }
@@ -812,8 +1028,11 @@ export class Resolver {
             const a = { n: Math.max(0, this.argc), open: this.argc < 0 };
             let fit = cands.filter(s => fits(a, sigArity(this.sigOf(s.id), s.name)));
             // an overload that takes the arguments as they are wins over a variadic one (javac's phases)
+            // … unless the last argument is itself an array (`checkNotNull(iterables)` with `Iterable<E>... iterables`):
+            // a variadic method takes it as it is, and it is the fixed one that cannot
             const fixed = fit.filter(s => sigArity(this.sigOf(s.id), s.name)?.max !== Infinity);
-            if (fixed.length && fixed.length < fit.length) fit = fixed;
+            const arrayLast = this.argTypes?.length === this.argc && this.argTypes[this.argc - 1]?.endsWith('[]');
+            if (fixed.length && fixed.length < fit.length && !arrayLast) fit = fixed;
             if (fit.length === 1) return { id: fit[0].id, conf, ncand: 1 };
             // several of that count: the one the arguments' types fit (`append('-')` is append(char))
             if (fit.length > 1 && this.argTypes) {
@@ -823,8 +1042,22 @@ export class Resolver {
             }
             if (fit.length > 1 && fit.length < cands.length) return this.#pick(fit.map(s => s.id), kind, conf, fileId);
         }
+        // Rust: `impl From<f32> for Value` and `impl From<f64> for Value` declare `from` twice with
+        // different parameters: the impl is selected by the trait's type argument, the type of the
+        // call's argument. Where the source shows the argument types and exactly one impl takes them,
+        // that one; otherwise the call stays unbound rather than reaching the first
+        if (sameQ && kind === 'call' && this.sigOf && cands.length > 1 && this.t.file(cands[0].fileId)?.lang === 'rust'
+            && cands[0].bases?.length && cands.every(s => s.bases?.[0] === cands[0].bases[0])
+            && new Set(cands.map(s => this.sigOf(s.id))).size > 1) {
+            const spec = this.specs.rust;
+            const at = this.argTypes && spec?.pickByArgs ? spec.pickByArgs(cands.map(s => this.sigOf(s.id)), cands[0].name, cands[0].qname.split('.').slice(-2, -1)[0] ?? null, this.argTypes) : -1;
+            if (at >= 0) return { id: cands[at].id, conf, ncand: 1 };
+            return { id: null, conf: 0, ncand: cands.length };
+        }
+        // the length of a candidate decides between otherwise equal ones: a body edit elsewhere can change this answer
+        for (const s of cands) this.t.note('L', s.name);
         const scored = cands.map(s => ({ s, score: this.#proximity(s, fileId) + (s.endLine - s.startLine) / 1e4 }));
-        scored.sort((a, b) => b.score - a.score || a.s.id - b.s.id);
+        scored.sort((a, b) => b.score - a.score || this.t.cmp(a.s, b.s));
         return { id: scored[0].s.id, conf: sameQ ? conf : conf * 0.75, ncand: cands.length };
     }
 
@@ -853,33 +1086,40 @@ export class Resolver {
         // 1. lexical scope: symbols nested in enclosing definitions (closures, inner functions)
         for (let s = srcId != null ? this.t.sym(srcId) : null, g = 0; s && g < 32; s = s.parentId != null ? this.t.sym(s.parentId) : null, g++) {
             // members of an object literal or a type literal are not names in scope
-            const ids = this.t.byParent.get(s.id)?.get(name)?.filter(id => !MEMBER_KINDS.has(this.t.sym(id)?.kind));
+            const ids = this.t.childrenNamed(s.id, name).filter(id => !MEMBER_KINDS.has(this.t.sym(id)?.kind));
             if (ids?.length && !MEMBER_HOLDERS.has(s.kind)) {
                 const r = this.#pick(ids, kind, 0.95, fileId);
                 if (r) return r;
             }
             // recursion; a method calls itself by a bare name only where members are in scope (implicit this)
-            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind) && (s.kind !== 'method' || spec?.implicitThis) && this.#reaches(s)) return { id: s.id, conf: 0.9, ncand: 1 };
+            // (where overloads are methods of their own and the type has others, the arguments pick one, below: `f(x)` in `f(T... xs)` may be `f(T x)`)
+            if (s.name === name && kind === 'call' && CALLABLE_KINDS.has(s.kind) && (s.kind !== 'method' || spec?.implicitThis) && this.#reaches(s)
+                && !(spec?.distinctOverloads && s.kind === 'method' && s.parentId != null && this.t.childrenNamed(s.parentId, name).length > 1)) return { id: s.id, conf: 0.9, ncand: 1 };
         }
         // 2. implicit this: members of the enclosing type (Java/Kotlin/C#/Scala/C++/Ruby)
         // (`new AVLNode<>(…)` inside AVLNode names the class, not one of its constructors)
         if (spec?.implicitThis && srcId != null && kind !== 'type' && kind !== 'inherit' && kind !== 'new') {
-            const type = this.enclosingType(srcId);
-            if (type) {
-                const r = this.#pick(this.#overloadsReached(type, this.membersOf(type, name), name), kind, 0.9, fileId);
+            let type = this.enclosingType(srcId);
+            // Java (JLS 6.4.1, 15.12.1): a name no member of the class nor of its supertypes has is looked up in the
+            // lexically enclosing class, and so on outwards (an inner class calls its outer class's method)
+            for (let depth = 0; type && depth < 8; depth++) {
+                const own = this.membersOf(type, name);
+                const r = this.#pick(this.#overloadsReached(type, own, name), kind, 0.9, fileId);
                 if (r) return r;
+                const outer = spec.nestedTypes && !own.length && type.id != null ? this.t.sym(type.id)?.parentId : null;
+                type = outer != null ? this.enclosingType(outer) : null;
             }
         }
         // 3. same file, top-level
         // a member declared outside its type's body (a Rust `impl` block, a Go receiver, a C++
         // `T::m`) is reached through a receiver or `self`, never by its bare name
-        const local = (this.t.fileSyms.get(fileId) ?? []).filter(id => { const s = this.t.sym(id); return s.name === name && this.#fileLevel(s); });
+        const local = this.t.symsNamed(fileId, name).filter(id => this.#fileLevel(this.t.sym(id)));
         if (local.length) {
             const r = this.#pick(local, kind, 0.9, fileId);
             if (r) return r;
         }
         // 4. explicit import binding
-        const imp = this.#importFor(fileId, name);
+        const imp = this.#importFor(fileId, name, srcId);
         if (imp) {
             const target = imp.imported && imp.imported !== '*' && imp.imported !== 'default' ? imp.imported : name;
             let ids = [];
@@ -888,13 +1128,14 @@ export class Resolver {
                     // a default import names the module's default export, whatever the importer calls it:
                     // a definition of that name in the module itself, else its default export; only then
                     // what the module imports under that name (it may import another `name` of its own)
-                    ids = (this.t.fileSyms.get(imp.targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.name === name && s.parentId == null; });
+                    ids = this.t.symsNamed(imp.targetFileId, name).filter(id => this.t.sym(id).parentId == null);
                     if (!ids.length) ids = this.#defaultExport(imp.targetFileId, name);
                     if (!ids.length) ids = this.exportedFrom(imp.targetFileId, target);
                 } else ids = this.exportedFrom(imp.targetFileId, target);
             }
             if (!ids.length && imp.targetDir) ids = this.#symbolsInDir(imp.targetDir, target, fileId);
             if (!ids.length && imp.source && PACKAGE_LANGS.has(file.lang)) ids = this.#symbolsInPackage(imp.source, target);
+            if (!ids.length && imp.source && SINGLE_TYPE_IMPORTS.has(file.lang) && kind !== 'type') ids = this.#staticImported(imp.source, target);
             if (ids.length) {
                 const r = this.#pick(ids, kind, 0.95, fileId);
                 if (r) return r;
@@ -920,6 +1161,7 @@ export class Resolver {
             if (w.targetFileId != null) ids = this.exportedFrom(w.targetFileId, name);
             else if (w.targetDir) ids = this.#symbolsInDir(w.targetDir, name, fileId);
             else if (w.source && PACKAGE_LANGS.has(file.lang)) ids = this.#symbolsInPackage(w.source, name);
+            if (!ids.length && w.source && SINGLE_TYPE_IMPORTS.has(file.lang) && kind !== 'type') ids = this.#staticImported(w.source, name);
             const r = ids.length ? this.#pick(ids, kind, 0.85, fileId) : null;
             if (r) return r;
         }
@@ -963,6 +1205,7 @@ export class Resolver {
 
     #defaultExport(targetFileId, localName) {
         // `export default class Foo` / `module.exports = Foo` → the file's main exported symbol
+        this.t.note('X', targetFileId);
         const ids = (this.t.fileSyms.get(targetFileId) ?? []).filter(id => { const s = this.t.sym(id); return s.parentId == null && s.exported; });
         const same = ids.filter(id => this.t.sym(id).name.toLowerCase() === localName.toLowerCase());
         if (same.length) return same;
@@ -1010,6 +1253,7 @@ export class Resolver {
 
     /** A JS/TS file that imports or exports something: its top-level names are its own. */
     #isModule(fileId) {
+        this.t.note('X', fileId);
         if ((this.t.imports.get(fileId) ?? []).length) return true;
         return (this.t.fileSyms.get(fileId) ?? []).some(id => { const s = this.t.sym(id); return s?.parentId == null && s?.exported; });
     }
@@ -1035,7 +1279,7 @@ export class Resolver {
             }
         }
         // a Rust trait-path call: `SerializeSeq::serialize_element(self, v)`, `Debug::fmt(n, f)`
-        if (file.lang === 'rust' && kind === 'call' && this.argTypes?.length === 1) {
+        if (file.lang === 'rust' && kind === 'call' && this.selfArg) {
             const r = this.#traitPathCall(name, recv, fileId);
             if (r) return r;
         }
@@ -1044,6 +1288,21 @@ export class Resolver {
             const r = this.#rustPath(name, kind, recv, fileId);
             if (r) return r;
         }
+        // `self.x = …` in a class that declares no `x`: a use only of a property a base class declares
+        // (the assignment runs its setter); a new attribute is no use of anything
+        if (recvType === '~base') {
+            const ts = srcId != null ? this.enclosingType(srcId) : null;
+            const cls = ts?.id != null ? this.t.sym(ts.id) : null;
+            const ids = [];
+            for (const b of cls?.bases ?? []) {
+                const bt = this.resolveTypeName(b, cls.fileId);
+                if (bt) ids.push(...this.membersOf({ id: bt.id, name: bt.name, fileId: bt.fileId }, name).filter(id => this.t.sym(id)?.kind === 'method'));
+            }
+            return this.#pick(ids, kind, 0.9, fileId) ?? { id: null, conf: 0, ncand: 0 };
+        }
+        // an untyped parameter's members: a guess by name only outside test code (where pytest fills it)
+        const paramRecv = recvType === '~param';
+        if (paramRecv) recvType = null;
         // inferred receiver type (locals, params, fields, factories; chains across files)
         if (recvType) {
             const type = this.resolveRecvType(recvType, fileId, srcId);
@@ -1055,7 +1314,7 @@ export class Resolver {
                 // interface / abstract receiver: the member may be declared only on implementations
                 return { id: null, conf: 0, ncand: 0 };
             }
-            if (this.#unknownDeclaredType(recvType)) {
+            if (this.#unknownDeclaredType(recvType, fileId)) {
                 // the receiver is declared as a type the index does not hold (a library type, or a
                 // declaration the parser could not read): another type's member of that name is not
                 // a guess, so the call stays unbound and is counted with the same-name candidates
@@ -1064,7 +1323,7 @@ export class Resolver {
             }
         }
         // receiver is an imported module / namespace / package alias
-        const imp = this.#importFor(fileId, root) ?? this.#importFor(fileId, recv);
+        const imp = this.#importFor(fileId, root, srcId) ?? this.#importFor(fileId, recv, srcId);
         if (imp) {
             const rest = recv === imp.local ? [] : recv.slice(imp.local.length + 1).split('.').filter(Boolean);
             let ids = [];
@@ -1097,7 +1356,8 @@ export class Resolver {
                 // `import flask; flask.json.dumps(…)`: the rest of the receiver names submodules
                 if (!ids.length && mod != null && rest.length) {
                     let cur = mod;
-                    for (const seg of rest) { cur = cur != null ? this.#submodule(cur, seg) : null; }
+                    let path = imp.local;
+                    for (const seg of rest) { path += '.' + seg; cur = cur != null ? this.#submodule(cur, seg, fileId, path) : null; }
                     if (cur != null) ids = this.exportedFrom(cur, name);
                 }
             }
@@ -1124,7 +1384,11 @@ export class Resolver {
                 const r = this.#pick(owned, kind, owned.some(id => this.t.sym(id).fileId === fileId) ? 0.8 : 0.6, fileId);
                 if (r) return r;
             } else {
-                const ids = this.#byStatic(this.membersOf({ id: typeSym.id, name: typeSym.name, fileId: typeSym.fileId }, name), true);
+                // an enum constant with a body (`InBody { boolean process(…) {…} }`) is a value of the enum: `InBody.process(…)`
+                // names the enum's member, the body being an anonymous class (JLS 8.9.1)
+                const enumOf = typeSym.kind === 'class' && typeSym.parentId != null ? this.t.sym(typeSym.parentId) : null;
+                const owner = enumOf?.kind === 'enum' && typeSym.bases?.[0] === enumOf.name ? enumOf : typeSym;
+                const ids = this.#byStatic(this.membersOf({ id: owner.id, name: owner.name, fileId: owner.fileId }, name), true);
                 const r = this.#pick(ids, kind, Math.min(0.9, r0.conf), fileId);
                 if (r) return r;
             }
@@ -1132,7 +1396,13 @@ export class Resolver {
         // unknown receiver: any member with that name (dynamic dispatch by name). Property reads are
         // too common to guess (`x.length`, `opts.name`), so they stay unbound without type evidence.
         if (kind === 'read') return { id: null, conf: 0, ncand: 0 };
-        return this.#anyMember(name, kind, fileId) ?? { id: null, conf: 0, ncand: 0 };
+        const guess = this.#anyMember(name, kind, fileId);
+        // Python: a test function's parameters are filled in by the test runner (a pytest fixture, a
+        // parametrized value) by their name; nothing in the repository's calls says what they are,
+        // so a member called on one is not given to the one class that happens to declare a member
+        // of that name. The call stays unbound, and counted among the ones an answer could not bind.
+        if (guess && this.specs[file.lang]?.noNameGuess && (!this.specs[file.lang].paramReceivers || (paramRecv && file.isTest))) return { id: null, conf: 0, ncand: guess.ncand };
+        return guess ?? { id: null, conf: 0, ncand: 0 };
     }
 
     /**
@@ -1161,7 +1431,7 @@ export class Resolver {
     #traitPathCall(name, recv, fileId) {
         const trait = recv.split('.').pop();
         if (!/^[A-Z]/.test(trait ?? '')) return null;
-        const self = this.typeFromString(this.argTypes[0], fileId);
+        const self = this.typeFromString(this.selfArg, fileId);
         if (!self || self === EXTERNAL || (self.id == null && !self.allOf)) return null;
         const ids = this.membersOf(self, name).filter(id => { const m = this.t.sym(id); return m && CALLABLE_KINDS.has(m.kind) && m.bases?.includes(trait); });
         return ids.length ? this.#pick(ids, 'call', 0.9, fileId) : null;
@@ -1176,6 +1446,7 @@ export class Resolver {
     #rustPath(name, kind, recv, fileId) {
         const segs = recv.split('.');
         const from = this.t.file(fileId)?.path;
+        this.t.note('G', 'modules'); // module paths are read from the file list and the manifests
         const isModule = (p, seg) => p && (seg === 'crate' || seg === 'self' || seg === 'super' || this.modules.rustCrates?.get(seg) === p || new RegExp(`(^|/)${seg}(\\.rs|/mod\\.rs)$`).test(p));
         let cur = null, rest = segs;
         if (segs[0] === 'crate' || segs[0] === 'self' || segs[0] === 'super' || this.modules.rustCrates?.has(segs[0])) {
@@ -1192,6 +1463,13 @@ export class Resolver {
                 // a child module of this one (`mod chan;` then `chan::channel()`)
                 target = this.modules.resolve('rust', from, `self::${segs[0]}`)?.file;
                 if (target === from) target = null;
+                // a module brought in by a glob (`use tokio_util::codec::*;` then `length_delimited::Builder::new()`)
+                if (!target) for (const w of this.t.imports.get(fileId) ?? []) {
+                    if (!w.wildcard || w.targetFileId == null) continue;
+                    const wp = this.t.file(w.targetFileId)?.path;
+                    const sub = wp && this.modules.resolve('rust', wp, `self::${segs[0]}`)?.file;
+                    if (sub && sub !== wp) { target = sub; break; }
+                }
             }
             else if (!isModule(target, mod)) return null;
             if (!target || !isModule(target, imp ? mod : segs[0])) return null;
@@ -1239,8 +1517,14 @@ export class Resolver {
      * `TName` are left out: they are usually type parameters (`T`, `K`, `TItem`), whose calls reach
      * the members of their bound.
      */
-    #unknownDeclaredType(desc) {
+    #unknownDeclaredType(desc, fileId) {
         if (!/^[A-Z][\w$]*$/.test(desc) || /^[A-Z][A-Z0-9]?$|^T[A-Z]\w*$/.test(desc) || TYPE_WRAPPERS.has(desc)) return false;
+        // Rust: a name a `use` brings in from a crate that is not in the repository (`use bytes::Buf;`) is
+        // that crate's, whatever the repository's own types are called
+        if (this.t.file(fileId)?.lang === 'rust') {
+            const imp = this.#importFor(fileId, desc);
+            if (imp && imp.targetFileId == null && imp.targetPath == null && !imp.wildcard) return true;
+        }
         // a descriptor may name a value rather than a type (Go `s := ByCid`, a package-level constant)
         return !(this.t.byName.get(desc) ?? []).some(id => { const k = this.t.sym(id)?.kind; return TYPE_KINDS.has(k) || VALUE_TYPED_KINDS.has(k); });
     }

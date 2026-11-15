@@ -9,7 +9,7 @@
 
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/v/graph-indexer?color=007acc&style=for-the-badge" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/graph-indexer"><img src="https://img.shields.io/npm/dt/graph-indexer?color=4caf50&style=for-the-badge" alt="NPM Downloads"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22.23.4%2B%20%7C%2024.22.1%2B%20%7C%2026.12.1%2B-brightgreen?style=for-the-badge&logo=nodedotjs" alt="Node.js 22.23.4+, 24.22.1+ or 26.12.1+"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22.23.5%2B%20%7C%2024.22.3%2B%20%7C%2026.13.1%2B-brightgreen?style=for-the-badge&logo=nodedotjs" alt="Node.js 22.23.5+, 24.22.3+ or 26.13.1+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT"></a>
 </div>
 
@@ -29,7 +29,9 @@ instead of reading whole files and grepping.
   method named `get`. Measured against the TypeScript compiler it finds 89% of the real
   references at 98% precision; grep finds all of them buried among seven times as many false hits.
 - **Answers are never stale.** The index re-syncs with the files on disk before every answer,
-  including edits the agent made a second ago, so line numbers and call graphs are current.
+  including edits the agent made a second ago, so line numbers and call graphs are current. An
+  index that was updated holds the facts of one built from scratch: replaying 870 real commits of
+  nine repositories through the update path, file by file in either order, leaves no difference.
 - **Answers are small.** A tool reply is typically 400–1,500 tokens: the right function with
   line numbers, not a 2,000-line file.
 - **Nothing to set up.** Zero dependencies, no native builds, no model downloads, no network,
@@ -40,8 +42,8 @@ instead of reading whole files and grepping.
 
 ## Quick start
 
-Requires **Node.js 22.23.4+, 24.22.1+ or 26.12.1+** (the built-in `node:sqlite`, and the October 2026
-Node.js security releases, which fix CVE-2026-111497).
+Requires **Node.js 22.23.5+, 24.22.3+ or 26.13.1+** (the built-in `node:sqlite`, and the November 2026
+Node.js security releases, which fix CVE-2026-123864 and others).
 
 ```bash
 cd your-repo
@@ -116,11 +118,13 @@ that one definition (`npx graph-indexer demo` shows it again).
 | `find_references` | see every use before renaming or changing a signature | uses grouped by file, enclosing function, confidence, calls through base types marked |
 | `call_graph` | trace callers and callees across files | a tree with locations and confidence |
 | `change_impact` | get the blast radius of a change, or of your uncommitted diff | transitive dependents by distance, tests to run, co-changed files, risk |
-| `check_changes` | verify uncommitted edits without building | syntax errors introduced, calls that no longer fit, removed names still in use, the tests to run |
+| `check_changes` | verify uncommitted edits without building | syntax errors introduced, calls that no longer fit, removed or renamed names still in use (types, constants and attributes as well as calls), the same method still declared in a supertype or subtype, the tests to run |
 | `outline` | see a file's structure, or a ranked map of a directory or the repo | signatures and line ranges within a token budget |
+| `rename_symbol` | rename a function, method, class or field everywhere it is used, in one step | the edits by file (definition, uses, imports and exports, overrides that must keep matching), written all or none with `apply: true`; what it could not bind for sure, listed and left alone |
 
-All tools are read-only. Replies are plain text, capped, best result first, and end with a hint
-for the next step. Example, on [gin](https://github.com/gin-gonic/gin):
+Every tool is read-only except `rename_symbol`, which lists its edits and writes them only when
+called with `apply: true` (`graph-indexer serve --read-only` turns that off). Replies are plain
+text, capped, best result first, and end with a hint for the next step. Example, on [gin](https://github.com/gin-gonic/gin):
 
 ```text
 > search_code("where are trusted proxies checked")
@@ -181,10 +185,12 @@ own `findReferences` (import lines and declarations excluded):
 do not. Against the compiler's full rename set (sibling overrides included) recall is 0.925. The
 fixture has no `node_modules`, so library-typed values are invisible to the compiler: precision is
 a lower bound.* The same measurement against the Go type checker (gin, caddy, nats-server) gives
-precision 0.992–1.000 and recall 0.972–0.981, against the Java compiler (spring-petclinic,
-jsoup, Commons Collections) 0.961–0.994 and 0.883–0.989, against pyright (six Python
-repositories) 0.895–0.998 and 0.927–0.998, and against rust-analyzer (serde_json, ripgrep, tokio)
-0.968–0.990 and 0.799–0.942; grep's precision there is 0.01–0.61.
+precision 0.992–1.000 and recall 0.978–0.983, against the Java compiler (spring-petclinic,
+jsoup, Commons Collections) 0.991–1.000 and 0.904–0.995, against pyright (six Python
+repositories) 0.954–0.999 and 0.970–0.998, and against rust-analyzer (serde_json, ripgrep, tokio)
+0.990–0.993 and 0.906–0.948; grep's precision there is 0.01–0.61. On three repositories nobody
+had looked at while this was built (gson, urllib3, arrayvec) precision is 0.964–0.991 and recall
+0.759–0.987.
 In the server of Twenty, an open-source CRM monorepo (28,512 files), precision is 0.999 and
 recall 0.924; grep's precision is 0.009 and 2.x's 0.052.
 
@@ -241,7 +247,16 @@ questions against 13 without it, at 0.87 of the cost, and did the refactors at 0
 and half the time. With the usual model every run with graph-indexer solved its task. Details in
 [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
-**Speed.** A full index of nestjs (1,641 files, 96k lines) takes 3.7 s; afterwards only changed
+**After an edit.** `check_changes` is measured on real commits applied in part — the definition
+changed, its users elsewhere not yet. On 120 held-out commits of ten repositories, with 288
+files a developer had to follow a change into, it points into 62% of them, and reports the
+developer's finished change as broken in 2 commits (3.1.0: 55% and 18). The rename behind
+`rename_symbol` and `graph-indexer rename`, run alone on the 17 rename tasks of the agent
+benchmark and graded by the TypeScript compiler and the Go type checker, solved 15 at the first
+run and all 17 after one fix to the Go engine
+([docs/BENCHMARKS.md](docs/BENCHMARKS.md#check-on-changes-left-half-done)).
+
+**Speed.** A full index of nestjs (1,703 files, 102k lines) takes 1.7 s; afterwards only changed
 files are re-parsed. Warm tool calls take 1–4 ms for the graph tools, about 30 ms for search and
 18 ms for a repository outline.
 
@@ -311,6 +326,7 @@ graph-indexer symbol <name> [--no-code]
 graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--no-tests]
 graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N]
 graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
+graph-indexer rename <symbol> <new-name> [--write] [--min-confidence exact|high]
 graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
 ```
 

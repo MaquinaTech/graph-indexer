@@ -25,7 +25,7 @@ tool reply.
 | `src/parse/runtime.mjs` | loads the vendored web-tree-sitter runtime and gzipped grammar WASM |
 | `src/parse/languages.mjs`, `src/parse/lang/*.mjs` | one spec per language: a tree-sitter query plus small hooks |
 | `src/parse/extract.mjs` | language-agnostic extraction and intra-file type inference |
-| `src/index/discover.mjs` | which files to index (git, `.gitignore`, generated/minified/huge filters, symlink containment) |
+| `src/index/discover.mjs` | which files to index (git, `.gitignore`, the project's own directories, generated/minified/huge filters, symlink containment) |
 | `src/index/modules.mjs` | module resolution: import specifier → file or directory |
 | `src/index/resolver.mjs` | symbol table and the reference-binding ladder |
 | `src/index/indexer.mjs` | incremental sync: change detection, per-file writes, targeted re-resolution |
@@ -34,6 +34,8 @@ tool reply.
 | `src/store/db.mjs` | SQLite schema (`node:sqlite`, WAL) and helpers |
 | `src/search/*.mjs` | tokenizer, query analysis, hybrid ranking |
 | `src/query/intel.mjs` | the query facade: freshness, symbol lookup, references, dependents, impact, maps |
+| `src/query/check.mjs` | the edit checker: what uncommitted changes broke or left behind, without a build |
+| `src/query/rename.mjs` | rename on bound references: the definition, its method family, its uses and imports |
 | `src/mcp/*.mjs` | MCP server, tool definitions and text rendering |
 | `src/cli/init.mjs` | agent configuration writer |
 
@@ -102,7 +104,9 @@ accessors (`get`, `first`, `at`, `pop` …), map accessors (`get`, `values` …)
 external (`!`) rather than guessed.
 
 Bindings are keyed by lexical scope — callables, types, and anonymous functions/lambdas/
-comprehensions — so same-named locals in sibling callbacks do not collide. Two different bindings
+comprehensions, and in Rust and Go every block — so same-named locals in sibling callbacks do not
+collide and a name declared again in an inner block keeps its outer type outside it. A struct type
+written in place (Go's table-driven tests) types the fields of its values. Two different bindings
 of one name in one scope are a conflict and yield no type (precision over recall).
 
 ## 2. Storage
@@ -111,9 +115,10 @@ of one name in one scope are a conflict and yield no type (precision over recall
 
 | table | content |
 |---|---|
-| `files` | path, language, size, mtime, content hash, package, test flag |
-| `symbols` | name, qualified name, kind, parent, owner, ranges, signature, doc, type, export/visibility, static, decorators, bases, ordinal |
+| `files` | path, language, size, mtime, content hash, package, test flag, and what resolving its references read (`deps`, below) |
+| `symbols` | name, qualified name, kind, parent, owner, ranges, signature, doc, type, export/visibility, static, decorators, bases, ordinal, position in the file's extraction |
 | `refs` | name, kind, position, enclosing symbol, receiver, receiver type, bound target, confidence, candidate count |
+| `refs_unbound` | the references that bind to nothing in the repository (a library's member, an untyped read): no answer shows them, but they are resolved again when a change elsewhere could give them a target |
 | `imports` | source, imported/local names, re-exports, wildcard, resolved target file/dir |
 | `fields` | inferred field types per owner |
 | `fts` | FTS5 (contentless, porter) over symbol name, qualified name, signature, doc, path, body |
@@ -131,11 +136,81 @@ completed on the next start.
 
 `Indexer.sync()` reconciles with the working tree: discover files (git `ls-files` including
 untracked-but-not-ignored, or a `.gitignore`-aware walk), compare size+mtime, hash only what
-changed, parse changed files in batches, write each file in a transaction, then re-resolve:
+changed, parse changed files in batches, write each file in a transaction, then resolve again the
+references of the files that changed and of the files that depend on what changed.
 
-- references in the files that changed,
-- references that pointed at symbols that disappeared,
-- references by name that could now bind to newly added symbols (incremental runs only).
+### Which files are the project's own
+
+Inside a git work tree the list is git's: what it tracks and what it neither tracks nor ignores.
+On top of that, directories that hold someone else's code or a tool's output are skipped by name
+whatever git says (`node_modules`, `vendor`, `third_party`, `dist`, caches), and generated or
+minified files by name and content. A second group of names is build output in one project and
+source in another — `bin`, `build`, `out`, `target`, `obj`, `env`, `venv`, `coverage`, `external`,
+`deps`: a CLI's entry points, the build scripts, the adapters to an external service, a word of
+the domain. Those are skipped only when git tracks no code under them (`ownDirectories` in
+`discover.mjs`): what a build writes is ignored or untracked, what is committed is the project's
+own. A copy of another project kept in one of them (`deps/hiredis/`, `external/googletest/`)
+carries its own licence file and stays out. Without git there is nothing to tell the two apart,
+and the names are skipped. A file git still lists but that is gone from the working tree (a
+deletion not yet staged) is no module an import can lead to.
+
+git says which files; the name of each is the one on disk. Where the file system does not tell
+`README.md` from `readme.md` (macOS, Windows), git goes on naming a file as its index does after
+a rename that changed only the letter case, until it is told with `git mv`. Untracked files are
+therefore asked for without folding case (`diskNames` in `discover.mjs`): the name on disk comes
+back as an untracked file and takes the place of the tracked one, so the index does not change
+when git's index catches up, and a rule the repository wrote in another case still ignores what
+git says it ignores.
+
+### An updated index is the index built from scratch
+
+Every measurement of reference accuracy scores a freshly built index. An agent never works on
+one: it edits, the index re-syncs, and the next answer comes from an index updated many times.
+The two hold the same facts — every symbol, import, inferred field type and reference, with its
+target and confidence — and `bench/eval-incremental.mjs` checks it by replaying real history
+through the update path, commit by commit and file by file in both orders
+([BENCHMARKS](BENCHMARKS.md#an-updated-index-against-one-built-from-scratch)). Three things make
+it so:
+
+- **Resolution records what it read.** While a file's references are resolved, every question
+  asked of the rest of the repository is noted: the definitions of a name (whether or not one
+  existed), a qualified name, the members declared for an owner, the imports of another file, the
+  inferred fields of a type, whether a path exists, a file's exports, the module map. The lookup
+  maps of the symbol table record their own reads (`TrackedMap` in `resolver.mjs`), so a rule added
+  to the resolver is tracked without being told. Each file keeps the set as sorted 32-bit hashes
+  (`files.deps`, about 1 KB).
+- **A change emits what it altered.** Writing a file compares what other files could read of it
+  before and after: per definition, a signature of everything but its position (name, kind,
+  nesting, type, bases, signature text, export) and its length; its imports with their targets;
+  its field types; its package. Each difference emits the keys of the questions whose answer it
+  changes. A file whose recorded reads meet the emitted keys is resolved again; nothing else is.
+  A body edit that changes no signature reaches no other file; a changed return type reaches the
+  files that called it. The module map is its own key: when the file list or a manifest
+  (`package.json`, `tsconfig*.json`, `go.mod`, `Cargo.toml`) changes, the imports of every file
+  are resolved again and the files whose imports moved follow.
+- **Nothing depends on the order of indexing.** The lists of the symbol table are kept in one
+  canonical order (file path, then position in the file), ties between candidates are broken in
+  that order, a type's inferred fields are merged over the files that declare them in that order,
+  and Go's implicit implementations are derived after resolution, which never sees them.
+
+A reference that binds to nothing in the repository used to be deleted. It is kept apart instead
+(`refs_unbound`): a definition written after its uses, the common order when an agent edits a
+caller first, finds them.
+
+Updates run one after the other (`Indexer.#serial`): tool calls arrive while another is still
+syncing, and two updates interleaved at their awaits would write the same file twice. A call
+waits for the update in flight before it answers. From its first write to its last an update
+holds a mark in the store (`resolve_pending`); a run that stops half way is made good by the
+next one, which resolves every reference and every import again. And when another process has
+written the store (the edit hook opens its own index when the resident does not answer in time;
+SQLite's `data_version` tells), the state held in memory is read again before anything else.
+
+A path handed over on its own — by the file watcher, by a tool that edited a file — goes through
+what a full discovery would have applied to it: a directory stands for the files the index holds
+under it and the ones on disk now, a file the repository ignores is not indexed for having been
+seen, a name that differs from the one on disk only by letter case is not a second file (the one
+on disk is looked at in its place), and a file a manifest reads (the base a `tsconfig` extends)
+counts as a manifest.
 
 `CodeIntel.ensureFresh()` runs before every tool call. With a healthy recursive `fs.watch` it
 re-indexes just the dirty paths (plus a sweep every 30 s); without one it does a stat sweep at most
@@ -180,6 +255,37 @@ directories, Rust `crate`/`self`/`super`, C includes, Ruby/Bash/CSS relatives.
 - **Change impact** seeds from symbols, files or the uncommitted `git diff`, collects dependents by
   distance, tests that reach them (via the graph and naming conventions), exported surface and git
   co-change counts, and summarizes a risk level.
+- **Checking an edit** (`check_changes`) compares each changed file with its version at the base
+  commit. Calls bound to a definition whose parameters changed are counted against the new ones
+  (and, in Python, their keywords against the names it still takes); in JavaScript, where any
+  count is legal, they are listed to look at instead of reported as broken. A definition that is
+  gone is put back into the symbol table as it was, every reference that now binds to nothing and
+  carries its name is resolved again, and the ones that bind to it are its uses left behind: the
+  same binding `find_references` does, on what is no longer there, so a type, a constant or an
+  attribute is found as a call is, and another definition of the same name is not. A method that
+  changed or went is also looked up in its family: the supertypes that still declare it and the
+  subtypes that still override it. A file that was deleted or moved is put back into the module
+  map, the imports that lead nowhere now are resolved again, and the ones that reach it are
+  imports left on its old path — what a compiler reports first, and nothing else in the report
+  would. A file renamed only in its letter case, which git goes on reporting under the old name,
+  is one of them. A call counts as one that "no longer fits" only if it fitted the signature as
+  it was.
+  [BENCHMARKS](BENCHMARKS.md#check-on-changes-left-half-done) measures it on real commits applied
+  in part.
+- **Renaming** (`rename_symbol` over MCP, `graph-indexer rename` on the command line) edits what
+  an IDE's rename edits: the definition and its overloads, for a member the declarations it overrides and that override it
+  through every type in between, the references bound to any of them at `exact` confidence, and
+  the import and re-export statements that name it. What it could not bind is listed, not edited.
+  It also edits what follows from the definition without being a reference (a JSX closing tag,
+  `@name.setter`, the defining file's own `export { name }`), keeps the key of a shorthand
+  property (`{ name }` → `{ name: newName }`), and refuses a name that would change what the code
+  means: one a supertype or subtype declares, one another file of the same Go or Java package
+  declares, one that is a local where a use stands, a builtin the file uses, a reserved word, a Go
+  name that would stop being exported. A Rust trait method goes with its `impl` methods. A use of
+  the name the index records nothing for (a function passed as a value, `ns.name`) is listed to
+  check by hand. The index is reconciled with the working tree
+  before anything is read, every edit is checked against the file as it is, and the files are
+  written all or none.
 - **Maps** (`outline` of a directory or the repository) rank symbols by PageRank over the
   reference graph, personalized to a focus query when given (Aider's repo-map idea applied to
   symbols), within a token budget.
@@ -208,8 +314,10 @@ three per file before the rest, and replies show the matching lines of the top r
 `src/mcp/server.mjs` implements JSON-RPC over stdio without an SDK. It negotiates protocol
 versions 2024-11-05 through 2025-11-25 and also serves the stateless 2026-07-28 revision
 (`server/discover`, per-request `_meta` protocol version, error −32022 for unsupported versions).
-Logs go to stderr only. Tools are declared read-only (`readOnlyHint`), with descriptions under
-2 KB and short server instructions.
+Logs go to stderr only. Tools are declared read-only (`readOnlyHint`) except `rename_symbol`,
+the one that writes (`destructiveHint`; it lists its edits unless called with `apply: true`, and
+a server started with `--read-only` declares it read-only and never writes), with descriptions
+under 2 KB and short server instructions.
 
 Replies are plain text designed for a model's context: best result first, capped lists with
 "N more — narrow with …" hints, code with line numbers and at most `max_lines`, a

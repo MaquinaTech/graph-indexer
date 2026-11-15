@@ -27,7 +27,7 @@
  *
  * With --systems <file>, other tools are scored too, through their MCP servers (bench/arena/mcp-system.mjs).
  *
- *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7] [--v2 ~/.gi-agentic/v2] [--systems bench/arena/systems.json]
+ *   node bench/eval-graph.mjs [--fixture nestjs] [--scope packages/core,packages/common] [--n 150] [--seed 7] [--sample FILE] [--v2 ~/.gi-agentic/v2] [--systems bench/arena/systems.json]
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -209,9 +209,19 @@ const cands = intel.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.name_line
     AND s.name NOT LIKE '<%'`)
     .filter(s => scope.some(p => s.path.startsWith(p)) && !s.path.endsWith('.d.ts'));
 const rand = rng(seed);
-const sample = [];
+let sample = [];
 const pool = [...cands];
 while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
+// --sample FILE freezes the sample (one `path:line:qname` per line): the symbols named in FILE are
+// used if it exists, and the drawn sample is written to it if not, so that two builds are scored
+// on the same symbols even when one of them indexes more files (as bench/eval-graph-rust.mjs does)
+const sampleFile = opt('--sample', null);
+if (sampleFile && fs.existsSync(sampleFile)) {
+    const byKey = new Map(cands.map(s => [`${s.path}:${s.name_line}:${s.qname}`, s]));
+    const keys = fs.readFileSync(sampleFile, 'utf8').split('\n').filter(Boolean);
+    sample = keys.map(k => byKey.get(k)).filter(Boolean);
+    console.log(`sample from ${sampleFile}: ${sample.length} of ${keys.length} symbols found`);
+} else if (sampleFile) fs.writeFileSync(sampleFile, sample.map(s => `${s.path}:${s.name_line}:${s.qname}`).join('\n') + '\n');
 
 // ── graph-indexer 2.x, and the size of each tool's answer ────────────────────────────
 const v2Root = opt('--v2', null) && path.resolve(opt('--v2').replace(/^~/, os.homedir()));

@@ -48,6 +48,7 @@ const JAVA_QUERY = `
 (local_variable_declaration declarator: (variable_declarator name: (identifier) @bind.name value: (object_creation_expression type: ${T('bind.new')}))) @bind
 (local_variable_declaration declarator: (variable_declarator name: (identifier) @bind.name value: (_) @bind.expr)) @bind
 (formal_parameter type: (_) @bind.type name: (identifier) @bind.name) @bind
+(spread_parameter [(type_identifier) (generic_type) (scoped_type_identifier) (integral_type) (floating_point_type) (boolean_type) (array_type)] @bind.type (variable_declarator name: (identifier) @bind.name)) @bind
 (enhanced_for_statement type: (_) @bind.type name: (identifier) @bind.name value: (_) @bind.elem) @bind
 (field_declaration type: (_) @field.type declarator: (variable_declarator name: (identifier) @field.name)) @field
 `;
@@ -109,6 +110,8 @@ export const java = {
     id: 'java',
     distinctOverloads: true, // each overload is a method of its own: calls bind by argument count
     argType: javaArgType,    // … and, among overloads of one count, by the argument types the source shows
+    opaqueCollections: true, // `Deque<Iterator<E>>` is the library's Deque, not a type the index knows
+    annotationLines: true, // a bodyless declaration's signature skips the annotation lines above it
     localValues: true, // an argument named like a local or parameter is that variable
     nestedTypes: true, // `Token.Comment` names the class Comment nested in Token
     // an anonymous class (`new Transformer<>() {…}`) is `<anonymous>`, a subclass of what it instantiates

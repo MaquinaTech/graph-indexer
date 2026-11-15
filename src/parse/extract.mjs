@@ -15,8 +15,9 @@ import { compileQuery, createParser, loadGrammar } from './runtime.mjs';
 import { callArgc } from './arity.mjs';
 
 const MAX_SIG = 240;
+const MAX_SIG_OVERLOADS = 800;
 const MEMBER_PARENT = new Set(['class', 'interface', 'struct', 'trait', 'impl', 'enum', 'object', 'module']);
-const REF_PRIORITY = { decorator: 6, inherit: 5, new: 4, call: 3, import: 2, type: 1, value: 0, read: -1 };
+const REF_PRIORITY = { accessor: 7, decorator: 6, inherit: 5, new: 4, call: 3, import: 2, type: 1, value: 0, read: -1 };
 const MAX_DOC = 600;
 
 const compiled = new Map(); // spec.id -> { language, query, parser }
@@ -42,12 +43,17 @@ function signatureOf(defNode, spec, source) {
     let end = body ? body.startIndex : defNode.endIndex;
     let text = source.slice(defNode.startIndex, end);
     if (!body) {
+        // a bodyless declaration (interface method, abstract method, field) is its first line, but not
+        // an annotation line standing alone above it: `@Override\n boolean add(E e);` is `boolean add(E e);`
+        if (spec.annotationLines) text = text.replace(/^(?:\s*@[\w.]+(?:\([^)]*\))?[ \t]*\n)+/, '');
         const nl = text.indexOf('\n');
         if (nl > 0) text = text.slice(0, nl);
     }
     text = collapse(text).replace(/[{:=\s]+$/, '');
     if (spec.signatureCleanup) text = spec.signatureCleanup(text, defNode);
-    return text.length > MAX_SIG ? text.slice(0, MAX_SIG - 1) + '…' : text;
+    // where overloads are methods of their own the whole parameter list tells them apart: it is kept
+    const max = spec.distinctOverloads ? MAX_SIG_OVERLOADS : MAX_SIG;
+    return text.length > max ? text.slice(0, max - 1) + '…' : text;
 }
 
 function cleanComment(text) {
@@ -131,7 +137,8 @@ function simplifyChain(text) {
         s = inner.replace(/^new\s+/, '') + s.slice(k + 1);
     }
     // a fluent chain formatted one call per line is long mostly in whitespace: measure it without
-    s = s.replace(/\s+/g, '').replace(/<[^<>()]*>(?=\()/g, '');
+    // a turbofish (Rust `channel::<u8>(1)`, `iter.collect::<Vec<_>>()`) names type arguments, not a path segment
+    s = s.replace(/\s+/g, '').replace(/::<(?:[^<>()]|<(?:[^<>()]|<[^<>()]*>)*>)*>(?=\()/g, '').replace(/<[^<>()]*>(?=\()/g, '');
     if (s.length > 600) return null;
     for (let i = 0; i < 12 && /[()[\]]/.test(s); i++) {
         const next = s.replace(/\([^()[\]]*\)/g, '\u0001').replace(/\[[^()[\]]*\]/g, '\u0002');
@@ -384,6 +391,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         let bindName = null, bindType = null, bindNew = null, bindCall = null, bindVar = null, bindExpr = null, bindElem = null, bindEach = null, srcNode = null;
         let bindKey = null, bindOf = null, bindLocal = false;
         let cbFn = null, cbArg = null, bindTuple = null, tupleOwner = null, tupleVariant = null, bindVariant = null;
+        let bindInline = null, bindInlineElem = null;
         for (const c of m.captures) {
             const n = c.name;
             if (n === 'name') nameNode = c.node;
@@ -406,6 +414,8 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else if (n === 'bind.elem' || n === 'field.elem') bindElem = c.node;
             else if (n === 'bind.each') bindEach = c.node;
             else if (n === 'bind.key') bindKey = c.node.text;
+            else if (n === 'bind.inline') bindInline = c.node.text;         // a value of a type written in place (Go `struct { … }`)
+            else if (n === 'bind.inlineElem') bindInlineElem = c.node.text; // a collection of such values
             else if (n === 'bind.local') bindLocal = true;
             else if (n === 'bind.of') bindOf = c.node;
             else if (n === 'scope') { role = 'scope'; main = c.node; }
@@ -447,6 +457,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 const id = el.type === 'identifier' ? el : (el.type === 'mut_pattern' || el.type === 'ref_pattern') ? el.namedChildren.find(x => x.type === 'identifier') : null;
                 const d = id && memberOfDescriptor(expr, String(i));
                 if (d) binds.push({ node: main, name: id.text, expr: d });
+                else if (id && spec.localNames) binds.push({ node: main, name: id.text, local: true });
             });
             continue;
         }
@@ -491,12 +502,13 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 else if (bindOf) { const t = normalizeType(bindOf.text, spec); expr = t ? `(${t}).${bindKey}` : null; }
                 else expr = memberOfDescriptor(expr, bindKey);
             }
-            const rec = { node: main, name: bindName, type: bindType, new: bindNew, call: bindCall, var: bindVar, local: bindLocal,
+            // a varargs parameter (`T... xs`) is an array
+            const rec = { node: main, name: bindName, type: bindType && main.type === 'spread_parameter' ? bindType + '[]' : bindType, new: bindNew, call: bindCall, var: bindVar, local: bindLocal,
                 expr, elem: bindElem ? elementsDescriptor(bindElem, spec) : null,
-                each: bindEach ? elementsDescriptor(bindEach, spec) : null };
+                each: bindEach ? elementsDescriptor(bindEach, spec) : null, inline: bindInline, inlineElem: bindInlineElem };
             const prev = bindSites.get(key);
             if (prev === undefined) { bindSites.set(key, list.length); list.push(rec); }
-            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each']) p[k] ??= rec[k]; p.local ||= rec.local; }
+            else { const p = list[prev]; for (const k of ['type', 'new', 'call', 'var', 'expr', 'elem', 'each', 'inline', 'inlineElem']) p[k] ??= rec[k]; p.local ||= rec.local; }
         }
     }
 
@@ -569,6 +581,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
             decorators: spec.decoratorsOf ? spec.decoratorsOf(node) : [],
             bases: spec.implicitBases?.(node) ?? [],
             type: d.type ? declaredType(node, d.type, spec) : null,
+            rawType: d.type ?? null, // as written: a collection's type is not yet `T[]`
             isStatic: isStaticMember(node, d.nameNode, spec),
             startIndex: node.startIndex,
             endIndex: node.endIndex,
@@ -667,7 +680,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
         return best?.type ?? null;
     };
     const localTypes = new Map();   // `${scope}:${name}` -> binding record | { conflict }
-    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.each === b.each && a.cb === b.cb && a.inline === b.inline;
+    const sameBinding = (a, b) => a.type === b.type && a.call === b.call && a.expr === b.expr && a.elem === b.elem && a.each === b.each && a.cb === b.cb && a.inline === b.inline && a.inlineElem === b.inlineElem;
     // `helper((err, socket) => socket.send())`: an untyped parameter of a function passed to a call
     // takes its type from the callee's signature, resolved across files (the `cb:` types above)
     for (const { call, fn, arg } of cbSites) {
@@ -711,48 +724,61 @@ function extractFromTree(spec, query, tree, source, relPath) {
         }
         const prev = localTypes.get(k);
         if (!prev) localTypes.set(k, val);
+        // an untyped parameter later assigned a value (`def f(app): app = Flask()`): the value's type
+        // holds from the assignment on; before it the parameter is whatever the caller passed
+        // an annotated name (`request: Request`) keeps its declared type through later assignments of
+        // values whose type is not written (`request = next(flow)`), as a type checker holds it
+        else if (spec.localNames && prev.declared && !val.declared && !val.type) prev.end = Math.min(prev.end, val.end);
+        else if (spec.localNames && val.declared && !prev.declared && !prev.type) localTypes.set(k, { ...val, end: Math.min(prev.end, val.end) });
+        else if (spec.localNames && prev.opaque && prev.param && !val.opaque) localTypes.set(k, { ...val, end: prev.end, after: val.end });
         else if (!prev.conflict && !sameBinding(prev, val)) localTypes.set(k, { conflict: true, end: Math.min(prev.end, val.end) });
         else if (val.end < prev.end) prev.end = val.end;
+    };
+    const lookupLocal = (ctx, name, keepOpaque = false) => {
+        for (let k = ctx.scope; ; k = scopes[k].parent) {
+            const seq = spec.shadowing && ctx.pos != null ? sequential.get(k + ':' + name) : null;
+            if (seq) {
+                let best = null;
+                for (const s of seq) if (s.from <= ctx.pos && (!best || s.from >= best.from)) best = s;
+                if (best) return best.opaque && !keepOpaque ? null : best;
+                if (k < 0) break;
+                continue; // bound later in this scope: an outer binding holds here
+            }
+            const v = localTypes.get(k + ':' + name);
+            if (v) return v.conflict || (v.opaque && !keepOpaque) || (v.after != null && ctx.pos != null && ctx.pos < v.after) ? null : v;
+            if (k < 0) break;
+        }
+        return null;
     };
     for (const b of binds) {
         const ctx = { ...ctxAt(b.node.startIndex), pos: b.node.startIndex };
         const end = b.node.endIndex; // the local is in effect from here on
         const from = spec.shadowing && b.node.type !== 'let_declaration' && b.node.type !== 'parameter' ? b.node.startIndex : end;
-        const setLocal = (scope, name, val) => setLocalAt(scope, name, { ...val, from });
+        const argRaw = spec.bindingArgType ? spec.bindingArgType(b.node, (name) => lookupLocal(ctx, name, true)?.argRaw ?? null) : null;
+        const setLocal = (scope, name, val) => setLocalAt(scope, name, { ...val, raw: val.raw ?? (b.type && b.type !== 'var' ? b.type : null), argRaw, from }); // `raw`: the type as written
         if (b.variant) {
             const owner = b.variant.owner === 'Self' ? selfType(ctx.sym)?.name : b.variant.owner;
             if (owner) setLocal(ctx.scope, b.name, { type: owner + '#' + b.variant.field, ctx, end });
             continue;
         }
+        // a type written in place (Go: `tc := struct { in Request; want string }{…}`, and a table of them)
+        if (b.inline) { setLocal(ctx.scope, b.name, { inline: b.inline, ctx, end }); continue; }
+        if (b.inlineElem) { setLocal(ctx.scope, b.name, { inlineElem: b.inlineElem, ctx, end }); continue; }
         const typed = b.expr && /^(new|as) /.test(b.expr) ? b.expr.slice(3).trim() : null; // `new X(…)` / `… as X`
         let type = b.type ? typeText(b.type) : (b.new ? typeText(b.new) : typed ? typeText(typed) : b.expr === '!' ? '!' : null);
+        // `me: &Arc<Self>` (Rust): Self is the type of the enclosing impl
+        if (type && spec.shadowing && /^Self(\[\]|\{\})?$/.test(type)) { const st = selfType(ctx.sym)?.name; type = st ? st + type.slice(4) : null; }
         // a type parameter stands for its bound (`r: &mut R` with `R: Read`)
         if (type && spec.typeParamBound && /^[A-Z][\w$]*$/.test(type)) { const bound = spec.typeParamBound(b.node, type); if (bound) type = typeText(bound) ?? type; }
-        if (type) setLocal(ctx.scope, b.name, { type, ctx, end, raw: b.type ?? b.new ?? typed });
+        if (type) setLocal(ctx.scope, b.name, { type, ctx, end, raw: b.type ?? b.new ?? typed, declared: !!b.type });
         else if (b.type && /^\{[^]*\}$/.test(b.type.trim())) setLocal(ctx.scope, b.name, { inline: b.type.trim(), ctx, end }); // `x: { a: A; … }`
         else if (b.call) setLocal(ctx.scope, b.name, { call: b.call, ctx, end });
         else if (b.cb) setLocal(ctx.scope, b.name, { cb: b.cb, ctx, end });
         else if (b.expr && b.expr !== '?' && b.expr !== 'null' && b.expr !== b.name) setLocal(ctx.scope, b.name, { expr: b.expr, ctx, end });
         else if (b.elem && b.elem !== '?') setLocal(ctx.scope, b.name, { elem: b.elem, ctx, end });
         else if (b.each && b.each !== '?') setLocal(ctx.scope, b.name, { each: b.each, ctx, end });
-        else if (b.type || (b.expr && b.expr !== 'null') || b.local) setLocal(ctx.scope, b.name, { opaque: true, ctx, end }); // shadows outer bindings
+        else if (b.type || (b.expr && b.expr !== 'null') || b.local) setLocal(ctx.scope, b.name, { opaque: true, param: !!b.local && !b.type && !b.expr, ctx, end }); // shadows outer bindings
     }
-    const lookupLocal = (ctx, name) => {
-        for (let k = ctx.scope; ; k = scopes[k].parent) {
-            const seq = spec.shadowing && ctx.pos != null ? sequential.get(k + ':' + name) : null;
-            if (seq) {
-                let best = null;
-                for (const s of seq) if (s.from <= ctx.pos && (!best || s.from >= best.from)) best = s;
-                if (best) return best.opaque ? null : best;
-                if (k < 0) break;
-                continue; // bound later in this scope: an outer binding holds here
-            }
-            const v = localTypes.get(k + ':' + name);
-            if (v) return v.conflict || v.opaque ? null : v;
-            if (k < 0) break;
-        }
-        return null;
-    };
     /** A local binding of `name` (typed or not) is visible at ctx: it shadows globals and builtins. */
     const isDeclared = (ctx, name) => {
         for (let k = ctx.scope; ; k = scopes[k].parent) {
@@ -766,8 +792,18 @@ function extractFromTree(spec, query, tree, source, relPath) {
         for (let k = ctx.scope; k >= 0; k = scopes[k].parent) if ((localTypes.get(k + ':' + name)?.end ?? Infinity) <= pos) return true;
         return false;
     };
+    /** `name` at `pos` is a parameter of the enclosing function that no annotation or assignment types yet. */
+    const isUntypedParam = (ctx, name, pos) => {
+        for (let k = ctx.scope; k >= 0; k = scopes[k].parent) {
+            const v = localTypes.get(k + ':' + name);
+            if (v) return !!v.param && (v.after == null || pos < v.after) || (v.after != null && pos < v.after);
+        }
+        return false;
+    };
     const fieldTypes = new Map();   // `${classIdx}:${field}` -> type string (see above)
 
+    /** A member in a deferred type: where a field and a method may share a name (Java), a call is told by `()`. */
+    const memberRef = (seg) => seg.name + (spec.distinctOverloads && seg.ops[0] === '()' ? '()' : '');
     /** Apply `()` / `[]` operators to a type string; null when the result is unknown. */
     const applyOps = (t, ops) => {
         for (const op of ops) {
@@ -800,6 +836,12 @@ function extractFromTree(spec, query, tree, source, relPath) {
             else return null;
         }
         return `cb:${i}:${j}:${target}`;
+    };
+    /** The inline type of a value: its own, or that of the collection it is an element of (`for _, tc := range tests`). */
+    const inlineOf = (v) => {
+        if (v.inline) return v.inline;
+        if (v.elem && /^[A-Za-z_$][\w$]*$/.test(v.elem)) return lookupLocal(v.ctx, v.elem)?.inlineElem ?? null;
+        return null;
     };
     const bindingType = (v, depth) => {
         if (v.type) return v.type;
@@ -862,7 +904,7 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 const nt = ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, 'this.' + segs[1].name) : null;
                 let ft = nt ?? (st.idx >= 0 ? fieldTypes.get(st.idx + ':' + segs[1].name) : null);
                 if (ft) ft = boundAt(ctx.pos, ft) ?? ft; // `formatter: F` in `impl<W, F: Formatter>`
-                t = applyOps(ft ?? st.name + '#' + segs[1].name, segs[1].ops);
+                t = applyOps(ft ?? st.name + '#' + memberRef(segs[1]), segs[1].ops);
             }
             i = 2;
         } else {
@@ -870,13 +912,14 @@ function extractFromTree(spec, query, tree, source, relPath) {
             const nt = !isCall && ctx.pos != null && narrowed.length ? narrowedAt(ctx.pos, first.name) : null;
             const v = isCall ? null : nt ? { type: nt } : lookupLocal(ctx, first.name);
             // a value of an inline object type: its member's written type
-            if (v?.inline && !first.ops.length && segs.length > 1) { t = applyOps(typeText(inlineMemberType(v.inline, segs[1].name)), segs[1].ops); i = 2; }
+            const inl = v && !first.ops.length && segs.length > 1 ? inlineOf(v) : null;
+            if (inl) { t = applyOps(typeText((spec.inlineMemberType ?? inlineMemberType)(inl, segs[1].name)), segs[1].ops); i = 2; }
             else if (v) t = applyOps(bindingType(v, depth), first.ops);
             else if (isCall) t = applyOps('call:' + first.name, first.ops.slice(1));
             else if (spec.implicitThis && classOf(ctx.sym, symbols) >= 0) {
                 t = applyOps(fieldTypes.get(classOf(ctx.sym, symbols) + ':' + first.name) ?? null, first.ops);
                 // a field the class inherits (declared in a base, maybe in another file): the resolver's to find
-                if (!t && /^[a-z_]/.test(first.name) && !isDeclared(ctx, first.name)) t = applyOps(symbols[classOf(ctx.sym, symbols)].qname + '#' + first.name, first.ops);
+                if (!t && /^[a-z_]/.test(first.name) && !isDeclared(ctx, first.name)) t = applyOps(symbols[classOf(ctx.sym, symbols)].qname + '#' + memberRef(first), first.ops);
             }
             // a type parameter, in a path (`R::read(x)`) or as a value's type: its bound
             if (!t && !v && !first.ops.length && /^[A-Z]/.test(first.name)) t = boundAt(ctx.pos, first.name);
@@ -935,7 +978,9 @@ function extractFromTree(spec, query, tree, source, relPath) {
                 const b = ft ? boundAt(ctx.pos, ft) : null;
                 if (b) { t = b; continue; }
             }
-            t = applyOps(t + '#' + seg.name, seg.ops);
+            // Rust: a call `x.m()` names a method, never a field `m` (`(x.m)()` is the only way to call one):
+            // the step is marked `m()` so the resolver skips a field of the same name (builder setters)
+            t = applyOps(t + '#' + (spec.methodCallSteps ? seg.name + (call ? '()' : '') : memberRef(seg)), seg.ops);
         }
         return t;
     };
@@ -1012,11 +1057,23 @@ function extractFromTree(spec, query, tree, source, relPath) {
         const fieldType = (name) => {
             for (let c = classOf(ctx.sym, symbols), g = 0; c >= 0 && g < 8; c = symbols[c].parentIdx >= 0 ? classOf(symbols[c].parentIdx, symbols) : -1, g++) {
                 const f = symbols.find(s => s.parentIdx === c && s.name === name && VALUE_KINDS.has(s.kind));
-                if (f) return f.type ?? null;
+                if (f) return f.rawType ?? f.type ?? null;
             }
             return null;
         };
-        const out = args.map(n => spec.argType(n, (name) => { const v = lookupLocal(ctx, name); return v ? v.raw ?? null : isDeclared(ctx, name) ? null : fieldType(name); }) ?? '?');
+        // a local whose type has no encoding (`Iterable<?>`) is still declared as written
+        const declaredRaw = (name) => { for (let k = ctx.scope; ; k = scopes[k].parent) { const v = localTypes.get(k + ':' + name); if (v) return v.conflict ? null : v.raw ?? null; if (k < 0) return null; } };
+        // a language that types locals by what their initial value shows (Rust) keeps that type apart from `raw`
+        const rawOf = (name) => {
+            if (spec.bindingArgType) {
+                if (name.startsWith('self.')) return fieldType(name.slice(5));
+                const v = lookupLocal(ctx, name, true);
+                return v ? v.argRaw ?? null : isDeclared(ctx, name) ? null : fieldType(name);
+            }
+            const v = lookupLocal(ctx, name);
+            return v ? v.raw ?? null : isDeclared(ctx, name) ? declaredRaw(name) : fieldType(name);
+        };
+        const out = args.map(n => spec.argType(n, rawOf) ?? '?');
         return out.some(t => t !== '?') ? out : null;
     };
     const inferReceiverType = (recv, ctx) => {
@@ -1028,12 +1085,17 @@ function extractFromTree(spec, query, tree, source, relPath) {
     // ── references ─────────────────────────────────────────────────────────────
     const refs = [];
     for (const r of rawRefs) {
-        if (defNameIds.has(r.nameNode.id)) continue; // a definition's own name
+        // a definition's own name; except `self.x = …` of a new attribute (Python), which may run a
+        // base class's property setter: kept as a read through the bases only (`~base`)
+        const ownAttr = defNameIds.has(r.nameNode.id);
+        if (ownAttr && !(spec.hoistMemberFields && r.kind === 'read' && r.recvNode?.text === 'self')) continue;
         let name = r.nameNode.text;
         if (spec.normalizeRefName) name = spec.normalizeRefName(name, r);
         if (!name || name.length > 128) continue;
-        const kind = r.kind;
-        let recv = r.recvNode ? receiverDescriptor(r.recvNode, spec) : '';
+        // `@x.setter` / `@x.deleter` names the property `x` of the class being defined: a read of `self.x`
+        const accessor = r.kind === 'accessor';
+        const kind = accessor ? 'read' : r.kind;
+        let recv = accessor ? 'this' : r.recvNode ? receiverDescriptor(r.recvNode, spec) : '';
         const ctx = ctxAt(r.nameNode.startIndex);
         // a trait-path call (Rust `Trait::m(x)`, `<T as Trait>::m(x)`): the type whose impl of the
         // trait runs is the first argument's, or the one named before `as`
@@ -1064,11 +1126,15 @@ function extractFromTree(spec, query, tree, source, relPath) {
         if (!recv && (kind === 'value' ? spec.packageValues || spec.localValues || spec.localNames : kind === 'call' && (spec.packageValues || spec.localNames)) && isDeclaredLocally(ctx, name, r.nameNode.startIndex)) continue;
         const pos = r.nameNode.startPosition;
         const encl = ctx.sym;
-        const recvType = inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
+        let recvType = ownAttr ? '~base' : inferReceiverType(recv, { ...ctx, pos: r.nameNode.startIndex });
+        // an object that is a parameter nothing types (`def test_x(app): app.run()`): its class is whatever the caller passes
+        if (!recvType && recv && spec.paramReceivers && isUntypedParam(ctx, recv.split('.')[0], r.nameNode.startIndex)) recvType = '~param';
         // arguments passed: tells overloads apart where each one is a method of its own
         const a = spec.distinctOverloads && (kind === 'call' || kind === 'new') ? callArgc(r.node) : null;
         // and, where overloads differ by type (`append(char)` / `append(String)`), what each argument is
-        const argTypes = selfArg ? [selfArg] : a && !a.open && a.n > 0 && spec.argType ? argTypesOf(r.node, { ...ctx, pos: r.nameNode.startIndex }) : null;
+        // (a trait-path call keeps the type its trait is implemented for first, marked `=`)
+        const typed = spec.argType && (spec.distinctOverloads ? a && !a.open && a.n > 0 : kind === 'call' && r.node.type === 'call_expression') ? argTypesOf(r.node, { ...ctx, pos: r.nameNode.startIndex }) : null;
+        const argTypes = selfArg ? ['=' + selfArg, ...(typed ?? [])] : typed;
         refs.push({ name, kind, line: pos.row + 1, col: pos.column, recv, recvType, symIdx: encl, argc: a ? (a.open ? -1 : a.n) : null, argTypes });
     }
 
@@ -1154,6 +1220,7 @@ export function normalizeType(t, spec, depth = 0) {
         .replace(/^(?:(?:readonly|const|mut|dyn|impl|typeof|unique|volatile|struct|enum|class|final|ref|in|out|inout)\s+|[&*^]\s*|'[A-Za-z_]\w*\s+)+/, '')
         .replace(/(?:\s*(?:[?!*&]|\.\.\.))+$/, '')
         .trim();
+    s = s.replace(/^\?\s+(?:extends|super)\s+/, ''); // a wildcard (`? extends E`) is its bound
     if (!s || /^keyof\s/.test(s) || INFERRED_TYPES.has(s)) return null;
     const alts = splitTop(s, '|').map(x => x.trim()).filter(Boolean);
     if (alts.length > 1) {
@@ -1186,13 +1253,20 @@ export function normalizeType(t, spec, depth = 0) {
         const head = m[1].split(/\.|::|\\/).pop();
         const args = splitTop(m[2], ',').map(x => x.trim());
         if (spec?.transparentTypes?.has(head)) return normalizeType(args[0], spec, depth + 1);
-        if (spec?.elementTypes?.has(head)) return arrayOf(normalizeType(args[0], spec, depth + 1));
-        if (spec?.mapTypes?.has(head)) return mapOf(normalizeType(args[args.length - 1], spec, depth + 1));
+        // Python's `tuple[A, B, C]` is positional (`a, b, c = f()` types each name); `tuple[A, ...]` is a collection
+        if (spec?.positionalTuples?.has(head) && args.length > 1 && !args.includes('...')) {
+            return '(' + args.map(x => { const n = normalizeType(x, spec, depth + 1); return n && !/[(),]/.test(n) ? n : '?'; }).join(',') + ')';
+        }
+        // a library collection of something the encoding cannot hold (`Deque<Iterator<E>>`) is still the library's: its members are not the repository's
+        if (spec?.elementTypes?.has(head)) return arrayOf(normalizeType(args[0], spec, depth + 1)) ?? (spec.opaqueCollections ? '!' : null);
+        if (spec?.mapTypes?.has(head)) return mapOf(normalizeType(args[args.length - 1], spec, depth + 1)) ?? (spec.opaqueCollections ? '!' : null);
         if (head === 'Union') return normalizeType(args.join('|'), spec, depth + 1);
         s = m[1];
     }
     s = s.replace(/<.*$/s, '').replace(/\(.*$/s, '').replace(/\[.*$/s, '').trim();
     const segs = s.split(/::|\.|\\/).filter(Boolean);
+    // `std::fs::DirEntry` (Rust): a path rooted in the standard library is never a type of the repository
+    if (spec?.externalRoots?.has(segs[0]) && segs.length > 1 && /::/.test(s)) return '!';
     // `http.Request`: the package tells a type of the repository from a library's (see Resolver)
     if (spec?.qualifiedTypes && segs.length === 2 && /^[A-Za-z_]\w*\.[A-Za-z_]\w*$/.test(s)) return s;
     // `Token.Comment`, `org.x.Outer.Inner`: a nested type keeps its enclosing types, not its package

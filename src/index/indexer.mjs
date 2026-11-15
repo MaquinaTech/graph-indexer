@@ -6,15 +6,24 @@
  *
  * Change detection follows git's model: (size, mtime) is the cheap signature, the content hash
  * decides. Symbol ids are stable across re-indexing (matched by qualified name + kind + ordinal),
- * so references from untouched files stay valid; only references that pointed at deleted symbols,
- * or that could now bind to newly added names, are re-resolved.
+ * so references from untouched files stay valid.
+ *
+ * An updated index holds the same facts as one built from scratch (bench/eval-incremental.mjs
+ * replays real history to check it). Three things make that so:
+ *   - resolving a file's references records what it asked of the rest of the repository (the
+ *     definitions of a name, a file's imports, a type's inferred fields, the module map), and a
+ *     change emits the keys of what it altered: exactly the files that asked are resolved again;
+ *   - references that bind to nothing are kept aside (`refs_unbound`), so a definition written
+ *     after its uses still finds them;
+ *   - the symbol table's lists are in one canonical order, so no answer depends on the order in
+ *     which files were indexed.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { discoverFiles, isIndexablePath, insideRoot, looksMinified, MAX_FILE_BYTES } from './discover.mjs';
-import { ModuleResolver } from './modules.mjs';
-import { SymbolTable, Resolver } from './resolver.mjs';
+import { discoverFiles, isIndexablePath, insideRoot, looksMinified, ignoredAmong, listedAmong, diskName, filesUnder, MAX_FILE_BYTES } from './discover.mjs';
+import { ModuleResolver, isManifestPath } from './modules.mjs';
+import { SymbolTable, Resolver, newDeps, depHash } from './resolver.mjs';
 import { extractFile } from '../parse/extract.mjs';
 import { specForPath, LANGUAGES } from '../parse/languages.mjs';
 import { tokenString, codeTokens } from '../search/tokenize.mjs';
@@ -34,6 +43,10 @@ function lineStarts(src) {
     return starts;
 }
 
+// Languages whose resolution asks the module map while binding a reference (a Rust path is walked
+// module by module); the others only follow the import targets stored for each file.
+const MODULE_MAP_READERS = new Set(['rust']);
+
 export class Indexer {
     constructor({ root, store, log = () => {}, include = null }) {
         this.root = path.resolve(root);
@@ -46,6 +59,11 @@ export class Indexer {
         this.loaded = false;
         this.resolveAll = false;
         this.version = 0; // bumps on every change; caches key off it
+        this.deps = new Map(); // fileId -> sorted Uint32Array of the keys its references' resolution read
+        this.modulesFp = null; // fingerprint of the manifests the stored imports were resolved with
+        this.lastFanout = null; // { changed, dependents, keys } of the last update, for `status` and the benchmarks
+        this.layout = null; // set by sync(): the output-like directories git tracks source in (discover.mjs)
+        this.viaGit = null; // set by sync(): whether git lists the files (and answers what is ignored)
     }
 
     // ── bootstrap from the store ─────────────────────────────────────────────────
@@ -58,9 +76,13 @@ export class Indexer {
         }
         // an interrupted run may have written files whose references were never resolved
         this.resolveAll = s.getMeta('resolve_pending') === '1';
-        const files = s.all('SELECT id, path, lang, package, is_test FROM files');
-        for (const f of files) this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
-        for (const r of s.all('SELECT id, file_id, name, qname, kind, parent_id, owner, type, bases, decorators, exported, is_static, start_line, end_line FROM symbols')) {
+        const files = s.all('SELECT id, path, lang, package, is_test, deps FROM files ORDER BY path');
+        for (const f of files) {
+            this.table.addFile({ id: f.id, path: f.path, lang: f.lang, package: f.package, isTest: !!f.is_test });
+            this.deps.set(f.id, f.deps ? new Uint32Array(f.deps.buffer.slice(f.deps.byteOffset, f.deps.byteOffset + f.deps.byteLength)) : EMPTY_DEPS);
+        }
+        this.modulesFp = s.getMeta('modules_fp');
+        for (const r of s.all('SELECT s.id, s.file_id, s.name, s.qname, s.kind, s.parent_id, s.owner, s.type, s.bases, s.decorators, s.exported, s.is_static, s.start_line, s.end_line, s.seq FROM symbols s JOIN files f ON f.id = s.file_id ORDER BY f.path, s.seq')) {
             this.table.addSym(rowToSym(r));
         }
         // the interfaces a Go type satisfies implicitly are stored only as `~structural` edges
@@ -72,7 +94,7 @@ export class Indexer {
             if (!ty.bases.includes(r.name)) { ty.bases.push(r.name); ty.structural.add(r.name); }
         }
         const imps = new Map();
-        for (const r of s.all('SELECT file_id, source, imported, local, reexport, wildcard, target_file_id, target_dir, target_path FROM imports')) {
+        for (const r of s.all('SELECT file_id, source, imported, local, reexport, wildcard, line, target_file_id, target_dir, target_path FROM imports ORDER BY rowid')) {
             const list = imps.get(r.file_id) ?? imps.set(r.file_id, []).get(r.file_id);
             list.push(rowToImport(r, r.target_dir, r.target_path));
         }
@@ -82,51 +104,182 @@ export class Indexer {
         for (const [fid, rows] of fields) this.table.setFieldTypes(fid, rows);
         this.modules = new ModuleResolver(this.root, files.map(f => f.path));
         this.resolver.modules = this.modules;
+        // a manifest edited while no process had the index open: the stored imports were resolved with the old one
+        this.modulesStale = files.length > 0 && sha1(this.modules.fingerprint()) !== this.modulesFp;
+        this.dataVersion = s.get('PRAGMA data_version')?.data_version ?? null;
         this.loaded = true;
     }
 
+    /** Forget the in-memory state: it is read again from the store, and every reference resolved again. */
+    #forget() {
+        this.table = new SymbolTable();
+        this.resolver.t = this.table;
+        this.resolver.resetMemo();
+        this.deps = new Map();
+        this.modules = null;
+        this.loaded = false;
+    }
+
     // ── public API ──────────────────────────────────────────────────────────────
+    /**
+     * One update at a time. Tool calls arrive while another is still syncing; two updates interleaved
+     * at their awaits wrote the same file twice (`UNIQUE constraint failed: files.path`) and one could
+     * lose the keys the other had emitted, leaving references bound to rows that were gone.
+     */
+    #queue = Promise.resolve();
+    #serial(fn) {
+        const run = this.#queue.then(fn, fn);
+        this.#queue = run.catch(() => {});
+        return run;
+    }
+
+    /**
+     * Another process wrote the index (the edit hook opens its own when the resident is busy): what
+     * this one holds in memory is no longer what the store holds, so it is read again. SQLite's
+     * `data_version` changes only when another connection commits.
+     * @returns {boolean} whether the state was read again
+     */
+    reloadIfForeign() {
+        const v = this.store.get('PRAGMA data_version')?.data_version ?? null;
+        if (this.loaded && this.dataVersion != null && v !== this.dataVersion) {
+            this.#forget();
+            this.load();
+            this.version++;
+            return true;
+        }
+        this.dataVersion = v;
+        return false;
+    }
+
     /** Full reconciliation with the working tree. */
-    async sync({ onProgress = null } = {}) {
+    sync(opts = {}) { return this.#serial(() => this.#sync(opts)); }
+
+    async #sync({ onProgress = null } = {}) {
         if (!this.loaded) this.load();
+        this.reloadIfForeign();
         const t0 = Date.now();
-        const { files } = discoverFiles(this.root, { include: this.include });
+        const { files, layout, viaGit } = discoverFiles(this.root, { include: this.include });
+        this.layout = layout; // which output-like directories are the project's own, for paths checked one by one
+        this.viaGit = viaGit;
         const known = new Map(this.store.all('SELECT id, path, size, mtime_ms, hash FROM files').map(r => [r.path, r]));
         const present = new Set(files);
         const removed = [...known.keys()].filter(p => !present.has(p));
-        this.modules.setFiles(files);
-        const toParse = [];
+        const toParse = [], onDisk = [];
         for (const rel of files) {
             const st = safeStat(path.join(this.root, rel));
+            // git lists a tracked file until its deletion is staged: one that is gone from the
+            // working tree is no module an import can lead to
+            if (st?.isFile()) onDisk.push(rel);
             if (!st || !st.isFile() || st.size > MAX_FILE_BYTES) { if (known.has(rel)) removed.push(rel); continue; }
             const k = known.get(rel);
             if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
             toParse.push({ rel, st, prev: k ?? null });
         }
-        const res = await this.#apply(toParse, removed, { onProgress });
+        this.modules.setFiles(onDisk);
+        const res = await this.#apply(toParse, removed, { onProgress, modulesChanged: sha1(this.modules.fingerprint()) !== this.modulesFp });
         this.store.setMeta('last_sync', String(Date.now()));
         this.store.setMeta('root', this.root);
         return { ...res, total: files.length, ms: Date.now() - t0 };
     }
 
     /** Re-check specific paths (created/modified/deleted). Cheap; used before answering queries. */
-    async syncPaths(paths) {
+    syncPaths(paths) { return this.#serial(() => this.#syncPaths(paths)); }
+
+    async #syncPaths(paths) {
         if (!this.loaded) this.load();
+        this.reloadIfForeign();
+        // which files are the project's own is learnt by a full discovery: an index reopened and handed paths first does one
+        if (this.viaGit == null) return this.#sync();
         const toParse = [];
         const removed = [];
+        let manifest = false;
+        const rels = new Set();
         for (const p of new Set(paths)) {
-            const rel = path.isAbsolute(p) ? path.relative(this.root, p).split(path.sep).join('/') : p;
-            if (rel.startsWith('..') || !isIndexablePath(rel, { include: this.include })) continue;
+            let rel = path.isAbsolute(p) ? path.relative(this.root, p).split(path.sep).join('/') : String(p);
+            // one spelling per file: `./src/`, `src//a.ts`, `src/./a.ts` are `src`, `src/a.ts`
+            rel = path.posix.normalize(rel.replace(/\\/g, '/')).replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+            if (rel === '' || rel === '.') return this.#sync();
+            if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) continue;
+            // one Unicode form per file: the name the index holds, else the composed one git lists (macOS hands decomposed names to the watcher)
+            if (rel !== rel.normalize('NFC') || rel !== rel.normalize('NFD')) {
+                const held = [rel.normalize('NFC'), rel.normalize('NFD')].find(n => this.store.get('SELECT 1 FROM files WHERE path = ?', n));
+                rel = held ?? (process.platform === 'darwin' ? rel.normalize('NFC') : rel);
+            }
+            // what the repository ignores decides which files there are: one written while it was
+            // ignored is the project's own once the rule is gone (and the other way round), and no
+            // path among these says which. Rare enough to look at everything again.
+            if (path.posix.basename(rel) === '.gitignore') return this.#sync();
+            // a manifest is not indexed (`svelte.config.js` is: it is source as well), but it decides
+            // where imports lead; so does a file a manifest reads (the base a tsconfig extends)
+            if (isManifestPath(rel) || this.modules.manifestReads?.has(rel)) manifest = true;
+            if (specForPath(rel)) rels.add(rel);
+            // a directory that was renamed, moved in or removed arrives as one path: the files the
+            // index holds under it, and the ones it holds on disk now (a directory can be named like a file, `m.ts/`)
+            const under = this.store.all('SELECT path FROM files WHERE path >= ? AND path < ?', rel + '/', rel + '0').map(r => r.path);
+            const isDir = safeStat(path.join(this.root, rel))?.isDirectory();
+            if (!under.length && !isDir) continue;
+            const onDisk = isDir ? filesUnder(this.root, rel) : [];
+            if (!onDisk) return this.#sync(); // too many to look at one by one
+            for (const f of under) rels.add(f);
+            for (const f of onDisk) if (specForPath(f)) rels.add(f);
+        }
+        const unknown = [], oversize = [];
+        for (const rel of rels) {
+            if (!isIndexablePath(rel, { include: this.include, layout: this.layout })) continue;
             const st = safeStat(path.join(this.root, rel));
             const k = this.store.get('SELECT id, path, size, mtime_ms, hash FROM files WHERE path = ?', rel);
-            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES || !insideRoot(this.root, rel)) { if (k) removed.push(rel); continue; }
+            // a name the file system answers for in another case is not the file's: the one on disk is
+            // looked at in its place (git names a file as its index does until it is told of the rename)
+            const disk = st ? diskName(this.root, rel) : rel;
+            if (disk !== rel) rels.add(disk);
+            // handed over by its new name only, after a rename that changed only its letter case: the old row goes
+            if (!k && st && disk === rel && this.#foldsCase()) for (const o of this.store.all('SELECT path FROM files WHERE lower(path) = lower(?) AND path != ?', rel, rel)) if (diskName(this.root, o.path) !== o.path) removed.push(o.path);
+            if (!st || !st.isFile() || st.size > MAX_FILE_BYTES || !insideRoot(this.root, rel) || disk !== rel) {
+                if (k) removed.push(rel);
+                // too big to index, but a file all the same: imports of it still lead there, as a full discovery has it
+                if (st?.isFile() && st.size > MAX_FILE_BYTES && disk === rel && insideRoot(this.root, rel)) { oversize.push(rel); if (!k) unknown.push(rel); }
+                continue;
+            }
             if (k && k.size === st.size && k.mtime_ms === Math.floor(st.mtimeMs)) continue;
             toParse.push({ rel, st, prev: k ?? null });
-            this.modules.addFile(rel);
+            if (!k) unknown.push(rel);
         }
-        for (const r of removed) this.modules.removeFile(r);
-        if (!toParse.length && !removed.length) return { changed: 0, removed: 0 };
-        return this.#apply(toParse, removed, {});
+        // a file the index does not hold yet may be one the repository ignores (generated code, the
+        // output of a watch build): a full discovery would not list it, so it is not indexed here either
+        if (unknown.length && this.viaGit != null) {
+            // with git, what it lists: that also leaves out a nested repository, a submodule and a path beyond a link
+            const listed = this.viaGit ? listedAmong(this.root, unknown) : null;
+            const ignored = this.viaGit ? (listed && new Set(unknown.filter(u => !listed.has(u)))) : ignoredAmong(this.root, unknown, false);
+            if (ignored == null) return this.#sync(); // git could not answer: a full discovery can
+            if (ignored.size) for (let i = oversize.length - 1; i >= 0; i--) if (ignored.has(oversize[i])) oversize.splice(i, 1);
+            if (ignored.size) for (let i = toParse.length - 1; i >= 0; i--) if (!toParse[i].prev && ignored.has(toParse[i].rel)) toParse.splice(i, 1);
+        }
+        for (const p of toParse) if (this.modules.addFile(p.rel)) manifest = true;
+        for (const r of removed) if (this.modules.removeFile(r)) manifest = true;
+        for (const r of oversize) if (this.modules.addFile(r)) manifest = true;
+        // manifests are looked for next to source directories: one that changed, or a directory that
+        // appeared or emptied, can bring one in or out (a Cargo manifest also counts only when its
+        // library file exists, so a Rust file coming or going reads them again)
+        let modulesChanged = !!this.modulesStale;
+        if (manifest || [...removed, ...toParse.filter(p => !p.prev).map(p => p.rel)].some(p => p.endsWith('.rs'))) {
+            this.modules.reloadManifests();
+            modulesChanged = sha1(this.modules.fingerprint()) !== this.modulesFp;
+        }
+        if (!toParse.length && !removed.length && !modulesChanged) return { changed: 0, removed: 0 };
+        return this.#apply(toParse, removed, { modulesChanged });
+    }
+
+    /** Does the file system answer for a name in another letter case (macOS, Windows)? Asked once, of the root's own name. */
+    #foldsCase() {
+        if (this.folds === undefined) {
+            const base = path.basename(this.root);
+            const swapped = base.replace(/\p{L}/gu, c => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+            try {
+                const a = fs.statSync(this.root), b = swapped !== base ? fs.statSync(path.join(path.dirname(this.root), swapped)) : null;
+                this.folds = !!b && a.ino === b.ino && a.dev === b.dev;
+            } catch { this.folds = false; }
+        }
+        return this.folds;
     }
 
     /** Which of these indexed paths differ from disk right now (size/mtime)? */
@@ -141,12 +294,32 @@ export class Indexer {
     }
 
     // ── internals ────────────────────────────────────────────────────────────────
-    async #apply(toParse, removed, { onProgress }) {
-        const s = this.store;
+    /**
+     * Apply a set of changes. If it fails half way the store has rolled back the batch in hand, but
+     * the symbol table has not, and the keys emitted so far are lost: the in-memory state is dropped,
+     * and the next call reads the store again and resolves everything (`resolve_pending`).
+     */
+    async #apply(toParse, removed, opts) {
+        try { return await this.#applyChanges(toParse, removed, opts); }
+        catch (e) { this.#forget(); throw e; }
+    }
+
+    async #applyChanges(toParse, removed, { onProgress, modulesChanged = false }) {
+        const s = this.store, t = this.table;
         let changed = 0, unchangedContent = 0, added = 0;
-        const touchedFileIds = [];
-        const removedSymIds = [];
-        const addedNames = new Set();
+        const touched = new Set();   // files whose references are resolved again
+        const written = new Set();   // files parsed in this run (their imports were resolved against the final module map)
+        const emitted = new Set();   // hashes of the keys this update altered (see resolver.mjs: TrackedMap)
+        const emit = (kind, key) => emitted.add(depHash(kind, String(key)));
+        let fileSetChanged = false, goTouched = this.resolveAll;
+        // a file of a language whose resolution reads the module map itself (Rust paths) came or went
+        let moduleFilesChanged = false;
+
+        // from the first write to the last, the index is one whose references have to be resolved
+        // again if the run stops: the mark goes up before the removals, which commit on their own
+        if (toParse.length || removed.length || modulesChanged) s.setMeta('resolve_pending', '1');
+        t.pkgDelta.clear();
+        t.importDelta.clear();
 
         // remove deleted files
         if (removed.length) {
@@ -154,19 +327,26 @@ export class Indexer {
                 for (const rel of removed) {
                     const f = s.get('SELECT id FROM files WHERE path = ?', rel);
                     if (!f) continue;
-                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { removedSymIds.push(r.id); s.run('DELETE FROM fts WHERE rowid = ?', r.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', r.id); }
+                    if (rel.endsWith('.go')) goTouched = true;
+                    this.#emitFile(f.id, this.#snapshot(f.id, new Map(s.all('SELECT id, sig FROM symbols WHERE file_id = ?', f.id).map(r => [r.id, r.sig]))), emit);
+                    emit('P', rel);
+                    emit('I', f.id);
+                    for (const r of s.all('SELECT id FROM symbols WHERE file_id = ?', f.id)) { s.run('DELETE FROM fts WHERE rowid = ?', r.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', r.id); }
                     s.run('DELETE FROM file_fts WHERE rowid = ?', f.id);
-                    for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, f.id);
+                    for (const tb of ['symbols', 'refs', 'refs_unbound', 'imports', 'fields']) s.run(`DELETE FROM ${tb} WHERE file_id = ?`, f.id);
                     s.run('DELETE FROM files WHERE id = ?', f.id);
-                    this.table.removeFile(f.id);
-                    this.modules?.removeFile(rel);
+                    t.removeFile(f.id);
+                    this.deps.delete(f.id);
+                    // a file still on disk (grown too big to index) is still where its imports lead, as a fresh discovery has it
+                    if (!safeStat(path.join(this.root, rel))?.isFile()) this.modules?.removeFile(rel);
+                    fileSetChanged = true;
+                    if (MODULE_MAP_READERS.has(specForPath(rel)?.id)) moduleFilesChanged = true;
                 }
             });
         }
 
         // parse changed/new files, write in batches; with many files a pool of threads parses the
         // next batch while this one is written
-        if (toParse.length || removed.length) s.setMeta('resolve_pending', '1');
         const BATCH = 200;
         const threads = poolSize(toParse.length);
         const pool = threads ? new ParsePool(threads) : null;
@@ -217,11 +397,11 @@ export class Indexer {
                 }
                 s.tx(() => {
                     for (const p of parsed) {
-                        const r = this.#writeFile(p);
-                        touchedFileIds.push(r.fileId);
-                        removedSymIds.push(...r.removedIds);
-                        for (const n of r.addedNames) addedNames.add(n);
-                        if (p.prev) changed++; else added++;
+                        const fileId = this.#writeFile(p, emit);
+                        touched.add(fileId);
+                        written.add(fileId);
+                        if (p.spec.id === 'go') goTouched = true;
+                        if (p.prev) changed++; else { added++; fileSetChanged = true; if (MODULE_MAP_READERS.has(p.spec.id)) moduleFilesChanged = true; }
                     }
                 });
                 done += Math.min(BATCH, toParse.length - i);
@@ -229,67 +409,111 @@ export class Indexer {
             }
         } finally { await pool?.close(); }
 
-        // resolve: refs of touched files + refs that pointed at removed symbols + refs that may bind to new names
-        this.resolver.resetMemo();
-        const refIds = new Set();
-        if (touchedFileIds.length) {
-            for (const fid of touchedFileIds) for (const r of s.all('SELECT id FROM refs WHERE file_id = ?', fid)) refIds.add(r.id);
-        }
-        const dangling = [];
-        if (removedSymIds.length) {
-            for (let i = 0; i < removedSymIds.length; i += 500) {
-                const chunk = removedSymIds.slice(i, i + 500);
-                for (const r of s.all(`SELECT id FROM refs WHERE dst_id IN (${chunk.map(() => '?').join(',')})`, ...chunk)) { refIds.add(r.id); dangling.push(r.id); }
-            }
-        }
-        const isIncremental = touchedFileIds.length < this.table.files.size;
-        if (addedNames.size && isIncremental) {
-            const names = [...addedNames];
-            for (let i = 0; i < names.length; i += 500) {
-                const chunk = names.slice(i, i + 500);
-                for (const r of s.all(`SELECT id FROM refs WHERE name IN (${chunk.map(() => '?').join(',')}) AND (dst_id IS NULL OR conf < 0.9)`, ...chunk)) refIds.add(r.id);
-            }
-        }
-        const goTouched = this.resolveAll || removed.some(r => r.endsWith('.go')) || toParse.some(p => p.rel.endsWith('.go'));
-        if (this.resolveAll) for (const r of s.all('SELECT id FROM refs')) refIds.add(r.id);
-        const resolved = this.#resolveRefs([...refIds]);
+        s.tx(() => {
+            // where imports lead depends on the file list and the manifests: when either changed, the
+            // imports of the files that were not parsed are looked at again
+            // (a run that stopped half way may have changed either and not got this far: `resolveAll`.
+            // The module map is read directly only by the languages of MODULE_MAP_READERS; the others
+            // read it through their stored imports, refreshed just below — so a new markdown file
+            // does not send every Rust file through resolution again)
+            const again = fileSetChanged || modulesChanged || this.resolveAll;
+            if (modulesChanged || moduleFilesChanged || this.resolveAll) emit('G', 'modules');
+            // a package or directory gained its first file or lost its last (a file rewritten alone in
+            // its directory leaves and comes back: no change)
+            if ([...t.pkgDelta.values()].some(d => d !== 0)) emit('G', 'packages');
+            for (const fid of this.#refreshImports(again, written)) { touched.add(fid); emit('I', fid); }
+            // a file gained its first importer or lost one: what was asked of "who imports it" may answer otherwise
+            for (const id of t.importDelta) emit('B', id);
+            // the files whose references read something this update altered
+            const direct = touched.size;
+            if (this.resolveAll) for (const fid of t.files.keys()) touched.add(fid);
+            else if (emitted.size) for (const [fid, deps] of this.deps) if (!touched.has(fid) && intersects(deps, emitted)) touched.add(fid);
+            this.lastFanout = { changed: written.size + removed.length, dependents: touched.size - direct, keys: emitted.size };
+            for (const fid of touched) if (t.file(fid)?.lang === 'go') { goTouched = true; break; }
+            // Go's implicit implementations are derived after resolution: resolution never sees them
+            if (goTouched) this.#stripStructural();
+        });
+        const resolved = this.#resolveFiles([...touched]);
         if (goTouched) this.#goImplements();
         this.resolveAll = false;
-        if (toParse.length || removed.length) s.setMeta('resolve_pending', '0');
-        if (touchedFileIds.length || removed.length) this.version++;
-        return { added, changed, removed: removed.length, unchangedContent, resolved };
+        const fp = sha1(this.modules.fingerprint());
+        if (fp !== this.modulesFp) { this.modulesFp = fp; s.setMeta('modules_fp', fp); }
+        this.modulesStale = false;
+        if (toParse.length || removed.length || modulesChanged) s.setMeta('resolve_pending', '0');
+        if (touched.size || removed.length) this.version++;
+        return { added, changed, removed: removed.length, unchangedContent, resolved, dependents: this.lastFanout.dependents };
     }
 
-    #writeFile({ rel, st, prev, source, hash, spec, extraction }) {
-        const s = this.store;
+    /**
+     * What resolution can read of a file's definitions, per definition: a signature of everything
+     * but its position (name, kind, nesting, type, bases, signature text…) and its length in lines.
+     */
+    #snapshot(fileId, sigs) {
+        const t = this.table, out = new Map();
+        const names = t.fileNames.get(fileId);
+        for (const id of t.fileSyms.get(fileId) ?? []) {
+            const y = t.sym(id);
+            // its place among the file's definitions of that name: "the first candidate" is read in that order
+            const rank = names?.get(y.name)?.indexOf(id) ?? 0;
+            let anc = '';
+            for (let p = y.parentId != null ? t.sym(y.parentId) : null, g = 0; p && g < 32; p = p.parentId != null ? t.sym(p.parentId) : null, g++) anc += p.kind + '/';
+            out.set(id, {
+                name: y.name, qname: y.qname, owner: y.owner, top: y.parentId == null && y.exported, span: y.endLine - y.startLine,
+                sig: JSON.stringify([y.name, y.qname, y.kind, y.parentId, y.owner, y.type, y.declaredBases ?? y.bases, y.exported, y.isStatic, y.byRef, sigs.get(id) ?? null, anc, rank]),
+            });
+        }
+        return out;
+    }
+
+    /** Emit the keys of every definition of a file (the file appeared, disappeared or changed package). */
+    #emitFile(fileId, snap, emit) {
+        for (const d of snap.values()) this.#emitSym(fileId, d, emit);
+        for (const r of this.table.fieldRows.get(fileId) ?? []) emit('FT', r.owner);
+    }
+
+    #emitSym(fileId, d, emit) {
+        emit('N', d.name);
+        emit('Q', d.qname);
+        if (d.owner) emit('O', d.owner);
+        if (d.top) emit('X', fileId);
+    }
+
+    #writeFile({ rel, st, prev, source, hash, spec, extraction }, emit) {
+        const s = this.store, t = this.table;
         const { symbols, refs, imports, fields, fileInfo, errors, errorLines } = extraction;
         const lines = lineStarts(source);
         const isTest = spec.testFile?.test(rel) ? 1 : 0;
         const pkg = fileInfo?.package ?? null;
         let fileId;
         let oldSyms = [];
+        let before = null; // what the rest of the repository could read of this file before the change
         if (prev) {
             fileId = prev.id;
-            oldSyms = s.all('SELECT id, qname, kind, ordinal FROM symbols WHERE file_id = ?', fileId);
+            oldSyms = s.all('SELECT id, qname, kind, ordinal, sig FROM symbols WHERE file_id = ?', fileId);
+            before = {
+                snap: this.#snapshot(fileId, new Map(oldSyms.map(o => [o.id, o.sig]))),
+                imports: importsKey(Map.prototype.get.call(t.imports, fileId) ?? []),
+                fields: fieldsByOwner(t.fieldRows.get(fileId) ?? []),
+                pkg: t.file(fileId)?.package ?? null,
+            };
             for (const o of oldSyms) { s.run('DELETE FROM fts WHERE rowid = ?', o.id); s.run('DELETE FROM doc_fts WHERE rowid = ?', o.id); }
             s.run('DELETE FROM file_fts WHERE rowid = ?', fileId);
-            for (const t of ['symbols', 'refs', 'imports', 'fields']) s.run(`DELETE FROM ${t} WHERE file_id = ?`, fileId);
+            for (const tb of ['symbols', 'refs', 'refs_unbound', 'imports', 'fields']) s.run(`DELETE FROM ${tb} WHERE file_id = ?`, fileId);
             s.run('UPDATE files SET lang = ?, size = ?, mtime_ms = ?, hash = ?, lines = ?, package = ?, is_test = ?, parse_errors = ?, parse_error_lines = ?, indexed_at = ? WHERE id = ?',
                 spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now(), fileId);
-            this.table.removeFile(fileId);
+            t.removeFile(fileId);
         } else {
             const r = s.run('INSERT INTO files (path, lang, size, mtime_ms, hash, lines, package, is_test, parse_errors, parse_error_lines, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 rel, spec.id, st.size, Math.floor(st.mtimeMs), hash, lines.length, pkg, isTest, errors, errorLines?.length ? JSON.stringify(errorLines) : null, Date.now());
             fileId = Number(r.lastInsertRowid);
         }
-        this.table.addFile({ id: fileId, path: rel, lang: spec.id, package: pkg, isTest: !!isTest });
+        t.addFile({ id: fileId, path: rel, lang: spec.id, package: pkg, isTest: !!isTest });
 
         // stable ids: reuse by (qname, kind, ordinal)
         const oldByKey = new Map(oldSyms.map(o => [o.qname + '\0' + o.kind + '\0' + o.ordinal, o.id]));
         const ordinals = new Map();
         const ids = new Array(symbols.length);
-        const reused = new Set();
-        const addedNames = [];
+        const sigs = new Map();
         const pathTokens = tokenString(rel.replace(/\.[^.]+$/, ''));
         for (let i = 0; i < symbols.length; i++) {
             const sym = symbols[i];
@@ -301,14 +525,14 @@ export class Indexer {
             const parentId = sym.parentIdx >= 0 ? ids[sym.parentIdx] : null;
             const decorators = sym.decorators?.length ? JSON.stringify(sym.decorators) : null;
             const bases = sym.bases?.length ? JSON.stringify(sym.bases) : null;
-            const r = s.run(`INSERT INTO symbols (id, file_id, name, name_lc, qname, kind, parent_id, owner, start_line, start_col, end_line, end_col, name_line, name_col, sig, doc, type, exported, visibility, decorators, bases, ordinal, is_static)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            const r = s.run(`INSERT INTO symbols (id, file_id, name, name_lc, qname, kind, parent_id, owner, start_line, start_col, end_line, end_col, name_line, name_col, sig, doc, type, exported, visibility, decorators, bases, ordinal, is_static, seq)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 reuse ?? null, fileId, sym.name, sym.name.toLowerCase(), sym.qname, sym.kind, parentId, sym.owner, sym.startLine, sym.startCol, sym.endLine, sym.endCol,
-                sym.nameLine, sym.nameCol, sym.sig || null, sym.doc || null, sym.type, sym.exported ? 1 : 0, sym.visibility, decorators, bases, ord, sym.isStatic ? 1 : 0);
+                sym.nameLine, sym.nameCol, sym.sig || null, sym.doc || null, sym.type, sym.exported ? 1 : 0, sym.visibility, decorators, bases, ord, sym.isStatic ? 1 : 0, i);
             const id = reuse ?? Number(r.lastInsertRowid);
             ids[i] = id;
-            if (reuse != null) reused.add(reuse); else addedNames.push(sym.name);
-            this.table.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine, byRef: !!sym.decorators?.[0]?.startsWith('impl &') });
+            sigs.set(id, sym.sig || null);
+            t.addSym({ id, fileId, name: sym.name, qname: sym.qname, kind: sym.kind, parentId, owner: sym.owner, type: sym.type, bases: sym.bases ?? [], exported: !!sym.exported, isStatic: !!sym.isStatic, startLine: sym.startLine, endLine: sym.endLine, byRef: !!sym.decorators?.[0]?.startsWith('impl &'), path: rel, seq: i });
         }
         // FTS documents; documentation goes to its own table and has no file document
         if (spec.docs) {
@@ -350,37 +574,77 @@ export class Indexer {
         const impRows = [];
         for (const imp of imports) {
             const target = this.modules.resolveImport(spec.id, rel, imp);
-            let targetFileId = null;
-            if (target?.file) targetFileId = s.get('SELECT id FROM files WHERE path = ?', target.file)?.id ?? null;
+            const targetFileId = target?.file ? Map.prototype.get.call(t.fileByPath, target.file)?.id ?? null : null;
             const row = { source: imp.source ?? null, imported: imp.imported ?? null, local: imp.local ?? null, reexport: imp.reexport ?? null, wildcard: imp.wildcard ? 1 : 0, line: imp.line ?? null, target_file_id: targetFileId, target_dir: target?.dir ?? null };
             s.run('INSERT INTO imports (file_id, source, imported, local, reexport, wildcard, line, target_file_id, target_dir, target_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 fileId, row.source, row.imported, row.local, row.reexport, row.wildcard, row.line, row.target_file_id, row.target_dir, target?.file ?? null);
             impRows.push(rowToImport(row, target?.dir ?? null, target?.file ?? null));
         }
-        this.table.setImports(fileId, impRows);
+        t.setImports(fileId, impRows);
         for (const f of fields ?? []) s.run('INSERT INTO fields (file_id, owner_qname, name, type) VALUES (?, ?, ?, ?)', fileId, f.owner, f.name, f.type);
-        this.table.setFieldTypes(fileId, (fields ?? []).map(f => ({ owner_qname: f.owner, name: f.name, type: f.type })));
-        const removedIds = oldSyms.filter(o => !reused.has(o.id)).map(o => o.id);
-        return { fileId, removedIds, addedNames };
+        t.setFieldTypes(fileId, (fields ?? []).map(f => ({ owner_qname: f.owner, name: f.name, type: f.type })));
+
+        // what changed for the rest of the repository: the keys other files' resolutions may have read
+        const after = this.#snapshot(fileId, sigs);
+        if (!before) {
+            this.#emitFile(fileId, after, emit);
+            emit('P', rel);
+        } else {
+            const moved = before.pkg !== pkg; // another package: every definition is a different one to its users
+            for (const [id, o] of before.snap) {
+                const n = after.get(id);
+                if (!n || n.sig !== o.sig || moved) { this.#emitSym(fileId, o, emit); if (n) this.#emitSym(fileId, n, emit); }
+                else if (n.span !== o.span) emit('L', o.name);
+            }
+            for (const [id, n] of after) if (!before.snap.has(id)) this.#emitSym(fileId, n, emit);
+            if (importsKey(impRows) !== before.imports) emit('I', fileId);
+            const now = fieldsByOwner(t.fieldRows.get(fileId) ?? []);
+            for (const owner of new Set([...before.fields.keys(), ...now.keys()])) if (before.fields.get(owner) !== now.get(owner)) emit('FT', owner);
+        }
+        return fileId;
     }
 
-    /** Import targets whose file was not indexed yet at write time are fixed up lazily here. */
-    #fixImportTargets() {
-        const s = this.store;
-        for (const [fid, imps] of this.table.imports) {
-            const f = this.table.file(fid);
-            if (!f) continue;
+    /**
+     * Bring stored import targets in line with the module map. `all`: the file list or a manifest
+     * changed, so every import of the files that were not parsed in this run is resolved again;
+     * otherwise only targets that were waiting for their file to be indexed are filled in.
+     * @returns {number[]} the files, not parsed in this run, whose imports now lead elsewhere
+     */
+    #refreshImports(all, written) {
+        const s = this.store, t = this.table;
+        const moved = [];
+        for (const [fid, imps] of t.imports) {
+            const f = t.file(fid);
+            if (!f || !imps.length) continue;
+            const again = all && !written.has(fid);
             let changed = false;
             for (const imp of imps) {
-                // a package import can have both a directory and an entry file (Python `pkg/__init__.py`)
-                if (imp.targetFileId != null || !imp.targetPath) continue;
-                const t = this.table.fileByPath.get(imp.targetPath);
-                if (t) { imp.targetFileId = t.id; changed = true; }
+                let file = imp.targetPath, dir = imp.targetDir;
+                if (again) { const target = this.modules.resolveImport(f.lang, f.path, imp); file = target?.file ?? null; dir = target?.dir ?? null; }
+                else if (imp.targetFileId != null || !file) continue;
+                const id = file ? Map.prototype.get.call(t.fileByPath, file)?.id ?? null : null;
+                if (file !== imp.targetPath || dir !== imp.targetDir || id !== imp.targetFileId) { imp.targetPath = file; imp.targetDir = dir; imp.targetFileId = id; changed = true; }
             }
-            if (changed) {
-                for (const imp of imps) if (imp.targetFileId != null && imp.targetPath) s.run('UPDATE imports SET target_file_id = ? WHERE file_id = ? AND target_path = ? AND target_file_id IS NULL', imp.targetFileId, fid, imp.targetPath);
-                this.table.setImports(fid, imps);
+            if (!changed) continue;
+            s.run('DELETE FROM imports WHERE file_id = ?', fid);
+            for (const imp of imps) {
+                s.run('INSERT INTO imports (file_id, source, imported, local, reexport, wildcard, line, target_file_id, target_dir, target_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    fid, imp.source, imp.imported, imp.local, imp.reexport, imp.wildcard ? 1 : 0, imp.line ?? null, imp.targetFileId, imp.targetDir, imp.targetPath);
             }
+            t.setImports(fid, imps);
+            if (!written.has(fid)) moved.push(fid);
+        }
+        return moved;
+    }
+
+    /** Take Go's implicit implementations out of the table and the store (they are derived again after resolution). */
+    #stripStructural() {
+        const s = this.store, t = this.table;
+        const old = s.all("SELECT DISTINCT src_id, name FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
+        s.run("DELETE FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
+        for (const o of old) {
+            const sym = t.sym(o.src_id);
+            if (sym && sym.structural?.has(o.name)) { sym.bases = sym.bases.filter(b => b !== o.name || sym.declaredBases?.includes(b)); sym.structural.delete(o.name); }
         }
     }
 
@@ -394,12 +658,6 @@ export class Indexer {
     #goImplements() {
         const s = this.store, t = this.table;
         s.tx(() => {
-            const old = s.all("SELECT src_id, name FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
-            s.run("DELETE FROM refs WHERE kind = 'inherit' AND recv_type = '~structural'");
-            for (const o of old) {
-                const sym = t.sym(o.src_id);
-                if (sym && sym.structural?.has(o.name)) { sym.bases = sym.bases.filter(b => b !== o.name || sym.declaredBases?.includes(b)); sym.structural.delete(o.name); }
-            }
             const goFile = (fid) => t.file(fid)?.lang === 'go';
             const dirOf = (fid) => { const f = t.file(fid); return f ? path.posix.dirname(f.path) : null; };
             const ifaces = [], types = [];
@@ -409,6 +667,9 @@ export class Indexer {
                 else if (sym.kind === 'struct' || sym.kind === 'type' || sym.kind === 'class') types.push(sym);
             }
             if (!ifaces.length || !types.length) return;
+            // in the table's canonical order, whatever order the files were indexed in
+            ifaces.sort((a, b) => t.cmp(a, b));
+            types.sort((a, b) => t.cmp(a, b));
             const ifaceByName = new Map();
             for (const i of ifaces) (ifaceByName.get(i.name) ?? ifaceByName.set(i.name, []).get(i.name)).push(i);
             // a method's signature shape (see go.mjs methodShape); null when unreadable, which matches any
@@ -473,25 +734,87 @@ export class Indexer {
         });
     }
 
-    #resolveRefs(refIds) {
-        if (!refIds.length) return 0;
-        const s = this.store;
-        this.#fixImportTargets();
+    /**
+     * Resolve every reference of these files again, recording for each file what its resolution
+     * read. A reference that binds to nothing in the repository moves to `refs_unbound`, and one
+     * kept there that now binds comes back.
+     */
+    #resolveFiles(fileIds) {
+        if (!fileIds.length) return 0;
+        const s = this.store, t = this.table;
+        const droppable = (r, res) => res.id == null && (r.kind === 'value' || r.kind === 'read' || r.kind === 'type' || res.external);
         let n = 0;
         s.tx(() => {
-            for (let i = 0; i < refIds.length; i += 900) {
-                const chunk = refIds.slice(i, i + 900);
-                const rows = s.all(`SELECT id, file_id, src_id, name, kind, recv, recv_type, argc, arg_types FROM refs WHERE id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
-                for (const r of rows) {
-                    const res = this.resolver.resolve(r);
-                    if (res.id == null && (r.kind === 'value' || r.kind === 'read' || r.kind === 'type' || res.external)) { s.run('DELETE FROM refs WHERE id = ?', r.id); continue; }
-                    s.run('UPDATE refs SET dst_id = ?, conf = ?, ncand = ? WHERE id = ?', res.id, res.conf, res.ncand ?? 0, r.id);
-                    if (res.id != null) n++;
-                }
+            for (const fid of fileIds) {
+                if (!t.file(fid)) continue;
+                const rows = s.all("SELECT id, file_id, src_id, name, kind, line, col, recv, recv_type, argc, arg_types, dst_id, conf, ncand FROM refs WHERE file_id = ? AND (recv_type IS NULL OR recv_type != '~structural')", fid);
+                const unbound = s.all('SELECT id, file_id, src_id, name, kind, line, col, recv, recv_type, argc, arg_types FROM refs_unbound WHERE file_id = ?', fid);
+                // nothing computed for another file is reused: what this file's answers read is all recorded here
+                this.resolver.resetMemo();
+                const deps = t.deps = newDeps();
+                try {
+                    // one order for both lists, the same whether the index is being built or brought up
+                    // to date: by position, as the file reads (rows move between the two tables as
+                    // they gain and lose a target, so their own order says nothing)
+                    const all = [...rows, ...unbound.map(r => ({ ...r, aside: true }))].sort((x, y) => x.line - y.line || x.col - y.col || (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : 0) || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+                    for (const r of all) {
+                        const res = this.resolver.resolve(r);
+                        if (r.aside) {
+                            if (droppable(r, res)) continue;
+                            s.run('DELETE FROM refs_unbound WHERE id = ?', r.id);
+                            s.run('INSERT INTO refs (file_id, src_id, name, kind, line, col, recv, recv_type, dst_id, conf, ncand, argc, arg_types) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', fid, r.src_id, r.name, r.kind, r.line, r.col, r.recv, r.recv_type, res.id, res.conf, res.ncand ?? 0, r.argc, r.arg_types);
+                            if (res.id != null) n++;
+                            continue;
+                        }
+                        if (droppable(r, res)) {
+                            s.run('DELETE FROM refs WHERE id = ?', r.id);
+                            s.run('INSERT INTO refs_unbound (file_id, src_id, name, kind, line, col, recv, recv_type, argc, arg_types) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', fid, r.src_id, r.name, r.kind, r.line, r.col, r.recv, r.recv_type, r.argc, r.arg_types);
+                            continue;
+                        }
+                        const ncand = res.ncand ?? 0;
+                        if (res.id !== r.dst_id || res.conf !== r.conf || ncand !== r.ncand) s.run('UPDATE refs SET dst_id = ?, conf = ?, ncand = ? WHERE id = ?', res.id, res.conf, ncand, r.id);
+                        if (res.id != null) n++;
+                    }
+                } finally { t.deps = null; }
+                const keys = packDeps(deps);
+                this.deps.set(fid, keys);
+                s.run('UPDATE files SET deps = ? WHERE id = ?', new Uint8Array(keys.buffer, keys.byteOffset, keys.byteLength), fid);
             }
         });
+        this.resolver.resetMemo();
         return n;
     }
+}
+
+const EMPTY_DEPS = new Uint32Array(0);
+
+/** A file's recorded reads as a sorted array of distinct key hashes. */
+function packDeps(deps) {
+    const set = new Set();
+    for (const kind of Object.keys(deps)) for (const key of deps[kind]) set.add(depHash(kind, String(key)));
+    return Uint32Array.from(set).sort();
+}
+
+/** Does a sorted array of key hashes hold any of the emitted ones? */
+function intersects(sorted, emitted) {
+    if (!sorted.length) return false;
+    if (emitted.size > 24) { for (let i = 0; i < sorted.length; i++) if (emitted.has(sorted[i])) return true; return false; }
+    for (const h of emitted) {
+        let lo = 0, hi = sorted.length - 1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; const v = sorted[mid]; if (v === h) return true; if (v < h) lo = mid + 1; else hi = mid - 1; }
+    }
+    return false;
+}
+
+/** The parts of a file's imports that other files' resolutions read (not their lines). */
+function importsKey(imps) {
+    return JSON.stringify(imps.map(i => [i.source, i.imported, i.local, i.reexport, i.wildcard ? 1 : 0, i.targetPath ?? null, i.targetDir ?? null]));
+}
+
+function fieldsByOwner(rows) {
+    const by = new Map();
+    for (const r of rows) by.set(r.owner, (by.get(r.owner) ?? '') + r.name + '\u0000' + r.type + '\u0001');
+    return by;
 }
 
 function safeStat(p) { try { return fs.statSync(p); } catch { return null; } }
@@ -500,13 +823,13 @@ function rowToSym(r) {
     return {
         id: r.id, fileId: r.file_id, name: r.name, qname: r.qname, kind: r.kind, parentId: r.parent_id ?? null, owner: r.owner ?? null,
         type: r.type ?? null, bases: r.bases ? JSON.parse(r.bases) : [], exported: !!r.exported, isStatic: !!r.is_static, startLine: r.start_line, endLine: r.end_line,
-        byRef: r.decorators ? /^\["impl &/.test(r.decorators) : false,
+        byRef: r.decorators ? /^\["impl &/.test(r.decorators) : false, seq: r.seq ?? undefined,
     };
 }
 
 function rowToImport(r, dir = null, targetPath = null) {
     return {
-        source: r.source, imported: r.imported, local: r.local, reexport: r.reexport, wildcard: !!r.wildcard,
+        source: r.source, imported: r.imported, local: r.local, reexport: r.reexport, wildcard: !!r.wildcard, line: r.line ?? null,
         targetFileId: r.target_file_id ?? null, targetDir: dir ?? r.target_dir ?? null, targetPath,
     };
 }

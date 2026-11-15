@@ -15,7 +15,7 @@ process.emitWarning = function (warning, ...rest) {
 };
 const { DatabaseSync } = await import('node:sqlite');
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS files (
   is_test INTEGER NOT NULL DEFAULT 0,
   parse_errors INTEGER NOT NULL DEFAULT 0, -- regions the parser could not read (ERROR nodes)
   parse_error_lines TEXT,                   -- their [start, end] lines as JSON, the first 100
-  indexed_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL,
+  deps BLOB                                 -- what resolving this file's references read (sorted 32-bit key hashes): which changes elsewhere reach it
 );
 CREATE TABLE IF NOT EXISTS symbols (
   id INTEGER PRIMARY KEY AUTOINCREMENT, -- ids are never reused: stable ids of re-indexed symbols are re-inserted explicitly
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS symbols (
   decorators TEXT,
   bases TEXT,
   ordinal INTEGER NOT NULL DEFAULT 0,
-  is_static INTEGER NOT NULL DEFAULT 0
+  is_static INTEGER NOT NULL DEFAULT 0,
+  seq INTEGER NOT NULL DEFAULT 0 -- position in the file's extraction: with the path, the canonical order of definitions
 );
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name_lc);
@@ -77,6 +79,22 @@ CREATE INDEX IF NOT EXISTS refs_file ON refs(file_id);
 CREATE INDEX IF NOT EXISTS refs_dst ON refs(dst_id);
 CREATE INDEX IF NOT EXISTS refs_src ON refs(src_id);
 CREATE INDEX IF NOT EXISTS refs_name ON refs(name);
+-- references that bind to nothing in the repository (a library's member, an untyped read): no answer
+-- shows them, but a later change elsewhere can give them a target, so they are kept to be resolved again
+CREATE TABLE IF NOT EXISTS refs_unbound (
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL,
+  src_id INTEGER,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  col INTEGER NOT NULL,
+  recv TEXT,
+  recv_type TEXT,
+  argc INTEGER,
+  arg_types TEXT
+);
+CREATE INDEX IF NOT EXISTS refs_unbound_file ON refs_unbound(file_id);
 CREATE TABLE IF NOT EXISTS imports (
   file_id INTEGER NOT NULL,
   source TEXT,
@@ -140,6 +158,7 @@ export class Store {
     constructor(dbPath) {
         this.path = dbPath;
         this.stmts = new Map();
+        this.writes = new Map(); // write statements (see run)
         fs.mkdirSync(path.dirname(dbPath), { recursive: true });
         this.db = new DatabaseSync(dbPath);
         this.#harden();
@@ -173,7 +192,16 @@ export class Store {
 
     all(sql, ...params) { return this.q(sql).all(...params); }
     get(sql, ...params) { return this.q(sql).get(...params); }
-    run(sql, ...params) { return this.q(sql).run(...params); }
+    /**
+     * A write. Its statement reads integers as BigInt: what SQLite reports as the last inserted rowid after a write to an FTS5
+     * table can be one of FTS5's own (its segment rowids pass 2^53), and Node 26 throws for an integer a number cannot hold.
+     * The ids this code inserts are small: `lastInsertRowid` is turned back into a number by whoever reads it.
+     */
+    run(sql, ...params) {
+        let s = this.writes.get(sql);
+        if (!s) { s = this.db.prepare(sql); s.setReadBigInts(true); this.writes.set(sql, s); }
+        return s.run(...params);
+    }
 
     tx(fn) {
         this.db.exec('BEGIN');
@@ -184,7 +212,7 @@ export class Store {
     /** Drop every indexed fact but keep the database (the index is a cache of the source tree). */
     reset() {
         this.tx(() => {
-            for (const t of ['files', 'symbols', 'refs', 'imports', 'fields', 'vectors', 'vec_files']) this.db.exec(`DELETE FROM ${t}`);
+            for (const t of ['files', 'symbols', 'refs', 'refs_unbound', 'imports', 'fields', 'vectors', 'vec_files']) this.db.exec(`DELETE FROM ${t}`);
             this.db.exec("INSERT INTO fts(fts) VALUES ('delete-all')");
             this.db.exec("INSERT INTO file_fts(file_fts) VALUES ('delete-all')");
             this.db.exec("INSERT INTO doc_fts(doc_fts) VALUES ('delete-all')");

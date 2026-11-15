@@ -47,9 +47,18 @@ const cands = intel.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.name_line
     AND s.name NOT LIKE '<%'`)
     .filter(s => srcDirs.some(d => s.path.startsWith(d + '/')) && (!scope.length || scope.some(p => s.path.startsWith(p))));
 const rand = rng(seed);
-const sample = [];
+let sample = [];
 const pool = [...cands];
 while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
+// --sample FILE freezes the sample (one `path:line:qname` per line): used if FILE exists, written to
+// it if not, so that two builds are scored on the same symbols (as bench/eval-graph-rust.mjs does)
+const sampleFile = opt('--sample', null);
+if (sampleFile && fs.existsSync(sampleFile)) {
+    const byKey = new Map(cands.map(s => [`${s.path}:${s.name_line}:${s.qname}`, s]));
+    const keys = fs.readFileSync(sampleFile, 'utf8').split('\n').filter(Boolean);
+    sample = keys.map(k => byKey.get(k)).filter(Boolean);
+    console.log(`sample from ${sampleFile}: ${sample.length} of ${keys.length} symbols found`);
+} else if (sampleFile) fs.writeFileSync(sampleFile, sample.map(s => `${s.path}:${s.name_line}:${s.qname}`).join('\n') + '\n');
 
 // ── oracle ───────────────────────────────────────────────────────────────────────
 const t0 = Date.now();
