@@ -62,8 +62,24 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
   annotates at most 50,000 matching lines, and a file whose syntax makes the structural queries
   super-linear is given up after 15 s, so none of them can block the server. Tool arguments are held
   to the bounds their schema declares (depths, limits, list lengths) whatever the client sends.
-- **Read-only tools.** All MCP tools are read-only (`readOnlyHint: true`) and never modify
-  the repository.
+- **One tool writes, when asked to.** Every MCP tool is read-only (`readOnlyHint: true`) and
+  never modifies the repository, except `rename_symbol`: called with `apply: true` it rewrites
+  the lines that name the symbol, and it is declared accordingly (`readOnlyHint: false`,
+  `destructiveHint: true`), so a client that asks before running such a tool asks. Without
+  `apply` it lists the edits and changes nothing. The same rename is
+  `graph-indexer rename … --write` on the command line (when a resident process holds the index,
+  the command line asks it over the local socket, and it is that process that writes). Either
+  way it edits only regular files the index holds, inside the repository and never through a
+  link, at positions it has checked against each file's text as read from disk at that moment;
+  it writes all of them or none (through a temporary file beside each one, putting back what it
+  wrote if a later write fails). The temporary file has a random name and is created exclusively,
+  never through a link a repository could plant there, and a file that is not valid UTF-8 is not
+  rewritten. Apart from that temporary file it creates, deletes and moves no file, and it runs
+  nothing.
+  `graph-indexer serve --read-only` (or `GRAPH_INDEXER_READ_ONLY=1`) starts a server none of
+  whose tools write: `rename_symbol` is then declared read-only, has no `apply`, and lists its
+  edits whatever it is sent, over MCP and to a `rename --write` the command line sends to its
+  local socket.
 - **stdio transport.** The MCP server talks to the local client over stdin/stdout. It does not
   open a network socket.
 - **Local socket for hooks and the CLI.** The MCP server, or `graph-indexer daemon` started by the
@@ -72,7 +88,8 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
   long for a socket, in a per-user directory in the temp dir with mode 0700 whose owner and mode
   both sides check before using it. On Windows the pipe's name carries a random id that each
   resident writes to `.graph-indexer/`, so another user of the machine cannot create the pipe first
-  and answer in its place. It answers the same read-only queries as the CLI.
+  and answer in its place. It answers the same queries as the CLI, the one write among them
+  (`rename --write`) only when the resident is not a server started read-only.
   `GRAPH_INDEXER_RESIDENT=0` disables it.
 - **Local artifacts.** The index is a SQLite database in `<repo>/.graph-indexer/` (git-ignored by
   `init`, mode 0700; a `.graph-indexer` that is a symbolic link is refused, symbolic links inside it
@@ -84,7 +101,8 @@ graph-indexer is a local developer tool. Its threat model follows from a few del
 ## Runtime
 
 graph-indexer runs in the Node.js the user installs. It requires a release that includes the
-October 2026 Node.js security fixes (22.23.4+, 24.22.1+ or 26.12.1+; CVE-2026-111497 and others).
+November 2026 Node.js security fixes (22.23.5+, 24.22.3+ or 26.13.1+; CVE-2026-123864,
+CVE-2026-126051 and others), which include October's (CVE-2026-111497).
 Keep Node.js updated to the latest patch release of a supported line.
 
 ## Operational guidance

@@ -30,6 +30,7 @@ The \`graph-indexer\` MCP server answers what a text search cannot answer exactl
 - Starting on any other task in code you have not read: \`explore\` with the task in words.
 - Uses of a function, method or class that other code shares a name with: \`find_references\` (exact call sites, says when the list is complete; kind \`inherit\` for subclasses and implementations). Callers of callers: \`call_graph\`.
 - Before changing a signature other code relies on: \`change_impact\`; after: \`check_changes\`.
+- Renaming a function, method, class or field everywhere it is used: \`rename_symbol\` (lists the edits; \`apply: true\` writes them).
 ${BLOCK_END}`;
 
 /** The managed instructions block `init` writes to CLAUDE.md / AGENTS.md (markers included). */

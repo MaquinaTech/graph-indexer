@@ -2,7 +2,7 @@
 
 const TH = (cap) => `[(type_identifier) @${cap} (generic_type type: (type_identifier) @${cap}) (scoped_type_identifier path: (_) @recv name: (type_identifier) @${cap}) (reference_type type: (type_identifier) @${cap}) (reference_type type: (generic_type type: (type_identifier) @${cap}))]`;
 // a whole type (normalizeType unwraps references, Box/Rc/Arc/Option/Result, and sees Vec<T> as T[])
-const TW = (cap) => `[(type_identifier) (generic_type) (scoped_type_identifier) (reference_type) (array_type) (pointer_type) (tuple_type)] @${cap}`;
+const TW = (cap) => `[(type_identifier) (primitive_type) (generic_type) (scoped_type_identifier) (reference_type) (array_type) (pointer_type) (tuple_type)] @${cap}`;
 
 const QUERY = `
 (function_item name: (identifier) @name return_type: ${TW('type')}) @def.function
@@ -241,7 +241,9 @@ function macroEdit(node, text, parse) {
         edit = { from: bang, to: bang + 1, text: ' ' };
         probe = `fn __() { let _ = __(${inner}); }`;
     } else if (open === '[') {
-        edit = { from: node.startIndex, to: bang + 1, text: blank(text.slice(node.startIndex, bang + 1)) };
+        // `vec![..]` keeps an empty block comment where its name stood: the array is a Vec (see rustArgType)
+        const gap = blank(text.slice(node.startIndex, bang + 1));
+        edit = { from: node.startIndex, to: bang + 1, text: macro.text === 'vec' && gap.length === 4 ? '/**/' : gap };
         probe = `fn __() { let _ = [${inner}]; }`;
     } else if (open === '{' && ITEM_PARENTS.has(node.parent?.type) && inner.trim()) {
         edit = { from: node.startIndex, to: tt.endIndex, text: blank(text.slice(node.startIndex, tt.startIndex + 1)) + inner + ' ' };
@@ -269,20 +271,283 @@ function wrappedValue(node, describe) {
     return args.length === 1 ? describe(args[0]) : undefined;
 }
 
+const POINTER_TYPES = new Set(['Box', 'Rc', 'Arc', 'Cow', 'Pin', 'Option', 'Result', 'Weak']);
+
 /**
- * A file whose own crate defines a type named like a transparent wrapper (tokio's `Mutex`,
- * `RwLock`, `Semaphore`…) keeps that type: `inner: Mutex<Inner>` is tokio's Mutex, whose
- * methods (`get_mut`, `lock`) are the repository's, not a view of Inner.
+ * A file whose own crate defines a type named like a transparent wrapper or a collection (tokio's
+ * `Mutex`, `RwLock`, `LinkedList`…) keeps that type: `inner: Mutex<Inner>` is tokio's Mutex, whose
+ * methods (`get_mut`, `lock`) are the repository's, not a view of Inner. A `use` rooted anywhere but
+ * the standard library (`use crate::…`, `use tokio::sync::Mutex` in the crate's tests) names such a type.
  */
 function specForSource(source) {
     let shadowed = null;
-    for (const t of rust.transparentTypes) {
+    for (const t of [...rust.transparentTypes, ...rust.elementTypes, ...rust.mapTypes]) {
         if (!source.includes(t)) continue;
-        const own = new RegExp(`\\b(?:struct|enum|type|trait|union)\\s+${t}\\b|\\buse\\s+(?:crate|self|super)::[^;]*\\b${t}\\b[^;]*;`).test(source);
-        if (own) (shadowed ??= new Set()).add(t);
+        // a pointer or an Option reached through a path (`use crate::loom::sync::Arc`) is still a pointer to its contents
+        const defined = new RegExp(`\\b(?:struct|enum|type|trait|union)\\s+${t}\\b`).test(source);
+        const imported = !POINTER_TYPES.has(t) && new RegExp(`\\buse\\s+(?!(?:std|core|alloc)::)\\w+::[^;]*\\b${t}\\b[^;]*;`).test(source);
+        if (defined || imported) (shadowed ??= new Set()).add(t);
     }
-    if (!shadowed) return null;
-    return { ...rust, transparentTypes: new Set([...rust.transparentTypes].filter(t => !shadowed.has(t))) };
+    const local = ownModuleNames(source);
+    if (!shadowed && !local) return null;
+    const out = { ...rust };
+    if (shadowed) {
+        out.isPrimitiveType = (t) => PRIMITIVES.has(t) && !shadowed.has(t);
+        for (const k of ['transparentTypes', 'elementTypes', 'mapTypes']) out[k] = new Set([...rust[k]].filter(t => !shadowed.has(t)));
+    }
+    if (local) out.externalReceivers = new Set([...rust.externalReceivers].filter(t => !local.has(t)));
+    return out;
+}
+
+/**
+ * `fs::symlink(..)` names std's `fs` unless the file brings in another `fs`: `use tokio::fs;`,
+ * `use crate::io::{self, …}`, `mod fs;`. The names the file binds that way, among the standard
+ * library's module names (a name followed by `::` in a path is not bound by it).
+ */
+function ownModuleNames(source) {
+    let names = null;
+    const add = (n) => { if (rust.externalReceivers.has(n)) (names ??= new Set()).add(n); };
+    for (const m of source.matchAll(/\bmod\s+(\w+)/g)) add(m[1]);
+    for (const m of source.matchAll(/\buse\s+(?!(?:std|core|alloc)::)([^;]*);/g)) {
+        const body = m[1];
+        for (const b of body.matchAll(/\bas\s+(\w+)/g)) add(b[1]);
+        for (const b of body.matchAll(/\b(\w+)\s*(?=[,;}]|$)/g)) if (b[1] !== 'self') add(b[1]);
+        for (const b of body.matchAll(/\b(\w+)::\{\s*self\b/g)) add(b[1]);
+    }
+    return names;
+}
+
+// ── argument types ──────────────────────────────────────────────────────────────
+// Impls of one trait for one type differ by the trait's type argument (`impl From<f32> for Value`,
+// `impl From<bool> for Value`): `Value::from(x)` runs the impl whose parameter is the type of `x`.
+// The types below are Rust type text, normalised (no lifetimes, `&mut T` / `&T`, `_` = not known,
+// `{int}` / `{float}` = an unsuffixed literal), as far as the call's own source shows them.
+
+const INT_TYPES = new Set(['i8', 'i16', 'i32', 'i64', 'i128', 'isize', 'u8', 'u16', 'u32', 'u64', 'u128', 'usize']);
+
+/** A type as written, without lifetimes and spacing: `&'a mut [u8]` → `&mut [u8]`. */
+function normTy(t) {
+    if (!t) return null;
+    const s = String(t).replace(/'[A-Za-z_]\w*\s*/g, '').replace(/::</g, '<').replace(/\s+/g, ' ').replace(/&\s+/g, '&').replace(/\s*([<>,;\[\]()])\s*/g, (m, c) => (c === ',' || c === ';' ? c + ' ' : c)).trim();
+    return s || null;
+}
+
+/** `Vec<u8>` → { head: 'Vec', args: ['u8'] }; `&mut T` → { ref: 'mut', to: 'T' }; `[T]`, `[T; N]`, `(A, B)`. */
+function parseTy(s) {
+    s = s.trim();
+    let m;
+    if ((m = /^&(mut )?(.*)$/s.exec(s))) return { ref: m[1] ? 'mut' : '', to: m[2] };
+    if (s[0] === '[' && s.endsWith(']')) { const parts = splitTop(s.slice(1, -1), ';'); return parts.length === 2 ? { arr: parts[0] } : { slice: parts[0] }; }
+    if (s[0] === '(' && s.endsWith(')')) return { tuple: splitTop(s.slice(1, -1), ',').filter(Boolean) };
+    const i = s.indexOf('<');
+    const base = i < 0 ? s : s.slice(0, i);
+    const head = base.replace(/^(dyn|impl)\s+/, '').split('::').pop().trim();
+    return { head, args: i < 0 ? [] : splitTop(s.slice(i + 1, s.lastIndexOf('>')), ',').filter(Boolean), sized: !/^(dyn|impl)\s/.test(base) };
+}
+
+/** Split at top-level `sep` (not inside <>, (), []). */
+function splitTop(s, sep) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if ('<([{'.includes(c)) depth++;
+        else if ('>)]}'.includes(c) && !(c === '>' && s[i - 1] === '-')) depth--;
+        if (c === sep && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+    }
+    out.push(cur.trim());
+    return out;
+}
+
+/**
+ * How well an argument type fits a parameter type: 2 the same type, 1 fits through something not
+ * known (`_`, a literal's `{int}`, a generic parameter), 0 never. A reference is no value of its type
+ * (`From<&T>` and `From<T>` are different impls), and `&mut` is no `&`: trait selection does not coerce.
+ */
+function tyFit(a, p, generics) {
+    if (a === '_') return 1;
+    const pa = parseTy(a), pp = parseTy(p);
+    if (pp.head !== undefined && !pp.args.length && (generics.has(pp.head) || /^[A-Z][A-Z0-9]?$/.test(pp.head))) return 1;
+    if (a === '{int}') return pp.head && INT_TYPES.has(pp.head) ? 1 : 0;
+    if (a === '{float}') return pp.head === 'f32' || pp.head === 'f64' ? 1 : 0;
+    if (pa.ref != null || pp.ref != null) return pa.ref === pp.ref && pa.ref != null ? tyFit(pa.to, pp.to, generics) : 0;
+    if (pa.slice != null || pp.slice != null) return pa.slice != null && pp.slice != null ? tyFit(pa.slice, pp.slice, generics) : 0;
+    if (pa.arr != null || pp.arr != null) return pa.arr != null && pp.arr != null ? tyFit(pa.arr, pp.arr, generics) : 0;
+    if (pa.tuple || pp.tuple) {
+        if (!pa.tuple || !pp.tuple || pa.tuple.length !== pp.tuple.length) return 0;
+        return pa.tuple.reduce((m, t, i) => Math.min(m, tyFit(t, pp.tuple[i], generics)), 2);
+    }
+    if (pa.head !== pp.head) return 0;
+    if (!pa.args.length || !pp.args.length) return pa.args.length === pp.args.length ? 2 : 1;
+    if (pa.args.length !== pp.args.length) return 0;
+    return pa.args.reduce((m, t, i) => Math.min(m, tyFit(t, pp.args[i], generics)), 2);
+}
+
+/** The parameters of the function `name` declared in a signature: { self, types, generics }, or null. */
+function rustParams(sig, name) {
+    const m = sig ? new RegExp(`\\bfn\\s+${name}\\s*`).exec(sig) : null;
+    if (!m) return null;
+    let i = m.index + m[0].length;
+    const generics = new Set();
+    if (sig[i] === '<') {
+        let d = 0, j = i;
+        for (; j < sig.length; j++) { if (sig[j] === '<') d++; else if (sig[j] === '>' && sig[j - 1] !== '-' && --d === 0) break; }
+        for (const g of splitTop(sig.slice(i + 1, j), ',')) { const n = /^(?:const\s+)?([A-Za-z_]\w*)/.exec(g); if (n) generics.add(n[1]); }
+        i = j + 1;
+        while (sig[i] === ' ') i++;
+    }
+    if (sig[i] !== '(') return null;
+    let d = 0, j = i;
+    for (; j < sig.length; j++) { if ('([{<'.includes(sig[j])) d++; else if (')]}>'.includes(sig[j]) && sig[j - 1] !== '-' && --d === 0) break; }
+    if (d !== 0) return null;
+    let self = false;
+    const types = [];
+    for (const p of splitTop(sig.slice(i + 1, j), ',')) {
+        if (!p) continue;
+        if (/^(?:&\s*(?:'\w+\s*)?(?:mut\s+)?|mut\s+)?self\b/.test(p)) { self = true; continue; }
+        const c = p.indexOf(':');
+        if (c < 0) return null;
+        types.push(normTy(p.slice(c + 1)));
+    }
+    return { self, types, generics };
+}
+
+/**
+ * Among the methods of impls of one trait for one type (`Bytes::from` in `impl From<Vec<u8>>`,
+ * `impl From<&[u8]>`…), the one the call's argument types select: `argTypes` are the call's, `owner` the
+ * implementing type (for `Self`), `sigs` the candidates' signatures. Returns the index of the one best fit
+ * or -1 when the types do not say (an argument not known, several fits, none).
+ */
+function pickByArgs(sigs, name, owner, argTypes) {
+    if (!argTypes?.length || argTypes.every(t => t === '?')) return -1;
+    const scored = sigs.map(sig => {
+        const ps = rustParams(sig, name);
+        if (!ps) return -1;
+        let args = argTypes;
+        if (ps.self && args.length === ps.types.length + 1) args = args.slice(1); // `Trait::m(&x, y)`
+        if (args.length !== ps.types.length) return -1;
+        let score = 2;
+        for (let i = 0; i < args.length; i++) {
+            if (args[i] === '?') continue;
+            const p = ps.types[i].replace(/\bSelf\b/g, owner ?? 'Self');
+            const f = tyFit(args[i], p, ps.generics);
+            if (f === 0) return -1;
+            score = Math.min(score, f);
+        }
+        return score;
+    });
+    const best = Math.max(...scored);
+    if (best < 0) return -1;
+    const at = scored.flatMap((s, i) => (s === best ? [i] : []));
+    return at.length === 1 ? at[0] : -1;
+}
+
+const ctorOwner = (fn) => {
+    const path = fn.childForFieldName('path');
+    const t = path?.type === 'generic_type' ? path.childForFieldName('type') : path;
+    return t && (t.type === 'identifier' || t.type === 'type_identifier') && /^[A-Z]\w+$/.test(t.text) && t.text !== 'Self' ? { name: t.text, args: path.type === 'generic_type' ? path.childForFieldName('type_arguments')?.namedChildren.map(c => normTy(c.text)) : null } : null;
+};
+
+/** The element type of a sliceable value (`Vec<u8>`, `[u8; 4]`, `&[u8]`) as `[u8]`; `str` for text. */
+function sliceOf(t) {
+    for (let g = 0; t && g < 4; g++) {
+        const p = parseTy(t);
+        if (p.ref != null) { t = p.to; continue; }
+        if (p.slice != null || p.arr != null) return `[${p.slice ?? p.arr}]`;
+        if (p.head === 'Vec' && p.args.length === 1) return `[${p.args[0]}]`;
+        if (p.head === 'String' || p.head === 'str') return 'str';
+        return null;
+    }
+    return null;
+}
+
+const OWNED_TEXT = { to_string: 'String', to_owned: null, into_bytes: 'Vec<u8>', to_vec: 'Vec<_>' };
+
+/**
+ * The static type of an expression where the source shows it: a literal with its suffix, `vec![..]`,
+ * `Vec::new()`, `String::from(..)`, `Box::new(x)`, `Type::new(..)`, a struct literal, a typed local
+ * (`look` gives its declared type), `&x`, `&mut x`, `&x[..]`, `x.clone()`, `x.to_string()`. Null when it does not.
+ */
+function rustArgType(n, look) {
+    switch (n.type) {
+        case 'integer_literal': { const m = /(?:[ui](?:8|16|32|64|128|size))$/.exec(n.text); return m ? m[0] : '{int}'; }
+        case 'float_literal': { const m = /f(?:32|64)$/.exec(n.text); return m ? m[0] : '{float}'; }
+        case 'boolean_literal': return 'bool';
+        case 'char_literal': return /^b/.test(n.text) ? 'u8' : 'char';
+        case 'string_literal': case 'raw_string_literal': return /^br?[#"]/.test(n.text) ? '&[u8; _]' : '&str';
+        case 'parenthesized_expression': return n.namedChildren[0] ? rustArgType(n.namedChildren[0], look) : null;
+        case 'unary_expression': return n.text.startsWith('-') && n.namedChildren[0] && /literal$/.test(n.namedChildren[0].type) ? rustArgType(n.namedChildren[0], look) : null;
+        case 'type_cast_expression': return normTy(n.childForFieldName('type')?.text);
+        case 'identifier': return normTy(look(n.text));
+        case 'field_expression': return n.childForFieldName('value')?.type === 'self' ? normTy(look('self.' + n.childForFieldName('field')?.text)) : null;
+        case 'array_expression': {
+            // `vec![..]` is rewritten to an array behind an empty block comment (see macroEdit)
+            if (n.previousSibling?.type === 'block_comment' && n.previousSibling.text === '/**/') return 'Vec<_>';
+            return null;
+        }
+        case 'struct_expression': { const t = n.childForFieldName('name'); return t && /^[A-Z]/.test(t.text) && t.text !== 'Self' ? t.text.split('::').pop() : null; }
+        case 'reference_expression': {
+            const inner = n.childForFieldName('value');
+            if (!inner) return null;
+            const mut = n.namedChildren.some(c => c.type === 'mutable_specifier') ? 'mut ' : '';
+            if (inner.type === 'index_expression' && inner.namedChildren[1]?.type === 'range_expression') {
+                const base = inner.namedChildren[0];
+                const bt = base.type === 'string_literal' && /^br?[#"]/.test(base.text) ? '[u8; _]' : rustArgType(base, look);
+                const sl = bt ? sliceOf(bt) : null;
+                return sl ? `&${mut}${sl}` : null;
+            }
+            const t = rustArgType(inner, look);
+            return t && t !== '_' ? `&${mut}${t}` : null;
+        }
+        case 'call_expression': {
+            const fn = n.childForFieldName('function');
+            const args = n.childForFieldName('arguments')?.namedChildren.filter(c => !/comment/.test(c.type)) ?? [];
+            if (fn?.type === 'identifier') return fn.text === 'format' && n.text[fn.endIndex - n.startIndex] === ' ' ? 'String' : null; // `format!(…)`, rewritten to `format (…)`
+            if (fn?.type === 'generic_function') return rustCtorType(fn.childForFieldName('function'), args, look);
+            if (fn?.type === 'scoped_identifier') return rustCtorType(fn, args, look);
+            if (fn?.type === 'field_expression' && !args.length) {
+                const m = fn.childForFieldName('field')?.text;
+                const recv = fn.childForFieldName('value');
+                if (m === 'to_string') return 'String';
+                const rt = recv ? rustArgType(recv, look) : null;
+                if (!rt || rt === '_') return null;
+                const rp = parseTy(rt);
+                if (m === 'clone') return rp.ref != null ? rp.to : rt;       // a reference to a Clone value clones the value
+                if (m === 'into_bytes') return rp.head === 'String' ? 'Vec<u8>' : null;
+                if (m === 'into_boxed_slice') return rp.head === 'Vec' && rp.args.length === 1 ? `Box<[${rp.args[0]}]>` : null;
+                if (m === 'as_bytes') return rp.head === 'String' || rp.head === 'str' || (rp.ref != null && /^(String|str)$/.test(rp.to)) ? '&[u8]' : null;
+                if (m === 'to_vec') return sliceOf(rt) && sliceOf(rt) !== 'str' ? `Vec<${sliceOf(rt).slice(1, -1)}>` : null;
+            }
+            return null;
+        }
+        default: return null;
+    }
+}
+
+/** `Vec::new()`, `Vec::<u8>::with_capacity(n)`, `String::from(..)`, `Box::new(x)`, `Type::new(..)`: a value of the type named. */
+function rustCtorType(fn, args, look) {
+    const name = fn?.childForFieldName('name')?.text;
+    const o = fn ? ctorOwner(fn) : null;
+    if (!o || !name) return null;
+    if (o.name === 'Box') return name === 'new' && args.length === 1 ? (() => { const t = rustArgType(args[0], look); return t && t !== '_' && !/^\{/.test(t) ? `Box<${t}>` : null; })() : null;
+    if (o.name === 'Vec') return /^(new|with_capacity)$/.test(name) ? (o.args?.length === 1 ? `Vec<${o.args[0]}>` : 'Vec<_>') : null;
+    if (o.name === 'String') return /^(new|from|with_capacity)$/.test(name) ? 'String' : null;
+    if (WRAPPERS.has(o.name) || POINTER_TYPES.has(o.name) || PRIMITIVES.has(o.name)) return null;
+    // by convention `Type::new(..)` / `Type::default()` / `Type::with_capacity(..)` build a Type, and `Type::from(x)` is `From::from`
+    return /^(new|default|with_capacity|from)$/.test(name) ? o.name : null;
+}
+
+/** What a binding's declared or initial value says its type is, for the arguments it is later passed as. */
+function bindingArgType(node, look) {
+    if (node.type === 'let_declaration') {
+        const t = node.childForFieldName('type');
+        if (t) return /^_$/.test(t.text) ? null : normTy(t.text);
+        const v = node.childForFieldName('value');
+        const r = v ? rustArgType(v, look) : null;
+        return r && r !== '_' && !/^\{/.test(r) ? r : null; // an unsuffixed literal's type is settled by what it is used for
+    }
+    if (node.type === 'parameter') { const t = node.childForFieldName('type'); return t ? normTy(t.text) : null; }
+    return null;
 }
 
 function visibility(node) {
@@ -308,19 +573,27 @@ export const rust = {
     specForSource,
     receiverDescriptor: wrappedValue,
     typeParamBound,
+    methodCallSteps: true,
+    externalRoots: new Set(['std', 'core', 'alloc']),
     tupleTypes: true,
     shadowing: true,
     pathCalls: true,
     ownerOf: implOwner,
     implicitBases: implTrait,
     // the impl a method is declared in (`impl Cursor<Vec<u8>>`): methods of one name in impls of one
-    // type are `#[cfg]` variants of one method, in impls of different types (or traits) methods of their own
+    // type are `#[cfg]` variants of one method, in impls of different types (or traits) methods of their own;
+    // so are those of a generic trait given different type arguments (`impl From<A> for T`, `impl From<B> for T`)
     decoratorsOf: (node) => {
         const impl = (node.type === 'function_item' || node.type === 'function_signature_item') ? implOf(node) : null;
         const t = impl?.childForFieldName('type');
-        return t ? ['impl ' + t.text.replace(/\s+/g, ' ')] : [];
+        const trait = impl?.childForFieldName('trait');
+        const targs = trait?.type === 'generic_type' ? normTy(trait.childForFieldName('type_arguments')?.text) : null;
+        return t ? ['impl ' + t.text.replace(/\s+/g, ' ') + (targs ? ' as ' + (typeHead(trait) ?? '') + targs : '')] : [];
     },
     traitPathCalls: true,
+    argType: rustArgType,          // the types of a call's arguments, where the source shows them…
+    bindingArgType,                // … of a local, from its declared type or its first value
+    pickByArgs,                    // … tell impls of one trait for one type apart (`impl From<A> for T`, `impl From<B> for T`)
     refineKind(kind, d, parent) {
         if (kind === 'function' && implOwner(d.node)) return 'method';
         return kind;

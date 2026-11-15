@@ -116,3 +116,117 @@ test('a field assigned an element of itself (`self.impl = self.impl[0]`) does no
         assert.ok(s, 'indexed');
     } finally { ci.close(); rmrf(r); }
 });
+
+// ── what pyright's own typing rules add (flask, requests, httpx, click) ────────────────────────────
+
+const RULES = {
+    'lib/__init__.py': 'from .models import Response\nfrom . import session\n',
+    'lib/models.py': [
+        'class Response:',
+        '    def read(self):',
+        '        return 1',
+        '    @property',
+        '    def elapsed(self):',
+        '        return 0',
+        '    @elapsed.setter',
+        '    def elapsed(self, v):',
+        '        pass',
+        '',
+        'class Child(Response):',
+        '    def __init__(self):',
+        '        self.elapsed = 5',
+        '        self.fresh = 1',
+        '',
+        'def get() -> Response:',
+        '    return Response()',
+        '',
+        'def pair() -> tuple[int, Response]:',
+        '    return 1, Response()',
+        '',
+        'def helper():',
+        '    return 1',
+        '',
+    ].join('\n'),
+    'lib/session.py': 'class Session:\n    def send(self):\n        return 1\n',
+    'lib/cookies.py': 'class Jar:\n    def refill(self):\n        return 1\n',
+    'lib/app.py': [
+        'import lib',
+        'from lib.models import Response, get, pair',
+        '',
+        'def local_import():',
+        '    from lib import session',
+        '    return session.Session()',
+        '',
+        'def elsewhere():',
+        '    return session.Session()',
+        '',
+        'def reassigned(r):',
+        '    r.read()',
+        '    r = get()',
+        '    r.read()',
+        '',
+        'def declared(r: Response):',
+        '    r = get()',
+        '    return r.read()',
+        '',
+        'def unpack():',
+        '    n, resp = pair()',
+        '    return resp.read()',
+        '',
+        'def submodules():',
+        '    return lib.session.Session(), lib.cookies.Jar()',
+        '',
+        'FUNCS = (lib.models.helper,)',
+        '',
+        'def fixture_like(thing):',
+        '    return thing.refill()',
+        '',
+    ].join('\n'),
+    'tests/test_app.py': 'def test_x(thing):\n    return thing.refill()\n',
+};
+
+test('Python typing rules', async (t) => {
+    const r = makeRepo(RULES);
+    const ci = new CodeIntel({ root: r });
+    await ci.open();
+    const refs = (file, qname) => {
+        const s = ci.store.get('SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ? AND s.qname = ? ORDER BY s.start_line LIMIT 1', file, qname);
+        return [...ci.references(s.id).groups.values()].flat().map(x => `${x.path}:${x.line}`);
+    };
+    try {
+        await t.test('an import inside a function binds its names in that function only', () => {
+            const u = refs('lib/session.py', 'Session');
+            assert.ok(u.includes('lib/app.py:6'));
+            assert.ok(!u.includes('lib/app.py:9'));
+        });
+        await t.test('an untyped parameter later assigned a typed value has that type from the assignment on', () => {
+            const u = refs('lib/models.py', 'Response.read');
+            assert.ok(u.includes('lib/app.py:14'));
+        });
+        await t.test('an annotated parameter keeps its declared type through a later assignment', () => {
+            assert.ok(refs('lib/models.py', 'Response.read').includes('lib/app.py:18'));
+        });
+        await t.test('`a, b = f()` types each name from the tuple the function returns', () => {
+            assert.ok(refs('lib/models.py', 'Response.read').includes('lib/app.py:22'));
+        });
+        await t.test('`@x.setter` and `self.x = v` through a base class property are uses of the property', () => {
+            const u = refs('lib/models.py', 'Response.elapsed');
+            assert.ok(u.includes('lib/models.py:7'), 'the setter decorator');
+            assert.ok(u.includes('lib/models.py:13'), 'the assignment that runs the setter');
+            assert.ok(!u.includes('lib/models.py:14'), 'a new attribute is not a use');
+        });
+        await t.test('`pkg.sub` is an attribute of a package only once something imported it', () => {
+            assert.ok(refs('lib/session.py', 'Session').includes('lib/app.py:25'), 'imported by lib/__init__');
+            assert.ok(!refs('lib/cookies.py', 'Jar').includes('lib/app.py:25'), 'never imported');
+        });
+        await t.test('a module function named as a value is a use', () => {
+            assert.ok(refs('lib/models.py', 'helper').includes('lib/app.py:27'));
+        });
+        await t.test('a member of an object nothing types is not bound by name: pytest fills test parameters', () => {
+            const u = refs('lib/cookies.py', 'Jar.refill');
+            assert.ok(!u.includes('tests/test_app.py:2'));
+            // outside test code the guess by a unique name stays, at its low confidence
+            assert.ok(u.includes('lib/app.py:30'));
+        });
+    } finally { ci.close(); rmrf(r); }
+});

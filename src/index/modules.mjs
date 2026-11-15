@@ -8,6 +8,11 @@ import path from 'node:path';
 import { readRepoFile } from '../util/paths.mjs';
 
 const ECMA_EXTS = ['.ts', '.tsx', '.d.ts', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
+// files that are not indexed themselves but decide where imports lead
+const MANIFEST = /(^|\/)(package\.json|[tj]sconfig(\.[\w-]+)?\.json|svelte\.config\.[jt]s|go\.mod|Cargo\.toml)$/;
+
+/** Is this path a manifest the module map is read from? A change to one can move any import. */
+export function isManifestPath(rel) { return MANIFEST.test(rel); }
 
 function readJson(root, rel) {
     try {
@@ -33,23 +38,44 @@ export class ModuleResolver {
         this.#loadManifests();
     }
 
+    /** @returns {boolean} whether the set of source directories changed (manifests are looked for next to them) */
     addFile(f) {
-        if (this.files.has(f)) return;
+        if (this.files.has(f)) return false;
         this.files.add(f);
         const d = path.posix.dirname(f);
+        const fresh = !this.dirs.has(d);
         (this.dirs.get(d) ?? this.dirs.set(d, []).get(d)).push(f);
         this.bySuffix = null;
+        return fresh;
     }
 
+    /** @returns {boolean} whether the set of source directories changed */
     removeFile(f) {
-        if (!this.files.delete(f)) return;
+        if (!this.files.delete(f)) return false;
         const d = path.posix.dirname(f);
         const list = this.dirs.get(d);
-        if (list) { const i = list.indexOf(f); if (i >= 0) list.splice(i, 1); }
+        let gone = false;
+        // a directory that lost its last file is no package any more (a Go import of it leads nowhere)
+        if (list) { const i = list.indexOf(f); if (i >= 0) list.splice(i, 1); if (!list.length) { this.dirs.delete(d); gone = true; } }
         this.bySuffix = null;
+        return gone;
+    }
+
+    /** Read the manifests again (after one changed, or the file list did). */
+    reloadManifests() { this.#loadManifests(); }
+
+    /**
+     * Everything the manifests contribute to resolution, as one string: when it differs from the one
+     * an index was resolved with, every import has to be looked at again.
+     */
+    fingerprint() {
+        const pkgs = [...this.packages].map(([name, { dir, json: j }]) => [name, dir, j.source, j.types, j.typings, j.module, j.main, j.imports]).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+        return JSON.stringify([pkgs, [...this.tsScopes].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)), this.goModules, [...this.rustCrates].sort(), [...this.rustPackages].sort()]);
     }
 
     #loadManifests() {
+        // the files read here whose names do not say they are manifests (the base a tsconfig extends)
+        this.manifestReads = new Set();
         // JS/TS workspace packages: package name -> directory
         this.packages = new Map();
         const pkgJsons = [...this.files].length ? this.#findManifests('package.json') : [];
@@ -136,6 +162,7 @@ export class ModuleResolver {
 
     /** compilerOptions of a tsconfig file, following relative `extends` (a child's paths replace its parent's). */
     #tsOptions(rel, depth = 0) {
+        this.manifestReads.add(rel);
         const j = readJson(this.root, rel);
         if (!j || depth > 5) return null;
         const dir = path.posix.dirname(rel);
@@ -198,7 +225,7 @@ export class ModuleResolver {
                 cur = path.posix.dirname(cur);
             }
         }
-        return out;
+        return out.sort(); // the same order whatever order the files were added in
     }
 
     #suffixIndex() {

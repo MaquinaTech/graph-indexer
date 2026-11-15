@@ -149,3 +149,199 @@ test('rust: 2018 child-module paths, a crate type that shadows a std wrapper, an
     assert.deepEqual(at('src/sync.rs:Mutex.get_mut', 'src/fs.rs'), [3], "the crate's Mutex, not a view of u8");
     assert.deepEqual(at('src/sync.rs:Strong.send', 'src/fs.rs'), [3], "Weak's own upgrade(), then unwrap()");
 });
+
+test('rust: a module brought in by a glob starts a path, and a builder chain keeps its type', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[workspace]\nmembers = ["lib", "app"]\n',
+        'lib/Cargo.toml': '[package]\nname = "lib"\n',
+        'lib/src/lib.rs': 'pub mod codec;\n',
+        'lib/src/codec/mod.rs': 'pub mod framing;\n',
+        'lib/src/codec/framing.rs': [
+            'pub struct Builder {',                                            // 1
+            '    n: u32,',
+            '    num: Other,',
+            '}',
+            'impl Builder {',                                                 // 2
+            '    pub fn new() -> Builder { Builder { n: 0, num: Other } }',               // 3
+            '    pub fn num(&mut self, n: u32) -> &mut Self { self.n = n; self }', // 4
+            '    pub fn done(&self) -> u32 { self.n }',
+            '}',
+            'pub struct Other;',
+            'impl Other { pub fn done(&self) -> u32 { 0 } pub fn num(&self) {} }',
+            '',
+        ].join('\n'),
+        'app/Cargo.toml': '[package]\nname = "app"\n',
+        'app/src/main.rs': [
+            'use lib::codec::*;',                                             // 1
+            'fn main() {',                                                    // 2
+            '    let n = framing::Builder::new()',                            // 3
+            '        .num(2)',                                                // 4
+            '        .num(3).num(4).num(5).num(6)',                          // 5
+            '        .done();',                                               // 6
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('lib/src/codec/framing.rs:Builder.new', 'app/src/main.rs'), [3]);
+    assert.deepEqual(at('lib/src/codec/framing.rs:Builder.num', 'app/src/main.rs'), [4, 5, 5, 5, 5]);
+    assert.deepEqual(at('lib/src/codec/framing.rs:Builder.done', 'app/src/main.rs'), [6]);
+});
+
+test('rust: a Mutex imported from another crate of the workspace is that crate\'s type, not a view of its contents', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[workspace]\nmembers = ["sync", "app"]\n',
+        'sync/Cargo.toml': '[package]\nname = "sync"\n',
+        'sync/src/lib.rs': [
+            'pub struct Mutex<T> { v: T }',                                  // 1
+            'impl<T> Mutex<T> {',                                            // 2
+            '    pub fn try_lock_owned(self: Arc<Self>) -> u32 { 0 }',       // 3
+            '}',
+            '',
+        ].join('\n'),
+        'app/Cargo.toml': '[package]\nname = "app"\n',
+        'app/tests/t.rs': [
+            'use std::sync::Arc;',                                           // 1
+            'use sync::Mutex;',                                              // 2
+            'fn t() {',                                                      // 3
+            '    let m: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));',       // 4
+            '    m.clone().try_lock_owned();',                               // 5
+            '    m.try_lock_owned();',                                       // 6
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('sync/src/lib.rs:Mutex.try_lock_owned', 'app/tests/t.rs'), [5, 6]);
+});
+
+test('rust: a bound imported from a crate outside the repository is not the repository\'s type of that name', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': 'mod blocking;\nmod budget;\nmod user;\n',
+        'src/blocking.rs': 'pub(crate) struct Buf { n: usize }\n',
+        'src/budget.rs': 'pub struct Budget;\nimpl Budget {\n    pub fn has_remaining(&self) -> bool { true }\n}\n',
+        'src/user.rs': [
+            'use bytes::Buf;',                                       // 1
+            'fn f<B: Buf>(buf: &mut B) -> bool {',                   // 2
+            '    buf.has_remaining()',                               // 3
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/budget.rs:Budget.has_remaining', 'src/user.rs'), []);
+});
+
+test('rust: a std path names the standard library\'s type, not a repository type of the same last name', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct DirEntry { std: Arc<std::fs::DirEntry> }',    // 1
+            'impl DirEntry {',                                        // 2
+            '    pub fn file_name(&self) -> u32 { 0 }',               // 3
+            '    pub fn name2(&self) -> u32 { self.std.file_name() }', // 4
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:DirEntry.file_name', 'src/lib.rs'), []);
+});
+
+test('rust: an Arc reached through a re-exporting path of the crate is still a pointer to its contents', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'mod loom { pub use std::sync::Arc; }',                  // 1
+            'use crate::loom::Arc;',                                 // 2
+            'struct Shared;',                                        // 3
+            'impl Shared { fn notify(&self) {} }',                   // 4
+            'struct Sender { shared: Arc<Shared> }',                 // 5
+            'impl Sender { fn f(&self) { self.shared.notify(); } }', // 6
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:Shared.notify', 'src/lib.rs'), [6]);
+});
+
+test('rust: `fs::f()` is the crate\'s `fs` when the file imports one, std\'s otherwise', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[workspace]\nmembers = ["rt", "app"]\n',
+        'rt/Cargo.toml': '[package]\nname = "rt"\n',
+        'rt/src/lib.rs': 'pub mod fs;\n',
+        'rt/src/fs.rs': 'pub fn symlink(a: u32) {}\n',
+        'app/Cargo.toml': '[package]\nname = "app"\n',
+        'app/src/a.rs': 'use rt::fs;\nfn f() {\n    fs::symlink(1);\n}\n',
+        'app/src/b.rs': 'use std::fs;\nfn f() {\n    fs::symlink(1);\n}\n',
+    });
+    assert.deepEqual(at('rt/src/fs.rs:symlink', 'app/src/a.rs'), [3]);
+    assert.deepEqual(at('rt/src/fs.rs:symlink', 'app/src/b.rs'), []);
+});
+
+test('rust: a parameter typed Self (also behind a pointer) is of the type of its impl', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Owned;',                                         // 1
+            'impl Owned { fn bind(&self) {} }',                          // 2
+            'pub struct Handle { owned: Owned }',                        // 3
+            'impl Handle {',                                             // 4
+            '    fn spawn(me: &Arc<Self>) { me.owned.bind(); }',         // 5
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:Owned.bind', 'src/lib.rs'), [5]);
+});
+
+test('rust: a turbofish call types the value like the plain call', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Sender;',                                                    // 1
+            'pub struct Receiver;',                                                  // 2
+            'impl Sender { pub fn send(&self) {} }',                                 // 3
+            'impl Receiver { pub fn recv_many(&mut self) {} }',                      // 4
+            'pub fn channel<T>(n: usize) -> (Sender, Receiver) { (Sender, Receiver) }', // 5
+            'fn t() {',                                                              // 6
+            '    let (tx, mut rx) = channel::<u8>(1);',                              // 7
+            '    tx.send();',                                                        // 8
+            '    rx.recv_many();',                                                   // 9
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:Sender.send', 'src/lib.rs'), [8]);
+    assert.deepEqual(at('src/lib.rs:Receiver.recv_many', 'src/lib.rs'), [9]);
+});
+
+test('rust: a LinkedList imported from the crate is the crate\'s, not a std collection of its elements', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': 'mod list;\nmod user;\n',
+        'src/list.rs': 'pub struct LinkedList<L, T> { head: Option<L>, t: T }\nimpl<L, T> LinkedList<L, T> {\n    pub fn remove(&mut self, x: u32) {}\n}\n',
+        'src/user.rs': [
+            'use crate::list::LinkedList;',                                  // 1
+            'struct Waiter;',                                                // 2
+            'struct Waitlist { queue: LinkedList<Waiter, u8> }',             // 3
+            'fn f(w: &mut Waitlist) { w.queue.remove(1); }',                 // 4
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/list.rs:LinkedList.remove', 'src/user.rs'), [4]);
+});
+
+test('rust: a method of a primitive parameter is not a repository method of that name', async (t) => {
+    const at = await repo(t, {
+        'Cargo.toml': '[package]\nname = "app"\n',
+        'src/lib.rs': [
+            'pub struct Error;',                                                // 1
+            'impl Error { pub fn classify(&self) -> u8 { 0 } }',                // 2
+            'fn f(value: f32) -> u8 {',                                         // 3
+            '    match value.classify() {',                                     // 4
+            '        FpCategory::Nan => 0,',                                    // 5
+            '        _ => 1,',                                                  // 6
+            '    }',
+            '}',
+            '',
+        ].join('\n'),
+    });
+    assert.deepEqual(at('src/lib.rs:Error.classify', 'src/lib.rs'), []);
+});

@@ -99,7 +99,7 @@ async function runTools(calls) {
  * Answer hooks and CLI queries for this index over the repository's local socket (see
  * src/cli/resident.mjs). Resolves to null when another process already does.
  */
-async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
+async function serveResident(intel, { idleMs = 0, onIdle = null, readOnly = false } = {}) {
     const { startResident } = await import('../src/cli/resident.mjs');
     const hold = async () => ({ intel, release() {} });
     return startResident({
@@ -113,7 +113,7 @@ async function serveResident(intel, { idleMs = 0, onIdle = null } = {}) {
             if (req.op === 'tool' && Array.isArray(req.calls)) {
                 const { callTool } = await import('../src/mcp/tools.mjs');
                 const outs = [];
-                for (const [name, args] of req.calls) outs.push(await callTool(intel, name, args ?? {}, { cli: true }));
+                for (const [name, args] of req.calls) outs.push(await callTool(intel, name, args ?? {}, { cli: true, readOnly }));
                 return outs.join('\n\n');
             }
             return null;
@@ -125,7 +125,8 @@ const HELP = `graph-indexer ${pkg.version} — live code graph & search for AI c
 
 Usage:
   graph-indexer init [--repo DIR] [--agents claude,cursor,vscode,gemini,codex,opencode,junie,zed,devin] [--all] [--hooks] [--local] [--dry-run] [--no-instructions] [--no-helper] [--no-demo]
-  graph-indexer serve [--repo DIR]          start the MCP server on stdio
+  graph-indexer serve [--repo DIR] [--read-only]
+                                                   start the MCP server on stdio (--read-only: no tool writes)
   graph-indexer index [--repo DIR]          build or update the index
   graph-indexer status [--repo DIR]
   graph-indexer explore <task in words> [--or QUERY]… [--symbols a,b] [--path P] [--max-tokens N]
@@ -145,6 +146,7 @@ Usage:
   graph-indexer refs <name> [--kind call|type|inherit|new|value|decorator] [--path P] [--no-tests]
   graph-indexer callgraph <name> [--direction callers|callees|both] [--depth N] [--no-tests]
   graph-indexer impact [--symbols a,b] [--files x,y] [--diff] [--depth N]
+  graph-indexer rename <symbol> <new-name> [--write] [--min-confidence exact|high]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
   graph-indexer hook post-tool|session-start|subagent-start   agent hook (JSON on stdin)
@@ -160,14 +162,17 @@ async function main() {
     if (cmd === 'version' || flag('--version')) { process.stdout.write(pkg.version + '\n'); return; }
     switch (cmd) {
         case 'serve': {
+            // --read-only: no tool writes (`rename_symbol` lists its edits, as it does without `apply`)
+            const readOnly = flag('--read-only') || /^(1|true|yes)$/i.test(process.env.GRAPH_INDEXER_READ_ONLY ?? '');
             const intel = await openIntel({ watch: true, background: true, quiet: true });
             const { McpServer } = await import('../src/mcp/server.mjs');
-            const server = new McpServer({ intel, version: pkg.version, log, ready: intel.ready });
-            intel.ready.then((r) => log(`index ready: ${r.total} files (${r.added} added, ${r.changed} changed, ${r.removed} removed) in ${r.ms} ms`)).catch((e) => log(`indexing failed: ${e.stack || e.message}`));
+            const server = new McpServer({ intel, version: pkg.version, log, ready: intel.ready, readOnly });
+            intel.ready.then((r) => r && log(`index ready: ${r.total} files (${r.added} added, ${r.changed} changed, ${r.removed} removed) in ${r.ms} ms`)).catch((e) => log(`indexing failed: ${e.stack || e.message}`));
             server.onClose = () => { intel.close(); process.exit(0); };
             server.listen();
             for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { intel.close(); process.exit(0); });
-            serveResident(intel).catch((e) => log(`resident: ${e.message}`));
+            // a read-only server answers CLI queries over its socket read-only too: it never writes for a client that asks it to
+            serveResident(intel, { readOnly }).catch((e) => log(`resident: ${e.message}`));
             return;
         }
         case 'daemon': {
@@ -262,6 +267,10 @@ async function main() {
         case 'check': {
             const files = (opt('--files') ?? '').split(',').filter(Boolean); const base = opt('--base', 'HEAD');
             return runTool('check_changes', { files, base });
+        }
+        case 'rename': {
+            const write = flag('--write'); const min = opt('--min-confidence', 'exact');
+            return runTool('rename_symbol', { symbol: argv[0], new_name: argv[1], apply: write, min_confidence: min });
         }
         case 'demo': return runTool('demo', {});
         case 'routes': return runTool('routes', { filter: argv.join(' ') });

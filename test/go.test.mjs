@@ -175,3 +175,67 @@ test('Go: reopening the index keeps them', async () => {
     const impl = refsTo('Handler').filter(r => r.kind === 'inherit').map(r => r.src_qname).sort();
     assert.deepEqual(impl, ['Alias', 'Base', 'Engine']);
 });
+
+test('Go: a name declared again in an inner block does not erase the type it has outside, and table-driven tests are typed', async () => {
+    const root = makeRepo({
+        'go.mod': 'module example.com/render\n\ngo 1.21\n',
+        'render.go': [
+            'package render',
+            '',
+            'type ASCII struct{ Data string }',
+            '',
+            'func (r ASCII) WriteContentType() {}',
+            '',
+            'func (r ASCII) Render() error {',
+            '\tr.WriteContentType()',
+            '\tfor _, r := range r.Data {',
+            '\t\t_ = r',
+            '\t}',
+            '\treturn nil',
+            '}',
+            '',
+            'type Matcher struct{}',
+            '',
+            'func (m Matcher) Match(s string) bool { return s != "" }',
+            '',
+            'type Other struct{}',
+            '',
+            'func (o Other) Match(s string) bool { return false }',
+        ].join('\n'),
+        'render_test.go': [
+            'package render',
+            '',
+            'import "testing"',
+            '',
+            'func TestMatch(t *testing.T) {',
+            '\tfor i, tc := range []struct {',
+            '\t\trequire Matcher',
+            '\t\tinput   string',
+            '\t}{',
+            '\t\t{require: Matcher{}, input: "a"},',
+            '\t} {',
+            '\t\tif !tc.require.Match(tc.input) {',
+            '\t\t\tt.Fatal(i)',
+            '\t\t}',
+            '\t}',
+            '\ttests := []struct {',
+            '\t\tname string',
+            '\t\tm, other Matcher',
+            '\t}{{name: "x"}}',
+            '\tfor _, tt := range tests {',
+            '\t\ttt.other.Match(tt.name)',
+            '\t}',
+            '}',
+        ].join('\n'),
+    });
+    const intel = new CodeIntel({ root });
+    await intel.open();
+    try {
+        const bound = (file, line, name) => intel.store.get(`SELECT d.qname FROM refs r JOIN files f ON f.id = r.file_id JOIN symbols d ON d.id = r.dst_id WHERE f.path = ? AND r.line = ? AND r.name = ?`, file, line, name)?.qname ?? null;
+        // `for _, r := range …` rebinds r inside the loop only: the receiver keeps its type before it
+        assert.equal(bound('render.go', 8, 'WriteContentType'), 'ASCII.WriteContentType');
+        // a field of a struct type written in the loop's own table, and of a table declared first
+        assert.equal(bound('render_test.go', 12, 'Match'), 'Matcher.Match');
+        assert.equal(bound('render_test.go', 21, 'Match'), 'Matcher.Match');
+    } finally { intel.close(); rmrf(root); }
+});

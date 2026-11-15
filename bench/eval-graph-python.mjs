@@ -151,9 +151,18 @@ const cands = intel.store.all(`SELECT s.id, s.name, s.qname, s.kind, s.name_line
     WHERE f.lang = 'python' AND f.is_test = 0 AND s.kind IN ('function', 'method', 'class') AND length(s.name) > 2 AND s.name NOT LIKE '\\_\\_%\\_\\_' ESCAPE '\\'`)
     .filter(s => scope.some(p => s.path.startsWith(p)));
 const rand = rng(seed);
-const sample = [];
+let sample = [];
 const pool = [...cands];
 while (sample.length < N && pool.length) sample.push(pool.splice(Math.floor(rand() * pool.length), 1)[0]);
+// --sample FILE freezes the sample (one `path:line:qname` per line): used if FILE exists, written to
+// it if not, so that two builds are scored on the same symbols (as bench/eval-graph-rust.mjs does)
+const sampleFile = opt('--sample', null);
+if (sampleFile && fs.existsSync(sampleFile)) {
+    const byKey = new Map(cands.map(s => [`${s.path}:${s.name_line}:${s.qname}`, s]));
+    const keys = fs.readFileSync(sampleFile, 'utf8').split('\n').filter(Boolean);
+    sample = keys.map(k => byKey.get(k)).filter(Boolean);
+    console.log(`sample from ${sampleFile}: ${sample.length} of ${keys.length} symbols found`);
+} else if (sampleFile) fs.writeFileSync(sampleFile, sample.map(s => `${s.path}:${s.name_line}:${s.qname}`).join('\n') + '\n');
 
 // pyright analyses lazily: one warm-up query lets it build the program before timing starts
 if (sample.length) await oracleRefs(sample[0]);

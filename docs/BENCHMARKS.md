@@ -95,6 +95,13 @@ one call per line, chains that start with `(await …)`, `this` inside an anonym
 (`return class extends ModuleRef {…}`), and the values of a map handed to `forEach`, a
 `values()` loop or a copy (`Array.from`, spread), also from a class that extends `Map<K, V>`.
 
+**The sample is frozen since 2026-11-15** (`--sample bench/ts-samples/nestjs.txt`, the 400 symbols
+drawn with seed 11 by 3.1.0). nestjs keeps the interfaces it restates from other libraries in
+directories called `external/`, which were not indexed before
+([CHANGELOG](../CHANGELOG.md)); once they are, the seeded draw picks other symbols, and two builds
+would be scored on different samples. On the frozen sample this build scores what 3.1.0 scores:
+0.997 / 0.962 / 0.920.
+
 **A caveat on the oracle.** The fixture is checked out without `node_modules`, so values that
 flow through third-party libraries (for example `iterate(instances).filter(([_, w]) =>
 w.isDependencyTreeStatic())` with `iterare`) are `any` to the compiler and their references are
@@ -169,6 +176,35 @@ seven faults, fixed in this order (the agent tasks on caddy, below, found four m
   **result types of interface methods**. On one question the index went from 3 to 12 of 13 call
   sites.
 
+**2026-11-10: block scopes and table-driven tests.** Two things the debug output of the oracle and
+the rename tasks on caddy ([below](#rename-alone-on-the-refactor-tasks)) showed, measured on the
+same samples (seed 7):
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| gin (146 symbols) | 3.1.0 | 1.000 | 0.981 | 0.986 |
+| | now | 1.000 | **0.982** | **0.993** |
+| caddy (196) | 3.1.0 | 1.000 | 0.972 | 0.934 |
+| | block scopes | 1.000 | 0.975 | 0.949 |
+| | now | 1.000 | **0.978** | **0.964** |
+| nats-server (199) | 3.1.0 | 0.992 | 0.978 | 0.935 |
+| | now | 0.992 | **0.983** | **0.945** |
+
+- **A name declared again in an inner block erased its type in the whole function.** In
+  `func (r AsciiJSON) Render(…) { r.WriteContentType(w); … for _, r := range s { … } }` the loop's
+  `r` and the receiver `r` were two bindings of one name in one scope, which is a conflict and
+  yields no type, so the call on the receiver stayed unbound. Blocks, `for`, `if`, `switch` and
+  `select` statements and their cases are scopes of their own now, as Rust's are.
+- **Table-driven tests were untyped.** `for _, tc := range []struct{ require ResponseMatcher; … }{…}`
+  and `tests := []struct{…}{…}; for _, tt := range tests` declare a struct type in place: the
+  fields of `tc` and `tt` now have the types written there (also for maps and arrays of such
+  structs, and for a single `x := struct{…}{…}`).
+
+The same block scoping measured for TypeScript (nestjs, seed 11) and Java (the three repositories)
+changed no figure, so it was not kept there. Every other repository's index is unchanged, fact for
+fact, but for eight references of Commons Collections (23 checkouts compared with 3.1.0: 19
+identical, the three Go ones gain bound references — gin 25, caddy 56, nats-server 1,254).
+
 **What is still missed.** Methods that a type gets from an embedded *library* type
 (`struct { net.Conn }` has `SetReadDeadline`; an interface embedding `io.Reader` needs
 `Read`): the index does not read the standard library or dependencies, so such types are not
@@ -235,6 +271,42 @@ boxing (`append('-')` is `append(char)`); a single-type import from a library pa
 java.io.UncheckedIOException;`) is no longer a same-name class of the repository; and
 `Outer.this.m()`, `new Node(…)` inside `Node` and nested types named through their outer class
 (`Token.TokenType.EOF`) are uses.
+
+**2026-11-15** (same samples; "before" is the "now" above):
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| spring-petclinic (111 symbols) | before | 0.994 | 0.989 | 0.973 |
+| | now | **1.000** | **0.995** | **0.991** |
+| jsoup (188) | before | 0.992 | 0.943 | 0.846 |
+| | now | **0.996** | **0.965** | **0.899** |
+| commons-collections (200) | before | 0.961 | 0.883 | 0.825 |
+| | now | **0.991** | **0.904** | **0.885** |
+
+- **A signature that began with an annotation** (`@Override` on its own line above a bodyless
+  `boolean add(E e);`) was stored as `@Override`: the method had no readable parameters and fitted
+  any call. Signatures of up to 800 characters are kept where each overload is a method of its own
+  (240 cut the parameter list of annotated generic methods).
+- **Varargs.** `T... xs` is an array, and a call whose last argument is an array reaches the
+  variadic overload, not the fixed one javac's first phase would otherwise prefer; `f(x)` inside
+  `f(T... xs)` may be another overload, not a call of itself.
+- **Static imports** (`import static pkg.Type.m;`, `import static pkg.Type.*;`) bind to the static
+  members of the type, inherited ones included.
+- **A method's family is told by parameter types too**: `putAll(Map)` does not override
+  `putAll(MultiValuedMap)`, and a field is no override of a method of its name.
+- **An inner class calls its outer class's methods** (the lookup goes outwards, JLS 15.12.1); an
+  enum constant with a body is a value of the enum, so `InBody.process(…)` names the enum's
+  method; of a field and a method with one name, a call takes the method and a read the field.
+- **An override reached through a second interface** wins over what the first one inherits
+  (`OrderedBidiMap extends BidiMap, OrderedMap`: `mapIterator()` is `OrderedMap`'s). This alone
+  moved Commons Collections' precision from 0.958 to 0.991.
+- A library collection whose element type the index cannot hold (`Deque<Iterator<? extends E>>`)
+  is still the library's, not a type of the repository.
+
+Commons Collections' recall stays at 0.904 for the reason given below: 65 of its 69 missed lines
+(8 of jsoup's 33) are `super.m()` calls, which the oracle counts for every override of `m` and the
+index binds to the parent's `m` alone. With that rule switched off, to see its size and not to
+ship, recall is 0.993 (jsoup 0.973) at the same precision.
 
 **What is still missed.** Overloads that take the same number of arguments of types the source
 does not show (a method's result, another class's constant), calls through a library interface, and lambdas typed only by the
@@ -312,6 +384,55 @@ inside the subscripts of qualified generics (`t.Optional[Command]`, `t.Callable[
 are type references. (On this machine the "after" build reproduces every row except flask's exact
 set, 0.707 instead of 0.713; "now" is measured against that.) fastapi is unchanged (0.997 / 0.998 / 0.940); no Python repository lost
 precision or recall.
+
+**2026-11-15** ("before" is the 2026-11-09 build; rich was only read for its headline figures):
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| fastapi (150 symbols) | before / now | 0.997 | 0.998 | 0.947 |
+| flask (150) | before | 0.895 | 0.927 | 0.753 |
+| | now | **0.961** | **0.976** | **0.853** |
+| requests (149) | before | 0.954 | 0.987 | 0.886 |
+| | now | 0.954 | **0.993** | **0.913** |
+| httpx (150) | before | 0.998 | 0.950 | 0.800 |
+| | now | **0.999** | **0.970** | **0.873** |
+| rich (144) *(held out)* | before | 0.992 | 0.974 | 0.861 |
+| | now | 0.992 | **0.979** | **0.896** |
+| click (144) | before | 0.971 | 0.980 | 0.917 |
+| | now | **0.994** | 0.980 | **0.931** |
+
+- **An import inside a function binds in that function only.** One flask test's `from blueprintapp
+  import app` had made `app` that import for the whole file.
+- **`name.attr` is a use of `name`**, whatever its letter case (`run_command.make_context`).
+- **A parameter without an annotation that is assigned a typed value** (`def f(app): app = Flask()`)
+  has that type from the assignment on; an annotated name keeps its declared type through later
+  assignments; `a, b, c = f()` types each name when `f` returns `tuple[A, B, C]`.
+- **Properties.** `@x.setter` is a read of the property `x`, and `self.x = v` in a class that
+  declares no `x` runs the setter of a base class's property: a use of it.
+- **`pkg.sub.X` binds only once some module imports `pkg.sub`**; a submodule nobody imports is an
+  `AttributeError`. This is Python's rule, and here the index and the oracle part ways on purpose.
+  pyright wants the import in the file that writes `pkg.sub` or in the package's `__init__`, and
+  the rule was first written that way: requests reached 0.975 precision. But
+  `requests.cookies.RequestsCookieJar()` after a plain `import requests` runs — `requests/__init__`
+  imports `sessions`, which imports `cookies` — and requests' tests are full of it; with pyright's
+  rule those uses were not found, and `check` stopped seeing a caller it had seen before
+  (sqlglot's `optimizer.pushdown_projections.pushdown_projections(…)`, a ripple of the `check`
+  benchmark). Nine of requests' extra lines are such uses.
+- **A module's function named as a value** (`requests.get` in a tuple) is a use.
+- **A member called on an untyped parameter of a test function is not bound by name.** The test
+  runner fills such a parameter in (a pytest fixture, a parametrized value); nothing in the
+  repository's calls says what it is, and giving the call to the one class that happens to declare
+  a member of that name was wrong far more often than right (flask's extra lines went from 58 to
+  22). The same guess is kept outside tests: dropping it everywhere lost real references on rich
+  and click, and was reverted. Resolving a fixture parameter to what its `@pytest.fixture`
+  function returns is the real answer; pyright does not see fixtures, so this oracle cannot
+  confirm it, and it has not been built.
+
+flask and requests do not reach 0.99 precision. Of flask's 22 extra lines, 13 are in `examples/`,
+which flask's own pyright configuration leaves out (the oracle cannot report them), and most of the
+rest are chains through untyped values that graph-indexer follows by its own return-type inference
+and pyright does not. Of requests' 26, nine are the submodule uses above and two are uses through
+an import alias, which pyright's reference search skips; the rest are such chains.
 
 What remains: flask's precision is lower because of test code whose receivers pyright cannot type
 either (`app` fixtures without annotations), which graph-indexer binds by name as `likely` — counted
@@ -456,9 +577,89 @@ samples; "before" is the second round's "now":
   `(*self).find_at(at)` inside it is the trait's method. `f32::to_bits(self)` inside `impl Float
   for f32` is the primitive's own method, not a call of itself.
 
+**Fourth round (2026-11-15, rust-analyzer 1.99.1).** Same oracle and frozen samples; "before" is the
+third round's "now":
+
+| repository | build | precision | recall | exact set |
+|---|---|---|---|---|
+| serde_json (138 symbols) | before | 0.974 | 0.947 | 0.899 |
+| | now | **0.993** | 0.947 | **0.920** |
+| ripgrep (148) | before | 0.990 | 0.944 | 0.912 |
+| | now | 0.990 | **0.948** | **0.919** |
+| tokio (150) | before | 0.981 | 0.838 | 0.747 |
+| | now | **0.990** | **0.906** | **0.813** |
+
+- **Names that are std's in one file and the crate's in another.** `use tokio::sync::Mutex;` names
+  tokio's `Mutex`, a crate's own `LinkedList` or `HashMap` is not the std collection, `fs::f()` is
+  the crate's `fs` when the file imports one, and `Arc` reached through a crate path
+  (`crate::loom::sync::Arc`) is still a pointer to its contents (tokio's `Arc<Shared>` fields had
+  no type). The other way round, `std::fs::DirEntry` is std's, not the repository's `DirEntry`,
+  and a bound imported from another crate (`use bytes::Buf; … B: Buf`) is not the repository's
+  type of that name.
+- **A module brought in by a glob starts a path**: after `use tokio_util::codec::*;`,
+  `length_delimited::Builder::new()` is found.
+- **A method call never selects a field** (a builder's field and its setter share a name), a
+  parameter typed `Self` (`me: &Arc<Self>`) is of the impl's type, a turbofish call
+  (`channel::<u8>(1)`) types its value, and a primitive-typed local (`value: f32`) is typed, so
+  `value.classify()` is no longer the repository's one `classify`.
+- **Impls of one trait that differ in a parameter type** (`impl From<f32> for Value`, `impl
+  From<bool> for Value`) are told apart by the argument's type. `Value::from(x)` was bound to the
+  first of them whatever `x` was. Calls now record the types their arguments show, as Java's do
+  (literals with their suffixes, `"s"` and `b"x"`, `vec![…]`, `String::from(…)`, `&x`, `&x[..]`,
+  `x.clone()`, typed locals, parameters and fields, constructions of a repository type), and the
+  call reaches the one impl whose parameter takes them; when the source does not show the type,
+  or more than one impl still fits (an unsuffixed integer fits every integer impl), it is left
+  unbound and counted among the calls an answer could not bind. This is where serde_json's
+  precision comes from. The first version of the rule only left such calls unbound, and what
+  that costs on code built around these impls showed on bytes, below.
+
 What remains: receivers typed by a constructor of a library type (`SocketAddrV4::new(ip,
 port).to_socket_addrs()`), calls on a reference the index does not tell from the value (`map` of
 type `&Map`), `self[..]`, and macros whose arguments are not plain Rust (`async_assert_fn!`).
+
+### Repositories nobody had looked at (2026-11-15)
+
+The fixes above were found on the repositories above. To see what carries over, repositories
+that had never been indexed were cloned at a tag, a sample was drawn once and frozen, and the
+build before this pass and the build after it were each run once on it:
+
+```bash
+node bench/eval-graph-java.mjs --fixture gson --fixture-dir DIR --src gson/src/main/java --n 200 --sample bench/java-samples/gson.txt
+node bench/eval-graph-python.mjs --fixture urllib3 --fixture-dir DIR --scope src/urllib3/ --n 150 --sample bench/python-samples/urllib3.txt
+node bench/eval-graph-rust.mjs --fixture arrayvec --fixture-dir DIR --n 150 --sample bench/rust-samples/arrayvec.txt
+node bench/eval-graph-rust.mjs --fixture bytes --fixture-dir DIR --n 150 --sample bench/rust-samples/bytes.txt
+# gson-parent-2.11.0, urllib3 2.2.3, arrayvec 0.7.6, bytes v1.9.0; for the two Rust crates the
+# dependency tables are removed from Cargo.toml, so nothing is fetched
+```
+
+| repository | oracle | build | precision | recall | exact set |
+|---|---|---|---|---|---|
+| gson 2.11.0 (199 symbols) | javac, dispatch | before | 0.939 | 0.983 | 0.905 |
+| | | now | **0.991** | **0.987** | **0.940** |
+| urllib3 2.2.3 (150) | pyright | before | 0.966 | 0.975 | 0.780 |
+| | | now | 0.966 | 0.980 | **0.827** |
+| arrayvec 0.7.6 (150) | rust-analyzer | before | 0.960 | 0.751 | 0.673 |
+| | | now | 0.964 | 0.759 | **0.700** |
+
+Java carries over in full. Python and Rust carry over in the direction and a fraction of the size
+seen on the development repositories: what was fixed there were mostly their own idioms. (urllib3
+was run a second time, after the submodule rule above went back to Python's: 0.968 precision with
+pyright's rule, 0.966 with Python's, the rest the same.)
+
+**bytes, and a fault of this pass.** The first Rust repository measured this way was bytes 1.9.0,
+and it is not in the table because it stopped being unseen. Run once like the others it gave
+0.666 / 0.844 / 0.633 before and 0.904 / 0.732 / 0.633 after: 24 points of precision gained, 11 of
+recall lost. The debug output, read after the run, said why. bytes has four `impl From<…> for
+Bytes` and as many for `BytesMut` and `Vec`. The build before bound every `Bytes::from(x)` to one
+of the four, so that one had all its uses and the uses of the other three, and those three had
+none; the rule as first written in this pass bound none of them. Neither is right, and the second
+is no better for someone asking who uses `From<Vec<u8>>`. Recording the types of the arguments of
+Rust calls (the fourth round's last point) was done because of this, with bytes as a development
+repository from then on: 0.939 / 0.859 / 0.673, and serde_json, ripgrep and tokio unchanged. What
+bytes still misses is a constant passed as the argument (`Bytes::from(LONG)`: constants carry no
+type), a local initialised from a method's result, and impls whose parameter is itself generic
+(`impl Extend<u8>`, `Extend<&u8>` and `Extend<Bytes> for BytesMut`, all `extend<T>(&mut self,
+iter: T)`). arrayvec was cloned after that, as the repository that had not been looked at.
 
 ### A product monorepo: Twenty
 
@@ -843,6 +1044,351 @@ TypeORM's data-source default schema (16 of twenty's entities show their table w
 Kysely and raw queries through the Prisma client, materialized views, and a proxy model lists its
 base's migrations, which are its table's.
 
+## An updated index against one built from scratch
+
+```bash
+node bench/fixtures.mjs --history 400
+node bench/eval-incremental.mjs --fixtures gin,express-js,fastapi,axios,rust,spring --n 120 --mode commit
+node bench/eval-incremental.mjs --fixtures gin,express-js,fastapi,axios,rust,spring --n 120 --mode file --order reverse
+```
+
+Every figure in section 1 scores an index built from scratch. An agent never works on one: it
+edits, the index re-syncs the files that changed, and the next answer comes from an index that has
+been updated many times. This benchmark asks whether the two are the same index.
+
+**Method.** A scratch worktree of a repository is moved along its last N commits (the first-parent
+chain ending at the pinned commit) in one of three ways, and after each commit the updated index is
+compared with a fresh index of the same tree: every symbol, import, inferred field type and
+reference, with what it binds to, its confidence and its candidate count.
+
+- `commit` — one sync per commit, what a pull or a branch switch does;
+- `file`, `forward` — the commit's files are written one at a time with a sync in between, the
+  way an agent's edits arrive;
+- `file`, `reverse` — the same in the opposite order, so that whichever of two files a change
+  spans is written first in one of the two runs (a call before its definition, and the reverse).
+
+A commit after which any fact differs counts as divergent; the updated index is then rebuilt, so
+one divergence is not counted again at every later commit.
+
+**Results** (nine repositories in six languages: gin, express, fastapi, axios, serde_json and
+spring-petclinic over 120 commits each, nestjs, sqlglot and networkx over 50):
+
+| mode | build | commits | commits that leave the index different | references that differ | …bound to another definition | …bound where a fresh index leaves them unbound | …unbound or missing where a fresh index binds them | …extra | imports that differ |
+|---|---|---|---|---|---|---|---|---|---|
+| commit | 3.1.0 | 870 | 8 | 580 | 4 | 11 | 153 | 412 | 40 |
+| | now | 870 | **0** | **0** | | | | | 0 |
+| file, forward | 3.1.0 | 870 | 25 | 706 | 4 | 11 | 262 | 429 | 70 |
+| | now | 870 | **0** | **0** | | | | | 0 |
+| file, reverse | 3.1.0 | 870 | 30 | 772 | 33 | 17 | 296 | 426 | 69 |
+| | now | 870 | **0** | **0** | | | | | 0 |
+
+By repository, 3.1.0 diverges in gin (3, 7 and 6 commits in the three modes), axios (4, 9, 8),
+serde_json (1, 1, 1), spring-petclinic (0, 2, 1), nestjs (0, 5, 4), sqlglot (0, 1, 6), fastapi
+(0, 0, 3) and networkx (0, 0, 1); express never does. The counts are of commits and references
+after which the index is wrong until the files involved are indexed again: each divergent commit
+is followed by a rebuild in this benchmark, so they do not accumulate as they would in a session.
+A first run of the new build over 3,240 replays (150 commits a fixture) had found one difference,
+which was the benchmark's own: a commit that renames `readme.md` to `README.md`, replayed on a
+file system that does not tell the two names apart by writing the new file and then deleting "the
+old one". Removals are replayed first now.
+
+**What the replays did not find.** History exercises the edits developers make, not every edit.
+An independent reading of the code after these runs found one more: two definitions of one name
+that swap places inside a file (`namespace A { f }` and `namespace B { f }` reordered) changed
+which one "the first candidate" is for a call elsewhere, and nothing said so. A definition's place
+among its file's definitions of that name is part of what a change emits now, with a test. The
+same reading found that a manifest edited while no process had the index open went unnoticed until
+the next full sweep, and that a failed update left the in-memory table ahead of the store; both
+are fixed. After those fixes a confirmation replay (60 commits of each fixture, 25 of nestjs, the
+three modes: 1,155 replays) again left no difference.
+
+**Second pass (2026-11-15).** A second independent reading, of the update path alone, found what
+no replay of history can hold, each now a test in `test/incremental.test.mjs`: two tool calls at
+once ran two updates at once (`UNIQUE constraint failed: files.path`, and references left bound
+to rows that were gone); an update that failed after its removals had been written left imports
+resolved to the removed file for good; an index written by a second process (the edit hook's own)
+was not read again by the first; and the type of a receiver such as `make().x` was remembered per
+file, so with a function declared inside another and an imported one of its name the answer
+depended on which reference was resolved first. It also found paths the quick update did not
+follow until the next full sweep (a directory renamed as a whole, a file the repository ignores, a
+rename that changes only letter case, the base a `tsconfig` extends), and two cases of needless
+work: a file rewritten alone in its directory re-resolved every Java file that imports a library
+type, and a new document every Rust file.
+
+With all of that fixed, and with the resolver changes of section 1 in, history was replayed
+again: gin, express, fastapi, axios, serde_json, spring-petclinic and nestjs, 120 commits each,
+in the three modes (2,520 replays). Commit by commit and file by file in forward order left no
+difference. File by file in reverse order left one, in axios `7a2f901`, and it was a fault this
+pass had introduced: the commit adds files under `test/module/typings/` and removes `typings/`
+from `.gitignore`; written last to first, the files arrive while they are still ignored, the new
+check for ignored paths rightly leaves them out, and nothing looked at them again when the rule
+went. A change to a `.gitignore` is now followed by a full reconciliation.
+
+That fix was replayed in turn, and the reverse order left one again, in spring-petclinic
+`a50bfb65bb`: the commit renames `readme.md` to `README.md` and edits `.gitignore`. On a file
+system that does not tell the two names apart git goes on listing `readme.md` until its index is
+moved, so the full reconciliation the `.gitignore` now triggers named the file as git did, while
+the update of the path alone had named it as the disk does: a disagreement that had been there
+all along and that no replay had reached. The name of a file is now the one on disk in both
+(untracked files are asked of git without folding case), and `check` reports the imports that
+still use the old name. On that code, the code these numbers describe, the three modes were
+replayed once more in full: no difference in any of the 2,520.
+
+What 3.1.0 got wrong, by kind, from the commits above and from the scenarios of
+`test/incremental.test.mjs` (26 of the 32 tests it had before the second pass fail on 3.1.0):
+
+- an import written before the file it names existed was never resolved (fastapi's tutorial tests
+  written before the tutorial module), and one whose target moved with a `package.json` or
+  `tsconfig.json` change stayed where it was (in axios one such commit leaves 453 facts wrong:
+  references kept through an `import 'axios'` that no longer led there, and reads that a
+  declaration added in another file should have bound);
+- a Go import of a package whose last file was removed still led to the empty directory (gin);
+- a type, a value or an attribute used before its definition was written lost the reference for
+  good: references that bound to nothing were deleted at indexing time;
+- a changed return type, base class, field type or re-export left the calls made through it bound
+  to the old definition in every file that had not itself changed;
+- the candidate count and confidence of a call could depend on which file was indexed last.
+
+**How far an update reaches.** With dependency tracking an update resolves again only the files
+that read what changed ([ARCHITECTURE](ARCHITECTURE.md#an-updated-index-is-the-index-built-from-scratch)).
+Over the replays above an update resolves again 9.6 other files on average when a whole commit
+arrives at once and 14.5 when its files arrive one by one, 957 at most (a fastapi commit that
+touches a name hundreds of tutorial files define), and the slowest single update took 1.2 s
+(networkx, 615 files resolved again). Moving the index one commit forward takes about what it
+took: 95 ms against 96 ms a commit in `commit` mode, 167 against 160 and 109 against 144 in the
+two `file` modes (both builds measured on a machine doing other work), against 0.9–1.1 s to
+build it afresh. On Twenty (31,529 files, 1.2 million references): appending a
+comment to the most referenced file (`isDefined.ts`, 11,987 uses) reaches no other file and takes
+0.18 s; renaming its export reaches the 4,561 files that use it and takes 4.2 s; creating a file
+takes 0.8 s, most of it resolving the 177,722 imports again. Each file records 29 keys on average
+there (3.7 MB in all).
+
+**What it costs.** Cold index, CPU seconds of one thread (`GRAPH_INDEXER_WORKERS=0`), three runs of
+each build alternated on a machine that was doing other work, so CPU time rather than the clock:
+
+| repository | 3.1.0 | now | index size |
+|---|---|---|---|
+| nestjs (1,686 files) | 3.45 | 3.63 | 13.5 → 14.0 MB |
+| fastapi (1,698) | 2.96 | 3.15 | 13.2 → 13.5 MB |
+| sqlglot (266) | 4.90 | 4.23 | 16.8 → 17.9 MB |
+| nats-server (233) | 38.3 | 8.8 | 35.9 → 38.5 MB |
+| Twenty (31,529; two runs) | 62.9 | 61.4 | 334.4 → 334.8 MB |
+
+The second pass costs some of that back. Same measurement, on an idle machine, the build before
+the pass against this one (medians of three alternated runs):
+
+| repository | before | now | index size |
+|---|---|---|---|
+| nestjs (1,686 → 1,703 files) | 3.10 | 3.39 | 14.0 → 14.6 MB |
+| fastapi (1,698) | 2.62 | 2.75 | 13.5 → 13.9 MB |
+| sqlglot (265) | 3.69 | 4.20 | 17.9 → 19.7 MB |
+| nats-server (233) | 7.65 | 8.05 | 38.5 → 38.5 MB |
+| tokio (740 → 743) | 5.96 | 6.46 | 17.7 → 17.9 MB |
+| commons-collections (545) | 2.61 | 2.82 | 16.5 → 16.5 MB |
+
+Five to fourteen per cent more CPU for a cold index: a receiver's type is now kept per enclosing
+definition rather than per file (the fix for the order-dependent answer above), Rust calls record
+the types of their arguments, and Python binds more (`name.attr` of any case is a use). Clock time
+grows by two to eleven per cent.
+
+nats-server is one Go package of 233 files. For every reference the resolver scanned all the
+symbols of the file, or of every file of the package, to pick those of one name: quadratic in a
+large package. A per-file index by name gives the same symbols in the same order.
+
+A fresh index holds the same facts as one built by 3.1.0 in 19 of the 23 checkouts compared fact
+for fact (the fixtures, six Python, three Java and three Rust repositories, sqlglot, and Twenty
+with its 853,426 facts). The three Go repositories gain bound references through the scoping
+change of section 1, and eight references of Commons Collections change: in Java the type of a
+`call:` receiver is chosen with the arguments of the reference being resolved and was kept for the
+next reference of the file whatever its arguments, so the answer depended on which asked first; it
+is kept per argument shape now. Against javac Commons Collections scores the same (0.961 / 0.883,
+exact sets 0.825). So the
+oracle figures of section 1 hold as published, except Go's, measured again there.
+
+## `check` on changes left half done
+
+```bash
+node bench/eval-check.mjs --repos gin,axios,nestjs --n 40 --verbose
+node bench/eval-check.mjs --repos sqlglot --repo-dir ~/.gi-agentic/repos --n 30 --scan 1500 --verbose
+```
+
+`check_changes` exists for one failure: a definition is changed and its users elsewhere are not.
+Real history has the answer key.
+
+**Method.** A commit that changed the definition line of a name in a file A and, in the same
+commit, a line that uses that name in another file B shows where a developer had to follow the
+change: a *ripple*. The rules come from git text alone and follow B5's
+([PLAN-IDE-AGENTE](PLAN-IDE-AGENTE.md)): one parent, a subject that is not a release or a revert,
+2–8 modified source files and at most 16 files; a name of four or more characters whose definition
+line the commit removes or changes in A; a file B, not itself such an A, that contained the name
+and in which the commit changes a line containing it. Built and vendored copies (`dist/`,
+`*.min.*`) are neither A nor B: that exclusion was added after the first run on axios, whose bundle
+and its minified twin change together. The most recent such commits of each repository are taken.
+
+For each commit, in a worktree at its parent:
+
+- **half done** — only the A files are written as the commit leaves them, and `check` runs. A
+  ripple is *found* when a finding about that name points into file B; a *site* when it names the
+  line. Only what the reply shows counts: a list it cuts short ("… 12 more") is counted as far as
+  it is shown. Findings are problems ("✗": a call that no longer fits, a removed name still used)
+  or things to review ("•": callers in files not touched, the method's family, possible uses);
+- **finished** — the whole commit is checked out and `check` runs against the parent. A problem
+  reported here is a false alarm, or something the developer left broken.
+
+The repositories were split before any result was read. **Development** (looked at while fixing
+`check`): gin, axios, nestjs, sqlglot. **Held out** (run once, at the end, with the code frozen):
+express, serde_json, spring-petclinic, networkx, sqlalchemy, mypy, xarray, scrapy, haystack,
+pylint, sympy and Twenty.
+
+**Results.**
+
+| split | build | commits | ripples found | …as a problem | …into source files | sites | finished changes reported with problems | problems reported elsewhere |
+|---|---|---|---|---|---|---|---|---|
+| development | 3.1.0 | 56 | 40 of 103 (39 %) | 25 | 32 of 86 (37 %) | 59 of 172 (34 %) | 12 of 56 commits (122 problems) | 106 |
+| | now | 56 | **59 of 103 (57 %)** | 26 | **48 of 86 (56 %)** | **90 of 172 (52 %)** | **1 of 56 (6)** | **12** |
+| held out | 3.1.0 | 120 | 159 of 288 (55 %) | 135 | 90 of 157 (57 %) | 290 of 1,148 (25 %) | 18 of 120 commits (147 problems) | 42 |
+| | now | 120 | **177 of 288 (61 %)** | 118 | **97 of 157 (62 %)** | **333 of 1,148 (29 %)** | **6 of 120 (6)** | **12** |
+| development | second pass (2026-11-15) | 56 | 61 of 103 (59 %) | 29 | 50 of 86 (58 %) | 93 of 172 (54 %) | 1 of 56 (6) | 15 |
+| held out | second pass (2026-11-15) | 120 | 178 of 288 (62 %) | 122 | 97 of 157 (62 %) | 345 of 1,148 (30 %) | **2 of 120 (2)** | 12 |
+
+(Development: 40 commits a repository where the fetched history has them, 30 for sqlglot. Held
+out: 20 a repository, 10 for Twenty; express and spring-petclinic have no such commit in the
+history fetched, so ten repositories count.)
+
+The held-out gain in ripples found is a third of the development one (6 points against 18): most
+of what was fixed was found on JavaScript and TypeScript, and the held-out set is mostly Python,
+where 3.1.0 already did best. What carries over in full is the other column: finished changes
+reported as broken fall from 18 commits to 6 and from 147 problems to 6. Fewer ripples are reported
+*as a problem* (135 → 118) because a use tied to a removed definition only by its name is now
+listed as possible rather than as broken.
+
+The six held-out commits still reported, one problem each, were read after the run. Three were two
+bugs, fixed afterwards and not measured again (the figures above are the frozen build's): a
+generator passed as the only argument (`f(x for x in xs)`) was counted as two arguments (scrapy,
+sympy; 3.1.0 has it too), and a value named like a class that exists elsewhere (`G = nx.Graph()`
+with a test class `G`) was taken for the class in the new rule for `Base.method(self, …)`
+(networkx; introduced by this work). The other three (serde_json `Compound.serialize_entry`, two
+in sqlalchemy) were not looked into further.
+
+The one finished change still reported in development is a true one: nestjs `40e2755c82` removed
+the parameter of `ClientRedis.getClientOptions` and left six calls in a spec file passing it.
+
+What 3.1.0 got wrong, each now a test in `test/check.test.mjs`:
+
+- **JavaScript arity was treated as an error.** `merge(a, b)` against a function that now declares
+  three parameters is legal JavaScript; `check` called it a call that no longer fits. On axios the
+  developer's finished change was reported with problems in 7 of 7 commits (97 problems). In
+  JavaScript a count that does not match is now listed to look at; in TypeScript, Python, Go, Java
+  and the rest it is still a problem.
+- **"Removed but still used" went by name.** A removed top-level `map` claimed every `.map()` call
+  in the repository; a Go type renamed in one file and still named in another file of its package
+  was not found at all, because references that bound to nothing were not kept. The removed
+  definition is now put back into the symbol table as it was, the references that bind to nothing
+  and carry its name are resolved again, and those that bind to it are its uses
+  ([ARCHITECTURE](ARCHITECTURE.md#5-queries)). Uses only the name ties to it are listed apart, as
+  possible.
+- **A definition that changed kind was "removed"** (`function AxiosHeaders` made a class, a type
+  alias made an interface), and so was a name the file still binds by an import or by destructuring.
+- **Python:** `Base.method(self, x)` passes its receiver by hand and was one argument too many; a
+  call that passes a keyword the definition no longer takes is now a problem.
+- **A method's family.** A method removed from a class, or whose signature changed, is reported
+  with the supertypes that still declare it and the subtypes that still override it, in files the
+  change did not touch (16 of the 30 ripples found on nestjs carry such a finding).
+- **A signature that changes without changing its argument count** (another result, a parameter
+  renamed) lists its callers in files not touched.
+
+**Second pass (2026-11-15).** On the development commits `check` now finds 61 of the 103 ripples
+(59 before), 29 of them as a problem (26), 93 of the 172 sites (90), and still reports one finished
+change of 56, the true one. The held-out commits were run again, once, with the code frozen: 178
+of 288 ripples (177), and the developer's finished change reported with problems in 2 of 120
+commits instead of 6 — serde_json's `Compound.serialize_entry` and one in sqlalchemy remain; the
+four that went were the two bugs read after the first run (a generator passed as the only
+argument, a value named like a class) and what the decorator rule below no longer counts. The two more are the removed nestjs interface that sat in a directory
+the index used to skip (`external/`), and a function removed from sqlglot's parser that
+`parsers/postgres.py` still names (`build_jsonb_contains`). That is not where this pass changed `check` most: an
+independent reading of the code found what the benchmark's commits cannot contain — its rules
+take commits that only *modify* files — and each of these is now a test in `test/check.test.mjs`:
+
+- a file deleted or moved (`git mv util.ts helpers.ts`) while others still import it by the old
+  path: "No problems found" before; now the imports left behind are listed, with where the file
+  went;
+- a removed function when any other file declares one of the same name: it was taken for a
+  definition that had moved;
+- a changed file whose path holds a space or a non-ASCII letter: it was not checked at all;
+- a false alarm on a correct change under a decorator that supplies arguments (`@click.option`),
+  and on Rust's `Type::method(value, …)`;
+- limits (40 changed signatures, 30 removed definitions) that hid the rest without a word.
+
+**What it costs to read.** The whole reply, tests section included, over the development commits:
+1,445 → 1,583 characters per half-done change and 1,669 → 1,744 per finished one. axios's replies
+shrink (2,098 → 1,274: the false alarms are gone) and nestjs's grow (1,171 → 1,684: the method's
+family and the callers of a signature that changed without changing its count). That last list was
+first written with the old and the new signature and six call sites for each definition; it took
+844 characters of every reply about a finished nestjs change for 5 of the ripples found, so it is
+one line now: the definition, how many call sites, the first three.
+
+**What is still missed** (43 % of the development ripples): a change of meaning behind an
+unchanged signature (gin's `Render` stopped panicking; its tests changed what they assert),
+declaration files (`index.d.ts` restates the API, it does not use it), and uses through values the
+index cannot type. Part of this cannot be seen without running the code; the benchmark says how
+much.
+
+## `rename` alone on the refactor tasks
+
+```bash
+node bench/eval-rename.mjs          # needs the typescript package; for caddy, Go and the oracle
+```
+
+The B2 rename tasks ([AGENTIC-BENCHMARK](AGENTIC-BENCHMARK.md)) ask to rename one method that
+shares its name with methods of other classes. They are graded by the compiler: no new type error
+(TypeScript: `tsdiag` against the base revision; Go: the type checker over the module, tests
+included) and the target renamed with the same-name methods left alone. Each task records that the
+unmodified checkout fails, that the compiler's own rename passes, and that renaming every
+`.name(` call fails.
+
+Here no agent takes part. In a worktree at the task's base `graph-indexer rename <symbol> <new>
+--write` runs once, and the task's own checks grade what it wrote.
+
+| task set | tasks | solved, first run | solved now |
+|---|---|---|---|
+| nestjs (development, held-out, third and fifth rounds) | 11 | 11 | 11 |
+| Twenty | 4 | 4 | 4 |
+| caddy (Go) | 2 | 0 | 2 |
+| all | 17 | 15 | 17 |
+
+(Run again at the end, after the fixes below: 17 of 17.) Each rename took 0.04–0.3 s on nestjs
+and 1–2.7 s on Twenty. The two caddy tasks failed on one
+call each, `tc.require.Match(…)` and `tc.input.Name()`, where `tc` ranges over a table of test
+cases declared as a struct type in place: the index did not type the fields of such a struct, so
+the call was listed ("1 same-name call on a receiver of unknown type") and not edited. Typing
+them was a change to the engine, verified against the Go type checker (section 1: caddy's exact
+sets 0.949 → 0.964), after which both tasks pass. Those two tasks were the reason for the fix and
+are no evidence for it; the fifteen others were solved before anything was changed.
+
+These tasks rename methods. The same independent reading found two faults they could not show,
+both in renaming a top-level definition and both fixed with tests: the name was also replaced
+inside the module path of an import (`import { parse } from './parse'` became `'./parseText'`),
+and a new name already declared or imported in a file that uses the definition was not seen as a
+conflict.
+
+**Second pass (2026-11-15).** The seventeen tasks said the rename was right where it was used as
+the tasks use it. A reviewer who tried to break it found thirteen ways it was not, none of which
+a task exercises: with an index one edit behind, it renamed the call of another class's method of
+the same name and reported success (it read the positions before bringing the index up to date);
+it left `</Button>` after renaming `<Button>`, `@value.setter` above a renamed property, and
+`export { name }` in the defining file; it turned `{ name }` into `{ newName }`, changing the key
+other code reads; it accepted a new name a base class already declares, or one that is a local
+variable where a use stands; and a read-only file among the ones to edit left the rename half
+written. All are fixed and tested (`test/rename.test.mjs`): the index is reconciled first, every
+edit is checked against the file on disk, the files are written all or none, and a rename that
+would change what the code means is refused with the reason. Run again, it solves the same 17 of
+17.
+
+What the rename edits and what it lists instead is in
+[ARCHITECTURE](ARCHITECTURE.md#5-queries). Since 3.2.0 it is also an MCP tool, `rename_symbol`,
+the one that is not read-only: it writes when called with `apply: true`. Whether an agent uses
+it, and gains from it, has not been measured in sessions.
+
 ## 2. Localization from real commits
 
 ```bash
@@ -1061,22 +1607,25 @@ separately). The agent rounds against 2.x are in the
 
 | fixture | files | lines | symbols | references | bound | full index | DB |
 |---|---|---|---|---|---|---|---|
-| nvm | 6 | 5,786 | 158 | 1,419 | 94% | 0.1 s | 0.4 MB |
-| spring | 52 | 13,743 | 2,733 | 1,853 | 43% | 0.5 s | 1.7 MB |
-| rust | 71 | 23,198 | 2,028 | 5,976 | 86% | 0.7 s | 2.1 MB |
-| gin | 91 | 18,118 | 1,811 | 6,687 | 92% | 0.9 s | 2.3 MB |
-| cjson | 120 | 26,564 | 2,111 | 6,270 | 87% | 1.4 s | 2.5 MB |
-| axios | 136 | 15,374 | 1,000 | 5,838 | 68% | 1.0 s | 1.7 MB |
-| express-js | 157 | 23,326 | 424 | 10,165 | 70% | 0.7 s | 2.0 MB |
-| fastapi | 1,215 | 100,435 | 7,795 | 13,315 | 72% | 2.3 s | 7.0 MB |
-| nestjs | 1,641 | 95,963 | 7,958 | 33,360 | 82% | 3.7 s | 12.3 MB |
-| Twenty | 28,512 | 2,327,185 | 170,126 | 554,975 | 79% | 51 s | 304 MB |
+| nvm | 19 | 8,539 | 459 | 1,419 | 94% | 0.1 s | 0.8 MB |
+| spring | 53 | 13,922 | 2,753 | 1,454 | 54% | 0.3 s | 2.0 MB |
+| rust | 73 | 23,634 | 2,040 | 7,386 | 83% | 0.6 s | 2.9 MB |
+| gin | 102 | 22,342 | 1,981 | 7,548 | 91% | 0.4 s | 2.8 MB |
+| cjson | 132 | 29,967 | 2,435 | 6,556 | 84% | 0.5 s | 3.3 MB |
+| axios | 160 | 18,529 | 1,251 | 5,986 | 58% | 0.6 s | 2.3 MB |
+| express-js | 169 | 27,940 | 509 | 8,114 | 36% | 0.5 s | 2.5 MB |
+| fastapi | 1,698 | 196,531 | 13,461 | 16,333 | 70% | 1.4 s | 13.9 MB |
+| nestjs | 1,703 | 101,774 | 9,537 | 31,841 | 77% | 1.7 s | 14.6 MB |
+| Twenty | 31,634 | 2,610,431 | 197,622 | 442,396 | 73% | 43 s | 336 MB |
 
+Measured on 3.2.0 (2026-11-15, Apple Silicon, the default worker processes; the median of three
+cold builds, one for Twenty). Files and lines include documentation, which is indexed too.
 "Bound" is the share of stored references resolved to a definition in the repository (calls into
-libraries stay unbound; value, member-read and type references that cannot be bound are dropped
-at index time). After the first build only changed files are re-parsed.
+libraries stay unbound; a reference that binds to nothing yet is kept apart, to be bound when
+its definition is written, and is not counted here). After the first build only changed files
+are re-parsed.
 
 Warm tool latency on nestjs (median of 5): `get_symbol` 1.2 ms, `find_references` 1.1 ms,
 `call_graph` 1.4 ms, `change_impact` 3.7 ms, `outline` 17.8 ms, `search_code` about 30 ms.
-The eight tool definitions cost about 2.4k tokens of context and the server instructions about
-500; replies are typically 400–1,500 tokens.
+The ten tool definitions are 9.9k characters of JSON (about 2.5k tokens; `rename_symbol` is 1.2k
+characters of them) and the server instructions 0.8k characters; replies are typically 400–1,500 tokens.
