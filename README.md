@@ -26,8 +26,8 @@ instead of reading whole files and grepping.
 
 - **Answers are exact, not guesses.** `find_references` binds each use through scopes,
   imports and inferred receiver types, so it lists the callers of *this* `get` and not of every
-  method named `get`. Measured against the TypeScript compiler it finds 89% of the real
-  references at 98% precision; grep finds all of them buried among seven times as many false hits.
+  method named `get`. Measured against the TypeScript compiler it finds 96% of the real
+  references at 99.7% precision; grep finds them buried among seven false hits for each real one.
 - **Answers are never stale.** The index re-syncs with the files on disk before every answer,
   including edits the agent made a second ago, so line numbers and call graphs are current. An
   index that was updated holds the facts of one built from scratch: replaying 870 real commits of
@@ -39,6 +39,36 @@ instead of reading whole files and grepping.
   package. The MCP server keeps the index open while the agent runs; with hooks and no server, a
   resident process started on demand does the same so hooks and CLI queries answer in about
   0.1 s, and exits after 30 idle minutes (`GRAPH_INDEXER_RESIDENT=0` turns it off).
+
+## Benchmarks at a glance
+
+Every number below is graded by the compiler or type checker of the language, or by the hidden
+tests of a real fix, never by a model; [Measured results](#measured-results) has the details.
+
+- **Exact where other code tools guess.** Asked where ~150 random symbols are used, graph-indexer's
+  list is entirely right for 91–93% of them; CodeGraph's for 48–51%, codebase-memory-mcp's for
+  32–49%, grep's for 26–38%.
+- **The code tool agents actually use.** In real Claude Code sessions with each tool installed
+  by its own installer, the agent called graph-indexer in 19 of 19 code questions and refactors
+  (CodeGraph 0, codebase-memory-mcp 0, Serena 2), and it was the only setup that answered all 11
+  code questions exactly, at the lowest cost.
+- **It lets a small local model do the job.** Qwen3.5-9B on a Mac mini answered 6 of 6 code
+  questions exactly with graph-indexer 3.2 and 4 of 6 without it, with 38% fewer tokens, a third
+  less time and almost no grep.
+- **Cheaper and faster for cloud models too.** Claude Haiku 5.5 answers code questions with it at
+  0.88 of the cost and 0.78 of the time of Claude Code alone; earlier rounds measured 0.44 of the
+  cost of grep with a larger model, and a quarter of the cost when the question is handed to the
+  structural helper.
+- **Fast and small.** nestjs (1,641 files) indexes in 1.9 s into 13 MB; CodeGraph takes 3.2 s and
+  48 MB, codebase-memory-mcp 12 s and 28 MB.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/MaquinaTech/graph-indexer/main/assets/benchmarks/vs-tools.png" alt="graph-indexer against CodeGraph, codebase-memory-mcp, Serena, zvec-grep and grep: precision and exact answers against the compiler on nestjs and fastapi, code questions answered in real agent sessions and their cost, index time and size, symbol search and commit localization" width="100%" />
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/MaquinaTech/graph-indexer/main/assets/benchmarks/qwen-9b.png" alt="Qwen3.5-9B on a Mac mini with and without graph-indexer: 6 of 6 questions answered exactly against 4 of 6, 38% fewer tokens, 34% less time, no wrong or missed callers" width="100%" />
+</p>
 
 ## Quick start
 
@@ -177,7 +207,6 @@ own `findReferences` (import lines and declarations excluded):
 | | precision | recall | F1 |
 |---|---|---|---|
 | graph-indexer `find_references` | **0.997** | **0.962** | **0.979** |
-| graph-indexer 2.x `find_references` | 0.176 | 0.886 | 0.294 |
 | same-name references (no binding) | 0.252 | 0.975 | 0.400 |
 | grep for the name | 0.128 | 0.993 | 0.227 |
 
@@ -192,7 +221,34 @@ repositories) 0.954–0.999 and 0.970–0.998, and against rust-analyzer (serde_
 had looked at while this was built (gson, urllib3, arrayvec) precision is 0.964–0.991 and recall
 0.759–0.987.
 In the server of Twenty, an open-source CRM monorepo (28,512 files), precision is 0.999 and
-recall 0.924; grep's precision is 0.009 and 2.x's 0.052.
+recall 0.924; grep's precision is 0.009.
+
+**Against other code-intelligence tools.** The same question, "where is this used", put to each
+tool through its own MCP server, installed as its README recommends, on ~150 random symbols per
+repository and graded by the compiler's references (*exact set*: the symbol's whole list is right):
+
+| | nestjs precision | nestjs exact set | fastapi precision | fastapi exact set | cold index, nestjs | index size |
+|---|---|---|---|---|---|---|
+| graph-indexer | **0.993** | **0.913** | **0.997** | **0.927** | **1.9 s** | **13.2 MB** |
+| CodeGraph 1.6.2 | 0.743 | 0.510 | 0.652 | 0.480 | 3.0–3.3 s | 47.8 MB |
+| codebase-memory-mcp 0.11.0 | 0.559 | 0.322 | 0.929 | 0.493 | 11.8–12.1 s | 27.8 MB |
+| grep | 0.140 | 0.255 | 0.273 | 0.380 | | |
+
+In real Claude Code sessions (Sonnet 5.5, 11 new code questions and 8 refactors on nestjs, each
+tool installed by its own installer), graph-indexer was called in all 19 sessions and answered
+every question exactly; CodeGraph and codebase-memory-mcp were never called, Serena twice. Cost of
+a code question against Claude Code alone:
+
+| | questions answered exactly | cost of a question | graph-indexer's cost against it |
+|---|---|---|---|
+| graph-indexer | **11 / 11** | **0.92** (0.85–0.99) | |
+| Serena 1.7.0 | 9 / 11 | 1.05 (1.02–1.09) | 0.87 (0.79–0.95) |
+| codebase-memory-mcp 0.11.0 | 10 / 11 | 1.16 (1.10–1.24) | 0.79 (0.73–0.85) |
+| CodeGraph 1.6.2 | 10 / 11 | 1.42 (1.33–1.53) | 0.65 (0.60–0.69) |
+| Claude Code alone | 9 / 11 | 1 | |
+
+On the refactors graph-indexer cost 0.74 of CodeGraph's sessions, 0.91 of codebase-memory-mcp's
+and 0.93 of Serena's. [Details](docs/BENCHMARKS.md#codegraph-and-codebase-memory-mcp-2026-10-11).
 
 **Localization from real commits.** 169 focused commits of five repositories are replayed: the
 commit subject is the query, the files and functions it changed are the answer, and the index is
@@ -205,46 +261,44 @@ rolled back to the parent commit first.
 | BM25 over the same index | 0.373 | 0.722 | 0.401 | 0.290 |
 
 **Symbol search.** 377 hand-written queries over nine repositories in eight languages, scored
-strictly at symbol level: rank-1 0.703 and MRR 0.760, against 0.552 and 0.646 for graph-indexer
-2.x on the same queries. On the 169 held-out queries (never used for tuning) MRR is 0.773 vs 0.632.
+strictly at symbol level: rank-1 0.703 and MRR 0.760. On the 169 held-out queries (never used
+for tuning) MRR is 0.773.
 
 **Against zvec-grep 0.3.0** (hybrid BM25 + vector search, with its default embedding model,
 Qwen3-Embedding-0.6B, run on the same Mac): on the same 377 queries its best setting, code only,
 reaches rank-1 0.581 and MRR 0.639 (graph-indexer 0.703 and 0.761); on the 169 commits it puts
-the changed file first in 0.420 of them (graph-indexer 0.550, ranked grep 0.485). It is ahead on
-two repositories, gin and fastapi. It has no references or callers. In a one-repetition pilot of
-agent sessions (Haiku 5.5, 24 tasks, 13 of them from zvec-grep's own benchmark) neither tool beat
-Claude Code alone. [Details](docs/BENCHMARKS.md#zvec-grep-030-2026-11-06).
-
-**Against 2.x.** In real Claude Code sessions on nestjs and Twenty (40 tasks, 120 runs), 3.0
-cost 0.43 of 2.x on code questions and 0.46 on refactors, with a quarter to a third of the
-tokens spent looking code up; 2.x cost about twice as much as no index, as its tools and prompt
-add 11,300 tokens to every call (3.0: 1,200). Against no index, 3.0 halves those lookup tokens at
-0.84–0.86 of the cost. Every benchmark against 2.x is in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md#5-against-graph-indexer-2x).
+the changed file first in 0.420 of them (graph-indexer 0.550, ranked grep 0.485). It has no
+references or callers. On 11 code questions in Claude Code sessions (Haiku 5.5), graph-indexer
+answered all 11 at 0.73 of zvec-grep's cost; with zvec-grep installed one caller was missed.
+[Details](docs/BENCHMARKS.md#zvec-grep-030-2026-11-06).
 
 **Agents.** The same model gets the same task with built-in tools only, with graph-indexer added,
 or with graph-indexer instead of grep, and an oracle it never sees grades the result: the
-TypeScript compiler for code questions and multi-site refactors, the hidden tests of the real fix
-for issues reported after the model's training cutoff. In the fourth round (19 new tasks, 122
-runs, all solved), graph-indexer as `init` installs it answered code questions at 0.44 of the
-cost of grep alone (95% CI 0.32–0.67) and 0.37 of the time, with half the model's reasoning. A
-smaller model, at half the price per token, answered the same questions exactly with graph-indexer
-(7 of 7, against 5 of 7 with grep alone) at 0.26 of the cost (0.18–0.50) and 0.32 of the time — a
-tenth of what the larger model spent with grep — and did multi-site refactors at 0.69
-(0.56–0.87). Handed off the way a main agent delegates them, 24 new code questions were answered
-by the structural helper `init` installs as exactly as by a general-purpose sub-agent with grep
-(20 of 24 each), at 0.24 of the cost (0.18–0.33) and 0.28 of the time, with about 170 tokens
-handed back instead of the 23k a lookup adds to the asking agent's context. Fixing real issues
-does not get cheaper: 0.85 (0.76–0.96) in the fourth round, a gain the lookup rules it installs
-give on their own (0.86), and 1.05 (0.82–1.46) with the smaller model. In real Claude Code
-sessions (252 runs) graph-indexer as `init` installs it answered all 12 code questions exactly
-against 8–9 of 12 without it — the misses were the two-level caller questions — at 0.80 of the
-cost and 0.65 of the time; refactors came out the same, and on real issues, where the agent never
-called it, it cost 1.02–1.05 once its tool definitions were trimmed to what agents use. In Go (57
-real sessions on caddy, graded by the Go type checker) graph-indexer answered all 14 code
-questions against 13 without it, at 0.87 of the cost, and did the refactors at 0.81 of the cost
-and half the time. With the usual model every run with graph-indexer solved its task. Details in
+TypeScript compiler or the Go type checker for code questions and multi-site refactors, the
+hidden tests of the real fix for issues reported after the model's training cutoff.
+
+| Model and round | Code questions answered exactly | Cost | Time |
+|---|---|---|---|
+| Qwen3.5-9B on a Mac mini, 3.2 (6 questions) | **6 / 6** against 4 / 6 with no index | 0.62 of the tokens | 0.66 |
+| Claude Haiku 5.5, 3.2 (11 questions, 2 runs each) | 22 / 22, as without it | **0.88** (0.80–0.97) | **0.78** (0.66–0.90) |
+| Claude Code as `init` installs it (12 questions, 252 runs) | **12 / 12** against 8–9 / 12 | 0.80 | 0.65 |
+| fourth round, against grep alone (19 tasks, 122 runs) | all | **0.44** (0.32–0.67) | 0.37 |
+| a smaller model, against grep alone | **7 / 7** against 5 / 7 | 0.26 (0.18–0.50) | 0.32 |
+| Go, caddy (57 sessions) | **14 / 14** against 13 / 14 | 0.87 | |
+
+- **The misses without it are the questions that need callers of callers**, which grep cannot
+  follow and graph-indexer answers in one `call_graph` call.
+- **With Qwen3.5-9B** graph-indexer 3.2 also removed every wrong or missed caller (0 against 3
+  across the 6 questions), cut the uncached tokens a local model must prefill from 48k to 29k per
+  question, and replaced 14 greps per question with 0.2.
+- **Handed to the structural helper** `init` installs, 24 new code questions were answered as
+  exactly as by a general-purpose sub-agent with grep (20 of 24 each), at 0.24 of the cost
+  (0.18–0.33) and 0.28 of the time, with about 170 tokens handed back instead of the 23k a lookup
+  adds to the asking agent's context.
+- **Multi-site refactors** cost 0.81 (0.73–0.89) of grep's over three rounds, 0.69 (0.56–0.87)
+  with the smaller model, and in Go 0.81 of the cost in half the time.
+
+The rounds, with every task, run and the cases where graph-indexer does not help, are in
 [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md).
 
 **After an edit.** `check_changes` is measured on real commits applied in part — the definition

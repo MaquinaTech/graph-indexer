@@ -278,6 +278,12 @@ and rust-analyzer, and the faults the reviewers found in updates and in `rename`
   Symfony (1,104 files) are the same with both. The other grammars are at their latest release,
   except Scala, whose grammar is publishing fixes daily at the moment and stays at 0.26.2.
 - **Indexes are rebuilt on upgrade** (the index schema and the grammar manifest changed).
+- **The README leads with the benchmarks**: two figures (`assets/benchmarks/`) and a summary of
+  the comparisons with CodeGraph, codebase-memory-mcp, Serena, zvec-grep and grep, and of the agent
+  rounds, including two new ones on 3.2 — Claude Haiku 5.5 (150 runs) and Qwen3.5-9B running on a
+  Mac mini (18 runs), written up with every result in
+  [docs/AGENTIC-BENCHMARK.md](docs/AGENTIC-BENCHMARK.md). The comparison with 2.x moved out of the
+  README; it stays in [docs/BENCHMARKS.md](docs/BENCHMARKS.md#5-against-graph-indexer-2x).
 
 ---
 
