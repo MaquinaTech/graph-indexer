@@ -261,6 +261,12 @@ and rust-analyzer, and the faults the reviewers found in updates and in `rename`
   fixed before release: a link planted at the temporary file's predictable name made the write go
   outside the repository, and a server started `--read-only` still wrote for a CLI query sent to
   its local socket.
+- CodeQL flagged, after the first 3.2.0 commit, a pattern new in this release that took quadratic
+  time (`js/polynomial-redos`): the one that strips Java annotations from a parameter's type, on
+  `@0(` repeated with no `)` (240,000 characters, 8.6 s). Stored signatures are cut to 800
+  characters, so no index could reach it; it is a single linear pass now, identical in output (300,000
+  random strings compared), with a test. The `v3.2.0` tag was moved to the commit that fixes it
+  before 3.2.0 reached npm.
 - graph-indexer has no npm dependencies; GitHub reports no code-scanning, Dependabot or secret
   alerts, and the CI actions are at their latest release.
 

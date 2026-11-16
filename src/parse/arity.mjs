@@ -170,6 +170,30 @@ export function sigArity(sig, name) {
     return done ? { min, max } : null;
 }
 
+const WORD = /\w/;
+const SPACE = /\s/;
+/**
+ * The text without its annotations: `@Name`, its `(arguments)` up to the first `)` when there is
+ * one, and the spaces after it. A single pass: the regular expression it replaces took quadratic
+ * time on `@0(` repeated with no `)` (CodeQL js/polynomial-redos).
+ */
+function stripAnnotations(p) {
+    let out = '', i = 0, noClose = false;
+    while (i < p.length) {
+        if (p[i] !== '@' || !WORD.test(p[i + 1] ?? '')) { out += p[i++]; continue; }
+        let j = i + 1;
+        while (j < p.length && WORD.test(p[j])) j++;
+        if (p[j] === '(' && !noClose) {
+            // once no `)` is left after one point, none is left after any later one
+            const k = p.indexOf(')', j);
+            if (k < 0) noClose = true; else j = k + 1;
+        }
+        while (j < p.length && SPACE.test(p[j])) j++;
+        i = j;
+    }
+    return out;
+}
+
 /**
  * Parameter types read from a stored Java-like signature (`final void append(char c, int[] xs)`):
  * the text before each parameter's name, `...` kept as a trailing `...`. Null when unreadable.
@@ -181,7 +205,7 @@ export function sigParamTypes(sig, name) {
     const out = [];
     let depth = 0, cur = '';
     const param = (p) => {
-        p = p.replace(/@\w+(\([^)]*\))?\s*/g, '').replace(/\bfinal\s+/g, '').trim();
+        p = stripAnnotations(p).replace(/\bfinal\s+/g, '').trim();
         if (!p) return;
         const k = p.search(/[\w$]+\s*$/);
         out.push(k > 0 ? p.slice(0, k).trim() : p);
