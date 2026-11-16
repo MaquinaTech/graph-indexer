@@ -525,6 +525,58 @@ graph-indexer. Tool output is a fifth of the cost, so shrinking it cannot move B
 is fewer calls and less reasoning ([PLAN-AGENTES.md](PLAN-AGENTES.md)). The per-round tables
 below keep the costs recorded when each round was graded.
 
+### 3.2 against 3.1.1 and no index, on Haiku 5.5 and on a local Qwen3.5-9B (hk, qw; 2026-11-16)
+
+Three arms side by side, the same tasks and harness: `cc` (Claude Code alone), `cc+gi` with
+3.1.1 (`2970b91`) and `cc+gi` with 3.2.0, each as `init --no-helper` installs it. Both versions
+ran on Node 24.22.1 (3.1.1 fails on Node 26: see the CHANGELOG). The installed instructions
+differ in one line, the one that names `rename_symbol`, which 3.1.1 does not have.
+
+**Haiku 5.5** (`hk31`, `hk32`): 11 code questions on nestjs (`qa-nestjs-r7`), the 8 nestjs
+refactors (`refactor-nestjs-held`, `refactor-nestjs-r5`) and the 6 B5 tasks of `mp-haiku`; two
+runs per task and arm, 150 runs, $1.76. Every task was solved in every arm. Cost and time against
+`cc`, paired by task (bootstrap 95% CI):
+
+| tasks | 3.2 cost | 3.2 time | 3.1.1 cost | 3.1.1 time | 3.2 against 3.1.1 (cost, time) |
+|---|---|---|---|---|---|
+| 11 code questions | 0.88 (0.80–0.97) | 0.78 (0.66–0.90) | 0.89 (0.80–0.99) | 0.81 (0.69–0.95) | 0.99, 0.96 |
+| 8 refactors | 1.02 (0.96–1.09) | 0.95 (0.87–1.05) | 1.05 (1.00–1.10) | 1.02 (0.97–1.07) | 0.98, 0.94 |
+| 6 B5 issues | 1.10 (1.01–1.16) | 0.79 (0.57–1.02) | 1.25 (1.07–1.44) | 1.11 (0.94–1.24) | **0.87 (0.78–0.98), 0.71 (0.55–0.89)** |
+
+- Adoption on questions and refactors: 97% of the `cc+gi` runs called graph-indexer.
+- `rename_symbol` was called in 4 of the 8 runs of the 4 rename tasks, always twice (list, then
+  `apply: true`), and those runs were no cheaper than renaming with `sed`.
+- The B5 sqlalchemy task shows 13 PASS_TO_PASS tests "missing" in every arm: the grading Python
+  was rebuilt for this round and links SQLite 3.54.1, whose version is part of those tests' ids
+  (3.53.4 when the task was mined). The fix's own tests (5/5) and its RIPPLE tests (28/28) pass in
+  every run; the data were not edited.
+
+**Qwen3.5-9B** (`qw31`, `qw32`): mlx-community/Qwen3.5-9B-MLX-4bit at `938d8919` on an Apple M2
+with 24 GB, served by `mlx_lm.server` 0.32.0 on loopback with thinking off and the model's own
+sampling (0.6 / 0.95 / 20), reached by Claude Code through a local Anthropic-to-OpenAI translator.
+The 6 questions of `mp-haiku`, one run per task and arm (18 runs), one session at a time with
+the arms in rotating order. The harness's one-turn preflight was skipped: the 9B often described
+the sandbox probe instead of running it, and the same sandbox settings had passed it in the other
+arms.
+
+| | `cc` | 3.1.1 | 3.2 |
+|---|---|---|---|
+| questions answered exactly | 4 / 6 | 4 / 6 | **6 / 6** |
+| wrong or missed callers (all 6) | 3 | 9 | **0** |
+| mean score | 0.975 | 0.948 | **1.000** |
+| tokens per question (input-equivalent) | 129k | **78k** | 80k |
+| uncached input per question | 48k | **29k** | 29k |
+| minutes per question | 12.4 | 9.6 | **8.2** |
+| minutes to the answer | 10.1 | 7.4 | **6.0** |
+| grep calls per question | 13.8 | 0.3 | **0.2** |
+| files read per question | 5.8 | 5.7 | **4.3** |
+| turns per session | 20.0 | **17.7** | 24.5 |
+
+- The misses were both callers-of-callers questions: without an index Qwen left out 2 of 11
+  callers on one and added one on the other; with 3.1.1 it added 8 on one and 1 on the other.
+  Whether those 8 came from the index or from the model was not traced.
+- One run per task: the solved counts differ by two questions, which may be noise.
+
 ### Sonnet 5.5 against Haiku 5.5 (mp-sonnet, mp-haiku, pilot): 16 tasks, 128 runs
 
 The same 16 tasks, arms (`cc`, `cc+gi`) and two runs each, once with `--model claude-sonnet-5-5`
