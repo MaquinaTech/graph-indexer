@@ -98,6 +98,20 @@ same context to their tool output. Flags: `--agents claude,cursor,vscode,gemini,
 `--all`, `--hooks`, `--local` (use this checkout instead of `npx`), `--dry-run`,
 `--no-instructions`, `--no-helper`.
 
+One hook is opt-in and `--hooks` does not add it: `hook prompt`, for Claude Code's
+`UserPromptSubmit`. Before the agent's first turn it runs `find_references` on the code a request
+names (`getUserById`, `Type.member`, `Type::m`, `MAX_SIZE`, `render()` or a name in backticks), and
+`call_graph`'s callers too when the request asks what a change affects or which paths reach it, and
+adds those answers as the tools give them, whole, within 6,000 characters; an answer that does not
+fit is named instead. It reads only what the user wrote: blocks the host adds in tags (system
+reminders, task notifications) are left out, and so are sessions a program drives (`claude -p`, the
+Agent SDK; `GRAPH_INDEXER_PROMPT_HOOK=all` includes them). It says nothing while the index is missing
+or its first build runs. To use it, add it to `.claude/settings.json`:
+
+```json
+"UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "npx -y --prefix / graph-indexer@3 hook prompt", "timeout": 10 }] }]
+```
+
 In Claude Code (2.1.275 or later), the plugin installs in one step:
 
 ```text
