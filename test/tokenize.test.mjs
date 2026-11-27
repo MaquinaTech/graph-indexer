@@ -29,3 +29,9 @@ test('analyzeQuery separates identifiers, drops stopwords for natural language, 
     const d = analyzeQuery('retry logic path:src/net');
     assert.deepEqual(d.filters.path, ['src/net']);
 });
+
+test('analyzeQuery reads a name written as a call, foo(), as the identifier foo', () => {
+    assert.deepEqual(analyzeQuery('Is review() still needed?').identifiers, ['review']);
+    assert.deepEqual(analyzeQuery('who calls `getUserById()`, and (render)?').identifiers, ['getUserById']);
+    assert.ok(analyzeQuery('who calls (render)?').words.includes('render'));
+});

@@ -4,6 +4,16 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A query naming a function as a call (`render()`) did not take it as an identifier.** The
+  closing parenthesis was stripped before the shape `foo()` was tested, so `explore` did not centre
+  on the function. No query of the search benchmark is written that way.
+
+---
+
 ## [3.2.0] — 2026-11-15
 
 An index that was updated holds the facts of one built from scratch; `check` is measured on changes
