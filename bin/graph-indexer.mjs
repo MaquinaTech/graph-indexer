@@ -149,7 +149,7 @@ Usage:
   graph-indexer rename <symbol> <new-name> [--write] [--min-confidence exact|high]
   graph-indexer outline [path] [--focus TEXT] [--max-tokens N]
   graph-indexer check [--files x,y] [--base REV]     verify uncommitted edits
-  graph-indexer hook post-tool|session-start|subagent-start   agent hook (JSON on stdin)
+  graph-indexer hook post-tool|session-start|subagent-start|prompt   agent hook (JSON on stdin)
   graph-indexer semantic install|status        optional static code-embedding model (32 MB, MIT) for
                                                    search in words; used with GRAPH_INDEXER_SEMANTIC=1
   graph-indexer daemon [--idle-minutes N]           keep the index open for hooks and CLI queries

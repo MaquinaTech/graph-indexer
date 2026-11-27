@@ -17,6 +17,9 @@
  *   session-start   one line saying the index exists (builds it in the background if missing), plus
  *                   the lookup rules when the repository's instruction files do not carry them
  *   subagent-start  the line and the lookup rules, for subagents that do not read CLAUDE.md/AGENTS.md
+ *   prompt          (UserPromptSubmit, opt-in) find_references on the code a request names, and
+ *                   call_graph's callers when it asks about paths or impact, as the tools answer
+ *                   (src/cli/prompt.mjs); nothing while the index is being built
  *
  * Staying quiet until the agent is crawling matters: context added to every search made "where is
  * X" questions dearer in other projects' measurements. Fail-open by design: any error, timeout or
@@ -36,6 +39,8 @@ import { gitSync } from '../util/git.mjs';
 import { codeSpecForPath as specForPath } from '../parse/languages.mjs'; // hooks report on code files only
 
 const MAX_CONTEXT = 1500;
+// a request answered by the tools replaces the calls the agent would otherwise make, so it may say more
+const MAX_PROMPT_CONTEXT = 6000;
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'edit', 'write', 'apply_patch', 'replace', 'write_file']);
 const GREP_TOOLS = new Set(['Grep', 'grep', 'search_file_content', 'grep_search']);
 const READ_TOOLS = new Set(['Read', 'read_file', 'read', 'view']);
@@ -359,6 +364,33 @@ function shellEdits(root, state) {
     return changed;
 }
 
+/**
+ * A session a program drives (`claude -p`, the Agent SDK): Claude Code says so to its hooks in
+ * CLAUDE_CODE_ENTRYPOINT (`sdk-cli`, `sdk-ts`, `sdk-py`). Its prompts are briefs a program wrote,
+ * not requests the user typed, so the prompt hook skips them; GRAPH_INDEXER_PROMPT_HOOK=all reads
+ * them too (benchmark runs).
+ */
+export const programDriven = (env = process.env) => /^sdk-/.test(env.CLAUDE_CODE_ENTRYPOINT ?? '') && env.GRAPH_INDEXER_PROMPT_HOOK !== 'all';
+
+/**
+ * Before the first turn: the tools' answers for the code the request names. Never waits for the
+ * index: while its first build runs this says nothing, and otherwise it brings the index up to
+ * date first, as the MCP server does before every tool call.
+ */
+async function beforePrompt(input, acquire) {
+    const { userText, promptNames, promptContext } = await import('./prompt.mjs');
+    const text = userText(input.prompt ?? input.user_prompt);
+    if (!promptNames(text).length) return null; // nothing that may name code: do not open the index
+    const ix = await acquire();
+    if (!ix) return null;
+    const { intel } = ix;
+    try {
+        if (intel.initialDone === false) return null;
+        await intel.ensureFresh();
+        return await promptContext(intel, text, { budget: MAX_PROMPT_CONTEXT });
+    } finally { ix.release(); }
+}
+
 // the lookup rules, for sessions and subagents whose instruction files do not carry them
 const RULES = `How to look code up in this repository (graph-indexer):
 - Several things at once: several tool calls in one message, or one search with alternatives — not one search per turn.
@@ -413,8 +445,11 @@ export async function handleHook(event, input, { root, acquire }) {
     } else if (event === 'session-start' || event === 'subagent-start') {
         name ??= event === 'session-start' ? 'SessionStart' : 'SubagentStart';
         text = await sessionLine(root, { rules: event === 'subagent-start', acquire });
+    } else if (event === 'prompt') {
+        name ??= 'UserPromptSubmit';
+        text = await beforePrompt(input, acquire);
     }
-    return format(name, text, input, event === 'post-tool' ? MAX_CONTEXT : 2500);
+    return format(name, text, input, event === 'post-tool' ? MAX_CONTEXT : event === 'prompt' ? MAX_PROMPT_CONTEXT : 2500);
 }
 
 /**
@@ -446,10 +481,12 @@ export async function runHook(event, { repo = null, version = null } = {}) {
         // the repository added to it)
         const root = findRepoRoot(repo || input.cwd || process.cwd());
         const { askResident, residentRequired } = await import('./resident.mjs');
-        const reply = await askResident(root, { op: 'hook', event, input }, { version, totalMs: 2000 });
+        // a prompt in a session a program drives is a brief it wrote: nothing to add
+        const skip = event === 'prompt' && programDriven();
+        const reply = skip ? null : await askResident(root, { op: 'hook', event, input }, { version, totalMs: 2000 });
         let out = null;
         if (reply) out = reply.out;
-        else if (!residentRequired()) {
+        else if (!skip && !residentRequired()) {
             out = await handleHook(event, input, { root, acquire: localIndex(root) });
             spawnResident(root, event);
         }

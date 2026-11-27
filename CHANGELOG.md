@@ -4,6 +4,38 @@ All notable changes to graph-indexer are documented here. Dates are in YYYY-MM-D
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`hook prompt`, for Claude Code's `UserPromptSubmit` (opt-in).** Before the agent's first turn,
+  it adds the answers graph-indexer's own tools give for the code a request names, so a "who calls
+  X" question starts from them instead of a search (#7).
+  - Names are read as `explore` reads a query (`analyzeQuery`): lowerCamelCase, `Type.member`,
+    `Type::m`, `CONSTANTS`, `foo()`, and a plain word only when written as code. A bare name that
+    several definitions outside tests share is left out.
+  - For each name (at most 3), `find_references`; when the request asks what a change affects or
+    which paths reach it ("affect", "impact", "entry points", "afecta"…), `call_graph`'s callers
+    too, two levels, tests left out. The answers are the tools' own, so what they say about
+    completeness, parse gaps, unbound calls, string mentions and injection comes with them.
+  - Within 6,000 characters, answers are given whole: a long one is asked again with a smaller
+    `limit` (the tool says how many it left out), and one that still does not fit is named.
+  - It reads only what the user wrote: blocks the host adds in tags (`<system-reminder>`,
+    `<task-notification>`, `<agent-message>`, slash-command expansions) are left out, and sessions a
+    program drives (`claude -p`, the Agent SDK, which Claude Code names in
+    `CLAUDE_CODE_ENTRYPOINT`) are skipped unless `GRAPH_INDEXER_PROMPT_HOOK=all`.
+  - It never waits for the index: while it is missing or its first build runs, it says nothing.
+    Otherwise the index is brought up to date first, as before every MCP tool call.
+  - `init --hooks` does not add it; the README shows the entry for `.claude/settings.json`.
+
+### Fixed
+
+- **A query naming a function as a call (`render()`) did not take it as an identifier.** The
+  closing parenthesis was stripped before the shape `foo()` was tested, so `explore` did not centre
+  on the function. No query of the search benchmark is written that way.
+
+---
+
 ## [3.2.0] — 2026-11-15
 
 An index that was updated holds the facts of one built from scratch; `check` is measured on changes

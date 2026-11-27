@@ -38,6 +38,7 @@ tool reply.
 | `src/query/rename.mjs` | rename on bound references: the definition, its method family, its uses and imports |
 | `src/mcp/*.mjs` | MCP server, tool definitions and text rendering |
 | `src/cli/init.mjs` | agent configuration writer |
+| `src/cli/hook.mjs`, `src/cli/prompt.mjs` | agent hooks: the edit checker, lookups while the agent crawls, the session line and, opt-in, the tools' answers for the code a request names |
 
 ## 1. Parsing and extraction
 

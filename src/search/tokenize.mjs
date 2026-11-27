@@ -157,7 +157,8 @@ export function analyzeQuery(query) {
         return ' ';
     });
     q = q.trim();
-    const rawTokens = q.split(/[\s,;]+/).filter(Boolean).map(t => t.replace(/^[`'"(]+|[`'"),.?!:]+$/g, '')).filter(Boolean);
+    // quotes and punctuation around a token go, the parentheses of a call (`foo()`) stay
+    const rawTokens = q.split(/[\s,;]+/).filter(Boolean).map(t => t.replace(/^[`'"(]+/, '').replace(/(\(\))?[`'"),.?!:]*$/, '$1')).filter(Boolean);
     const identifiers = [];
     const words = [];
     rawTokens.forEach((t, i) => {

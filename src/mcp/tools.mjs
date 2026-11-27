@@ -1209,6 +1209,23 @@ const EXPLORE_SECONDARY = 5;
 const CALLER_KINDS = ['call', 'new', 'value', 'decorator'];
 
 /**
+ * The definitions an identifier of a query (analyzeQuery) names, best first, or none. Shared by
+ * explore and the prompt hook (src/cli/prompt.mjs).
+ */
+export function namedInQuery(intel, id, { natural = false } = {}) {
+    if (id.length < 3) return [];
+    // a bare word that happens to name something (`user`, `config`) is not a lookup
+    if (natural && /^[a-z]+$/.test(id)) return [];
+    // the definition must carry the name as written: `CLAUDE.md` is a file, not a variable `md`
+    const norm = id.replace(/::|#|->/g, '.');
+    let m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
+    // a keyword in capitals (`ALTER`, `PIVOT`) that names an entry of a large table of values (a
+    // token enum) is the language being talked about, not a definition to look at
+    if (/^[A-Z][A-Z0-9_]*$/.test(id)) m = m.filter(x => !(VALUE_KINDS.has(x.kind) && x.parent_id != null && largeTable(intel, x.parent_id)));
+    return m;
+}
+
+/**
  * Definitions to centre an exploration on, most relevant first: the symbols named, identifiers in the
  * query that name a definition, then the search results for the query (library code before tests and
  * examples, callables and types before plain values). Each comes with why it was picked.
@@ -1231,15 +1248,7 @@ function exploreSeeds(intel, { query, queries = [query], symbols, path: p }) {
         if (isIssueText(query)) for (const r of issueSeeds(intel, query, { path: p || null })) add(intel.sym(r.id), `issue terms: ${r.terms.slice(0, 4).join(', ')}`);
         const a = analyzeQuery(query);
         for (const id of a.identifiers) {
-            if (id.length < 3) continue;
-            // a bare word that happens to name something (`user`, `config`) is not a lookup
-            if (a.natural && /^[a-z]+$/.test(id)) continue;
-            // the definition must carry the name as written: `CLAUDE.md` is a file, not a variable `md`
-            const norm = id.replace(/::|#|->/g, '.');
-            let m = pickSymbol(intel, id).filter(x => x.name === norm || x.qname === norm || x.qname.endsWith('.' + norm));
-            // a keyword in capitals (`ALTER`, `PIVOT`) that names an entry of a large table of values (a
-            // token enum) is the language being talked about, not a definition to look at
-            if (/^[A-Z][A-Z0-9_]*$/.test(id)) m = m.filter(x => !(VALUE_KINDS.has(x.kind) && x.parent_id != null && largeTable(intel, x.parent_id)));
+            const m = namedInQuery(intel, id, { natural: a.natural });
             if (m.length) add(m[0], 'named in the query');
         }
         const { results } = intel.search.searchMany(queries.length ? queries : [query], { limit: 16, path: p || null });
