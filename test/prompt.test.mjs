@@ -191,7 +191,9 @@ test('the index is brought up to date before answering', async () => {
     const ix = new CodeIntel({ root: dir });
     try {
         await ix.open();
-        ix.sweepIntervalMs = 0; // no watcher here: the sweep finds the change
+        // the sweep is due (with an interval of 0, it was not when the hook ran in the millisecond
+        // the build ended)
+        ix.lastSweep = 0;
         // a caller in a new file, which no reference held so far would lead the tool to re-read
         writeFile(dir, 'src/b.ts', "import { getUserById } from './a';\nexport function load() { return getUserById(7); }\n");
         const out = await handleHook('prompt', { hook_event_name: 'UserPromptSubmit', prompt: 'Who calls getUserById?' }, { root: dir, acquire: async () => ({ intel: ix, release() {} }) });
